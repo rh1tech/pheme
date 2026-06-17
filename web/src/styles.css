@@ -2,25 +2,27 @@
 
 :root {
   --pheme-bg-light: radial-gradient(
-      1200px 600px at 100% -10%,
-      rgba(127, 76, 238, 0.08),
+      1100px 560px at 100% -10%,
+      rgba(127, 76, 238, 0.10),
       transparent 60%
     ),
-    radial-gradient(900px 500px at -10% 110%, rgba(190, 75, 219, 0.07), transparent 55%);
+    radial-gradient(820px 460px at -10% 110%, rgba(190, 75, 219, 0.08), transparent 55%);
   --pheme-bg-dark: radial-gradient(
-      1200px 600px at 100% -10%,
-      rgba(127, 76, 238, 0.16),
+      1100px 560px at 100% -10%,
+      rgba(127, 76, 238, 0.18),
       transparent 60%
     ),
-    radial-gradient(900px 500px at -10% 110%, rgba(190, 75, 219, 0.12), transparent 55%);
+    radial-gradient(820px 460px at -10% 110%, rgba(190, 75, 219, 0.12), transparent 55%);
 }
 
 body {
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 [data-mantine-color-scheme='light'] body {
-  background-color: #fafafd;
+  background-color: #f7f6fb;
   background-image: var(--pheme-bg-light);
   background-attachment: fixed;
 }
@@ -30,16 +32,102 @@ body {
   background-attachment: fixed;
 }
 
-/* Subtle lift on interactive cards (links to channels, etc.). */
-a.pheme-card,
-.pheme-card[role='button'],
-.pheme-card[data-clickable='true'] {
-  transition:
-    transform 120ms ease,
-    box-shadow 120ms ease,
-    border-color 120ms ease;
+/* Text selection in brand colour. */
+::selection {
+  background-color: color-mix(in srgb, var(--mantine-color-iris-5) 28%, transparent);
 }
 
+/* Slim, themed scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--mantine-color-iris-3) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--mantine-color-iris-4) 60%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--mantine-color-iris-5);
+}
+
+/* Sidebar — soft translucent panel, not a flat Mantine block. */
+.mantine-AppShell-navbar {
+  backdrop-filter: blur(8px);
+  background-color: light-dark(rgba(255, 255, 255, 0.72), rgba(22, 23, 26, 0.72));
+}
+
+/* NavLink: rounded pills; active uses the brand gradient. */
+.mantine-NavLink-root {
+  border-radius: var(--mantine-radius-md);
+  font-weight: 500;
+}
+.mantine-NavLink-root[data-active] {
+  background-image: linear-gradient(135deg, var(--mantine-color-iris-6), var(--mantine-color-grape-6));
+  color: #fff;
+}
+.mantine-NavLink-root[data-active]:hover {
+  background-image: linear-gradient(135deg, var(--mantine-color-iris-7), var(--mantine-color-grape-7));
+}
+
+/* Buttons: tactile press + a soft brand glow on the primary filled button. */
+.mantine-Button-root {
+  font-weight: 600;
+  transition:
+    transform 90ms ease,
+    box-shadow 120ms ease,
+    background-color 120ms ease;
+}
+.mantine-Button-root:active {
+  transform: translateY(1px);
+}
+.mantine-Button-root[data-variant='filled'] {
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--mantine-color-iris-6) 35%, transparent);
+}
+.mantine-Button-root[data-variant='filled']:hover {
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--mantine-color-iris-6) 45%, transparent);
+}
+
+/* Inputs: quiet filled fields that light up with a brand ring on focus. */
+.mantine-Input-input {
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+.mantine-Input-input:focus,
+.mantine-Input-input:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mantine-color-iris-5) 25%, transparent);
+}
+
+/* Tables: uppercase, tracked header labels read as a designed component. */
+.mantine-Table-th {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--mantine-color-dimmed);
+  font-weight: 600;
+}
+
+/* Inline code / trigger IDs as subtle brand chips. */
+.mantine-Code-root {
+  background-color: color-mix(in srgb, var(--mantine-color-iris-5) 12%, transparent);
+  color: light-dark(var(--mantine-color-iris-8), var(--mantine-color-iris-2));
+  border: 1px solid color-mix(in srgb, var(--mantine-color-iris-5) 22%, transparent);
+}
+
+/* Subtle lift on clickable cards. */
+.pheme-card {
+  transition:
+    transform 130ms ease,
+    box-shadow 130ms ease,
+    border-color 130ms ease;
+}
 .pheme-card[data-clickable='true']:hover {
   transform: translateY(-2px);
   border-color: var(--mantine-color-iris-4);

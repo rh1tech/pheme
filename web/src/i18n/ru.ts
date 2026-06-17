@@ -12,6 +12,9 @@ const ru: Resources = {
     save: 'Сохранить',
     delete: 'Удалить',
     toggleTheme: 'Переключить светлую/тёмную тему',
+    navChannels: 'Каналы',
+    navAdmin: 'Админ',
+    menu: 'Меню',
   },
   language: {
     label: 'Язык',

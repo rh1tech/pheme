@@ -10,6 +10,9 @@ const en = {
     save: 'Save',
     delete: 'Delete',
     toggleTheme: 'Toggle light/dark theme',
+    navChannels: 'Channels',
+    navAdmin: 'Admin',
+    menu: 'Menu',
   },
   language: {
     label: 'Language',

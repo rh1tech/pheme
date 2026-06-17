@@ -24,6 +24,10 @@ export const theme = createTheme({
   primaryColor: 'iris',
   primaryShade: { light: 6, dark: 5 },
   colors: { iris },
+  defaultGradient: BRAND_GRADIENT,
+  autoContrast: true,
+  cursorType: 'pointer',
+  focusRing: 'auto',
   fontFamily: fontStack,
   fontFamilyMonospace: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
   headings: {
@@ -31,16 +35,23 @@ export const theme = createTheme({
     fontWeight: '600',
   },
   defaultRadius: 'md',
+  shadows: {
+    xs: '0 1px 2px rgba(20, 16, 40, 0.06)',
+    sm: '0 2px 8px rgba(20, 16, 40, 0.08)',
+    md: '0 8px 24px rgba(20, 16, 40, 0.10)',
+    lg: '0 16px 40px rgba(20, 16, 40, 0.14)',
+    xl: '0 24px 60px rgba(20, 16, 40, 0.18)',
+  },
   components: {
     Card: { defaultProps: { radius: 'lg', withBorder: true, shadow: 'sm' } },
     Paper: { defaultProps: { radius: 'lg' } },
     Button: { defaultProps: { radius: 'md' } },
     ActionIcon: { defaultProps: { radius: 'md' } },
     Badge: { defaultProps: { radius: 'sm' } },
-    TextInput: { defaultProps: { radius: 'md' } },
-    PasswordInput: { defaultProps: { radius: 'md' } },
-    Textarea: { defaultProps: { radius: 'md' } },
-    Select: { defaultProps: { radius: 'md' } },
+    TextInput: { defaultProps: { radius: 'md', variant: 'filled' } },
+    PasswordInput: { defaultProps: { radius: 'md', variant: 'filled' } },
+    Textarea: { defaultProps: { radius: 'md', variant: 'filled' } },
+    Select: { defaultProps: { radius: 'md', variant: 'filled' } },
     Menu: { defaultProps: { radius: 'md', shadow: 'md' } },
     Modal: {
       defaultProps: {

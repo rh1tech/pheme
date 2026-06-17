@@ -1,4 +1,6 @@
-import { AppShell, Button, Group } from '@mantine/core'
+import { AppShell, Burger, Group, NavLink, ScrollArea, Stack } from '@mantine/core'
+import { useDisclosure } from '@mantine/hooks'
+import { IconBroadcast, IconShieldCog, IconLogout } from '@tabler/icons-react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
@@ -11,45 +13,84 @@ export function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { t } = useTranslation()
+  const [opened, { toggle, close }] = useDisclosure(false)
+
+  function go(path: string) {
+    navigate(path)
+    close()
+  }
 
   function handleLogout() {
     logout()
     navigate('/login', { replace: true })
   }
 
+  const onChannels = location.pathname === '/' || location.pathname.startsWith('/channels')
   const onAdmin = location.pathname.startsWith('/admin')
 
   return (
-    <AppShell header={{ height: 64 }} padding="lg">
+    <AppShell
+      header={{ height: 56 }}
+      navbar={{ width: 248, breakpoint: 'sm', collapsed: { mobile: !opened } }}
+      padding="lg"
+    >
       <AppShell.Header
-        withBorder
+        hiddenFrom="sm"
         style={{
           backdropFilter: 'blur(8px)',
           backgroundColor: 'light-dark(rgba(255,255,255,0.8), rgba(20,21,23,0.8))',
         }}
       >
-        <Group h="100%" px="lg" justify="space-between">
-          <Group gap="lg">
-            <Logo onClick={() => navigate('/')} />
-            {isAdmin && (
-              <Button
-                variant={onAdmin ? 'light' : 'subtle'}
-                size="xs"
-                onClick={() => navigate('/admin')}
-              >
-                {t('admin.nav')}
-              </Button>
-            )}
-          </Group>
-          <Group gap="sm">
-            <ThemeToggle />
-            <LanguageSwitcher />
-            <Button variant="default" size="xs" onClick={handleLogout}>
-              {t('common.logout')}
-            </Button>
-          </Group>
+        <Group h="100%" px="md" justify="space-between">
+          <Burger opened={opened} onClick={toggle} size="sm" aria-label={t('common.menu')} />
+          <Logo onClick={() => go('/')} />
+          <ThemeToggle />
         </Group>
       </AppShell.Header>
+
+      <AppShell.Navbar p="md">
+        <AppShell.Section>
+          <Group justify="space-between" mb="lg" mt={4}>
+            <Logo onClick={() => go('/')} />
+          </Group>
+        </AppShell.Section>
+
+        <AppShell.Section grow component={ScrollArea}>
+          <Stack gap={4}>
+            <NavLink
+              active={onChannels}
+              label={t('common.navChannels')}
+              leftSection={<IconBroadcast size={18} />}
+              onClick={() => go('/')}
+              variant="filled"
+            />
+            {isAdmin && (
+              <NavLink
+                active={onAdmin}
+                label={t('common.navAdmin')}
+                leftSection={<IconShieldCog size={18} />}
+                onClick={() => go('/admin')}
+                variant="filled"
+              />
+            )}
+          </Stack>
+        </AppShell.Section>
+
+        <AppShell.Section>
+          <Stack gap="sm" mt="md">
+            <NavLink
+              label={t('common.logout')}
+              leftSection={<IconLogout size={18} />}
+              onClick={handleLogout}
+            />
+            <Group gap="xs" px="xs">
+              <ThemeToggle />
+              <LanguageSwitcher />
+            </Group>
+          </Stack>
+        </AppShell.Section>
+      </AppShell.Navbar>
+
       <AppShell.Main>
         <Outlet />
       </AppShell.Main>
