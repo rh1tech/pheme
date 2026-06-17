@@ -1,4 +1,4 @@
-// Command app runs the authenticated user-facing API: channels, API keys,
+// Command app runs the authenticated user-facing API: auth, channels, API keys,
 // devices, subscriptions, message history, and a live event stream.
 package main
 
@@ -11,23 +11,32 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/bootstrap"
 	"github.com/rh1tech/pheme/api/internal/channel"
 	"github.com/rh1tech/pheme/api/internal/config"
-	"github.com/rh1tech/pheme/api/internal/live"
-	"github.com/rh1tech/pheme/api/internal/store"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg := config.Load()
+	b := bootstrap.New(cfg, logger)
 
-	// TODO: swap in MongoDB-backed store and Redis-backed live bus.
-	db := store.NewMemory()
-	bus := live.NewMemoryBus()
+	ctx := context.Background()
+	db, err := b.Store(ctx)
+	if err != nil {
+		logger.Error("store init", "error", err)
+		os.Exit(1)
+	}
+	bus, err := b.Live()
+	if err != nil {
+		logger.Error("live init", "error", err)
+		os.Exit(1)
+	}
+	tokens := b.Tokens()
 
-	h := &channel.AppHandler{Store: db, Live: bus}
 	mux := http.NewServeMux()
-	h.Routes(mux)
+	(&channel.AuthHandler{Store: db, Tokens: tokens}).Routes(mux)
+	(&channel.AppHandler{Store: db, Live: bus, Tokens: tokens}).Routes(mux)
 
 	srv := &http.Server{
 		Addr:              cfg.AppAddr,
@@ -47,10 +56,11 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(ctx)
-	_ = db.Close(ctx)
+	_ = srv.Shutdown(shutdownCtx)
+	_ = db.Close(shutdownCtx)
+	_ = b.Close()
 	logger.Info("app API stopped")
 }
 
@@ -58,7 +68,7 @@ func main() {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

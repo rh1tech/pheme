@@ -40,11 +40,19 @@ cp deploy/.env.example deploy/.env
 docker compose -f deploy/docker-compose.yml up -d   # Mongo, RabbitMQ, Redis
 
 cd api
-go run ./cmd/app         # App API   :8080
-go run ./cmd/ingest      # Ingest API :8081
-go run ./cmd/dispatcher  # Worker
+# Run with real backends (see deploy/.env.example for all toggles):
+export PHEME_STORE_DRIVER=mongo PHEME_BROKER_DRIVER=rabbit \
+       PHEME_LIVE_DRIVER=redis PHEME_RATELIMIT_DRIVER=redis \
+       PHEME_MONGO_URI='mongodb://pheme:pheme@localhost:27017/?authSource=admin'
+go run ./cmd/app         # App API    :8080  (auth, channels, history, SSE)
+go run ./cmd/ingest      # Ingest API :8081  (public trigger, API-key auth)
+go run ./cmd/dispatcher  # Worker      (consume → persist → push → live event)
 ```
+Omit the env vars to run with zero-dependency in-memory backends.
 
 ## Status
-Early scaffolding. The Go skeleton compiles and exposes health endpoints; domain
-logic is being filled in per the phased roadmap in the architecture doc.
+Phase 1 (scaffold) and phase 2 (infrastructure) complete: JWT auth (Argon2id),
+MongoDB persistence, RabbitMQ broker with DLQ, Redis rate limiting and live
+pub/sub, and FCM + Web Push senders — all selectable per environment and
+verified end-to-end against the docker-compose stack. Web and mobile clients are
+the next phases.

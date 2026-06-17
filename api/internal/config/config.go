@@ -35,6 +35,15 @@ type Config struct {
 	VAPIDPublicKey     string
 	VAPIDPrivateKey    string
 	VAPIDSubject       string // mailto: contact for Web Push
+
+	// Backend selection. Each defaults to a zero-dependency in-memory/log
+	// implementation so the services run without external infrastructure.
+	// Switch to the real adapters once the docker-compose stack is running.
+	StoreDriver     string // memory | mongo
+	BrokerDriver    string // memory | rabbit
+	LiveDriver      string // memory | redis
+	RateLimitDriver string // memory | redis
+	PushDriver      string // log | fcm | webpush | both
 }
 
 // Load reads configuration from the environment, applying sensible defaults for
@@ -61,6 +70,12 @@ func Load() Config {
 		VAPIDPublicKey:     env("PHEME_VAPID_PUBLIC", ""),
 		VAPIDPrivateKey:    env("PHEME_VAPID_PRIVATE", ""),
 		VAPIDSubject:       env("PHEME_VAPID_SUBJECT", "mailto:admin@example.com"),
+
+		StoreDriver:     env("PHEME_STORE_DRIVER", "memory"),
+		BrokerDriver:    env("PHEME_BROKER_DRIVER", "memory"),
+		LiveDriver:      env("PHEME_LIVE_DRIVER", "memory"),
+		RateLimitDriver: env("PHEME_RATELIMIT_DRIVER", "memory"),
+		PushDriver:      env("PHEME_PUSH_DRIVER", "log"),
 	}
 }
 

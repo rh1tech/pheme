@@ -88,3 +88,23 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 2. **Web** — Mantine SPA, device registration, history browsing, WebSocket live + Web Push.
 3. **Mobile** — Flutter FCM registration, history, subscribe.
 4. **Hardening** — approval mode, delivery receipts/resend, rate limits, export, metrics (Prometheus), Kubernetes manifests.
+
+## 9. Backend drivers
+Each infrastructure dependency is behind an interface with two implementations,
+selected by environment variable. Defaults are zero-dependency so the services
+run with no external infrastructure; switch to the real adapters once the
+docker-compose stack is up.
+
+| Concern     | Env var                   | Options                  | Real adapter |
+|-------------|---------------------------|--------------------------|--------------|
+| Persistence | `PHEME_STORE_DRIVER`      | `memory` \| `mongo`      | MongoDB (`internal/store`) |
+| Broker      | `PHEME_BROKER_DRIVER`     | `memory` \| `rabbit`     | RabbitMQ, publisher confirms + DLX/DLQ (`internal/broker`) |
+| Live events | `PHEME_LIVE_DRIVER`       | `memory` \| `redis`      | Redis pub/sub (`internal/live`) |
+| Rate limit  | `PHEME_RATELIMIT_DRIVER`  | `memory` \| `redis`      | Redis Lua token-bucket (`internal/ratelimit`) |
+| Push        | `PHEME_PUSH_DRIVER`       | `log` \| `fcm` \| `webpush` \| `both` | FCM + Web Push (`internal/push`) |
+
+`internal/bootstrap` builds these from config and is shared by all three mains.
+
+> **Note:** the MongoDB root user created by compose authenticates against the
+> `admin` database — use `?authSource=admin` in `PHEME_MONGO_URI`.
+

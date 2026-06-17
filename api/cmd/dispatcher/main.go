@@ -10,30 +10,41 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/rh1tech/pheme/api/internal/broker"
+	"github.com/rh1tech/pheme/api/internal/bootstrap"
 	"github.com/rh1tech/pheme/api/internal/config"
-	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/message"
-	"github.com/rh1tech/pheme/api/internal/push"
-	"github.com/rh1tech/pheme/api/internal/store"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	_ = config.Load()
-
-	// TODO: swap in MongoDB-backed store, RabbitMQ consumer, FCM/Web Push sender,
-	// and Redis-backed live bus. The in-memory wiring below documents the shape
-	// of the pipeline; cross-process delivery requires the shared infrastructure.
-	db := store.NewMemory()
-	consumer := broker.NewMemory(0)
-	sender := push.NewLogSender()
-	bus := live.NewMemoryBus()
-
-	dispatcher := message.NewDispatcher(db, sender, bus, logger)
+	cfg := config.Load()
+	b := bootstrap.New(cfg, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	db, err := b.Store(ctx)
+	if err != nil {
+		logger.Error("store init", "error", err)
+		os.Exit(1)
+	}
+	consumer, err := b.Consumer()
+	if err != nil {
+		logger.Error("consumer init", "error", err)
+		os.Exit(1)
+	}
+	sender, err := b.Push(ctx)
+	if err != nil {
+		logger.Error("push init", "error", err)
+		os.Exit(1)
+	}
+	bus, err := b.Live()
+	if err != nil {
+		logger.Error("live init", "error", err)
+		os.Exit(1)
+	}
+
+	dispatcher := message.NewDispatcher(db, sender, bus, logger)
 
 	go func() {
 		stop := make(chan os.Signal, 1)
@@ -48,7 +59,10 @@ func main() {
 		logger.Error("consume", "error", err)
 		os.Exit(1)
 	}
-	_ = consumer.Close(context.Background())
-	_ = db.Close(context.Background())
+
+	closeCtx := context.Background()
+	_ = consumer.Close(closeCtx)
+	_ = db.Close(closeCtx)
+	_ = b.Close()
 	logger.Info("dispatcher stopped")
 }

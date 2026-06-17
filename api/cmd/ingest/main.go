@@ -12,21 +12,28 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rh1tech/pheme/api/internal/broker"
+	"github.com/rh1tech/pheme/api/internal/bootstrap"
 	"github.com/rh1tech/pheme/api/internal/channel"
 	"github.com/rh1tech/pheme/api/internal/config"
-	"github.com/rh1tech/pheme/api/internal/ratelimit"
-	"github.com/rh1tech/pheme/api/internal/store"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg := config.Load()
+	b := bootstrap.New(cfg, logger)
 
-	// TODO: swap in MongoDB-backed store and RabbitMQ publisher.
-	db := store.NewMemory()
-	pub := broker.NewMemory(0)
-	limiter := ratelimit.NewTokenBucket(20, 40) // 20 req/s, burst 40, per channel
+	ctx := context.Background()
+	db, err := b.Store(ctx)
+	if err != nil {
+		logger.Error("store init", "error", err)
+		os.Exit(1)
+	}
+	pub, err := b.Publisher()
+	if err != nil {
+		logger.Error("publisher init", "error", err)
+		os.Exit(1)
+	}
+	limiter := b.Limiter()
 
 	h := &channel.IngestHandler{Store: db, Publisher: pub, Limiter: limiter}
 	mux := http.NewServeMux()
@@ -46,17 +53,15 @@ func main() {
 		}
 	}()
 
-	waitForShutdown()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(ctx)
-	_ = pub.Close(ctx)
-	_ = db.Close(ctx)
-	logger.Info("ingest API stopped")
-}
-
-func waitForShutdown() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx)
+	_ = pub.Close(shutdownCtx)
+	_ = db.Close(shutdownCtx)
+	_ = b.Close()
+	logger.Info("ingest API stopped")
 }

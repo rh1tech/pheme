@@ -14,36 +14,37 @@ import (
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
-// AppHandler serves the authenticated user-facing API.
-//
-// Authentication is a development placeholder: the caller's identity is read
-// from the X-User-Id header. Production must replace requireUser with JWT
-// verification (see internal/auth, TODO).
+// AppHandler serves the authenticated user-facing API. Identity comes from the
+// JWT access token validated by the auth middleware.
 type AppHandler struct {
-	Store store.Store
-	Live  live.Bus
+	Store  store.Store
+	Live   live.Bus
+	Tokens *auth.TokenManager
 }
 
-// Routes registers the App API endpoints on a mux.
+// Routes registers the App API endpoints on a mux. Protected endpoints are
+// wrapped with JWT middleware; health is public and the SSE stream authenticates
+// via a token query parameter (EventSource cannot set headers).
 func (h *AppHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", httpx.Health("app"))
-
-	mux.HandleFunc("POST /v1/channels", h.createChannel)
-	mux.HandleFunc("GET /v1/channels", h.listChannels)
-	mux.HandleFunc("POST /v1/channels/{id}/keys", h.createKey)
-
-	mux.HandleFunc("POST /v1/devices", h.createDevice)
-	mux.HandleFunc("POST /v1/channels/{id}/subscribe", h.subscribe)
-
-	mux.HandleFunc("GET /v1/channels/{id}/messages", h.listMessages)
 	mux.HandleFunc("GET /v1/stream", h.stream)
+
+	protected := http.NewServeMux()
+	protected.HandleFunc("POST /v1/channels", h.createChannel)
+	protected.HandleFunc("GET /v1/channels", h.listChannels)
+	protected.HandleFunc("POST /v1/channels/{id}/keys", h.createKey)
+	protected.HandleFunc("POST /v1/devices", h.createDevice)
+	protected.HandleFunc("POST /v1/channels/{id}/subscribe", h.subscribe)
+	protected.HandleFunc("GET /v1/channels/{id}/messages", h.listMessages)
+
+	mux.Handle("/v1/", h.Tokens.Middleware(protected))
 }
 
-// requireUser resolves the calling user. Placeholder auth — replace with JWT.
+// requireUser resolves the calling user from the JWT context.
 func (h *AppHandler) requireUser(w http.ResponseWriter, r *http.Request) (string, bool) {
-	uid := r.Header.Get("X-User-Id")
-	if uid == "" {
-		httpx.Error(w, http.StatusUnauthorized, "missing X-User-Id (dev auth placeholder)")
+	uid, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
 		return "", false
 	}
 	return uid, true
@@ -230,10 +231,13 @@ func (h *AppHandler) listMessages(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"messages": msgs, "nextCursor": next})
 }
 
-// stream is a Server-Sent Events endpoint delivering live messages. Production
-// should expose this as a WebSocket and fan out via Redis pub/sub.
+// stream is a Server-Sent Events endpoint delivering live messages. It accepts
+// the access token via the "token" query parameter because EventSource cannot
+// set an Authorization header. Production may expose this as a WebSocket and fan
+// out via Redis pub/sub.
 func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireUser(w, r); !ok {
+	if _, err := h.Tokens.Parse(r.URL.Query().Get("token"), auth.AccessToken); err != nil {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	flusher, ok := w.(http.Flusher)
