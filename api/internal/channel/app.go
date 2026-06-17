@@ -17,9 +17,10 @@ import (
 // AppHandler serves the authenticated user-facing API. Identity comes from the
 // JWT access token validated by the auth middleware.
 type AppHandler struct {
-	Store  store.Store
-	Live   live.Bus
-	Tokens *auth.TokenManager
+	Store          store.Store
+	Live           live.Bus
+	Tokens         *auth.TokenManager
+	VAPIDPublicKey string
 }
 
 // Routes registers the App API endpoints on a mux. Protected endpoints are
@@ -27,6 +28,7 @@ type AppHandler struct {
 // via a token query parameter (EventSource cannot set headers).
 func (h *AppHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", httpx.Health("app"))
+	mux.HandleFunc("GET /v1/meta", h.meta)
 	mux.HandleFunc("GET /v1/stream", h.stream)
 
 	protected := http.NewServeMux()
@@ -38,6 +40,14 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("GET /v1/channels/{id}/messages", h.listMessages)
 
 	mux.Handle("/v1/", h.Tokens.Middleware(protected))
+}
+
+// meta exposes public client configuration, such as the Web Push VAPID public
+// key, so the web client always matches the server's keys.
+func (h *AppHandler) meta(w http.ResponseWriter, _ *http.Request) {
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"vapidPublicKey": h.VAPIDPublicKey,
+	})
 }
 
 // requireUser resolves the calling user from the JWT context.

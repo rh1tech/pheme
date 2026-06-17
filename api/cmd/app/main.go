@@ -36,7 +36,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	(&channel.AuthHandler{Store: db, Tokens: tokens}).Routes(mux)
-	(&channel.AppHandler{Store: db, Live: bus, Tokens: tokens}).Routes(mux)
+	(&channel.AppHandler{Store: db, Live: bus, Tokens: tokens, VAPIDPublicKey: cfg.VAPIDPublicKey}).Routes(mux)
 
 	srv := &http.Server{
 		Addr:              cfg.AppAddr,

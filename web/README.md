@@ -1,25 +1,46 @@
 # Pheme Web
 
-TypeScript + Vite + Mantine single-page app for browsing notifications,
-managing channels and API keys, registering devices, and (in the Web phase)
-receiving browser push.
+TypeScript + Vite + Mantine single-page app: sign in, manage channels and API
+keys, browse message history, receive live updates over SSE, and register the
+browser for Web Push notifications.
 
 ## Develop
 ```bash
-cp .env.example .env.local   # set VITE_API_BASE / VITE_DEV_USER
+cp .env.example .env.local        # set VITE_API_BASE
 npm install
-npm run dev                  # http://localhost:5173
+npm run dev                       # http://localhost:5173
 ```
-Requires the App API running (default `http://localhost:8080`).
+Requires the App API running (default `http://localhost:8080`). For live updates
+and Web Push, run the API with the Redis live bus and a configured VAPID key
+pair (see ../deploy/.env.example).
 
-## Build
+## Build & lint
 ```bash
-npm run build
-npm run preview
+npm run build                     # tsc typecheck + vite production build
+npx eslint src --max-warnings 0
+```
+
+## Structure
+```
+src/
+├── lib/
+│   ├── api.ts        API client: bearer auth + transparent token refresh
+│   ├── tokens.ts     access/refresh token persistence (localStorage)
+│   ├── jwt.ts        client-side JWT subject decode (display only)
+│   ├── types.ts      API response types
+│   ├── webpush.ts    service-worker registration + PushManager subscribe
+│   └── device.ts     local Web Push device id
+├── auth/             AuthProvider + context (login/register/logout)
+├── hooks/
+│   └── useEventStream.ts   SSE subscription to /v1/stream
+├── components/       Layout (app shell) + RequireAuth route guard
+├── pages/            LoginPage, DashboardPage, ChannelPage
+└── App.tsx           routes
 ```
 
 ## Notes
-- Auth is currently a development placeholder (`X-User-Id` header); it will be
-  replaced by JWT bearer tokens once the auth endpoints land.
-- `public/sw.js` is a Web Push service worker placeholder, wired up in the Web
-  phase together with server-side VAPID keys.
+- Auth uses JWT access + refresh tokens; the client refreshes the access token
+  transparently on a 401 and redirects to login when the session is gone.
+- The SSE stream authenticates via a `token` query parameter because
+  `EventSource` cannot send an `Authorization` header.
+- `public/sw.js` displays incoming Web Push notifications.
