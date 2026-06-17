@@ -85,6 +85,8 @@ const ru: Resources = {
     channelUpdated: 'Канал обновлён',
     updateFailed: 'Не удалось обновить',
     subscribeBrowser: 'Подписать этот браузер',
+    subscribeTitle: 'Уведомления в браузере',
+    subscribeDescription: 'Получать push-уведомления этого канала в данном браузере.',
     browserSubscribed: 'Этот браузер подписан',
     subscribeFailed: 'Не удалось подписаться',
     deleteTitle: 'Удалить канал',

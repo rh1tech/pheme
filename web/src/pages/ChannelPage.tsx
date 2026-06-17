@@ -447,11 +447,19 @@ export function ChannelPage() {
               </Stack>
 
               {webPushSupported() && (
-                <Group>
-                  <Button variant="light" onClick={subscribeBrowser}>
-                    {t('channel.subscribeBrowser')}
-                  </Button>
-                </Group>
+                <Card withBorder padding="md">
+                  <Group justify="space-between">
+                    <Stack gap={2}>
+                      <Text fw={600}>{t('channel.subscribeTitle')}</Text>
+                      <Text size="sm" c="dimmed">
+                        {t('channel.subscribeDescription')}
+                      </Text>
+                    </Stack>
+                    <Button variant="outline" onClick={subscribeBrowser}>
+                      {t('channel.subscribeBrowser')}
+                    </Button>
+                  </Group>
+                </Card>
               )}
 
               <Card withBorder padding="md" style={{ borderColor: 'var(--mantine-color-red-4)' }}>

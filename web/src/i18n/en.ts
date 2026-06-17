@@ -83,6 +83,8 @@ const en = {
     channelUpdated: 'Channel updated',
     updateFailed: 'Update failed',
     subscribeBrowser: 'Subscribe this browser',
+    subscribeTitle: 'Browser notifications',
+    subscribeDescription: 'Receive push notifications from this channel in this browser.',
     browserSubscribed: 'This browser is subscribed',
     subscribeFailed: 'Subscribe failed',
     deleteTitle: 'Delete channel',
