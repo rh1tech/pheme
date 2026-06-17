@@ -24,6 +24,7 @@ import {
 import { IconSearch, IconTrash, IconX } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Trans, useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { ApiKey, Channel, CreatedKey, Message, SubscriptionMode } from '../lib/types'
 import { useEventStream } from '../hooks/useEventStream'
@@ -33,6 +34,7 @@ import { registerWebPushDevice, webPushSupported } from '../lib/webpush'
 export function ChannelPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const [channel, setChannel] = useState<Channel | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [cursor, setCursor] = useState('')
@@ -45,7 +47,6 @@ export function ChannelPage() {
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
 
-  // Settings state
   const [editName, setEditName] = useState('')
   const [editMode, setEditMode] = useState<SubscriptionMode>('approval')
   const [savingSettings, setSavingSettings] = useState(false)
@@ -82,10 +83,11 @@ export function ChannelPage() {
         setMessages(page.messages)
         setCursor(page.nextCursor)
       })
-      .catch((e) => active && notifications.show({ color: 'red', message: `Load failed: ${String(e)}` }))
+      .catch((e) => active && notifications.show({ color: 'red', message: `${t('dashboard.loadFailed')}: ${String(e)}` }))
     return () => {
       active = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
   useEffect(() => {
@@ -106,7 +108,7 @@ export function ChannelPage() {
       setMessages(page.messages)
       setCursor(page.nextCursor)
     } catch (e) {
-      notifications.show({ color: 'red', message: `Search failed: ${String(e)}` })
+      notifications.show({ color: 'red', message: `${t('channel.searchFailed')}: ${String(e)}` })
     }
   }
 
@@ -118,7 +120,7 @@ export function ChannelPage() {
       setMessages((prev) => [...prev, ...page.messages])
       setCursor(page.nextCursor)
     } catch (e) {
-      notifications.show({ color: 'red', message: `Load failed: ${String(e)}` })
+      notifications.show({ color: 'red', message: `${t('dashboard.loadFailed')}: ${String(e)}` })
     } finally {
       setLoadingMore(false)
     }
@@ -142,7 +144,7 @@ export function ChannelPage() {
       setCreatedKey(await api.createKey(id))
       await reloadKeys()
     } catch (e) {
-      notifications.show({ color: 'red', message: `Key failed: ${String(e)}` })
+      notifications.show({ color: 'red', message: `${t('channel.keyFailed')}: ${String(e)}` })
     }
   }
 
@@ -150,9 +152,9 @@ export function ChannelPage() {
     try {
       await api.revokeKey(id, keyId)
       await reloadKeys()
-      notifications.show({ color: 'green', message: 'Key revoked' })
+      notifications.show({ color: 'green', message: t('channel.keyRevoked') })
     } catch (e) {
-      notifications.show({ color: 'red', message: `Revoke failed: ${String(e)}` })
+      notifications.show({ color: 'red', message: `${t('channel.revokeFailed')}: ${String(e)}` })
     }
   }
 
@@ -163,9 +165,9 @@ export function ChannelPage() {
       await api.notifyChannel(id, title.trim(), body.trim())
       setTitle('')
       setBody('')
-      notifications.show({ color: 'green', message: 'Message sent' })
+      notifications.show({ color: 'green', message: t('channel.messageSent') })
     } catch (e) {
-      notifications.show({ color: 'red', message: `Send failed: ${String(e)}` })
+      notifications.show({ color: 'red', message: `${t('channel.sendFailed')}: ${String(e)}` })
     } finally {
       setSending(false)
     }
@@ -179,9 +181,9 @@ export function ChannelPage() {
         saveWebDeviceId(deviceId)
       }
       await api.subscribe(id, deviceId)
-      notifications.show({ color: 'green', message: 'This browser is subscribed' })
+      notifications.show({ color: 'green', message: t('channel.browserSubscribed') })
     } catch (e) {
-      notifications.show({ color: 'red', message: `Subscribe failed: ${(e as Error).message}` })
+      notifications.show({ color: 'red', message: `${t('channel.subscribeFailed')}: ${(e as Error).message}` })
     }
   }
 
@@ -190,9 +192,9 @@ export function ChannelPage() {
     try {
       const updated = await api.updateChannel(id, { name: editName.trim(), subscriptionMode: editMode })
       setChannel(updated)
-      notifications.show({ color: 'green', message: 'Channel updated' })
+      notifications.show({ color: 'green', message: t('channel.channelUpdated') })
     } catch (e) {
-      notifications.show({ color: 'red', message: `Update failed: ${String(e)}` })
+      notifications.show({ color: 'red', message: `${t('channel.updateFailed')}: ${String(e)}` })
     } finally {
       setSavingSettings(false)
     }
@@ -202,10 +204,10 @@ export function ChannelPage() {
     setDeleting(true)
     try {
       await api.deleteChannel(id)
-      notifications.show({ color: 'green', message: 'Channel deleted' })
+      notifications.show({ color: 'green', message: t('channel.channelDeleted') })
       navigate('/', { replace: true })
     } catch (e) {
-      notifications.show({ color: 'red', message: `Delete failed: ${String(e)}` })
+      notifications.show({ color: 'red', message: `${t('channel.deleteFailed')}: ${String(e)}` })
       setDeleting(false)
     }
   }
@@ -214,32 +216,37 @@ export function ChannelPage() {
 
   return (
     <Container size="sm">
-      <Modal opened={createdKey !== null} onClose={() => setCreatedKey(null)} title="API key created">
+      <Modal opened={createdKey !== null} onClose={() => setCreatedKey(null)} title={t('channel.keyCreatedTitle')}>
         <Stack>
           <Text size="sm" c="dimmed">
-            Store this key now — it will not be shown again.
+            {t('channel.keyShownOnce')}
           </Text>
           <Code block>{createdKey?.key}</Code>
           <Group justify="flex-end">
             <CopyButton value={createdKey?.key ?? ''}>
-              {({ copied, copy }) => <Button onClick={copy}>{copied ? 'Copied' : 'Copy key'}</Button>}
+              {({ copied, copy }) => (
+                <Button onClick={copy}>{copied ? t('common.copied') : t('channel.copyKey')}</Button>
+              )}
             </CopyButton>
           </Group>
         </Stack>
       </Modal>
 
-      <Modal opened={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete channel">
+      <Modal opened={confirmDelete} onClose={() => setConfirmDelete(false)} title={t('channel.deleteTitle')}>
         <Stack>
           <Text size="sm">
-            Delete <b>{channel?.name}</b>? This permanently removes the channel, its API keys,
-            subscriptions and message history. This cannot be undone.
+            <Trans
+              i18nKey="channel.deleteConfirm"
+              values={{ name: channel?.name ?? '' }}
+              components={{ bold: <b /> }}
+            />
           </Text>
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setConfirmDelete(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button color="red" loading={deleting} onClick={deleteChannel}>
-              Delete channel
+              {t('channel.deleteTitle')}
             </Button>
           </Group>
         </Stack>
@@ -248,24 +255,24 @@ export function ChannelPage() {
       <Stack gap="lg">
         <Breadcrumbs>
           <Anchor component={Link} to="/">
-            Your channels
+            {t('dashboard.yourChannels')}
           </Anchor>
-          <Text>{channel?.name ?? 'Channel'}</Text>
+          <Text>{channel?.name ?? t('channel.fallbackName')}</Text>
         </Breadcrumbs>
 
         <Card withBorder padding="lg">
           <Group justify="space-between" align="flex-start">
             <Stack gap={4}>
-              <Title order={4}>{channel?.name ?? 'Channel'}</Title>
+              <Title order={4}>{channel?.name ?? t('channel.fallbackName')}</Title>
               <Group gap="xs">
                 <Text size="sm" c="dimmed">
-                  Trigger ID:
+                  {t('channel.triggerId')}
                 </Text>
                 <Code>{channel?.publicId ?? id}</Code>
                 <CopyButton value={channel?.publicId ?? ''}>
                   {({ copied, copy }) => (
                     <Button size="compact-xs" variant="subtle" onClick={copy}>
-                      {copied ? 'Copied' : 'Copy'}
+                      {copied ? t('common.copied') : t('common.copy')}
                     </Button>
                   )}
                 </CopyButton>
@@ -273,7 +280,7 @@ export function ChannelPage() {
             </Stack>
             {channel && (
               <Badge color={channel.subscriptionMode === 'open' ? 'teal' : 'grape'}>
-                {channel.subscriptionMode}
+                {t(`mode.${channel.subscriptionMode}`)}
               </Badge>
             )}
           </Group>
@@ -281,17 +288,17 @@ export function ChannelPage() {
 
         <Tabs defaultValue="messages" keepMounted={false}>
           <Tabs.List mb="md">
-            <Tabs.Tab value="messages">Messages</Tabs.Tab>
-            <Tabs.Tab value="send">Send</Tabs.Tab>
-            <Tabs.Tab value="keys">API keys</Tabs.Tab>
-            <Tabs.Tab value="settings">Settings</Tabs.Tab>
+            <Tabs.Tab value="messages">{t('channel.tabs.messages')}</Tabs.Tab>
+            <Tabs.Tab value="send">{t('channel.tabs.send')}</Tabs.Tab>
+            <Tabs.Tab value="keys">{t('channel.tabs.keys')}</Tabs.Tab>
+            <Tabs.Tab value="settings">{t('channel.tabs.settings')}</Tabs.Tab>
           </Tabs.List>
 
           <Tabs.Panel value="messages">
             <Stack gap="sm">
               <Group justify="flex-end">
                 <TextInput
-                  placeholder="Search title or body"
+                  placeholder={t('channel.searchPlaceholder')}
                   value={search}
                   onChange={(e) => setSearch(e.currentTarget.value)}
                   onKeyDown={(e) => e.key === 'Enter' && runSearch(search.trim())}
@@ -316,12 +323,12 @@ export function ChannelPage() {
               </Group>
               {activeQuery && (
                 <Text size="xs" c="dimmed">
-                  Filtering by “{activeQuery}” — live updates paused.
+                  {t('channel.filtering', { query: activeQuery })}
                 </Text>
               )}
               {messages.length === 0 && (
                 <Text c="dimmed" size="sm">
-                  No messages{activeQuery ? ' match your search' : ' yet'}.
+                  {activeQuery ? t('channel.noMessagesSearch') : t('channel.noMessages')}
                 </Text>
               )}
               {messages.map((m) => (
@@ -338,7 +345,7 @@ export function ChannelPage() {
               {cursor && (
                 <Group justify="center">
                   <Button variant="subtle" loading={loadingMore} onClick={loadMore}>
-                    Load more
+                    {t('channel.loadMore')}
                   </Button>
                 </Group>
               )}
@@ -348,14 +355,14 @@ export function ChannelPage() {
           <Tabs.Panel value="send">
             <Stack gap="sm">
               <TextInput
-                label="Title"
-                placeholder="Deploy finished"
+                label={t('channel.title')}
+                placeholder={t('channel.titlePlaceholder')}
                 value={title}
                 onChange={(e) => setTitle(e.currentTarget.value)}
               />
               <Textarea
-                label="Body"
-                placeholder="Production deploy completed successfully."
+                label={t('channel.body')}
+                placeholder={t('channel.bodyPlaceholder')}
                 autosize
                 minRows={3}
                 value={body}
@@ -363,7 +370,7 @@ export function ChannelPage() {
               />
               <Group justify="flex-end">
                 <Button onClick={sendMessage} loading={sending} disabled={!title.trim() && !body.trim()}>
-                  Send
+                  {t('channel.send')}
                 </Button>
               </Group>
             </Stack>
@@ -373,19 +380,19 @@ export function ChannelPage() {
             <Stack gap="sm">
               <Group justify="flex-end">
                 <Button size="xs" variant="light" onClick={createKey}>
-                  Create key
+                  {t('channel.createKey')}
                 </Button>
               </Group>
               {activeKeys.length === 0 ? (
                 <Text c="dimmed" size="sm">
-                  No active keys.
+                  {t('channel.noKeys')}
                 </Text>
               ) : (
                 <Table verticalSpacing="xs">
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th>Prefix</Table.Th>
-                      <Table.Th>Created</Table.Th>
+                      <Table.Th>{t('channel.colPrefix')}</Table.Th>
+                      <Table.Th>{t('channel.colCreated')}</Table.Th>
                       <Table.Th />
                     </Table.Tr>
                   </Table.Thead>
@@ -397,7 +404,7 @@ export function ChannelPage() {
                         </Table.Td>
                         <Table.Td>{new Date(k.createdAt).toLocaleDateString()}</Table.Td>
                         <Table.Td align="right">
-                          <Tooltip label="Revoke">
+                          <Tooltip label={t('channel.revoke')}>
                             <ActionIcon color="red" variant="subtle" onClick={() => revokeKey(k.id)}>
                               <IconTrash size={16} />
                             </ActionIcon>
@@ -415,26 +422,26 @@ export function ChannelPage() {
             <Stack gap="lg">
               <Stack gap="sm">
                 <TextInput
-                  label="Channel name"
+                  label={t('dashboard.channelName')}
                   value={editName}
                   onChange={(e) => setEditName(e.currentTarget.value)}
                 />
                 <div>
                   <Text size="sm" fw={500} mb={4}>
-                    Subscription mode
+                    {t('channel.subscriptionMode')}
                   </Text>
                   <SegmentedControl
                     value={editMode}
                     onChange={(v) => setEditMode(v as SubscriptionMode)}
                     data={[
-                      { label: 'Approval', value: 'approval' },
-                      { label: 'Open', value: 'open' },
+                      { label: t('mode.approval'), value: 'approval' },
+                      { label: t('mode.open'), value: 'open' },
                     ]}
                   />
                 </div>
                 <Group justify="flex-end">
                   <Button onClick={saveSettings} loading={savingSettings} disabled={!editName.trim()}>
-                    Save changes
+                    {t('channel.saveChanges')}
                   </Button>
                 </Group>
               </Stack>
@@ -442,7 +449,7 @@ export function ChannelPage() {
               {webPushSupported() && (
                 <Group>
                   <Button variant="light" onClick={subscribeBrowser}>
-                    Subscribe this browser
+                    {t('channel.subscribeBrowser')}
                   </Button>
                 </Group>
               )}
@@ -450,13 +457,13 @@ export function ChannelPage() {
               <Card withBorder padding="md" style={{ borderColor: 'var(--mantine-color-red-4)' }}>
                 <Group justify="space-between">
                   <Stack gap={2}>
-                    <Text fw={600}>Delete channel</Text>
+                    <Text fw={600}>{t('channel.dangerTitle')}</Text>
                     <Text size="sm" c="dimmed">
-                      Permanently remove this channel and its history.
+                      {t('channel.dangerDescription')}
                     </Text>
                   </Stack>
                   <Button color="red" variant="outline" onClick={() => setConfirmDelete(true)}>
-                    Delete
+                    {t('common.delete')}
                   </Button>
                 </Group>
               </Card>

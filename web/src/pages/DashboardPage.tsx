@@ -14,6 +14,7 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { Channel, SubscriptionMode } from '../lib/types'
 import { registerWebPushDevice, webPushSupported } from '../lib/webpush'
@@ -21,6 +22,7 @@ import { saveWebDeviceId } from '../lib/device'
 
 export function DashboardPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const [channels, setChannels] = useState<Channel[]>([])
   const [modalOpen, setModalOpen] = useState(false)
   const [name, setName] = useState('')
@@ -31,7 +33,7 @@ export function DashboardPage() {
     try {
       setChannels(await api.listChannels())
     } catch (e) {
-      notifications.show({ color: 'red', message: `Load failed: ${String(e)}` })
+      notifications.show({ color: 'red', message: `${t('dashboard.loadFailed')}: ${String(e)}` })
     }
   }
 
@@ -40,10 +42,15 @@ export function DashboardPage() {
     api
       .listChannels()
       .then((cs) => active && setChannels(cs))
-      .catch((e) => active && notifications.show({ color: 'red', message: `Load failed: ${String(e)}` }))
+      .catch(
+        (e) =>
+          active &&
+          notifications.show({ color: 'red', message: `${t('dashboard.loadFailed')}: ${String(e)}` }),
+      )
     return () => {
       active = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function openCreate() {
@@ -59,10 +66,10 @@ export function DashboardPage() {
       const created = await api.createChannel(name.trim(), mode)
       setModalOpen(false)
       await refresh()
-      notifications.show({ color: 'green', message: 'Channel created' })
+      notifications.show({ color: 'green', message: t('dashboard.created') })
       navigate(`/channels/${created.id}`)
     } catch (e) {
-      notifications.show({ color: 'red', message: `Create failed: ${String(e)}` })
+      notifications.show({ color: 'red', message: `${t('dashboard.createFailed')}: ${String(e)}` })
     } finally {
       setCreating(false)
     }
@@ -72,19 +79,19 @@ export function DashboardPage() {
     try {
       const deviceId = await registerWebPushDevice()
       saveWebDeviceId(deviceId)
-      notifications.show({ color: 'green', message: 'Browser notifications enabled' })
+      notifications.show({ color: 'green', message: t('dashboard.notificationsEnabled') })
     } catch (e) {
-      notifications.show({ color: 'red', message: `Could not enable: ${(e as Error).message}` })
+      notifications.show({ color: 'red', message: `${t('dashboard.enableFailed')}: ${(e as Error).message}` })
     }
   }
 
   return (
     <Container size="sm">
-      <Modal opened={modalOpen} onClose={() => setModalOpen(false)} title="New channel">
+      <Modal opened={modalOpen} onClose={() => setModalOpen(false)} title={t('dashboard.newChannel')}>
         <Stack gap="sm">
           <TextInput
-            label="Channel name"
-            placeholder="Site Alerts"
+            label={t('dashboard.channelName')}
+            placeholder={t('dashboard.channelNamePlaceholder')}
             data-autofocus
             value={name}
             onChange={(e) => setName(e.currentTarget.value)}
@@ -92,24 +99,24 @@ export function DashboardPage() {
           />
           <div>
             <Text size="sm" fw={500} mb={4}>
-              Subscription mode
+              {t('dashboard.subscriptionMode')}
             </Text>
             <SegmentedControl
               fullWidth
               value={mode}
               onChange={(v) => setMode(v as SubscriptionMode)}
               data={[
-                { label: 'Approval', value: 'approval' },
-                { label: 'Open', value: 'open' },
+                { label: t('mode.approval'), value: 'approval' },
+                { label: t('mode.open'), value: 'open' },
               ]}
             />
           </div>
           <Group justify="flex-end" mt="sm">
             <Button variant="default" onClick={() => setModalOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button onClick={createChannel} loading={creating} disabled={!name.trim()}>
-              Create channel
+              {t('dashboard.createChannel')}
             </Button>
           </Group>
         </Stack>
@@ -117,15 +124,15 @@ export function DashboardPage() {
 
       <Stack gap="lg">
         <Group justify="space-between">
-          <Title order={4}>Your channels</Title>
+          <Title order={4}>{t('dashboard.yourChannels')}</Title>
           <Group gap="xs">
             {webPushSupported() && (
               <Button variant="subtle" size="xs" onClick={enableNotifications}>
-                Enable notifications
+                {t('dashboard.enableNotifications')}
               </Button>
             )}
             <Button size="xs" onClick={openCreate}>
-              New channel
+              {t('dashboard.newChannel')}
             </Button>
           </Group>
         </Group>
@@ -133,7 +140,7 @@ export function DashboardPage() {
         <Stack gap="sm">
           {channels.length === 0 && (
             <Text c="dimmed" size="sm">
-              No channels yet — create one with “New channel”.
+              {t('dashboard.noChannels')}
             </Text>
           )}
           {channels.map((c) => (
@@ -147,7 +154,7 @@ export function DashboardPage() {
               <Group justify="space-between">
                 <Text fw={600}>{c.name}</Text>
                 <Badge color={c.subscriptionMode === 'open' ? 'teal' : 'grape'}>
-                  {c.subscriptionMode}
+                  {t(`mode.${c.subscriptionMode}`)}
                 </Badge>
               </Group>
             </Card>

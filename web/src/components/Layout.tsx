@@ -1,10 +1,13 @@
 import { AppShell, Button, Group, Text, Title } from '@mantine/core'
 import { Outlet, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
+import { LanguageSwitcher } from './LanguageSwitcher'
 
 export function Layout() {
   const { logout } = useAuth()
   const navigate = useNavigate()
+  const { t } = useTranslation()
 
   function handleLogout() {
     logout()
@@ -16,14 +19,17 @@ export function Layout() {
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
           <Group gap="xs" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>
-            <Title order={3}>Pheme</Title>
+            <Title order={3}>{t('common.appName')}</Title>
             <Text size="sm" c="dimmed">
-              notification relay
+              {t('common.tagline')}
             </Text>
           </Group>
-          <Button variant="subtle" onClick={handleLogout}>
-            Log out
-          </Button>
+          <Group gap="md">
+            <LanguageSwitcher />
+            <Button variant="subtle" onClick={handleLogout}>
+              {t('common.logout')}
+            </Button>
+          </Group>
         </Group>
       </AppShell.Header>
       <AppShell.Main>

@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Center,
+  Group,
   PasswordInput,
   Stack,
   Text,
@@ -12,12 +13,15 @@ import {
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
 import { ApiError } from '../lib/api'
+import { LanguageSwitcher } from '../components/LanguageSwitcher'
 
 export function LoginPage() {
   const { login, register } = useAuth()
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -33,7 +37,7 @@ export function LoginPage() {
       }
       navigate('/', { replace: true })
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : 'request failed'
+      const msg = err instanceof ApiError ? err.message : t('auth.requestFailed')
       notifications.show({ color: 'red', message: msg })
     } finally {
       setLoading(false)
@@ -41,34 +45,37 @@ export function LoginPage() {
   }
 
   return (
-    <Center mih="80vh">
+    <Center mih="100vh">
       <Card withBorder padding="xl" w={380}>
         <Stack>
-          <div>
-            <Title order={3}>Pheme</Title>
-            <Text size="sm" c="dimmed">
-              {mode === 'login' ? 'Sign in to your account' : 'Create an account'}
-            </Text>
-          </div>
+          <Group justify="space-between" align="flex-start">
+            <div>
+              <Title order={3}>{t('common.appName')}</Title>
+              <Text size="sm" c="dimmed">
+                {mode === 'login' ? t('auth.signInSubtitle') : t('auth.registerSubtitle')}
+              </Text>
+            </div>
+            <LanguageSwitcher />
+          </Group>
           <TextInput
-            label="Email"
+            label={t('auth.email')}
             type="email"
             value={email}
             onChange={(e) => setEmail(e.currentTarget.value)}
           />
           <PasswordInput
-            label="Password"
+            label={t('auth.password')}
             value={password}
             onChange={(e) => setPassword(e.currentTarget.value)}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
           />
           <Button onClick={submit} loading={loading} fullWidth>
-            {mode === 'login' ? 'Sign in' : 'Register'}
+            {mode === 'login' ? t('auth.signIn') : t('auth.register')}
           </Button>
           <Text size="sm" c="dimmed" ta="center">
-            {mode === 'login' ? "Don't have an account? " : 'Already registered? '}
+            {mode === 'login' ? t('auth.noAccount') : t('auth.haveAccount')}
             <Anchor onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
-              {mode === 'login' ? 'Register' : 'Sign in'}
+              {mode === 'login' ? t('auth.register') : t('auth.signIn')}
             </Anchor>
           </Text>
         </Stack>
