@@ -1,5 +1,5 @@
 import { Group, Text, ThemeIcon } from '@mantine/core'
-import { IconBroadcast } from '@tabler/icons-react'
+import { IconSpeakerphone } from '@tabler/icons-react'
 import { BRAND_GRADIENT } from '../theme'
 
 interface LogoProps {
@@ -19,7 +19,7 @@ export function Logo({ size = 'sm', onClick }: LogoProps) {
       onClick={onClick}
     >
       <ThemeIcon variant="gradient" gradient={BRAND_GRADIENT} size={dim} radius="md">
-        <IconBroadcast size={dim * 0.62} />
+        <IconSpeakerphone size={dim * 0.62} />
       </ThemeIcon>
       <Text
         fw={700}
