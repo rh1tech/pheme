@@ -1,4 +1,4 @@
-import { AppShell, Button, Group, Text, Title } from '@mantine/core'
+import { AppShell, Button, Group, Title } from '@mantine/core'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
@@ -20,9 +20,6 @@ export function Layout() {
         <Group h="100%" px="md" justify="space-between">
           <Group gap="xs" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>
             <Title order={3}>{t('common.appName')}</Title>
-            <Text size="sm" c="dimmed">
-              {t('common.tagline')}
-            </Text>
           </Group>
           <Group gap="md">
             <LanguageSwitcher />
