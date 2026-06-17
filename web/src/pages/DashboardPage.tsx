@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Badge,
   Button,
@@ -28,6 +28,7 @@ export function DashboardPage() {
   const [name, setName] = useState('')
   const [mode, setMode] = useState<SubscriptionMode>('approval')
   const [creating, setCreating] = useState(false)
+  const nameRef = useRef<HTMLInputElement>(null)
 
   async function refresh() {
     try {
@@ -87,9 +88,15 @@ export function DashboardPage() {
 
   return (
     <Container size="sm">
-      <Modal opened={modalOpen} onClose={() => setModalOpen(false)} title={t('dashboard.newChannel')}>
+      <Modal
+        opened={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={t('dashboard.newChannel')}
+        onEnterTransitionEnd={() => nameRef.current?.focus()}
+      >
         <Stack gap="sm">
           <TextInput
+            ref={nameRef}
             label={t('dashboard.channelName')}
             placeholder={t('dashboard.channelNamePlaceholder')}
             data-autofocus
@@ -148,6 +155,8 @@ export function DashboardPage() {
               key={c.id}
               withBorder
               padding="md"
+              className="pheme-card"
+              data-clickable="true"
               style={{ cursor: 'pointer' }}
               onClick={() => navigate(`/channels/${c.id}`)}
             >

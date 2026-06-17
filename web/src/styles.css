@@ -1,0 +1,47 @@
+/* Pheme global style refinements layered on top of the Mantine theme. */
+
+:root {
+  --pheme-bg-light: radial-gradient(
+      1200px 600px at 100% -10%,
+      rgba(127, 76, 238, 0.08),
+      transparent 60%
+    ),
+    radial-gradient(900px 500px at -10% 110%, rgba(190, 75, 219, 0.07), transparent 55%);
+  --pheme-bg-dark: radial-gradient(
+      1200px 600px at 100% -10%,
+      rgba(127, 76, 238, 0.16),
+      transparent 60%
+    ),
+    radial-gradient(900px 500px at -10% 110%, rgba(190, 75, 219, 0.12), transparent 55%);
+}
+
+body {
+  min-height: 100vh;
+}
+
+[data-mantine-color-scheme='light'] body {
+  background-color: #fafafd;
+  background-image: var(--pheme-bg-light);
+  background-attachment: fixed;
+}
+
+[data-mantine-color-scheme='dark'] body {
+  background-image: var(--pheme-bg-dark);
+  background-attachment: fixed;
+}
+
+/* Subtle lift on interactive cards (links to channels, etc.). */
+a.pheme-card,
+.pheme-card[role='button'],
+.pheme-card[data-clickable='true'] {
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    border-color 120ms ease;
+}
+
+.pheme-card[data-clickable='true']:hover {
+  transform: translateY(-2px);
+  border-color: var(--mantine-color-iris-4);
+  box-shadow: var(--mantine-shadow-md);
+}

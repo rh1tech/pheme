@@ -9,7 +9,6 @@ import {
   Stack,
   Text,
   TextInput,
-  Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { useNavigate } from 'react-router-dom'
@@ -18,6 +17,7 @@ import { useAuth } from '../auth/context'
 import { ApiError } from '../lib/api'
 import { LanguageSwitcher } from '../components/LanguageSwitcher'
 import { ThemeToggle } from '../components/ThemeToggle'
+import { Logo } from '../components/Logo'
 
 export function LoginPage() {
   const { login, register } = useAuth()
@@ -46,44 +46,45 @@ export function LoginPage() {
   }
 
   return (
-    <Center mih="100vh">
-      <Card withBorder padding="xl" w={380}>
-        <Stack>
-          <Group justify="space-between" align="flex-start">
-            <div>
-              <Title order={3}>{t('common.appName')}</Title>
-              <Text size="sm" c="dimmed">
-                {mode === 'login' ? t('auth.signInSubtitle') : t('auth.registerSubtitle')}
-              </Text>
-            </div>
-            <Group gap="xs">
-              <ThemeToggle />
-              <LanguageSwitcher />
-            </Group>
+    <Center mih="100vh" p="md">
+      <Stack w={400} gap="lg">
+        <Group justify="space-between">
+          <Logo size="lg" />
+          <Group gap="xs">
+            <ThemeToggle />
+            <LanguageSwitcher />
           </Group>
-          <TextInput
-            label={t('auth.email')}
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.currentTarget.value)}
-          />
-          <PasswordInput
-            label={t('auth.password')}
-            value={password}
-            onChange={(e) => setPassword(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submit()}
-          />
-          <Button onClick={submit} loading={loading} fullWidth>
-            {mode === 'login' ? t('auth.signIn') : t('auth.register')}
-          </Button>
-          <Text size="sm" c="dimmed" ta="center">
-            {mode === 'login' ? t('auth.noAccount') : t('auth.haveAccount')}
-            <Anchor onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
-              {mode === 'login' ? t('auth.register') : t('auth.signIn')}
-            </Anchor>
-          </Text>
-        </Stack>
-      </Card>
+        </Group>
+        <Card withBorder padding="xl" shadow="md">
+          <Stack>
+            <Text fw={600} fz="lg">
+              {mode === 'login' ? t('auth.signInSubtitle') : t('auth.registerSubtitle')}
+            </Text>
+            <TextInput
+              label={t('auth.email')}
+              type="email"
+              autoFocus
+              value={email}
+              onChange={(e) => setEmail(e.currentTarget.value)}
+            />
+            <PasswordInput
+              label={t('auth.password')}
+              value={password}
+              onChange={(e) => setPassword(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === 'Enter' && submit()}
+            />
+            <Button onClick={submit} loading={loading} fullWidth mt="xs">
+              {mode === 'login' ? t('auth.signIn') : t('auth.register')}
+            </Button>
+            <Text size="sm" c="dimmed" ta="center">
+              {mode === 'login' ? t('auth.noAccount') : t('auth.haveAccount')}
+              <Anchor fw={500} onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
+                {mode === 'login' ? t('auth.register') : t('auth.signIn')}
+              </Anchor>
+            </Text>
+          </Stack>
+        </Card>
+      </Stack>
     </Center>
   )
 }
