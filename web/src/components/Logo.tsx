@@ -1,14 +1,14 @@
 import { Group, Text, ThemeIcon } from '@mantine/core'
+import { IconFeather } from '@tabler/icons-react'
 import { BRAND_GRADIENT } from '../theme'
-import { PhemeMark } from './PhemeMark'
 
 interface LogoProps {
   size?: 'sm' | 'lg'
   onClick?: () => void
 }
 
-// The Pheme wordmark: a gradient tile bearing the winged-messenger goddess mark
-// alongside a gradient Space Grotesk wordmark.
+// The Pheme wordmark: a gradient tile bearing a quill feather (messenger / the
+// spreading of word and fame) alongside a gradient Space Grotesk wordmark.
 export function Logo({ size = 'sm', onClick }: LogoProps) {
   const dim = size === 'lg' ? 40 : 32
   return (
@@ -19,7 +19,7 @@ export function Logo({ size = 'sm', onClick }: LogoProps) {
       onClick={onClick}
     >
       <ThemeIcon variant="gradient" gradient={BRAND_GRADIENT} size={dim} radius="md">
-        <PhemeMark size={dim * 0.72} color="#fff" />
+        <IconFeather size={dim * 0.6} />
       </ThemeIcon>
       <Text
         fw={700}
