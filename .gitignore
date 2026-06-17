@@ -1,0 +1,26 @@
+# Go
+/api/bin/
+*.test
+*.out
+
+# Node / Vite
+node_modules/
+web/dist/
+web/.vite/
+
+# Flutter
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins*
+
+# Env & secrets
+.env
+*.local
+deploy/secrets/
+**/firebase-service-account.json
+**/vapid*.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
