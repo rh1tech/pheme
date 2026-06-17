@@ -115,6 +115,9 @@ export const api = {
   listChannels: () => request<{ channels: Channel[] }>('/v1/channels').then((r) => r.channels ?? []),
   createChannel: (name: string, subscriptionMode: SubscriptionMode) =>
     request<Channel>('/v1/channels', { method: 'POST', body: { name, subscriptionMode } }),
+  updateChannel: (id: string, body: { name?: string; subscriptionMode?: SubscriptionMode }) =>
+    request<Channel>(`/v1/channels/${id}`, { method: 'PATCH', body }),
+  deleteChannel: (id: string) => request<void>(`/v1/channels/${id}`, { method: 'DELETE' }),
 
   // API keys
   createKey: (channelId: string) =>

@@ -26,6 +26,8 @@ type Store interface {
 	ChannelByID(ctx context.Context, id string) (domain.Channel, error)
 	ChannelByPublicID(ctx context.Context, publicID string) (domain.Channel, error)
 	ChannelsByOwner(ctx context.Context, ownerID string) ([]domain.Channel, error)
+	UpdateChannel(ctx context.Context, id, name string, mode domain.SubscriptionMode) (domain.Channel, error)
+	DeleteChannel(ctx context.Context, id string) error
 
 	// API keys
 	CreateAPIKey(ctx context.Context, k domain.APIKey) (domain.APIKey, error)

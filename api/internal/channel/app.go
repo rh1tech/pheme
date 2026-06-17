@@ -36,6 +36,8 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected := http.NewServeMux()
 	protected.HandleFunc("POST /v1/channels", h.createChannel)
 	protected.HandleFunc("GET /v1/channels", h.listChannels)
+	protected.HandleFunc("PATCH /v1/channels/{id}", h.updateChannel)
+	protected.HandleFunc("DELETE /v1/channels/{id}", h.deleteChannel)
 	protected.HandleFunc("POST /v1/channels/{id}/keys", h.createKey)
 	protected.HandleFunc("GET /v1/channels/{id}/keys", h.listKeys)
 	protected.HandleFunc("DELETE /v1/channels/{id}/keys/{keyId}", h.revokeKey)
@@ -117,6 +119,55 @@ func (h *AppHandler) listChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"channels": channels})
+}
+
+type updateChannelRequest struct {
+	Name             string                  `json:"name"`
+	SubscriptionMode domain.SubscriptionMode `json:"subscriptionMode"`
+}
+
+func (h *AppHandler) updateChannel(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	channelID := r.PathValue("id")
+	if !h.ownsChannel(r, uid, channelID) {
+		httpx.Error(w, http.StatusForbidden, "not your channel")
+		return
+	}
+	var req updateChannelRequest
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if req.SubscriptionMode != "" &&
+		req.SubscriptionMode != domain.ModeOpen && req.SubscriptionMode != domain.ModeApproval {
+		httpx.Error(w, http.StatusBadRequest, "invalid subscriptionMode")
+		return
+	}
+	ch, err := h.Store.UpdateChannel(r.Context(), channelID, req.Name, req.SubscriptionMode)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not update channel")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, ch)
+}
+
+func (h *AppHandler) deleteChannel(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	channelID := r.PathValue("id")
+	if !h.ownsChannel(r, uid, channelID) {
+		httpx.Error(w, http.StatusForbidden, "not your channel")
+		return
+	}
+	if err := h.Store.DeleteChannel(r.Context(), channelID); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not delete channel")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *AppHandler) createKey(w http.ResponseWriter, r *http.Request) {

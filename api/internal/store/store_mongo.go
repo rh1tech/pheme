@@ -116,6 +116,56 @@ func (m *Mongo) ChannelsByOwner(ctx context.Context, ownerID string) ([]domain.C
 	return out, cur.All(ctx, &out)
 }
 
+func (m *Mongo) UpdateChannel(ctx context.Context, id, name string, mode domain.SubscriptionMode) (domain.Channel, error) {
+	set := bson.M{}
+	if name != "" {
+		set["name"] = name
+	}
+	if mode != "" {
+		set["subscriptionMode"] = mode
+	}
+	if len(set) > 0 {
+		if _, err := m.db.Collection("channels").UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set}); err != nil {
+			return domain.Channel{}, err
+		}
+	}
+	return m.ChannelByID(ctx, id)
+}
+
+func (m *Mongo) DeleteChannel(ctx context.Context, id string) error {
+	// Collect message IDs first so dependent deliveries can be removed.
+	cur, err := m.db.Collection("messages").Find(ctx, bson.M{"channelId": id})
+	if err != nil {
+		return err
+	}
+	var msgs []domain.Message
+	if err := cur.All(ctx, &msgs); err != nil {
+		return err
+	}
+	if len(msgs) > 0 {
+		ids := make([]string, 0, len(msgs))
+		for _, msg := range msgs {
+			ids = append(ids, msg.ID)
+		}
+		if _, err := m.db.Collection("deliveries").DeleteMany(ctx, bson.M{"messageId": bson.M{"$in": ids}}); err != nil {
+			return err
+		}
+	}
+	for _, coll := range []string{"messages", "subscriptions", "apiKeys"} {
+		if _, err := m.db.Collection(coll).DeleteMany(ctx, bson.M{"channelId": id}); err != nil {
+			return err
+		}
+	}
+	res, err := m.db.Collection("channels").DeleteOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (m *Mongo) CreateAPIKey(ctx context.Context, k domain.APIKey) (domain.APIKey, error) {
 	if k.ID == "" {
 		k.ID = mongoID()

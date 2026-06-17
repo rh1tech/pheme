@@ -5,6 +5,7 @@ import {
   Card,
   Container,
   Group,
+  Modal,
   SegmentedControl,
   Stack,
   Text,
@@ -21,6 +22,7 @@ import { saveWebDeviceId } from '../lib/device'
 export function DashboardPage() {
   const navigate = useNavigate()
   const [channels, setChannels] = useState<Channel[]>([])
+  const [modalOpen, setModalOpen] = useState(false)
   const [name, setName] = useState('')
   const [mode, setMode] = useState<SubscriptionMode>('approval')
   const [creating, setCreating] = useState(false)
@@ -34,19 +36,31 @@ export function DashboardPage() {
   }
 
   useEffect(() => {
-    // Initial data fetch on mount; state is set after the awaited response.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh()
+    let active = true
+    api
+      .listChannels()
+      .then((cs) => active && setChannels(cs))
+      .catch((e) => active && notifications.show({ color: 'red', message: `Load failed: ${String(e)}` }))
+    return () => {
+      active = false
+    }
   }, [])
+
+  function openCreate() {
+    setName('')
+    setMode('approval')
+    setModalOpen(true)
+  }
 
   async function createChannel() {
     if (!name.trim()) return
     setCreating(true)
     try {
-      await api.createChannel(name.trim(), mode)
-      setName('')
+      const created = await api.createChannel(name.trim(), mode)
+      setModalOpen(false)
       await refresh()
       notifications.show({ color: 'green', message: 'Channel created' })
+      navigate(`/channels/${created.id}`)
     } catch (e) {
       notifications.show({ color: 'red', message: `Create failed: ${String(e)}` })
     } finally {
@@ -66,25 +80,22 @@ export function DashboardPage() {
 
   return (
     <Container size="sm">
-      <Stack gap="lg">
-        <Group justify="space-between">
-          <Title order={4}>Your channels</Title>
-          {webPushSupported() && (
-            <Button variant="light" size="xs" onClick={enableNotifications}>
-              Enable browser notifications
-            </Button>
-          )}
-        </Group>
-
-        <Card withBorder padding="lg">
-          <Stack gap="sm">
-            <TextInput
-              label="New channel name"
-              placeholder="Site Alerts"
-              value={name}
-              onChange={(e) => setName(e.currentTarget.value)}
-            />
+      <Modal opened={modalOpen} onClose={() => setModalOpen(false)} title="New channel">
+        <Stack gap="sm">
+          <TextInput
+            label="Channel name"
+            placeholder="Site Alerts"
+            data-autofocus
+            value={name}
+            onChange={(e) => setName(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === 'Enter' && createChannel()}
+          />
+          <div>
+            <Text size="sm" fw={500} mb={4}>
+              Subscription mode
+            </Text>
             <SegmentedControl
+              fullWidth
               value={mode}
               onChange={(v) => setMode(v as SubscriptionMode)}
               data={[
@@ -92,18 +103,37 @@ export function DashboardPage() {
                 { label: 'Open', value: 'open' },
               ]}
             />
-            <Group justify="flex-end">
-              <Button onClick={createChannel} loading={creating} disabled={!name.trim()}>
-                Create channel
+          </div>
+          <Group justify="flex-end" mt="sm">
+            <Button variant="default" onClick={() => setModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={createChannel} loading={creating} disabled={!name.trim()}>
+              Create channel
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Stack gap="lg">
+        <Group justify="space-between">
+          <Title order={4}>Your channels</Title>
+          <Group gap="xs">
+            {webPushSupported() && (
+              <Button variant="subtle" size="xs" onClick={enableNotifications}>
+                Enable notifications
               </Button>
-            </Group>
-          </Stack>
-        </Card>
+            )}
+            <Button size="xs" onClick={openCreate}>
+              New channel
+            </Button>
+          </Group>
+        </Group>
 
         <Stack gap="sm">
           {channels.length === 0 && (
             <Text c="dimmed" size="sm">
-              No channels yet — create one above.
+              No channels yet — create one with “New channel”.
             </Text>
           )}
           {channels.map((c) => (

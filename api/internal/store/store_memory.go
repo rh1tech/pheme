@@ -107,6 +107,55 @@ func (m *Memory) ChannelsByOwner(_ context.Context, ownerID string) ([]domain.Ch
 	return out, nil
 }
 
+func (m *Memory) UpdateChannel(_ context.Context, id, name string, mode domain.SubscriptionMode) (domain.Channel, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.channels[id]
+	if !ok {
+		return domain.Channel{}, ErrNotFound
+	}
+	if name != "" {
+		c.Name = name
+	}
+	if mode != "" {
+		c.SubscriptionMode = mode
+	}
+	m.channels[id] = c
+	return c, nil
+}
+
+func (m *Memory) DeleteChannel(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.channels[id]; !ok {
+		return ErrNotFound
+	}
+	delete(m.channels, id)
+	for kid, k := range m.apiKeys {
+		if k.ChannelID == id {
+			delete(m.apiKeys, kid)
+		}
+	}
+	for sid, s := range m.subscriptions {
+		if s.ChannelID == id {
+			delete(m.subscriptions, sid)
+		}
+	}
+	msgIDs := map[string]struct{}{}
+	for mid, msg := range m.messages {
+		if msg.ChannelID == id {
+			msgIDs[mid] = struct{}{}
+			delete(m.messages, mid)
+		}
+	}
+	for did, d := range m.deliveries {
+		if _, ok := msgIDs[d.MessageID]; ok {
+			delete(m.deliveries, did)
+		}
+	}
+	return nil
+}
+
 func (m *Memory) CreateAPIKey(_ context.Context, k domain.APIKey) (domain.APIKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
