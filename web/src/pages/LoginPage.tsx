@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
 import { ApiError } from '../lib/api'
 import { LanguageSwitcher } from '../components/LanguageSwitcher'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 export function LoginPage() {
   const { login, register } = useAuth()
@@ -55,7 +56,10 @@ export function LoginPage() {
                 {mode === 'login' ? t('auth.signInSubtitle') : t('auth.registerSubtitle')}
               </Text>
             </div>
-            <LanguageSwitcher />
+            <Group gap="xs">
+              <ThemeToggle />
+              <LanguageSwitcher />
+            </Group>
           </Group>
           <TextInput
             label={t('auth.email')}

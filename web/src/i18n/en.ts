@@ -9,6 +9,7 @@ const en = {
     copied: 'Copied',
     save: 'Save',
     delete: 'Delete',
+    toggleTheme: 'Toggle light/dark theme',
   },
   language: {
     label: 'Language',

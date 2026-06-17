@@ -11,6 +11,7 @@ const ru: Resources = {
     copied: 'Скопировано',
     save: 'Сохранить',
     delete: 'Удалить',
+    toggleTheme: 'Переключить светлую/тёмную тему',
   },
   language: {
     label: 'Язык',
