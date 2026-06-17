@@ -48,14 +48,31 @@ const (
 	RoleAdmin Role = "admin"
 )
 
+// UserStatus is a user account's state.
+type UserStatus string
+
+const (
+	UserActive  UserStatus = "active"
+	UserBlocked UserStatus = "blocked"
+)
+
 // User is an authenticated account that owns channels and devices.
 type User struct {
-	ID           string    `bson:"_id,omitempty" json:"id"`
-	Email        string    `bson:"email" json:"email"`
-	PasswordHash string    `bson:"passwordHash" json:"-"`
-	Role         Role      `bson:"role" json:"role"`
-	CreatedAt    time.Time `bson:"createdAt" json:"createdAt"`
+	ID           string     `bson:"_id,omitempty" json:"id"`
+	Email        string     `bson:"email" json:"email"`
+	PasswordHash string     `bson:"passwordHash" json:"-"`
+	Role         Role       `bson:"role" json:"role"`
+	Status       UserStatus `bson:"status" json:"status"`
+	CreatedAt    time.Time  `bson:"createdAt" json:"createdAt"`
 }
+
+// ChannelStatus controls whether a channel accepts and delivers notifications.
+type ChannelStatus string
+
+const (
+	ChannelActive   ChannelStatus = "active"
+	ChannelDisabled ChannelStatus = "disabled"
+)
 
 // Channel is a named notification target with a public trigger ID.
 type Channel struct {
@@ -64,6 +81,7 @@ type Channel struct {
 	OwnerID          string           `bson:"ownerId" json:"ownerId"`
 	Name             string           `bson:"name" json:"name"`
 	SubscriptionMode SubscriptionMode `bson:"subscriptionMode" json:"subscriptionMode"`
+	Status           ChannelStatus    `bson:"status" json:"status"`
 	CreatedAt        time.Time        `bson:"createdAt" json:"createdAt"`
 }
 

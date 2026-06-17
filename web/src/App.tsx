@@ -7,6 +7,7 @@ import { LoginPage } from './pages/LoginPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ChannelPage } from './pages/ChannelPage'
 import { AdminPage } from './pages/AdminPage'
+import { AdminChannelPage } from './pages/AdminChannelPage'
 
 export default function App() {
   return (
@@ -28,6 +29,14 @@ export default function App() {
               element={
                 <RequireAdmin>
                   <AdminPage />
+                </RequireAdmin>
+              }
+            />
+            <Route
+              path="/admin/channels/:id"
+              element={
+                <RequireAdmin>
+                  <AdminChannelPage />
                 </RequireAdmin>
               }
             />

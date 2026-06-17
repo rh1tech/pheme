@@ -2,6 +2,7 @@ package channel
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/domain"
@@ -20,9 +21,12 @@ type AdminHandler struct {
 func (h *AdminHandler) Register(protected *http.ServeMux) {
 	protected.HandleFunc("GET /v1/admin/stats", h.stats)
 	protected.HandleFunc("GET /v1/admin/users", h.listUsers)
+	protected.HandleFunc("PATCH /v1/admin/users/{id}", h.updateUser)
 	protected.HandleFunc("DELETE /v1/admin/users/{id}", h.deleteUser)
 	protected.HandleFunc("GET /v1/admin/channels", h.listChannels)
+	protected.HandleFunc("PATCH /v1/admin/channels/{id}", h.updateChannel)
 	protected.HandleFunc("DELETE /v1/admin/channels/{id}", h.deleteChannel)
+	protected.HandleFunc("GET /v1/admin/channels/{id}/messages", h.channelMessages)
 	protected.HandleFunc("GET /v1/admin/channels/{id}/keys", h.listKeys)
 	protected.HandleFunc("DELETE /v1/admin/channels/{id}/keys/{keyId}", h.revokeKey)
 }
@@ -33,6 +37,21 @@ func (h *AdminHandler) requireAdmin(w http.ResponseWriter, r *http.Request) bool
 		return false
 	}
 	return true
+}
+
+// pageParams reads q, page (1-based) and limit query parameters with defaults.
+func pageParams(r *http.Request) (q string, offset, limit, page int) {
+	q = r.URL.Query().Get("q")
+	page = 1
+	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && v > 0 {
+		page = v
+	}
+	limit = 20
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 100 {
+		limit = v
+	}
+	offset = (page - 1) * limit
+	return q, offset, limit, page
 }
 
 func (h *AdminHandler) stats(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +76,8 @@ func (h *AdminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
 	}
-	users, err := h.Store.ListUsers(r.Context())
+	q, offset, limit, page := pageParams(r)
+	users, total, err := h.Store.AdminListUsers(r.Context(), q, offset, limit)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not list users")
 		return
@@ -73,9 +93,53 @@ func (h *AdminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]userSummary, 0, len(users))
 	for _, u := range users {
+		if u.Status == "" {
+			u.Status = domain.UserActive
+		}
 		out = append(out, userSummary{User: u, ChannelCount: counts[u.ID]})
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"users": out})
+	httpx.JSON(w, http.StatusOK, map[string]any{"users": out, "total": total, "page": page, "limit": limit})
+}
+
+type updateUserRequest struct {
+	Role   *domain.Role       `json:"role,omitempty"`
+	Status *domain.UserStatus `json:"status,omitempty"`
+}
+
+func (h *AdminHandler) updateUser(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	targetID := r.PathValue("id")
+	if uid, _ := auth.UserIDFromContext(r.Context()); uid == targetID {
+		httpx.Error(w, http.StatusBadRequest, "cannot change your own role or status")
+		return
+	}
+	var req updateUserRequest
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if req.Role != nil {
+		if *req.Role != domain.RoleUser && *req.Role != domain.RoleAdmin {
+			httpx.Error(w, http.StatusBadRequest, "invalid role")
+			return
+		}
+		if err := h.Store.UpdateUserRole(r.Context(), targetID, *req.Role); err != nil {
+			h.writeStoreErr(w, err, "could not update role")
+			return
+		}
+	}
+	if req.Status != nil {
+		if *req.Status != domain.UserActive && *req.Status != domain.UserBlocked {
+			httpx.Error(w, http.StatusBadRequest, "invalid status")
+			return
+		}
+		if err := h.Store.UpdateUserStatus(r.Context(), targetID, *req.Status); err != nil {
+			h.writeStoreErr(w, err, "could not update status")
+			return
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 func (h *AdminHandler) deleteUser(w http.ResponseWriter, r *http.Request) {
@@ -88,11 +152,7 @@ func (h *AdminHandler) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Store.DeleteUser(r.Context(), targetID); err != nil {
-		if err == store.ErrNotFound {
-			httpx.Error(w, http.StatusNotFound, "user not found")
-			return
-		}
-		httpx.Error(w, http.StatusInternalServerError, "could not delete user")
+		h.writeStoreErr(w, err, "could not delete user")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -108,7 +168,8 @@ func (h *AdminHandler) listChannels(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
 	}
-	channels, err := h.Store.ListAllChannels(r.Context())
+	q, offset, limit, page := pageParams(r)
+	channels, total, err := h.Store.AdminListChannels(r.Context(), q, offset, limit)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not list channels")
 		return
@@ -124,9 +185,36 @@ func (h *AdminHandler) listChannels(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]channelSummary, 0, len(channels))
 	for _, c := range channels {
+		if c.Status == "" {
+			c.Status = domain.ChannelActive
+		}
 		out = append(out, channelSummary{Channel: c, OwnerEmail: emails[c.OwnerID]})
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"channels": out})
+	httpx.JSON(w, http.StatusOK, map[string]any{"channels": out, "total": total, "page": page, "limit": limit})
+}
+
+type updateChannelStatusRequest struct {
+	Status domain.ChannelStatus `json:"status"`
+}
+
+func (h *AdminHandler) updateChannel(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	var req updateChannelStatusRequest
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if req.Status != domain.ChannelActive && req.Status != domain.ChannelDisabled {
+		httpx.Error(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+	ch, err := h.Store.UpdateChannelStatus(r.Context(), r.PathValue("id"), req.Status)
+	if err != nil {
+		h.writeStoreErr(w, err, "could not update channel")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, ch)
 }
 
 func (h *AdminHandler) deleteChannel(w http.ResponseWriter, r *http.Request) {
@@ -134,14 +222,31 @@ func (h *AdminHandler) deleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Store.DeleteChannel(r.Context(), r.PathValue("id")); err != nil {
-		if err == store.ErrNotFound {
-			httpx.Error(w, http.StatusNotFound, "channel not found")
-			return
-		}
-		httpx.Error(w, http.StatusInternalServerError, "could not delete channel")
+		h.writeStoreErr(w, err, "could not delete channel")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AdminHandler) channelMessages(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	channelID := r.PathValue("id")
+	limit := 50
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 && v <= 200 {
+		limit = v
+	}
+	msgs, err := h.Store.MessagesByChannel(r.Context(), channelID, r.URL.Query().Get("cursor"), r.URL.Query().Get("q"), limit)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not load messages")
+		return
+	}
+	var next string
+	if len(msgs) == limit {
+		next = msgs[len(msgs)-1].ID
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"messages": msgs, "nextCursor": next})
 }
 
 func (h *AdminHandler) listKeys(w http.ResponseWriter, r *http.Request) {
@@ -161,12 +266,16 @@ func (h *AdminHandler) revokeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Store.RevokeAPIKey(r.Context(), r.PathValue("keyId")); err != nil {
-		if err == store.ErrNotFound {
-			httpx.Error(w, http.StatusNotFound, "key not found")
-			return
-		}
-		httpx.Error(w, http.StatusInternalServerError, "could not revoke key")
+		h.writeStoreErr(w, err, "could not revoke key")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"status": "revoked", "id": r.PathValue("keyId")})
+}
+
+func (h *AdminHandler) writeStoreErr(w http.ResponseWriter, err error, msg string) {
+	if err == store.ErrNotFound {
+		httpx.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	httpx.Error(w, http.StatusInternalServerError, msg)
 }

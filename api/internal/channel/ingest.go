@@ -54,6 +54,11 @@ func (h *IngestHandler) notify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if ch.Status == domain.ChannelDisabled {
+		httpx.Error(w, http.StatusForbidden, "channel is disabled")
+		return
+	}
+
 	if h.Limiter != nil && !h.Limiter.Allow(ch.ID) {
 		httpx.Error(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return

@@ -77,6 +77,18 @@ func (m *Memory) UpdateUserRole(_ context.Context, userID string, role domain.Ro
 	return nil
 }
 
+func (m *Memory) UpdateUserStatus(_ context.Context, userID string, status domain.UserStatus) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[userID]
+	if !ok {
+		return ErrNotFound
+	}
+	u.Status = status
+	m.users[userID] = u
+	return nil
+}
+
 func (m *Memory) ListUsers(_ context.Context) ([]domain.User, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -86,6 +98,20 @@ func (m *Memory) ListUsers(_ context.Context) ([]domain.User, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
+}
+
+func (m *Memory) AdminListUsers(_ context.Context, query string, offset, limit int) ([]domain.User, int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	q := strings.ToLower(strings.TrimSpace(query))
+	var all []domain.User
+	for _, u := range m.users {
+		if q == "" || strings.Contains(strings.ToLower(u.Email), q) {
+			all = append(all, u)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	return paginate(all, offset, limit), int64(len(all)), nil
 }
 
 func (m *Memory) DeleteUser(ctx context.Context, userID string) error {
@@ -188,6 +214,18 @@ func (m *Memory) UpdateChannel(_ context.Context, id, name string, mode domain.S
 	return c, nil
 }
 
+func (m *Memory) UpdateChannelStatus(_ context.Context, id string, status domain.ChannelStatus) (domain.Channel, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.channels[id]
+	if !ok {
+		return domain.Channel{}, ErrNotFound
+	}
+	c.Status = status
+	m.channels[id] = c
+	return c, nil
+}
+
 func (m *Memory) DeleteChannel(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -229,6 +267,36 @@ func (m *Memory) ListAllChannels(_ context.Context) ([]domain.Channel, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
+}
+
+func (m *Memory) AdminListChannels(_ context.Context, query string, offset, limit int) ([]domain.Channel, int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	q := strings.ToLower(strings.TrimSpace(query))
+	var all []domain.Channel
+	for _, c := range m.channels {
+		if q == "" || strings.Contains(strings.ToLower(c.Name), q) {
+			all = append(all, c)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	return paginate(all, offset, limit), int64(len(all)), nil
+}
+
+// paginate returns the slice window [offset, offset+limit). A non-positive limit
+// returns everything from offset.
+func paginate[T any](items []T, offset, limit int) []T {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []T{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return items[offset:end]
 }
 
 func (m *Memory) AdminStats(_ context.Context, topN, recentN int) (domain.AdminStats, error) {

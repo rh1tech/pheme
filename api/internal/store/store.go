@@ -21,7 +21,9 @@ type Store interface {
 	CreateUser(ctx context.Context, u domain.User) (domain.User, error)
 	UserByEmail(ctx context.Context, email string) (domain.User, error)
 	UpdateUserRole(ctx context.Context, userID string, role domain.Role) error
+	UpdateUserStatus(ctx context.Context, userID string, status domain.UserStatus) error
 	ListUsers(ctx context.Context) ([]domain.User, error)
+	AdminListUsers(ctx context.Context, query string, offset, limit int) ([]domain.User, int64, error)
 	DeleteUser(ctx context.Context, userID string) error
 
 	// Channels
@@ -30,8 +32,10 @@ type Store interface {
 	ChannelByPublicID(ctx context.Context, publicID string) (domain.Channel, error)
 	ChannelsByOwner(ctx context.Context, ownerID string) ([]domain.Channel, error)
 	UpdateChannel(ctx context.Context, id, name string, mode domain.SubscriptionMode) (domain.Channel, error)
+	UpdateChannelStatus(ctx context.Context, id string, status domain.ChannelStatus) (domain.Channel, error)
 	DeleteChannel(ctx context.Context, id string) error
 	ListAllChannels(ctx context.Context) ([]domain.Channel, error)
+	AdminListChannels(ctx context.Context, query string, offset, limit int) ([]domain.Channel, int64, error)
 
 	// API keys
 	CreateAPIKey(ctx context.Context, k domain.APIKey) (domain.APIKey, error)

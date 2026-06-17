@@ -3,6 +3,8 @@
 export type SubscriptionMode = 'open' | 'approval'
 export type Platform = 'ios' | 'android' | 'web'
 export type Role = 'user' | 'admin'
+export type UserStatus = 'active' | 'blocked'
+export type ChannelStatus = 'active' | 'disabled'
 
 export interface TokenResponse {
   accessToken: string
@@ -17,6 +19,7 @@ export interface Channel {
   ownerId: string
   name: string
   subscriptionMode: SubscriptionMode
+  status: ChannelStatus
   createdAt: string
 }
 
@@ -76,12 +79,20 @@ export interface AdminUser {
   id: string
   email: string
   role: Role
+  status: UserStatus
   createdAt: string
   channelCount: number
 }
 
 export interface AdminChannel extends Channel {
   ownerEmail: string
+}
+
+export interface Paged<T> {
+  items: T[]
+  total: number
+  page: number
+  limit: number
 }
 
 export interface AdminStats {

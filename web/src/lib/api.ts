@@ -12,13 +12,16 @@ import type {
   AdminUser,
   ApiKey,
   Channel,
+  ChannelStatus,
   CreatedKey,
   Device,
   Meta,
   MessagesPage,
   Platform,
+  Role,
   SubscriptionMode,
   TokenResponse,
+  UserStatus,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080'
@@ -153,14 +156,36 @@ export const api = {
 
   // --- Admin ---
   adminStats: () => request<AdminStats>('/v1/admin/stats'),
-  adminListUsers: () =>
-    request<{ users: AdminUser[] }>('/v1/admin/users').then((r) => r.users ?? []),
+  adminListUsers: (q = '', page = 1, limit = 20) => {
+    const p = new URLSearchParams({ page: String(page), limit: String(limit) })
+    if (q) p.set('q', q)
+    return request<{ users: AdminUser[]; total: number; page: number; limit: number }>(
+      `/v1/admin/users?${p.toString()}`,
+    ).then((r) => ({ items: r.users ?? [], total: r.total, page: r.page, limit: r.limit }))
+  },
+  adminUpdateUser: (userId: string, body: { role?: Role; status?: UserStatus }) =>
+    request<unknown>(`/v1/admin/users/${userId}`, { method: 'PATCH', body }),
   adminDeleteUser: (userId: string) =>
     request<void>(`/v1/admin/users/${userId}`, { method: 'DELETE' }),
-  adminListChannels: () =>
-    request<{ channels: AdminChannel[] }>('/v1/admin/channels').then((r) => r.channels ?? []),
+  adminListChannels: (q = '', page = 1, limit = 20) => {
+    const p = new URLSearchParams({ page: String(page), limit: String(limit) })
+    if (q) p.set('q', q)
+    return request<{ channels: AdminChannel[]; total: number; page: number; limit: number }>(
+      `/v1/admin/channels?${p.toString()}`,
+    ).then((r) => ({ items: r.channels ?? [], total: r.total, page: r.page, limit: r.limit }))
+  },
+  adminUpdateChannelStatus: (channelId: string, status: ChannelStatus) =>
+    request<Channel>(`/v1/admin/channels/${channelId}`, { method: 'PATCH', body: { status } }),
   adminDeleteChannel: (channelId: string) =>
     request<void>(`/v1/admin/channels/${channelId}`, { method: 'DELETE' }),
+  adminChannelMessages: (channelId: string, cursor = '', query = '', limit = 50) => {
+    const p = new URLSearchParams({ limit: String(limit) })
+    if (cursor) p.set('cursor', cursor)
+    if (query) p.set('q', query)
+    return request<MessagesPage>(`/v1/admin/channels/${channelId}/messages?${p.toString()}`).then(
+      (page) => ({ messages: page.messages ?? [], nextCursor: page.nextCursor ?? '' }),
+    )
+  },
   adminListKeys: (channelId: string) =>
     request<{ keys: ApiKey[] }>(`/v1/admin/channels/${channelId}/keys`).then((r) => r.keys ?? []),
   adminRevokeKey: (channelId: string, keyId: string) =>

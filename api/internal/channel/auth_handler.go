@@ -73,6 +73,7 @@ func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 		Email:        req.Email,
 		PasswordHash: hash,
 		Role:         h.roleForEmail(req.Email),
+		Status:       domain.UserActive,
 		CreatedAt:    time.Now().UTC(),
 	})
 	if err != nil {
@@ -101,10 +102,19 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	// The admin allowlist is authoritative: sync the stored role on each login so
-	// changes to PHEME_ADMIN_EMAILS take effect without manual intervention.
-	role := h.roleForEmail(u.Email)
-	if role != u.Role {
+	if u.Status == domain.UserBlocked {
+		httpx.Error(w, http.StatusForbidden, "account is blocked")
+		return
+	}
+	// Determine the effective role. Stored role is authoritative (so admins can
+	// manually promote/demote users), but the PHEME_ADMIN_EMAILS allowlist always
+	// guarantees its emails are admins. We never auto-demote here.
+	role := u.Role
+	if role == "" {
+		role = domain.RoleUser
+	}
+	if h.roleForEmail(u.Email) == domain.RoleAdmin && role != domain.RoleAdmin {
+		role = domain.RoleAdmin
 		if err := h.Store.UpdateUserRole(r.Context(), u.ID, role); err != nil {
 			httpx.Error(w, http.StatusInternalServerError, "login failed")
 			return

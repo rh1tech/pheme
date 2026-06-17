@@ -104,6 +104,7 @@ func (h *AppHandler) createChannel(w http.ResponseWriter, r *http.Request) {
 		OwnerID:          uid,
 		Name:             req.Name,
 		SubscriptionMode: mode,
+		Status:           domain.ChannelActive,
 		CreatedAt:        time.Now().UTC(),
 	})
 	if err != nil {
@@ -275,8 +276,13 @@ func (h *AppHandler) notifyChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	channelID := r.PathValue("id")
-	if !h.ownsChannel(r, uid, channelID) {
+	ch, err := h.channelByID(r, channelID)
+	if err != nil || ch.OwnerID != uid {
 		httpx.Error(w, http.StatusForbidden, "not your channel")
+		return
+	}
+	if ch.Status == domain.ChannelDisabled {
+		httpx.Error(w, http.StatusForbidden, "channel is disabled")
 		return
 	}
 	var req notifyChannelRequest

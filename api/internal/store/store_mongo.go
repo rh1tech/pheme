@@ -98,6 +98,17 @@ func (m *Mongo) UpdateUserRole(ctx context.Context, userID string, role domain.R
 	return nil
 }
 
+func (m *Mongo) UpdateUserStatus(ctx context.Context, userID string, status domain.UserStatus) error {
+	res, err := m.db.Collection("users").UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$set": bson.M{"status": status}})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (m *Mongo) ListUsers(ctx context.Context) ([]domain.User, error) {
 	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
 	cur, err := m.db.Collection("users").Find(ctx, bson.M{}, opts)
@@ -106,6 +117,14 @@ func (m *Mongo) ListUsers(ctx context.Context) ([]domain.User, error) {
 	}
 	var out []domain.User
 	return out, cur.All(ctx, &out)
+}
+
+func (m *Mongo) AdminListUsers(ctx context.Context, query string, offset, limit int) ([]domain.User, int64, error) {
+	filter := bson.M{}
+	if q := strings.TrimSpace(query); q != "" {
+		filter["email"] = primitive.Regex{Pattern: regexp.QuoteMeta(q), Options: "i"}
+	}
+	return findPaged[domain.User](ctx, m.db.Collection("users"), filter, offset, limit)
 }
 
 func (m *Mongo) DeleteUser(ctx context.Context, userID string) error {
@@ -193,6 +212,17 @@ func (m *Mongo) UpdateChannel(ctx context.Context, id, name string, mode domain.
 		if _, err := m.db.Collection("channels").UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set}); err != nil {
 			return domain.Channel{}, err
 		}
+	}
+	return m.ChannelByID(ctx, id)
+}
+
+func (m *Mongo) UpdateChannelStatus(ctx context.Context, id string, status domain.ChannelStatus) (domain.Channel, error) {
+	res, err := m.db.Collection("channels").UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"status": status}})
+	if err != nil {
+		return domain.Channel{}, err
+	}
+	if res.MatchedCount == 0 {
+		return domain.Channel{}, ErrNotFound
 	}
 	return m.ChannelByID(ctx, id)
 }
@@ -370,6 +400,39 @@ func (m *Mongo) ListAllChannels(ctx context.Context) ([]domain.Channel, error) {
 	}
 	var out []domain.Channel
 	return out, cur.All(ctx, &out)
+}
+
+func (m *Mongo) AdminListChannels(ctx context.Context, query string, offset, limit int) ([]domain.Channel, int64, error) {
+	filter := bson.M{}
+	if q := strings.TrimSpace(query); q != "" {
+		filter["name"] = primitive.Regex{Pattern: regexp.QuoteMeta(q), Options: "i"}
+	}
+	return findPaged[domain.Channel](ctx, m.db.Collection("channels"), filter, offset, limit)
+}
+
+// findPaged runs a filtered, newest-first, paginated query and also returns the
+// total count of matching documents (ignoring pagination).
+func findPaged[T any](ctx context.Context, coll *mongo.Collection, filter bson.M, offset, limit int) ([]T, int64, error) {
+	total, err := coll.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	if offset > 0 {
+		opts.SetSkip(int64(offset))
+	}
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
+	cur, err := coll.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	var out []T
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 func (m *Mongo) AdminStats(ctx context.Context, topN, recentN int) (domain.AdminStats, error) {
