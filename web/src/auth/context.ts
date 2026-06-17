@@ -2,7 +2,9 @@ import { createContext, useContext } from 'react'
 
 export interface AuthState {
   userId: string | null
+  role: string | null
   isAuthenticated: boolean
+  isAdmin: boolean
   login: (email: string, password: string) => Promise<void>
   register: (email: string, password: string) => Promise<void>
   logout: () => void

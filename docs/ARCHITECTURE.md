@@ -67,13 +67,20 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - `POST /v1/channels/{id}/keys` (returns plaintext key once) · `DELETE /v1/channels/{id}/keys/{keyId}`
 - `POST /v1/devices` · `DELETE /v1/devices/{id}`
 - `POST /v1/channels/{id}/subscribe` · `POST /v1/channels/{id}/approvals/{deviceId}`
-- `GET /v1/channels/{id}/messages?cursor=&limit=` · `GET /v1/channels/{id}/export?format=json|csv`
-- `GET /v1/stream` — WebSocket, live messages for the user's subscribed channels
+- `GET /v1/channels/{id}/messages?cursor=&limit=&q=` · `POST /v1/channels/{id}/notify` (owner sends from the UI)
+- `GET /v1/stream` — SSE live messages (token via query parameter)
+
+### Admin (JWT, admin role only) — `/v1/admin/*`
+- `GET /v1/admin/stats` — totals (users, channels, messages, deliveries, devices), top channels, recent messages
+- `GET /v1/admin/users` · `DELETE /v1/admin/users/{id}` (cascades the user's data)
+- `GET /v1/admin/channels` · `DELETE /v1/admin/channels/{id}` (cascades)
+- `GET /v1/admin/channels/{id}/keys` · `DELETE /v1/admin/channels/{id}/keys/{keyId}`
 
 ## 6. Security
 - API keys stored hashed (SHA-256 of a high-entropy secret); shown once on creation; multiple keys per channel with revocation.
 - Passwords hashed with Argon2id.
-- JWT: short-lived access token + rotating refresh token.
+- JWT: short-lived access token + rotating refresh token. The token carries the user's role.
+- Roles: `user` (default) and `admin`. Admins are designated by the `PHEME_ADMIN_EMAILS` allowlist and the role is (re)synced on every register/login, so changing the list takes effect on next login. Admin-only endpoints live under `/v1/admin/*` and verify the role from the JWT.
 - Public ingest endpoint protected by per-key Redis token-bucket rate limiting and idempotency keys (dedupe website retries).
 - FCM service-account JSON and Web Push VAPID keys are injected as runtime secrets — never committed.
 

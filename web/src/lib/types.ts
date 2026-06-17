@@ -2,11 +2,13 @@
 
 export type SubscriptionMode = 'open' | 'approval'
 export type Platform = 'ios' | 'android' | 'web'
+export type Role = 'user' | 'admin'
 
 export interface TokenResponse {
   accessToken: string
   refreshToken: string
   userId: string
+  role: Role
 }
 
 export interface Channel {
@@ -66,4 +68,28 @@ export interface Meta {
 export interface LiveEvent {
   channelId: string
   message: Message
+}
+
+// --- Admin types ---
+
+export interface AdminUser {
+  id: string
+  email: string
+  role: Role
+  createdAt: string
+  channelCount: number
+}
+
+export interface AdminChannel extends Channel {
+  ownerEmail: string
+}
+
+export interface AdminStats {
+  users: number
+  channels: number
+  messages: number
+  deliveries: number
+  devices: number
+  topChannels: { channelId: string; name: string; count: number }[]
+  recentMessages: Message[]
 }

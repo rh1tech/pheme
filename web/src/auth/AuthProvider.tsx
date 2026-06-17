@@ -1,40 +1,56 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, setOnAuthFailure } from '../lib/api'
 import { clearTokens, loadTokens, saveTokens } from '../lib/tokens'
-import { decodeUserId } from '../lib/jwt'
+import { decodeRole, decodeUserId } from '../lib/jwt'
 import { AuthContext, type AuthState } from './context'
 
+interface Identity {
+  userId: string | null
+  role: string | null
+}
+
+function identityFromTokens(): Identity {
+  const tokens = loadTokens()
+  if (!tokens) return { userId: null, role: null }
+  return { userId: decodeUserId(tokens.accessToken), role: decodeRole(tokens.accessToken) }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [userId, setUserId] = useState<string | null>(() => {
-    const tokens = loadTokens()
-    return tokens ? decodeUserId(tokens.accessToken) : null
-  })
+  const [identity, setIdentity] = useState<Identity>(() => identityFromTokens())
 
   const logout = useCallback(() => {
     clearTokens()
-    setUserId(null)
+    setIdentity({ userId: null, role: null })
   }, [])
 
   // When the API client detects an unrecoverable auth failure, drop session state.
   useEffect(() => {
-    setOnAuthFailure(() => setUserId(null))
+    setOnAuthFailure(() => setIdentity({ userId: null, role: null }))
   }, [])
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.login(email, password)
     saveTokens({ accessToken: res.accessToken, refreshToken: res.refreshToken })
-    setUserId(res.userId)
+    setIdentity({ userId: res.userId, role: res.role })
   }, [])
 
   const register = useCallback(async (email: string, password: string) => {
     const res = await api.register(email, password)
     saveTokens({ accessToken: res.accessToken, refreshToken: res.refreshToken })
-    setUserId(res.userId)
+    setIdentity({ userId: res.userId, role: res.role })
   }, [])
 
   const value = useMemo<AuthState>(
-    () => ({ userId, isAuthenticated: userId !== null, login, register, logout }),
-    [userId, login, register, logout],
+    () => ({
+      userId: identity.userId,
+      role: identity.role,
+      isAuthenticated: identity.userId !== null,
+      isAdmin: identity.role === 'admin',
+      login,
+      register,
+      logout,
+    }),
+    [identity, login, register, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

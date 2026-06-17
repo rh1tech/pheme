@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,9 @@ type Config struct {
 	VAPIDPublicKey     string
 	VAPIDPrivateKey    string
 	VAPIDSubject       string // mailto: contact for Web Push
+
+	// Authorization
+	AdminEmails []string // emails granted the admin role on register/login
 
 	// Backend selection. Each defaults to a zero-dependency in-memory/log
 	// implementation so the services run without external infrastructure.
@@ -71,6 +75,8 @@ func Load() Config {
 		VAPIDPrivateKey:    env("PHEME_VAPID_PRIVATE", ""),
 		VAPIDSubject:       env("PHEME_VAPID_SUBJECT", "mailto:admin@example.com"),
 
+		AdminEmails: envList("PHEME_ADMIN_EMAILS"),
+
 		StoreDriver:     env("PHEME_STORE_DRIVER", "memory"),
 		BrokerDriver:    env("PHEME_BROKER_DRIVER", "memory"),
 		LiveDriver:      env("PHEME_LIVE_DRIVER", "memory"),
@@ -84,6 +90,21 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envList parses a comma-separated env var into a trimmed, lowercased slice.
+func envList(key string) []string {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(strings.ToLower(part)); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func envDuration(key string, def time.Duration) time.Duration {

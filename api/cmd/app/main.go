@@ -39,9 +39,21 @@ func main() {
 	}
 	tokens := b.Tokens()
 
+	adminEmails := make(map[string]bool, len(cfg.AdminEmails))
+	for _, e := range cfg.AdminEmails {
+		adminEmails[e] = true
+	}
+
 	mux := http.NewServeMux()
-	(&channel.AuthHandler{Store: db, Tokens: tokens}).Routes(mux)
-	(&channel.AppHandler{Store: db, Live: bus, Tokens: tokens, Publisher: pub, VAPIDPublicKey: cfg.VAPIDPublicKey}).Routes(mux)
+	(&channel.AuthHandler{Store: db, Tokens: tokens, AdminEmails: adminEmails}).Routes(mux)
+	(&channel.AppHandler{
+		Store:          db,
+		Live:           bus,
+		Tokens:         tokens,
+		Publisher:      pub,
+		Admin:          &channel.AdminHandler{Store: db},
+		VAPIDPublicKey: cfg.VAPIDPublicKey,
+	}).Routes(mux)
 
 	srv := &http.Server{
 		Addr:              cfg.AppAddr,

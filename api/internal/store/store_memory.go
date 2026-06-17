@@ -65,6 +65,70 @@ func (m *Memory) UserByEmail(_ context.Context, email string) (domain.User, erro
 	return domain.User{}, ErrNotFound
 }
 
+func (m *Memory) UpdateUserRole(_ context.Context, userID string, role domain.Role) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[userID]
+	if !ok {
+		return ErrNotFound
+	}
+	u.Role = role
+	m.users[userID] = u
+	return nil
+}
+
+func (m *Memory) ListUsers(_ context.Context) ([]domain.User, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]domain.User, 0, len(m.users))
+	for _, u := range m.users {
+		out = append(out, u)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (m *Memory) DeleteUser(ctx context.Context, userID string) error {
+	m.mu.RLock()
+	_, ok := m.users[userID]
+	var channelIDs, deviceIDs []string
+	for _, c := range m.channels {
+		if c.OwnerID == userID {
+			channelIDs = append(channelIDs, c.ID)
+		}
+	}
+	for _, d := range m.devices {
+		if d.UserID == userID {
+			deviceIDs = append(deviceIDs, d.ID)
+		}
+	}
+	m.mu.RUnlock()
+	if !ok {
+		return ErrNotFound
+	}
+
+	for _, cid := range channelIDs {
+		if err := m.DeleteChannel(ctx, cid); err != nil {
+			return err
+		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	deviceSet := map[string]struct{}{}
+	for _, did := range deviceIDs {
+		deviceSet[did] = struct{}{}
+		delete(m.devices, did)
+	}
+	for sid, s := range m.subscriptions {
+		if _, ok := deviceSet[s.DeviceID]; ok {
+			delete(m.subscriptions, sid)
+		}
+	}
+	delete(m.users, userID)
+	return nil
+}
+
 func (m *Memory) CreateChannel(_ context.Context, c domain.Channel) (domain.Channel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -154,6 +218,59 @@ func (m *Memory) DeleteChannel(_ context.Context, id string) error {
 		}
 	}
 	return nil
+}
+
+func (m *Memory) ListAllChannels(_ context.Context) ([]domain.Channel, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]domain.Channel, 0, len(m.channels))
+	for _, c := range m.channels {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (m *Memory) AdminStats(_ context.Context, topN, recentN int) (domain.AdminStats, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	stats := domain.AdminStats{
+		Users:      int64(len(m.users)),
+		Channels:   int64(len(m.channels)),
+		Messages:   int64(len(m.messages)),
+		Deliveries: int64(len(m.deliveries)),
+		Devices:    int64(len(m.devices)),
+	}
+
+	// Top channels by message volume.
+	counts := map[string]int64{}
+	for _, msg := range m.messages {
+		counts[msg.ChannelID]++
+	}
+	for cid, n := range counts {
+		name := cid
+		if c, ok := m.channels[cid]; ok {
+			name = c.Name
+		}
+		stats.TopChannels = append(stats.TopChannels, domain.ChannelVolume{ChannelID: cid, Name: name, Count: n})
+	}
+	sort.Slice(stats.TopChannels, func(i, j int) bool { return stats.TopChannels[i].Count > stats.TopChannels[j].Count })
+	if topN > 0 && len(stats.TopChannels) > topN {
+		stats.TopChannels = stats.TopChannels[:topN]
+	}
+
+	// Most recent messages across all channels.
+	all := make([]domain.Message, 0, len(m.messages))
+	for _, msg := range m.messages {
+		all = append(all, msg)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	if recentN > 0 && len(all) > recentN {
+		all = all[:recentN]
+	}
+	stats.RecentMessages = all
+	return stats, nil
 }
 
 func (m *Memory) CreateAPIKey(_ context.Context, k domain.APIKey) (domain.APIKey, error) {

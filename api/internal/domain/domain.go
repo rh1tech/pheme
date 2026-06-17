@@ -40,11 +40,20 @@ const (
 	DeliverySkipped DeliveryStatus = "skipped"
 )
 
+// Role is a user's authorization level.
+type Role string
+
+const (
+	RoleUser  Role = "user"
+	RoleAdmin Role = "admin"
+)
+
 // User is an authenticated account that owns channels and devices.
 type User struct {
 	ID           string    `bson:"_id,omitempty" json:"id"`
 	Email        string    `bson:"email" json:"email"`
 	PasswordHash string    `bson:"passwordHash" json:"-"`
+	Role         Role      `bson:"role" json:"role"`
 	CreatedAt    time.Time `bson:"createdAt" json:"createdAt"`
 }
 
@@ -117,4 +126,22 @@ type NotifyTask struct {
 	Data           map[string]string `json:"data,omitempty"`
 	IdempotencyKey string            `json:"idempotencyKey,omitempty"`
 	EnqueuedAt     time.Time         `json:"enqueuedAt"`
+}
+
+// ChannelVolume reports a channel's message count, used for "top channels".
+type ChannelVolume struct {
+	ChannelID string `json:"channelId"`
+	Name      string `json:"name"`
+	Count     int64  `json:"count"`
+}
+
+// AdminStats is the system-wide overview shown on the admin dashboard.
+type AdminStats struct {
+	Users          int64           `json:"users"`
+	Channels       int64           `json:"channels"`
+	Messages       int64           `json:"messages"`
+	Deliveries     int64           `json:"deliveries"`
+	Devices        int64           `json:"devices"`
+	TopChannels    []ChannelVolume `json:"topChannels"`
+	RecentMessages []Message       `json:"recentMessages"`
 }

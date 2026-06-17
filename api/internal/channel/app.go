@@ -22,6 +22,7 @@ type AppHandler struct {
 	Live           live.Bus
 	Tokens         *auth.TokenManager
 	Publisher      broker.Publisher
+	Admin          *AdminHandler
 	VAPIDPublicKey string
 }
 
@@ -45,6 +46,10 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("POST /v1/devices", h.createDevice)
 	protected.HandleFunc("POST /v1/channels/{id}/subscribe", h.subscribe)
 	protected.HandleFunc("GET /v1/channels/{id}/messages", h.listMessages)
+
+	if h.Admin != nil {
+		h.Admin.Register(protected)
+	}
 
 	mux.Handle("/v1/", h.Tokens.Middleware(protected))
 }

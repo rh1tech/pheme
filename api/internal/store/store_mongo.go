@@ -87,6 +87,71 @@ func (m *Mongo) UserByEmail(ctx context.Context, email string) (domain.User, err
 	return u, mapErr(err)
 }
 
+func (m *Mongo) UpdateUserRole(ctx context.Context, userID string, role domain.Role) error {
+	res, err := m.db.Collection("users").UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$set": bson.M{"role": role}})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *Mongo) ListUsers(ctx context.Context) ([]domain.User, error) {
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	cur, err := m.db.Collection("users").Find(ctx, bson.M{}, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.User
+	return out, cur.All(ctx, &out)
+}
+
+func (m *Mongo) DeleteUser(ctx context.Context, userID string) error {
+	// Cascade: delete the user's channels (and their dependents), then devices
+	// and their subscriptions, then the user.
+	channels, err := m.ChannelsByOwner(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for _, c := range channels {
+		if err := m.DeleteChannel(ctx, c.ID); err != nil {
+			return err
+		}
+	}
+
+	cur, err := m.db.Collection("devices").Find(ctx, bson.M{"userId": userID})
+	if err != nil {
+		return err
+	}
+	var devices []domain.Device
+	if err := cur.All(ctx, &devices); err != nil {
+		return err
+	}
+	if len(devices) > 0 {
+		ids := make([]string, 0, len(devices))
+		for _, d := range devices {
+			ids = append(ids, d.ID)
+		}
+		if _, err := m.db.Collection("subscriptions").DeleteMany(ctx, bson.M{"deviceId": bson.M{"$in": ids}}); err != nil {
+			return err
+		}
+		if _, err := m.db.Collection("devices").DeleteMany(ctx, bson.M{"userId": userID}); err != nil {
+			return err
+		}
+	}
+
+	res, err := m.db.Collection("users").DeleteOne(ctx, bson.M{"_id": userID})
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (m *Mongo) CreateChannel(ctx context.Context, c domain.Channel) (domain.Channel, error) {
 	if c.ID == "" {
 		c.ID = mongoID()
@@ -295,6 +360,81 @@ func (m *Mongo) CreateDelivery(ctx context.Context, d domain.Delivery) (domain.D
 	}
 	_, err := m.db.Collection("deliveries").InsertOne(ctx, d)
 	return d, err
+}
+
+func (m *Mongo) ListAllChannels(ctx context.Context) ([]domain.Channel, error) {
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	cur, err := m.db.Collection("channels").Find(ctx, bson.M{}, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.Channel
+	return out, cur.All(ctx, &out)
+}
+
+func (m *Mongo) AdminStats(ctx context.Context, topN, recentN int) (domain.AdminStats, error) {
+	var stats domain.AdminStats
+
+	counts := []struct {
+		coll string
+		dst  *int64
+	}{
+		{"users", &stats.Users},
+		{"channels", &stats.Channels},
+		{"messages", &stats.Messages},
+		{"deliveries", &stats.Deliveries},
+		{"devices", &stats.Devices},
+	}
+	for _, c := range counts {
+		n, err := m.db.Collection(c.coll).EstimatedDocumentCount(ctx)
+		if err != nil {
+			return domain.AdminStats{}, err
+		}
+		*c.dst = n
+	}
+
+	// Top channels by message volume via aggregation.
+	pipeline := mongo.Pipeline{
+		{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$channelId"}, {Key: "count", Value: bson.D{{Key: "$sum", Value: 1}}}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "count", Value: -1}}}},
+		{{Key: "$limit", Value: int64(maxInt(topN, 1))}},
+	}
+	cur, err := m.db.Collection("messages").Aggregate(ctx, pipeline)
+	if err != nil {
+		return domain.AdminStats{}, err
+	}
+	var grouped []struct {
+		ID    string `bson:"_id"`
+		Count int64  `bson:"count"`
+	}
+	if err := cur.All(ctx, &grouped); err != nil {
+		return domain.AdminStats{}, err
+	}
+	for _, g := range grouped {
+		name := g.ID
+		if ch, err := m.ChannelByID(ctx, g.ID); err == nil {
+			name = ch.Name
+		}
+		stats.TopChannels = append(stats.TopChannels, domain.ChannelVolume{ChannelID: g.ID, Name: name, Count: g.Count})
+	}
+
+	// Recent messages across all channels.
+	mopts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}}).SetLimit(int64(maxInt(recentN, 1)))
+	mcur, err := m.db.Collection("messages").Find(ctx, bson.M{}, mopts)
+	if err != nil {
+		return domain.AdminStats{}, err
+	}
+	if err := mcur.All(ctx, &stats.RecentMessages); err != nil {
+		return domain.AdminStats{}, err
+	}
+	return stats, nil
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (m *Mongo) Close(ctx context.Context) error {

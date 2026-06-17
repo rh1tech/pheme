@@ -7,6 +7,9 @@ import {
   type Tokens,
 } from './tokens'
 import type {
+  AdminChannel,
+  AdminStats,
+  AdminUser,
   ApiKey,
   Channel,
   CreatedKey,
@@ -147,6 +150,21 @@ export const api = {
       (page) => ({ messages: page.messages ?? [], nextCursor: page.nextCursor ?? '' }),
     )
   },
+
+  // --- Admin ---
+  adminStats: () => request<AdminStats>('/v1/admin/stats'),
+  adminListUsers: () =>
+    request<{ users: AdminUser[] }>('/v1/admin/users').then((r) => r.users ?? []),
+  adminDeleteUser: (userId: string) =>
+    request<void>(`/v1/admin/users/${userId}`, { method: 'DELETE' }),
+  adminListChannels: () =>
+    request<{ channels: AdminChannel[] }>('/v1/admin/channels').then((r) => r.channels ?? []),
+  adminDeleteChannel: (channelId: string) =>
+    request<void>(`/v1/admin/channels/${channelId}`, { method: 'DELETE' }),
+  adminListKeys: (channelId: string) =>
+    request<{ keys: ApiKey[] }>(`/v1/admin/channels/${channelId}/keys`).then((r) => r.keys ?? []),
+  adminRevokeKey: (channelId: string, keyId: string) =>
+    request<unknown>(`/v1/admin/channels/${channelId}/keys/${keyId}`, { method: 'DELETE' }),
 }
 
 /** Builds the SSE stream URL with the current access token as a query parameter. */

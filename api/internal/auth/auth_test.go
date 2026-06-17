@@ -22,7 +22,7 @@ func TestPasswordHashing(t *testing.T) {
 
 func TestTokenIssueParse(t *testing.T) {
 	m := NewTokenManager("test-secret", time.Minute, time.Hour)
-	access, refresh, err := m.Issue("user-123")
+	access, refresh, err := m.Issue("user-123", "user")
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestTokenIssueParse(t *testing.T) {
 
 func TestExpiredToken(t *testing.T) {
 	m := NewTokenManager("s", -time.Minute, time.Hour) // already expired access
-	access, _, err := m.Issue("u")
+	access, _, err := m.Issue("u", "user")
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}

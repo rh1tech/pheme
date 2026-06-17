@@ -14,8 +14,9 @@ import (
 
 // AuthHandler serves registration and token endpoints.
 type AuthHandler struct {
-	Store  store.Store
-	Tokens *auth.TokenManager
+	Store       store.Store
+	Tokens      *auth.TokenManager
+	AdminEmails map[string]bool // lowercased emails granted the admin role
 }
 
 // Routes registers the auth endpoints on a mux. These are public (no JWT).
@@ -23,6 +24,14 @@ func (h *AuthHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/register", h.register)
 	mux.HandleFunc("POST /v1/auth/login", h.login)
 	mux.HandleFunc("POST /v1/auth/refresh", h.refresh)
+}
+
+// roleForEmail returns the role an email should hold per the admin allowlist.
+func (h *AuthHandler) roleForEmail(email string) domain.Role {
+	if h.AdminEmails[strings.ToLower(email)] {
+		return domain.RoleAdmin
+	}
+	return domain.RoleUser
 }
 
 type credentials struct {
@@ -34,6 +43,7 @@ type tokenResponse struct {
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
 	UserID       string `json:"userId"`
+	Role         string `json:"role"`
 }
 
 func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
@@ -62,13 +72,14 @@ func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 	u, err := h.Store.CreateUser(r.Context(), domain.User{
 		Email:        req.Email,
 		PasswordHash: hash,
+		Role:         h.roleForEmail(req.Email),
 		CreatedAt:    time.Now().UTC(),
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "registration failed")
 		return
 	}
-	h.issue(w, u.ID, http.StatusCreated)
+	h.issue(w, u.ID, string(u.Role), http.StatusCreated)
 }
 
 func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +101,16 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	h.issue(w, u.ID, http.StatusOK)
+	// The admin allowlist is authoritative: sync the stored role on each login so
+	// changes to PHEME_ADMIN_EMAILS take effect without manual intervention.
+	role := h.roleForEmail(u.Email)
+	if role != u.Role {
+		if err := h.Store.UpdateUserRole(r.Context(), u.ID, role); err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "login failed")
+			return
+		}
+	}
+	h.issue(w, u.ID, string(role), http.StatusOK)
 }
 
 type refreshRequest struct {
@@ -102,21 +122,21 @@ func (h *AuthHandler) refresh(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	userID, err := h.Tokens.Parse(strings.TrimSpace(req.RefreshToken), auth.RefreshToken)
+	claims, err := h.Tokens.ParseClaims(strings.TrimSpace(req.RefreshToken), auth.RefreshToken)
 	if err != nil {
 		httpx.Error(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	}
-	h.issue(w, userID, http.StatusOK)
+	h.issue(w, claims.Subject, claims.Role, http.StatusOK)
 }
 
-func (h *AuthHandler) issue(w http.ResponseWriter, userID string, status int) {
-	access, refresh, err := h.Tokens.Issue(userID)
+func (h *AuthHandler) issue(w http.ResponseWriter, userID, role string, status int) {
+	access, refresh, err := h.Tokens.Issue(userID, role)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not issue tokens")
 		return
 	}
-	httpx.JSON(w, status, tokenResponse{AccessToken: access, RefreshToken: refresh, UserID: userID})
+	httpx.JSON(w, status, tokenResponse{AccessToken: access, RefreshToken: refresh, UserID: userID, Role: role})
 }
 
 // dummyHash is a precomputed Argon2id hash used to equalise login timing when an

@@ -1,13 +1,14 @@
 import { AppShell, Button, Group, Title } from '@mantine/core'
-import { Outlet, useNavigate } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
 import { LanguageSwitcher } from './LanguageSwitcher'
 import { ThemeToggle } from './ThemeToggle'
 
 export function Layout() {
-  const { logout } = useAuth()
+  const { logout, isAdmin } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const { t } = useTranslation()
 
   function handleLogout() {
@@ -15,12 +16,25 @@ export function Layout() {
     navigate('/login', { replace: true })
   }
 
+  const onAdmin = location.pathname.startsWith('/admin')
+
   return (
     <AppShell header={{ height: 60 }} padding="md">
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
-          <Group gap="xs" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>
-            <Title order={3}>{t('common.appName')}</Title>
+          <Group gap="md">
+            <Title order={3} style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>
+              {t('common.appName')}
+            </Title>
+            {isAdmin && (
+              <Button
+                variant={onAdmin ? 'light' : 'subtle'}
+                size="xs"
+                onClick={() => navigate('/admin')}
+              >
+                {t('admin.nav')}
+              </Button>
+            )}
           </Group>
           <Group gap="md">
             <ThemeToggle />

@@ -20,6 +20,9 @@ type Store interface {
 	// Users
 	CreateUser(ctx context.Context, u domain.User) (domain.User, error)
 	UserByEmail(ctx context.Context, email string) (domain.User, error)
+	UpdateUserRole(ctx context.Context, userID string, role domain.Role) error
+	ListUsers(ctx context.Context) ([]domain.User, error)
+	DeleteUser(ctx context.Context, userID string) error
 
 	// Channels
 	CreateChannel(ctx context.Context, c domain.Channel) (domain.Channel, error)
@@ -28,6 +31,7 @@ type Store interface {
 	ChannelsByOwner(ctx context.Context, ownerID string) ([]domain.Channel, error)
 	UpdateChannel(ctx context.Context, id, name string, mode domain.SubscriptionMode) (domain.Channel, error)
 	DeleteChannel(ctx context.Context, id string) error
+	ListAllChannels(ctx context.Context) ([]domain.Channel, error)
 
 	// API keys
 	CreateAPIKey(ctx context.Context, k domain.APIKey) (domain.APIKey, error)
@@ -43,6 +47,9 @@ type Store interface {
 	CreateMessage(ctx context.Context, m domain.Message) (domain.Message, error)
 	MessagesByChannel(ctx context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error)
 	CreateDelivery(ctx context.Context, d domain.Delivery) (domain.Delivery, error)
+
+	// Admin
+	AdminStats(ctx context.Context, topN, recentN int) (domain.AdminStats, error)
 
 	// Lifecycle
 	Close(ctx context.Context) error
