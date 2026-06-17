@@ -93,7 +93,7 @@ export function DashboardPage() {
               ]}
             />
             <Group justify="flex-end">
-              <Button onClick={createChannel} loading={creating}>
+              <Button onClick={createChannel} loading={creating} disabled={!name.trim()}>
                 Create channel
               </Button>
             </Group>

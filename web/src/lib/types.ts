@@ -44,6 +44,15 @@ export interface CreatedKey {
   note: string
 }
 
+export interface ApiKey {
+  id: string
+  channelId: string
+  prefix: string
+  label: string
+  createdAt: string
+  revokedAt?: string
+}
+
 export interface MessagesPage {
   messages: Message[]
   nextCursor: string

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,6 +129,21 @@ func (m *Memory) APIKeysByChannel(_ context.Context, channelID string) ([]domain
 	return out, nil
 }
 
+func (m *Memory) RevokeAPIKey(_ context.Context, keyID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k, ok := m.apiKeys[keyID]
+	if !ok {
+		return ErrNotFound
+	}
+	if k.RevokedAt == nil {
+		now := time.Now().UTC()
+		k.RevokedAt = &now
+		m.apiKeys[keyID] = k
+	}
+	return nil
+}
+
 func (m *Memory) CreateDevice(_ context.Context, d domain.Device) (domain.Device, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -173,15 +189,21 @@ func (m *Memory) CreateMessage(_ context.Context, msg domain.Message) (domain.Me
 }
 
 // MessagesByChannel returns messages newest-first. cursor is an exclusive upper
-// bound on message ID; empty means from the newest.
-func (m *Memory) MessagesByChannel(_ context.Context, channelID, cursor string, limit int) ([]domain.Message, error) {
+// bound on message ID; empty means from the newest. query, if non-empty, keeps
+// only messages whose title or body contains it (case-insensitive).
+func (m *Memory) MessagesByChannel(_ context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	q := strings.ToLower(strings.TrimSpace(query))
 	var out []domain.Message
 	for _, msg := range m.messages {
-		if msg.ChannelID == channelID {
-			out = append(out, msg)
+		if msg.ChannelID != channelID {
+			continue
 		}
+		if q != "" && !strings.Contains(strings.ToLower(msg.Title), q) && !strings.Contains(strings.ToLower(msg.Body), q) {
+			continue
+		}
+		out = append(out, msg)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	if cursor != "" {

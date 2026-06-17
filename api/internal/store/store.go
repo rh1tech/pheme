@@ -30,6 +30,7 @@ type Store interface {
 	// API keys
 	CreateAPIKey(ctx context.Context, k domain.APIKey) (domain.APIKey, error)
 	APIKeysByChannel(ctx context.Context, channelID string) ([]domain.APIKey, error)
+	RevokeAPIKey(ctx context.Context, keyID string) error
 
 	// Devices & subscriptions
 	CreateDevice(ctx context.Context, d domain.Device) (domain.Device, error)
@@ -38,7 +39,7 @@ type Store interface {
 
 	// Messages & deliveries
 	CreateMessage(ctx context.Context, m domain.Message) (domain.Message, error)
-	MessagesByChannel(ctx context.Context, channelID, cursor string, limit int) ([]domain.Message, error)
+	MessagesByChannel(ctx context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error)
 	CreateDelivery(ctx context.Context, d domain.Delivery) (domain.Delivery, error)
 
 	// Lifecycle

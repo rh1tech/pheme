@@ -7,6 +7,7 @@ import {
   type Tokens,
 } from './tokens'
 import type {
+  ApiKey,
   Channel,
   CreatedKey,
   Device,
@@ -114,8 +115,18 @@ export const api = {
   listChannels: () => request<{ channels: Channel[] }>('/v1/channels').then((r) => r.channels ?? []),
   createChannel: (name: string, subscriptionMode: SubscriptionMode) =>
     request<Channel>('/v1/channels', { method: 'POST', body: { name, subscriptionMode } }),
+
+  // API keys
   createKey: (channelId: string) =>
     request<CreatedKey>(`/v1/channels/${channelId}/keys`, { method: 'POST' }),
+  listKeys: (channelId: string) =>
+    request<{ keys: ApiKey[] }>(`/v1/channels/${channelId}/keys`).then((r) => r.keys ?? []),
+  revokeKey: (channelId: string, keyId: string) =>
+    request<unknown>(`/v1/channels/${channelId}/keys/${keyId}`, { method: 'DELETE' }),
+
+  // Send a message from the authenticated UI (owner only)
+  notifyChannel: (channelId: string, title: string, body: string) =>
+    request<unknown>(`/v1/channels/${channelId}/notify`, { method: 'POST', body: { title, body } }),
 
   // Devices & subscriptions
   createDevice: (body: { platform: Platform; fcmToken?: string; webPushSub?: string }) =>
@@ -124,9 +135,10 @@ export const api = {
     request<unknown>(`/v1/channels/${channelId}/subscribe`, { method: 'POST', body: { deviceId } }),
 
   // Messages
-  listMessages: (channelId: string, cursor = '', limit = 50) => {
+  listMessages: (channelId: string, cursor = '', query = '', limit = 50) => {
     const q = new URLSearchParams()
     if (cursor) q.set('cursor', cursor)
+    if (query) q.set('q', query)
     q.set('limit', String(limit))
     return request<MessagesPage>(`/v1/channels/${channelId}/messages?${q.toString()}`).then(
       (page) => ({ messages: page.messages ?? [], nextCursor: page.nextCursor ?? '' }),

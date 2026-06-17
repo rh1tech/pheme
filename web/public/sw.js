@@ -1,22 +1,33 @@
-// Pheme Web Push service worker (placeholder).
+// Pheme Web Push service worker.
 //
-// In the Web phase this will receive push events and display notifications.
-// Registering it requires VAPID keys configured on the server. See
-// docs/ARCHITECTURE.md (Web Push).
+// Receives push events from the browser's push service and displays a
+// notification. Registered by the web client after VAPID subscription; the
+// server (dispatcher) delivers via the Web Push protocol.
+
+// Activate immediately so an updated worker takes control without a manual
+// unregister.
+self.addEventListener('install', () => self.skipWaiting())
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
 
 self.addEventListener('push', (event) => {
   let payload = { title: 'Pheme', body: '' }
-  try {
-    if (event.data) payload = event.data.json()
-  } catch {
-    // ignore malformed payloads
+  if (event.data) {
+    try {
+      payload = event.data.json()
+    } catch {
+      payload = { title: 'Pheme', body: event.data.text() }
+    }
   }
-  event.waitUntil(
-    self.registration.showNotification(payload.title ?? 'Pheme', {
-      body: payload.body ?? '',
-      icon: '/favicon.svg',
-    }),
-  )
+
+  const title = payload.title || 'Pheme'
+  const options = {
+    body: payload.body || '',
+    tag: payload.data && payload.data.channelId ? payload.data.channelId : undefined,
+    renotify: true,
+    data: payload.data || {},
+  }
+
+  event.waitUntil(self.registration.showNotification(title, options))
 })
 
 self.addEventListener('notificationclick', (event) => {

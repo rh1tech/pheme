@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
@@ -130,6 +133,29 @@ func (m *Mongo) APIKeysByChannel(ctx context.Context, channelID string) ([]domai
 	return out, cur.All(ctx, &out)
 }
 
+func (m *Mongo) RevokeAPIKey(ctx context.Context, keyID string) error {
+	now := time.Now().UTC()
+	res, err := m.db.Collection("apiKeys").UpdateOne(ctx,
+		bson.M{"_id": keyID, "revokedAt": bson.M{"$exists": false}},
+		bson.M{"$set": bson.M{"revokedAt": now}},
+	)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		// Either the key does not exist or it is already revoked; treat a missing
+		// key as not found, an already-revoked key as success.
+		count, cerr := m.db.Collection("apiKeys").CountDocuments(ctx, bson.M{"_id": keyID})
+		if cerr != nil {
+			return cerr
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
+	}
+	return nil
+}
+
 func (m *Mongo) CreateDevice(ctx context.Context, d domain.Device) (domain.Device, error) {
 	if d.ID == "" {
 		d.ID = mongoID()
@@ -183,9 +209,14 @@ func (m *Mongo) CreateMessage(ctx context.Context, msg domain.Message) (domain.M
 }
 
 // MessagesByChannel returns messages newest-first. cursor is an exclusive
-// message ID: results continue from just after that message.
-func (m *Mongo) MessagesByChannel(ctx context.Context, channelID, cursor string, limit int) ([]domain.Message, error) {
+// message ID: results continue from just after that message. query, if
+// non-empty, keeps only messages whose title or body matches (case-insensitive).
+func (m *Mongo) MessagesByChannel(ctx context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error) {
 	filter := bson.M{"channelId": channelID}
+	if q := strings.TrimSpace(query); q != "" {
+		rx := primitive.Regex{Pattern: regexp.QuoteMeta(q), Options: "i"}
+		filter["$or"] = bson.A{bson.M{"title": rx}, bson.M{"body": rx}}
+	}
 	if cursor != "" {
 		var anchor domain.Message
 		err := m.db.Collection("messages").FindOne(ctx, bson.M{"_id": cursor}).Decode(&anchor)

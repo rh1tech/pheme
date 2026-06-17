@@ -32,11 +32,16 @@ func main() {
 		logger.Error("live init", "error", err)
 		os.Exit(1)
 	}
+	pub, err := b.Publisher()
+	if err != nil {
+		logger.Error("publisher init", "error", err)
+		os.Exit(1)
+	}
 	tokens := b.Tokens()
 
 	mux := http.NewServeMux()
 	(&channel.AuthHandler{Store: db, Tokens: tokens}).Routes(mux)
-	(&channel.AppHandler{Store: db, Live: bus, Tokens: tokens, VAPIDPublicKey: cfg.VAPIDPublicKey}).Routes(mux)
+	(&channel.AppHandler{Store: db, Live: bus, Tokens: tokens, Publisher: pub, VAPIDPublicKey: cfg.VAPIDPublicKey}).Routes(mux)
 
 	srv := &http.Server{
 		Addr:              cfg.AppAddr,
@@ -59,6 +64,7 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+	_ = pub.Close(shutdownCtx)
 	_ = db.Close(shutdownCtx)
 	_ = b.Close()
 	logger.Info("app API stopped")

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
+	"github.com/rh1tech/pheme/api/internal/broker"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/live"
@@ -20,6 +21,7 @@ type AppHandler struct {
 	Store          store.Store
 	Live           live.Bus
 	Tokens         *auth.TokenManager
+	Publisher      broker.Publisher
 	VAPIDPublicKey string
 }
 
@@ -35,6 +37,9 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("POST /v1/channels", h.createChannel)
 	protected.HandleFunc("GET /v1/channels", h.listChannels)
 	protected.HandleFunc("POST /v1/channels/{id}/keys", h.createKey)
+	protected.HandleFunc("GET /v1/channels/{id}/keys", h.listKeys)
+	protected.HandleFunc("DELETE /v1/channels/{id}/keys/{keyId}", h.revokeKey)
+	protected.HandleFunc("POST /v1/channels/{id}/notify", h.notifyChannel)
 	protected.HandleFunc("POST /v1/devices", h.createDevice)
 	protected.HandleFunc("POST /v1/channels/{id}/subscribe", h.subscribe)
 	protected.HandleFunc("GET /v1/channels/{id}/messages", h.listMessages)
@@ -145,6 +150,105 @@ func (h *AppHandler) createKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *AppHandler) listKeys(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	channelID := r.PathValue("id")
+	if !h.ownsChannel(r, uid, channelID) {
+		httpx.Error(w, http.StatusForbidden, "not your channel")
+		return
+	}
+	keys, err := h.Store.APIKeysByChannel(r.Context(), channelID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not list keys")
+		return
+	}
+	// APIKey.HashedKey is json:"-", so the secret hash is never serialised.
+	httpx.JSON(w, http.StatusOK, map[string]any{"keys": keys})
+}
+
+func (h *AppHandler) revokeKey(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	channelID := r.PathValue("id")
+	keyID := r.PathValue("keyId")
+	if !h.ownsChannel(r, uid, channelID) {
+		httpx.Error(w, http.StatusForbidden, "not your channel")
+		return
+	}
+	// Ensure the key belongs to this channel before revoking.
+	keys, err := h.Store.APIKeysByChannel(r.Context(), channelID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not load keys")
+		return
+	}
+	found := false
+	for _, k := range keys {
+		if k.ID == keyID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		httpx.Error(w, http.StatusNotFound, "key not found")
+		return
+	}
+	if err := h.Store.RevokeAPIKey(r.Context(), keyID); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not revoke key")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"status": "revoked", "id": keyID})
+}
+
+type notifyChannelRequest struct {
+	Title string            `json:"title"`
+	Body  string            `json:"body"`
+	Data  map[string]string `json:"data,omitempty"`
+}
+
+// notifyChannel lets a channel owner send a message from the authenticated UI,
+// without an API key. It enqueues the same NotifyTask the public ingest endpoint
+// produces, so delivery follows the identical pipeline.
+func (h *AppHandler) notifyChannel(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	channelID := r.PathValue("id")
+	if !h.ownsChannel(r, uid, channelID) {
+		httpx.Error(w, http.StatusForbidden, "not your channel")
+		return
+	}
+	var req notifyChannelRequest
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if req.Title == "" && req.Body == "" {
+		httpx.Error(w, http.StatusBadRequest, "title or body is required")
+		return
+	}
+	if h.Publisher == nil {
+		httpx.Error(w, http.StatusServiceUnavailable, "sending is not enabled")
+		return
+	}
+	task := domain.NotifyTask{
+		ChannelID:  channelID,
+		Title:      req.Title,
+		Body:       req.Body,
+		Data:       req.Data,
+		EnqueuedAt: time.Now().UTC(),
+	}
+	if err := h.Publisher.Publish(r.Context(), task); err != nil {
+		httpx.Error(w, http.StatusServiceUnavailable, "could not enqueue message")
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
 type createDeviceRequest struct {
 	Platform   domain.Platform `json:"platform"`
 	FCMToken   string          `json:"fcmToken,omitempty"`
@@ -229,7 +333,8 @@ func (h *AppHandler) listMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cursor := r.URL.Query().Get("cursor")
-	msgs, err := h.Store.MessagesByChannel(r.Context(), channelID, cursor, limit)
+	query := r.URL.Query().Get("q")
+	msgs, err := h.Store.MessagesByChannel(r.Context(), channelID, cursor, query, limit)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not load messages")
 		return
