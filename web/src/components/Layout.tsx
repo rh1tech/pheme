@@ -96,7 +96,7 @@ export function Layout() {
         </AppShell.Section>
 
         <AppShell.Section>
-          <Group gap="xs" justify="center" mt="md">
+          <Group gap="xs" justify="flex-start" mt="md">
             <Tooltip label={t('common.logout')} withArrow>
               <ActionIcon
                 variant="subtle"
