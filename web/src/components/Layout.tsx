@@ -1,4 +1,4 @@
-import { AppShell, Burger, Group, NavLink, ScrollArea, Stack } from '@mantine/core'
+import { ActionIcon, AppShell, Burger, Group, NavLink, ScrollArea, Stack, Tooltip } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { IconBroadcast, IconShieldCog, IconLogout } from '@tabler/icons-react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -77,17 +77,21 @@ export function Layout() {
         </AppShell.Section>
 
         <AppShell.Section>
-          <Stack gap="sm" mt="md">
-            <NavLink
-              label={t('common.logout')}
-              leftSection={<IconLogout size={18} />}
-              onClick={handleLogout}
-            />
-            <Group gap="xs" px="xs">
-              <ThemeToggle />
-              <LanguageSwitcher />
-            </Group>
-          </Stack>
+          <Group gap="xs" justify="center" mt="md">
+            <Tooltip label={t('common.logout')} withArrow>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                size="lg"
+                aria-label={t('common.logout')}
+                onClick={handleLogout}
+              >
+                <IconLogout size={18} />
+              </ActionIcon>
+            </Tooltip>
+            <ThemeToggle />
+            <LanguageSwitcher />
+          </Group>
         </AppShell.Section>
       </AppShell.Navbar>
 

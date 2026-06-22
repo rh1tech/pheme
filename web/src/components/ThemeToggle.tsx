@@ -1,4 +1,4 @@
-import { ActionIcon, useMantineColorScheme, useComputedColorScheme } from '@mantine/core'
+import { ActionIcon, Tooltip, useMantineColorScheme, useComputedColorScheme } from '@mantine/core'
 import { IconMoon, IconSun } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 
@@ -10,14 +10,16 @@ export function ThemeToggle() {
   const { t } = useTranslation()
 
   return (
-    <ActionIcon
-      variant="subtle"
-      color="gray"
-      size="lg"
-      aria-label={t('common.toggleTheme')}
-      onClick={() => setColorScheme(computed === 'dark' ? 'light' : 'dark')}
-    >
-      {computed === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
-    </ActionIcon>
+    <Tooltip label={t('common.toggleTheme')} withArrow>
+      <ActionIcon
+        variant="subtle"
+        color="gray"
+        size="lg"
+        aria-label={t('common.toggleTheme')}
+        onClick={() => setColorScheme(computed === 'dark' ? 'light' : 'dark')}
+      >
+        {computed === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
+      </ActionIcon>
+    </Tooltip>
   )
 }
