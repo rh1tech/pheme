@@ -103,7 +103,13 @@ const ru: Resources = {
   },
   admin: {
     nav: 'Админ',
+    navOverview: 'Обзор',
+    navUsers: 'Пользователи',
+    navChannels: 'Каналы',
     title: 'Панель администратора',
+    headerOverview: 'Обзор администратора',
+    headerUsers: 'Управление пользователями',
+    headerChannels: 'Управление каналами',
     tabOverview: 'Обзор',
     tabUsers: 'Пользователи',
     tabChannels: 'Каналы',

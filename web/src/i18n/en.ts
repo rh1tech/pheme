@@ -101,7 +101,13 @@ const en = {
   },
   admin: {
     nav: 'Admin',
+    navOverview: 'Overview',
+    navUsers: 'Users',
+    navChannels: 'Channels',
     title: 'Admin panel',
+    headerOverview: 'Admin Overview',
+    headerUsers: 'Users Control',
+    headerChannels: 'Channels Control',
     tabOverview: 'Overview',
     tabUsers: 'Users',
     tabChannels: 'Channels',

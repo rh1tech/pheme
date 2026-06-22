@@ -1,6 +1,6 @@
 import { ActionIcon, AppShell, Burger, Group, NavLink, ScrollArea, Stack, Tooltip } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconBroadcast, IconShieldCog, IconLogout } from '@tabler/icons-react'
+import { IconBroadcast, IconShieldCog, IconLogout, IconUsers } from '@tabler/icons-react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
@@ -26,7 +26,9 @@ export function Layout() {
   }
 
   const onChannels = location.pathname === '/' || location.pathname.startsWith('/channels')
-  const onAdmin = location.pathname.startsWith('/admin')
+  const isOverview = location.pathname === '/admin'
+  const onAdminUsers = location.pathname.startsWith('/admin/users')
+  const onAdminChannels = location.pathname.startsWith('/admin/channels')
 
   return (
     <AppShell
@@ -66,12 +68,29 @@ export function Layout() {
             />
             {isAdmin && (
               <NavLink
-                active={onAdmin}
-                label={t('common.navAdmin')}
+                active={isOverview}
+                label={t('admin.nav')}
                 leftSection={<IconShieldCog size={18} />}
                 onClick={() => go('/admin')}
+                opened
+                childrenOffset={28}
                 variant="filled"
-              />
+              >
+                <NavLink
+                  active={onAdminUsers}
+                  label={t('admin.navUsers')}
+                  leftSection={<IconUsers size={18} />}
+                  onClick={() => go('/admin/users')}
+                  variant="filled"
+                />
+                <NavLink
+                  active={onAdminChannels}
+                  label={t('admin.navChannels')}
+                  leftSection={<IconBroadcast size={18} />}
+                  onClick={() => go('/admin/channels')}
+                  variant="filled"
+                />
+              </NavLink>
             )}
           </Stack>
         </AppShell.Section>
