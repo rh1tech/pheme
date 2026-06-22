@@ -11,6 +11,10 @@
       rel="stylesheet"
     />
     <title>Pheme</title>
+    <!-- Runtime configuration (API base URL). In production the web container
+         regenerates this file from the environment; in dev it falls back to
+         VITE_API_BASE. -->
+    <script src="/config.js"></script>
     <script>
       // Apply the saved Mantine color scheme before first paint to avoid a flash.
       (function () {

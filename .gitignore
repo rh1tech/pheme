@@ -26,3 +26,6 @@ deploy/secrets/
 .DS_Store
 .idea/
 .vscode/
+
+# Deployment secrets (live on the server, never in git)
+deploy/**/stack.env

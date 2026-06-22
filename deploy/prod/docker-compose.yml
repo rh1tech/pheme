@@ -1,0 +1,110 @@
+# Production Pheme stack (one environment per Compose project).
+#
+# Run with, e.g.:
+#   docker compose -p pheme-prod --env-file /opt/pheme/prod/stack.env \
+#     -f docker-compose.yml up -d
+#
+# Infra (mongo/rabbitmq/redis) is internal-only. The web, app and ingest
+# services bind to 127.0.0.1 so the host nginx can reverse-proxy them with TLS.
+name: pheme
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS}
+    volumes:
+      - rabbit-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment: &service_env
+      PHEME_STORE_DRIVER: mongo
+      PHEME_BROKER_DRIVER: rabbit
+      PHEME_LIVE_DRIVER: redis
+      PHEME_RATELIMIT_DRIVER: redis
+      PHEME_PUSH_DRIVER: webpush
+      PHEME_MONGO_URI: "mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/?authSource=admin"
+      PHEME_MONGO_DB: pheme
+      PHEME_RABBIT_URI: "amqp://${RABBIT_USER}:${RABBIT_PASS}@rabbitmq:5672/"
+      PHEME_REDIS_ADDR: "redis:6379"
+      PHEME_JWT_SECRET: ${PHEME_JWT_SECRET}
+      PHEME_ADMIN_EMAILS: ${PHEME_ADMIN_EMAILS}
+      PHEME_VAPID_PUBLIC: ${PHEME_VAPID_PUBLIC}
+      PHEME_VAPID_PRIVATE: ${PHEME_VAPID_PRIVATE}
+      PHEME_VAPID_SUBJECT: ${PHEME_VAPID_SUBJECT}
+    ports:
+      - "127.0.0.1:${APP_HOST_PORT}:8080"
+
+  ingest:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/pheme-ingest"]
+    depends_on:
+      mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment: *service_env
+    ports:
+      - "127.0.0.1:${INGEST_HOST_PORT}:8081"
+
+  dispatcher:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/pheme-dispatcher"]
+    depends_on:
+      mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment: *service_env
+
+  web:
+    image: ${WEB_IMAGE}
+    restart: unless-stopped
+    environment:
+      PHEME_API_BASE: ${PHEME_API_BASE}
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT}:80"
+
+volumes:
+  mongo-data:
+  rabbit-data:
+  redis-data:

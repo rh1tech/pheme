@@ -24,7 +24,11 @@ import type {
   UserStatus,
 } from './types'
 
-const BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080'
+// Resolve the API base URL: runtime config (production container) first, then
+// the build-time Vite env (local dev), then a localhost default.
+const runtimeApiBase =
+  typeof window !== 'undefined' ? window.__PHEME_CONFIG?.apiBase : undefined
+const BASE = runtimeApiBase || import.meta.env.VITE_API_BASE || 'http://localhost:8080'
 
 /** Raised when the session is no longer valid and the user must re-authenticate. */
 export class AuthError extends Error {}
