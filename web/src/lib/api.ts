@@ -142,6 +142,14 @@ export const api = {
     request<Device>('/v1/devices', { method: 'POST', body }),
   subscribe: (channelId: string, deviceId: string) =>
     request<unknown>(`/v1/channels/${channelId}/subscribe`, { method: 'POST', body: { deviceId } }),
+  unsubscribe: (channelId: string, deviceId: string) =>
+    request<void>(`/v1/channels/${channelId}/subscribe?deviceId=${encodeURIComponent(deviceId)}`, {
+      method: 'DELETE',
+    }),
+  channelSubscription: (channelId: string, deviceId: string) =>
+    request<{ status: 'active' | 'pending' | 'none' }>(
+      `/v1/channels/${channelId}/subscription?deviceId=${encodeURIComponent(deviceId)}`,
+    ).then((r) => r.status),
 
   // Messages
   listMessages: (channelId: string, cursor = '', query = '', limit = 50) => {

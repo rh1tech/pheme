@@ -45,6 +45,8 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("POST /v1/channels/{id}/notify", h.notifyChannel)
 	protected.HandleFunc("POST /v1/devices", h.createDevice)
 	protected.HandleFunc("POST /v1/channels/{id}/subscribe", h.subscribe)
+	protected.HandleFunc("DELETE /v1/channels/{id}/subscribe", h.unsubscribe)
+	protected.HandleFunc("GET /v1/channels/{id}/subscription", h.subscriptionStatus)
 	protected.HandleFunc("GET /v1/channels/{id}/messages", h.listMessages)
 
 	if h.Admin != nil {
@@ -381,6 +383,43 @@ func (h *AppHandler) subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, sub)
+}
+
+func (h *AppHandler) unsubscribe(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireUser(w, r); !ok {
+		return
+	}
+	channelID := r.PathValue("id")
+	deviceID := r.URL.Query().Get("deviceId")
+	if deviceID == "" {
+		httpx.Error(w, http.StatusBadRequest, "deviceId is required")
+		return
+	}
+	if err := h.Store.Unsubscribe(r.Context(), channelID, deviceID); err != nil && err != store.ErrNotFound {
+		httpx.Error(w, http.StatusInternalServerError, "could not unsubscribe")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// subscriptionStatus reports whether a given device is subscribed to the
+// channel: status is "active", "pending" or "none".
+func (h *AppHandler) subscriptionStatus(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireUser(w, r); !ok {
+		return
+	}
+	channelID := r.PathValue("id")
+	deviceID := r.URL.Query().Get("deviceId")
+	if deviceID == "" {
+		httpx.JSON(w, http.StatusOK, map[string]any{"status": "none"})
+		return
+	}
+	sub, err := h.Store.SubscriptionForDevice(r.Context(), channelID, deviceID)
+	if err != nil {
+		httpx.JSON(w, http.StatusOK, map[string]any{"status": "none"})
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"status": sub.Status})
 }
 
 func (h *AppHandler) listMessages(w http.ResponseWriter, r *http.Request) {

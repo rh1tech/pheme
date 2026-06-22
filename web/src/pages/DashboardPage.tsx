@@ -13,11 +13,12 @@ import {
   Title,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
+import { IconBellCheck } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { Channel, SubscriptionMode } from '../lib/types'
-import { registerWebPushDevice, webPushSupported } from '../lib/webpush'
+import { getWebPushState, registerWebPushDevice, webPushSupported } from '../lib/webpush'
 import { saveWebDeviceId } from '../lib/device'
 
 export function DashboardPage() {
@@ -28,6 +29,7 @@ export function DashboardPage() {
   const [name, setName] = useState('')
   const [mode, setMode] = useState<SubscriptionMode>('approval')
   const [creating, setCreating] = useState(false)
+  const [pushOn, setPushOn] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
 
   async function refresh() {
@@ -60,6 +62,16 @@ export function DashboardPage() {
     setModalOpen(true)
   }
 
+  useEffect(() => {
+    let active = true
+    getWebPushState()
+      .then((s) => active && setPushOn(s.supported && s.permission === 'granted' && s.subscribed))
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [])
+
   async function createChannel() {
     if (!name.trim()) return
     setCreating(true)
@@ -80,6 +92,7 @@ export function DashboardPage() {
     try {
       const deviceId = await registerWebPushDevice()
       saveWebDeviceId(deviceId)
+      setPushOn(true)
       notifications.show({ color: 'green', message: t('dashboard.notificationsEnabled') })
     } catch (e) {
       notifications.show({ color: 'red', message: `${t('dashboard.enableFailed')}: ${(e as Error).message}` })
@@ -133,11 +146,21 @@ export function DashboardPage() {
         <Group justify="space-between">
           <Title order={4}>{t('dashboard.yourChannels')}</Title>
           <Group gap="xs">
-            {webPushSupported() && (
-              <Button variant="subtle" size="xs" onClick={enableNotifications}>
-                {t('dashboard.enableNotifications')}
-              </Button>
-            )}
+            {webPushSupported() &&
+              (pushOn ? (
+                <Badge
+                  color="teal"
+                  variant="light"
+                  size="lg"
+                  leftSection={<IconBellCheck size={14} />}
+                >
+                  {t('dashboard.notificationsOn')}
+                </Badge>
+              ) : (
+                <Button variant="subtle" size="xs" onClick={enableNotifications}>
+                  {t('dashboard.enableNotifications')}
+                </Button>
+              ))}
             <Button size="xs" onClick={openCreate}>
               {t('dashboard.newChannel')}
             </Button>

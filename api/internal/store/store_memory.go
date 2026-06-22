@@ -391,11 +391,43 @@ func (m *Memory) CreateDevice(_ context.Context, d domain.Device) (domain.Device
 func (m *Memory) Subscribe(_ context.Context, s domain.Subscription) (domain.Subscription, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Upsert: if this device already has a subscription to the channel, update it
+	// rather than creating a duplicate.
+	for id, existing := range m.subscriptions {
+		if existing.ChannelID == s.ChannelID && existing.DeviceID == s.DeviceID {
+			existing.Status = s.Status
+			m.subscriptions[id] = existing
+			return existing, nil
+		}
+	}
 	if s.ID == "" {
 		s.ID = newID()
 	}
 	m.subscriptions[s.ID] = s
 	return s, nil
+}
+
+func (m *Memory) SubscriptionForDevice(_ context.Context, channelID, deviceID string) (domain.Subscription, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, s := range m.subscriptions {
+		if s.ChannelID == channelID && s.DeviceID == deviceID {
+			return s, nil
+		}
+	}
+	return domain.Subscription{}, ErrNotFound
+}
+
+func (m *Memory) Unsubscribe(_ context.Context, channelID, deviceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, s := range m.subscriptions {
+		if s.ChannelID == channelID && s.DeviceID == deviceID {
+			delete(m.subscriptions, id)
+			return nil
+		}
+	}
+	return ErrNotFound
 }
 
 func (m *Memory) ActiveDevicesForChannel(_ context.Context, channelID string) ([]domain.Device, error) {

@@ -21,7 +21,7 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core'
-import { IconSearch, IconTrash, IconX } from '@tabler/icons-react'
+import { IconBellCheck, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Trans, useTranslation } from 'react-i18next'
@@ -52,6 +52,8 @@ export function ChannelPage() {
   const [savingSettings, setSavingSettings] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [subStatus, setSubStatus] = useState<'active' | 'pending' | 'none'>('none')
+  const [subBusy, setSubBusy] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -95,6 +97,20 @@ export function ChannelPage() {
     api
       .listKeys(id)
       .then((ks) => active && setKeys(ks))
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [id])
+
+  // Load whether this browser's device is subscribed to the channel.
+  useEffect(() => {
+    let active = true
+    const deviceId = loadWebDeviceId()
+    if (!deviceId) return // no device registered → status stays "none"
+    api
+      .channelSubscription(id, deviceId)
+      .then((status) => active && setSubStatus(status))
       .catch(() => undefined)
     return () => {
       active = false
@@ -174,6 +190,7 @@ export function ChannelPage() {
   }
 
   async function subscribeBrowser() {
+    setSubBusy(true)
     try {
       let deviceId = loadWebDeviceId()
       if (!deviceId) {
@@ -181,9 +198,31 @@ export function ChannelPage() {
         saveWebDeviceId(deviceId)
       }
       await api.subscribe(id, deviceId)
+      const status = await api.channelSubscription(id, deviceId)
+      setSubStatus(status)
       notifications.show({ color: 'green', message: t('channel.browserSubscribed') })
     } catch (e) {
       notifications.show({ color: 'red', message: `${t('channel.subscribeFailed')}: ${(e as Error).message}` })
+    } finally {
+      setSubBusy(false)
+    }
+  }
+
+  async function unsubscribeBrowser() {
+    const deviceId = loadWebDeviceId()
+    if (!deviceId) {
+      setSubStatus('none')
+      return
+    }
+    setSubBusy(true)
+    try {
+      await api.unsubscribe(id, deviceId)
+      setSubStatus('none')
+      notifications.show({ color: 'green', message: t('channel.unsubscribed') })
+    } catch (e) {
+      notifications.show({ color: 'red', message: `${t('channel.unsubscribeFailed')}: ${(e as Error).message}` })
+    } finally {
+      setSubBusy(false)
     }
   }
 
@@ -450,14 +489,32 @@ export function ChannelPage() {
                 <Card withBorder padding="md">
                   <Group justify="space-between">
                     <Stack gap={2}>
-                      <Text fw={600}>{t('channel.subscribeTitle')}</Text>
+                      <Group gap="xs">
+                        <Text fw={600}>{t('channel.subscribeTitle')}</Text>
+                        {subStatus === 'active' && (
+                          <Badge color="teal" variant="light" leftSection={<IconBellCheck size={14} />}>
+                            {t('channel.subscribed')}
+                          </Badge>
+                        )}
+                        {subStatus === 'pending' && (
+                          <Badge color="yellow" variant="light">
+                            {t('channel.subscriptionPending')}
+                          </Badge>
+                        )}
+                      </Group>
                       <Text size="sm" c="dimmed">
                         {t('channel.subscribeDescription')}
                       </Text>
                     </Stack>
-                    <Button variant="outline" onClick={subscribeBrowser}>
-                      {t('channel.subscribeBrowser')}
-                    </Button>
+                    {subStatus === 'none' ? (
+                      <Button variant="outline" loading={subBusy} onClick={subscribeBrowser}>
+                        {t('channel.subscribeBrowser')}
+                      </Button>
+                    ) : (
+                      <Button variant="subtle" color="red" loading={subBusy} onClick={unsubscribeBrowser}>
+                        {t('channel.unsubscribe')}
+                      </Button>
+                    )}
                   </Group>
                 </Card>
               )}

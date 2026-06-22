@@ -310,11 +310,46 @@ func (m *Mongo) CreateDevice(ctx context.Context, d domain.Device) (domain.Devic
 }
 
 func (m *Mongo) Subscribe(ctx context.Context, s domain.Subscription) (domain.Subscription, error) {
+	// Upsert on (channelId, deviceId) so a device has at most one subscription
+	// per channel.
+	filter := bson.M{"channelId": s.ChannelID, "deviceId": s.DeviceID}
+	var existing domain.Subscription
+	err := m.db.Collection("subscriptions").FindOne(ctx, filter).Decode(&existing)
+	if err == nil {
+		if _, uerr := m.db.Collection("subscriptions").UpdateOne(ctx, filter,
+			bson.M{"$set": bson.M{"status": s.Status}}); uerr != nil {
+			return domain.Subscription{}, uerr
+		}
+		existing.Status = s.Status
+		return existing, nil
+	}
+	if !errors.Is(err, mongo.ErrNoDocuments) {
+		return domain.Subscription{}, err
+	}
 	if s.ID == "" {
 		s.ID = mongoID()
 	}
-	_, err := m.db.Collection("subscriptions").InsertOne(ctx, s)
+	_, err = m.db.Collection("subscriptions").InsertOne(ctx, s)
 	return s, err
+}
+
+func (m *Mongo) SubscriptionForDevice(ctx context.Context, channelID, deviceID string) (domain.Subscription, error) {
+	var s domain.Subscription
+	err := m.db.Collection("subscriptions").
+		FindOne(ctx, bson.M{"channelId": channelID, "deviceId": deviceID}).Decode(&s)
+	return s, mapErr(err)
+}
+
+func (m *Mongo) Unsubscribe(ctx context.Context, channelID, deviceID string) error {
+	res, err := m.db.Collection("subscriptions").
+		DeleteOne(ctx, bson.M{"channelId": channelID, "deviceId": deviceID})
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (m *Mongo) ActiveDevicesForChannel(ctx context.Context, channelID string) ([]domain.Device, error) {

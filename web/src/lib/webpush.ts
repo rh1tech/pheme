@@ -9,6 +9,34 @@ export function webPushSupported(): boolean {
   return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
 }
 
+export interface WebPushState {
+  supported: boolean
+  permission: NotificationPermission | 'unsupported'
+  /** True when the browser has an active push subscription. */
+  subscribed: boolean
+}
+
+/**
+ * Inspects the browser's current Web Push state without prompting: whether it is
+ * supported, the notification permission, and whether a live PushSubscription
+ * already exists.
+ */
+export async function getWebPushState(): Promise<WebPushState> {
+  if (!webPushSupported()) {
+    return { supported: false, permission: 'unsupported', subscribed: false }
+  }
+  let subscribed = false
+  try {
+    const registration = await navigator.serviceWorker.getRegistration()
+    if (registration) {
+      subscribed = (await registration.pushManager.getSubscription()) !== null
+    }
+  } catch {
+    // ignore — treat as not subscribed
+  }
+  return { supported: true, permission: Notification.permission, subscribed }
+}
+
 function urlBase64ToUint8Array(base64: string): Uint8Array {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4)
   const normalized = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/')

@@ -45,6 +45,8 @@ type Store interface {
 	// Devices & subscriptions
 	CreateDevice(ctx context.Context, d domain.Device) (domain.Device, error)
 	Subscribe(ctx context.Context, s domain.Subscription) (domain.Subscription, error)
+	SubscriptionForDevice(ctx context.Context, channelID, deviceID string) (domain.Subscription, error)
+	Unsubscribe(ctx context.Context, channelID, deviceID string) error
 	ActiveDevicesForChannel(ctx context.Context, channelID string) ([]domain.Device, error)
 
 	// Messages & deliveries

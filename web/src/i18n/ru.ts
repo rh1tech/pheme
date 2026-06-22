@@ -45,6 +45,7 @@ const ru: Resources = {
     createFailed: 'Не удалось создать',
     loadFailed: 'Не удалось загрузить',
     notificationsEnabled: 'Уведомления в браузере включены',
+    notificationsOn: 'Уведомления включены',
     enableFailed: 'Не удалось включить',
   },
   mode: {
@@ -93,6 +94,12 @@ const ru: Resources = {
     subscribeDescription: 'Получать push-уведомления этого канала в данном браузере.',
     browserSubscribed: 'Этот браузер подписан',
     subscribeFailed: 'Не удалось подписаться',
+    subscribed: 'Подписан',
+    subscriptionPending: 'Ожидает подтверждения',
+    unsubscribe: 'Отписаться',
+    unsubscribed: 'Браузер отписан',
+    unsubscribeFailed: 'Не удалось отписаться',
+    notificationsBlocked: 'Уведомления заблокированы в этом браузере',
     deleteTitle: 'Удалить канал',
     deleteConfirm:
       'Удалить <bold>{{name}}</bold>? Это безвозвратно удалит канал, его API-ключи, подписки и историю сообщений. Действие необратимо.',

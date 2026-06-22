@@ -43,6 +43,7 @@ const en = {
     createFailed: 'Create failed',
     loadFailed: 'Load failed',
     notificationsEnabled: 'Browser notifications enabled',
+    notificationsOn: 'Notifications on',
     enableFailed: 'Could not enable',
   },
   mode: {
@@ -91,6 +92,12 @@ const en = {
     subscribeDescription: 'Receive push notifications from this channel in this browser.',
     browserSubscribed: 'This browser is subscribed',
     subscribeFailed: 'Subscribe failed',
+    subscribed: 'Subscribed',
+    subscriptionPending: 'Pending approval',
+    unsubscribe: 'Unsubscribe',
+    unsubscribed: 'This browser was unsubscribed',
+    unsubscribeFailed: 'Unsubscribe failed',
+    notificationsBlocked: 'Notifications are blocked in this browser',
     deleteTitle: 'Delete channel',
     deleteConfirm:
       'Delete <bold>{{name}}</bold>? This permanently removes the channel, its API keys, subscriptions and message history. This cannot be undone.',
