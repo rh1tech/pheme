@@ -67,7 +67,20 @@ export function AdminUsersPage() {
   }
 
   return (
-    <AdminPageShell title={t('admin.headerUsers')}>
+    <AdminPageShell
+      title={t('admin.headerUsers')}
+      actions={
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          onSubmit={() => {
+            setPage(1)
+            setQuery(search.trim())
+          }}
+          placeholder={t('admin.searchUsers')}
+        />
+      }
+    >
       <Modal opened={deleteId !== null} onClose={() => setDeleteId(null)} title={t('common.delete')}>
         <Stack>
           <Text size="sm">
@@ -89,15 +102,6 @@ export function AdminUsersPage() {
       </Modal>
 
       <Stack gap="sm">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          onSubmit={() => {
-            setPage(1)
-            setQuery(search.trim())
-          }}
-          placeholder={t('admin.searchUsers')}
-        />
         {users && users.items.length === 0 ? (
           <Text c="dimmed" size="sm">
             {t('admin.noUsers')}

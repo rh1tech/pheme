@@ -67,7 +67,20 @@ export function AdminChannelsPage() {
   }
 
   return (
-    <AdminPageShell title={t('admin.headerChannels')}>
+    <AdminPageShell
+      title={t('admin.headerChannels')}
+      actions={
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          onSubmit={() => {
+            setPage(1)
+            setQuery(search.trim())
+          }}
+          placeholder={t('admin.searchChannels')}
+        />
+      }
+    >
       <Modal opened={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title={t('common.delete')}>
         <Stack>
           <Text size="sm">

@@ -6,12 +6,24 @@ import { useTranslation } from 'react-i18next'
 // Page rows shown per admin list.
 export const ADMIN_PAGE_LIMIT = 10
 
-/** A consistent admin page shell: title + content. */
-export function AdminPageShell({ title, children }: { title: string; children: ReactNode }) {
+/** A consistent admin page shell: a header row (title + optional actions) and
+ *  content below it with a tight gap. */
+export function AdminPageShell({
+  title,
+  actions,
+  children,
+}: {
+  title: string
+  actions?: ReactNode
+  children: ReactNode
+}) {
   return (
     <Container size="lg">
-      <Stack gap="lg">
-        <Title order={3}>{title}</Title>
+      <Stack gap="md">
+        <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+          <Title order={3}>{title}</Title>
+          {actions}
+        </Group>
         {children}
       </Stack>
     </Container>
@@ -32,7 +44,8 @@ export function StatCard({ label, value }: { label: string; value?: number }) {
   )
 }
 
-/** A right-aligned search field that fires onSubmit on Enter or the icon. */
+/** A search field that fires onSubmit on Enter or the icon. Designed to sit in
+ *  the page header row. */
 export function SearchBar({
   value,
   onChange,
@@ -45,20 +58,18 @@ export function SearchBar({
   placeholder: string
 }) {
   return (
-    <Group justify="flex-end">
-      <TextInput
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.currentTarget.value)}
-        onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
-        rightSection={
-          <ActionIcon variant="subtle" onClick={onSubmit}>
-            <IconSearch size={16} />
-          </ActionIcon>
-        }
-        w={260}
-      />
-    </Group>
+    <TextInput
+      placeholder={placeholder}
+      value={value}
+      onChange={(e) => onChange(e.currentTarget.value)}
+      onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
+      rightSection={
+        <ActionIcon variant="subtle" onClick={onSubmit}>
+          <IconSearch size={16} />
+        </ActionIcon>
+      }
+      w={260}
+    />
   )
 }
 
