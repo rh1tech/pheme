@@ -97,6 +97,10 @@ const en = {
     unsubscribe: 'Unsubscribe',
     unsubscribed: 'This browser was unsubscribed',
     unsubscribeFailed: 'Unsubscribe failed',
+    subscribeIosHint:
+      'To enable notifications on iPhone or iPad, open Pheme in Safari, tap the Share button and choose “Add to Home Screen”, then open it from the new icon.',
+    subscribeUnsupported:
+      'This browser does not support push notifications. Try a recent version of Chrome, Edge, Firefox or Safari.',
     notificationsBlocked: 'Notifications are blocked in this browser',
     deleteTitle: 'Delete channel',
     deleteConfirm:

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ActionIcon,
+  Alert,
   Anchor,
   Badge,
   Breadcrumbs,
@@ -21,7 +22,7 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core'
-import { IconBellCheck, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
+import { IconBellCheck, IconDeviceMobile, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Trans, useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
@@ -31,7 +32,7 @@ import { useEventStream } from '../hooks/useEventStream'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { ModeBadge } from '../components/badges'
 import { loadWebDeviceId, saveWebDeviceId } from '../lib/device'
-import { registerWebPushDevice, webPushSupported } from '../lib/webpush'
+import { registerWebPushDevice, webPushAvailability } from '../lib/webpush'
 
 export function ChannelPage() {
   const { id = '' } = useParams()
@@ -56,6 +57,7 @@ export function ChannelPage() {
   const [deleting, setDeleting] = useState(false)
   const [subStatus, setSubStatus] = useState<'active' | 'pending' | 'none'>('none')
   const [subBusy, setSubBusy] = useState(false)
+  const pushAvailability = webPushAvailability()
 
   useEffect(() => {
     let active = true
@@ -476,28 +478,28 @@ export function ChannelPage() {
                 </Group>
               </Stack>
 
-              {webPushSupported() && (
-                <Card withBorder padding="md">
-                  <Group justify="space-between">
-                    <Stack gap={2}>
-                      <Group gap="xs">
-                        <Text fw={600}>{t('channel.subscribeTitle')}</Text>
-                        {subStatus === 'active' && (
-                          <Badge color="teal" variant="light" leftSection={<IconBellCheck size={14} />}>
-                            {t('channel.subscribed')}
-                          </Badge>
-                        )}
-                        {subStatus === 'pending' && (
-                          <Badge color="yellow" variant="light">
-                            {t('channel.subscriptionPending')}
-                          </Badge>
-                        )}
-                      </Group>
-                      <Text size="sm" c="dimmed">
-                        {t('channel.subscribeDescription')}
-                      </Text>
-                    </Stack>
-                    {subStatus === 'none' ? (
+              <Card withBorder padding="md">
+                <Group justify="space-between">
+                  <Stack gap={2}>
+                    <Group gap="xs">
+                      <Text fw={600}>{t('channel.subscribeTitle')}</Text>
+                      {pushAvailability === 'supported' && subStatus === 'active' && (
+                        <Badge color="teal" variant="light" leftSection={<IconBellCheck size={14} />}>
+                          {t('channel.subscribed')}
+                        </Badge>
+                      )}
+                      {pushAvailability === 'supported' && subStatus === 'pending' && (
+                        <Badge color="yellow" variant="light">
+                          {t('channel.subscriptionPending')}
+                        </Badge>
+                      )}
+                    </Group>
+                    <Text size="sm" c="dimmed">
+                      {t('channel.subscribeDescription')}
+                    </Text>
+                  </Stack>
+                  {pushAvailability === 'supported' &&
+                    (subStatus === 'none' ? (
                       <Button variant="outline" loading={subBusy} onClick={subscribeBrowser}>
                         {t('channel.subscribeBrowser')}
                       </Button>
@@ -505,10 +507,21 @@ export function ChannelPage() {
                       <Button variant="subtle" color="red" loading={subBusy} onClick={unsubscribeBrowser}>
                         {t('channel.unsubscribe')}
                       </Button>
-                    )}
-                  </Group>
-                </Card>
-              )}
+                    ))}
+                </Group>
+                {pushAvailability !== 'supported' && (
+                  <Alert
+                    mt="sm"
+                    variant="light"
+                    color={pushAvailability === 'ios-needs-install' ? 'blue' : 'gray'}
+                    icon={<IconDeviceMobile size={18} />}
+                  >
+                    {pushAvailability === 'ios-needs-install'
+                      ? t('channel.subscribeIosHint')
+                      : t('channel.subscribeUnsupported')}
+                  </Alert>
+                )}
+              </Card>
 
               <Card withBorder padding="md" style={{ borderColor: 'var(--mantine-color-red-4)' }}>
                 <Group justify="space-between">

@@ -9,6 +9,37 @@ export function webPushSupported(): boolean {
   return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
 }
 
+/** Reports whether the current device is iOS or iPadOS. */
+export function isIOS(): boolean {
+  const ua = navigator.userAgent || ''
+  const iOSUA = /iPad|iPhone|iPod/.test(ua)
+  // iPadOS 13+ reports as a Mac; detect it by touch support.
+  const iPadOS = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+  return iOSUA || iPadOS
+}
+
+/** Reports whether the app is running as an installed (standalone) PWA. */
+export function isStandalonePWA(): boolean {
+  return (
+    window.matchMedia?.('(display-mode: standalone)').matches === true ||
+    (navigator as Navigator & { standalone?: boolean }).standalone === true
+  )
+}
+
+/** Why Web Push can't be used here, or 'supported' when it can. */
+export type WebPushAvailability = 'supported' | 'ios-needs-install' | 'unsupported'
+
+/**
+ * Explains whether Web Push is usable on this device. iOS only exposes the Push
+ * APIs inside an installed Home Screen PWA, so a normal Safari tab reports
+ * 'ios-needs-install' rather than a hard 'unsupported'.
+ */
+export function webPushAvailability(): WebPushAvailability {
+  if (webPushSupported()) return 'supported'
+  if (isIOS() && !isStandalonePWA()) return 'ios-needs-install'
+  return 'unsupported'
+}
+
 export interface WebPushState {
   supported: boolean
   permission: NotificationPermission | 'unsupported'

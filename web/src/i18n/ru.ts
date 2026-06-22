@@ -99,6 +99,10 @@ const ru: Resources = {
     unsubscribe: 'Отписаться',
     unsubscribed: 'Браузер отписан',
     unsubscribeFailed: 'Не удалось отписаться',
+    subscribeIosHint:
+      'Чтобы включить уведомления на iPhone или iPad, откройте Pheme в Safari, нажмите кнопку «Поделиться» и выберите «На экран «Домой»», затем откройте приложение с новой иконки.',
+    subscribeUnsupported:
+      'Этот браузер не поддерживает push-уведомления. Попробуйте свежую версию Chrome, Edge, Firefox или Safari.',
     notificationsBlocked: 'Уведомления заблокированы в этом браузере',
     deleteTitle: 'Удалить канал',
     deleteConfirm:

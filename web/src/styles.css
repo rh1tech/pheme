@@ -21,6 +21,13 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Stop the elastic rubber-band/overscroll bounce so the app feels native on
+   mobile (iOS 16.4+ / modern Android) without disabling normal scrolling. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
 [data-mantine-color-scheme='light'] body {
   background-color: #f7f6fb;
   background-image: var(--pheme-bg-light);
