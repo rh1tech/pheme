@@ -34,13 +34,28 @@ pheme/
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 
-## Quick start (local infra)
-```bash
-cp deploy/.env.example deploy/.env
-docker compose -f deploy/docker-compose.yml up -d   # Mongo, RabbitMQ, Redis
+## Quick start
 
+```bash
+make setup   # one-time: checks tools, picks free ports, generates VAPID keys
+make dev     # build + run infra, API services and the web app; streams logs
+```
+
+Then open **http://localhost:5173**. Press Ctrl-C to stop the services
+(`make stop ARGS=--all` also stops the Docker infrastructure).
+
+`make setup` auto-detects port conflicts (e.g. an existing local MongoDB) and
+picks alternate host ports, writing the gitignored `.env.dev`, `deploy/.env` and
+`web/.env.local`. To make yourself an admin, set `PHEME_ADMIN_EMAILS` in
+`.env.dev`.
+
+Run `make help` for all targets (build, test, lint, infra-up/down/reset, logs,
+vapid). See [scripts/README.md](scripts/README.md) for details.
+
+### Manual (without the scripts)
+```bash
+docker compose -f deploy/docker-compose.yml up -d   # Mongo, RabbitMQ, Redis
 cd api
-# Run with real backends (see deploy/.env.example for all toggles):
 export PHEME_STORE_DRIVER=mongo PHEME_BROKER_DRIVER=rabbit \
        PHEME_LIVE_DRIVER=redis PHEME_RATELIMIT_DRIVER=redis \
        PHEME_MONGO_URI='mongodb://pheme:pheme@localhost:27017/?authSource=admin'

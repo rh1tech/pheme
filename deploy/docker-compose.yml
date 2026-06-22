@@ -7,7 +7,7 @@ services:
     image: mongo:7
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "${MONGO_HOST_PORT:-27017}:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-pheme}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:-pheme}
@@ -24,8 +24,8 @@ services:
     image: rabbitmq:3.13-management
     restart: unless-stopped
     ports:
-      - "5672:5672"   # AMQP
-      - "15672:15672" # management UI
+      - "${RABBIT_HOST_PORT:-5672}:5672"   # AMQP
+      - "${RABBIT_MGMT_HOST_PORT:-15672}:15672" # management UI
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-guest}
@@ -42,7 +42,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:

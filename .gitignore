@@ -16,6 +16,8 @@ mobile/.flutter-plugins*
 # Env & secrets
 .env
 *.local
+.env.dev
+/.dev/
 deploy/secrets/
 **/firebase-service-account.json
 **/vapid*.json
