@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Badge, Card, Group, SimpleGrid, Stack, Text, Title } from '@mantine/core'
-import { notifications } from '@mantine/notifications'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../lib/api'
+import { notifyError } from '../../lib/notify'
 import type { AdminStats } from '../../lib/types'
 import { AdminPageShell, StatCard } from '../../components/admin/AdminUI'
 
@@ -15,7 +15,7 @@ export function AdminOverviewPage() {
     api
       .adminStats()
       .then((s) => active && setStats(s))
-      .catch((e) => active && notifications.show({ color: 'red', message: `${t('admin.loadFailed')}: ${String(e)}` }))
+      .catch((e) => active && notifyError(t('admin.loadFailed'), e))
     return () => {
       active = false
     }

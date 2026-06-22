@@ -12,14 +12,15 @@ import {
   TextInput,
   Title,
 } from '@mantine/core'
-import { notifications } from '@mantine/notifications'
 import { IconBellCheck } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { notifyError, notifySuccess } from '../lib/notify'
 import type { Channel, SubscriptionMode } from '../lib/types'
 import { getWebPushState, registerWebPushDevice, webPushSupported } from '../lib/webpush'
 import { saveWebDeviceId } from '../lib/device'
+import { ModeBadge } from '../components/badges'
 
 export function DashboardPage() {
   const navigate = useNavigate()
@@ -36,7 +37,7 @@ export function DashboardPage() {
     try {
       setChannels(await api.listChannels())
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('dashboard.loadFailed')}: ${String(e)}` })
+      notifyError(t('dashboard.loadFailed'), e)
     }
   }
 
@@ -45,11 +46,7 @@ export function DashboardPage() {
     api
       .listChannels()
       .then((cs) => active && setChannels(cs))
-      .catch(
-        (e) =>
-          active &&
-          notifications.show({ color: 'red', message: `${t('dashboard.loadFailed')}: ${String(e)}` }),
-      )
+      .catch((e) => active && notifyError(t('dashboard.loadFailed'), e))
     return () => {
       active = false
     }
@@ -79,10 +76,10 @@ export function DashboardPage() {
       const created = await api.createChannel(name.trim(), mode)
       setModalOpen(false)
       await refresh()
-      notifications.show({ color: 'green', message: t('dashboard.created') })
+      notifySuccess(t('dashboard.created'))
       navigate(`/channels/${created.id}`)
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('dashboard.createFailed')}: ${String(e)}` })
+      notifyError(t('dashboard.createFailed'), e)
     } finally {
       setCreating(false)
     }
@@ -93,9 +90,9 @@ export function DashboardPage() {
       const deviceId = await registerWebPushDevice()
       saveWebDeviceId(deviceId)
       setPushOn(true)
-      notifications.show({ color: 'green', message: t('dashboard.notificationsEnabled') })
+      notifySuccess(t('dashboard.notificationsEnabled'))
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('dashboard.enableFailed')}: ${(e as Error).message}` })
+      notifyError(t('dashboard.enableFailed'), e)
     }
   }
 
@@ -185,9 +182,7 @@ export function DashboardPage() {
             >
               <Group justify="space-between">
                 <Text fw={600}>{c.name}</Text>
-                <Badge color={c.subscriptionMode === 'open' ? 'teal' : 'grape'}>
-                  {t(`mode.${c.subscriptionMode}`)}
-                </Badge>
+<ModeBadge mode={c.subscriptionMode} />
               </Group>
             </Card>
           ))}

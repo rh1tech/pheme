@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
-import { ActionIcon, Badge, Button, Group, Menu, Modal, Stack, Table, Text } from '@mantine/core'
+import { ActionIcon, Menu, Table, Text } from '@mantine/core'
 import { IconDots } from '@tabler/icons-react'
-import { notifications } from '@mantine/notifications'
 import { Trans, useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
+import { notifyError, notifySuccess } from '../../lib/notify'
 import type { AdminChannel, ChannelStatus, Paged } from '../../lib/types'
 import { ADMIN_PAGE_LIMIT, AdminPageShell, Pager, SearchBar } from '../../components/admin/AdminUI'
+import { ConfirmModal } from '../../components/ConfirmModal'
+import { ChannelStatusBadge, ModeBadge } from '../../components/badges'
 
 export function AdminChannelsPage() {
   const { t } = useTranslation()
@@ -18,15 +20,11 @@ export function AdminChannelsPage() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
 
-  function notifyError(key: string, e: unknown) {
-    notifications.show({ color: 'red', message: `${t(key)}: ${String(e)}` })
-  }
-
   function reload() {
     api
       .adminListChannels(query, page, ADMIN_PAGE_LIMIT)
       .then(setChannels)
-      .catch((e) => notifyError('admin.loadFailed', e))
+      .catch((e) => notifyError(t('admin.loadFailed'), e))
   }
 
   useEffect(() => {
@@ -34,7 +32,7 @@ export function AdminChannelsPage() {
     api
       .adminListChannels(query, page, ADMIN_PAGE_LIMIT)
       .then((p) => active && setChannels(p))
-      .catch((e) => active && notifyError('admin.loadFailed', e))
+      .catch((e) => active && notifyError(t('admin.loadFailed'), e))
     return () => {
       active = false
     }
@@ -44,10 +42,10 @@ export function AdminChannelsPage() {
   async function setStatus(id: string, status: ChannelStatus) {
     try {
       await api.adminUpdateChannelStatus(id, status)
-      notifications.show({ color: 'green', message: t('admin.channelUpdated') })
+      notifySuccess(t('admin.channelUpdated'))
       reload()
     } catch (e) {
-      notifyError('admin.updateFailed', e)
+      notifyError(t('admin.updateFailed'), e)
     }
   }
 
@@ -56,11 +54,11 @@ export function AdminChannelsPage() {
     setDeleting(true)
     try {
       await api.adminDeleteChannel(deleteTarget.id)
-      notifications.show({ color: 'green', message: t('admin.channelDeleted') })
+      notifySuccess(t('admin.channelDeleted'))
       setDeleteTarget(null)
       reload()
     } catch (e) {
-      notifyError('admin.deleteFailed', e)
+      notifyError(t('admin.deleteFailed'), e)
     } finally {
       setDeleting(false)
     }
@@ -81,97 +79,83 @@ export function AdminChannelsPage() {
         />
       }
     >
-      <Modal opened={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title={t('common.delete')}>
-        <Stack>
-          <Text size="sm">
-            <Trans
-              i18nKey="admin.deleteChannelConfirm"
-              values={{ name: deleteTarget?.name ?? '' }}
-              components={{ bold: <b /> }}
-            />
-          </Text>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setDeleteTarget(null)}>
-              {t('common.cancel')}
-            </Button>
-            <Button color="red" loading={deleting} onClick={confirmDelete}>
-              {t('common.delete')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+      <ConfirmModal
+        opened={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        title={t('common.delete')}
+        loading={deleting}
+      >
+        <Text size="sm">
+          <Trans i18nKey="admin.deleteChannelConfirm" values={{ name: deleteTarget?.name ?? '' }} components={{ bold: <b /> }} />
+        </Text>
+      </ConfirmModal>
 
-      <Stack gap="sm">
-        {channels && channels.items.length === 0 ? (
-          <Text c="dimmed" size="sm">
-            {t('admin.noChannels')}
-          </Text>
-        ) : (
-          <Table verticalSpacing="xs" striped>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t('admin.colName')}</Table.Th>
-                <Table.Th>{t('admin.colOwner')}</Table.Th>
-                <Table.Th>{t('admin.colMode')}</Table.Th>
-                <Table.Th>{t('admin.colStatus')}</Table.Th>
-                <Table.Th />
+      {channels && channels.items.length === 0 ? (
+        <Text c="dimmed" size="sm">
+          {t('admin.noChannels')}
+        </Text>
+      ) : (
+        <Table verticalSpacing="xs" striped>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>{t('admin.colName')}</Table.Th>
+              <Table.Th>{t('admin.colOwner')}</Table.Th>
+              <Table.Th>{t('admin.colMode')}</Table.Th>
+              <Table.Th>{t('admin.colStatus')}</Table.Th>
+              <Table.Th />
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {channels?.items.map((c) => (
+              <Table.Tr key={c.id}>
+                <Table.Td>
+                  <Text style={{ cursor: 'pointer' }} fw={500} onClick={() => navigate(`/admin/channels/${c.id}`)}>
+                    {c.name}
+                  </Text>
+                </Table.Td>
+                <Table.Td>{c.ownerEmail}</Table.Td>
+                <Table.Td>
+                  <ModeBadge mode={c.subscriptionMode} />
+                </Table.Td>
+                <Table.Td>
+                  <ChannelStatusBadge status={c.status} />
+                </Table.Td>
+                <Table.Td align="right">
+                  <Menu position="bottom-end" withinPortal>
+                    <Menu.Target>
+                      <ActionIcon variant="subtle" color="gray">
+                        <IconDots size={16} />
+                      </ActionIcon>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                      <Menu.Item onClick={() => navigate(`/admin/channels/${c.id}`)}>
+                        {t('admin.viewMessages')}
+                      </Menu.Item>
+                      {c.status === 'disabled' ? (
+                        <Menu.Item onClick={() => setStatus(c.id, 'active')}>{t('admin.enable')}</Menu.Item>
+                      ) : (
+                        <Menu.Item onClick={() => setStatus(c.id, 'disabled')}>{t('admin.disable')}</Menu.Item>
+                      )}
+                      <Menu.Divider />
+                      <Menu.Item color="red" onClick={() => setDeleteTarget({ id: c.id, name: c.name })}>
+                        {t('common.delete')}
+                      </Menu.Item>
+                    </Menu.Dropdown>
+                  </Menu>
+                </Table.Td>
               </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {channels?.items.map((c) => (
-                <Table.Tr key={c.id}>
-                  <Table.Td>
-                    <Text style={{ cursor: 'pointer' }} fw={500} onClick={() => navigate(`/admin/channels/${c.id}`)}>
-                      {c.name}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>{c.ownerEmail}</Table.Td>
-                  <Table.Td>
-                    <Badge color={c.subscriptionMode === 'open' ? 'teal' : 'grape'}>
-                      {t(`mode.${c.subscriptionMode}`)}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Badge color={c.status === 'disabled' ? 'red' : 'teal'} variant="light">
-                      {c.status === 'disabled' ? t('admin.statusDisabled') : t('admin.statusActive')}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td align="right">
-                    <Menu position="bottom-end" withinPortal>
-                      <Menu.Target>
-                        <ActionIcon variant="subtle" color="gray">
-                          <IconDots size={16} />
-                        </ActionIcon>
-                      </Menu.Target>
-                      <Menu.Dropdown>
-                        <Menu.Item onClick={() => navigate(`/admin/channels/${c.id}`)}>
-                          {t('admin.viewMessages')}
-                        </Menu.Item>
-                        {c.status === 'disabled' ? (
-                          <Menu.Item onClick={() => setStatus(c.id, 'active')}>{t('admin.enable')}</Menu.Item>
-                        ) : (
-                          <Menu.Item onClick={() => setStatus(c.id, 'disabled')}>{t('admin.disable')}</Menu.Item>
-                        )}
-                        <Menu.Divider />
-                        <Menu.Item color="red" onClick={() => setDeleteTarget({ id: c.id, name: c.name })}>
-                          {t('common.delete')}
-                        </Menu.Item>
-                      </Menu.Dropdown>
-                    </Menu>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        )}
-        <Pager
-          page={channels?.page ?? 1}
-          total={channels?.total ?? 0}
-          limit={ADMIN_PAGE_LIMIT}
-          onPrev={() => setPage((p) => Math.max(1, p - 1))}
-          onNext={() => setPage((p) => p + 1)}
-        />
-      </Stack>
+            ))}
+          </Table.Tbody>
+        </Table>
+      )}
+      <Pager
+        page={channels?.page ?? 1}
+        total={channels?.total ?? 0}
+        limit={ADMIN_PAGE_LIMIT}
+        onPrev={() => setPage((p) => Math.max(1, p - 1))}
+        onNext={() => setPage((p) => p + 1)}
+      />
     </AdminPageShell>
   )
 }

@@ -10,11 +10,11 @@ import {
   Text,
   TextInput,
 } from '@mantine/core'
-import { notifications } from '@mantine/notifications'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
 import { ApiError } from '../lib/api'
+import { notifyError } from '../lib/notify'
 import { LanguageSwitcher } from '../components/LanguageSwitcher'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { Logo } from '../components/Logo'
@@ -39,7 +39,7 @@ export function LoginPage() {
       navigate('/', { replace: true })
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : t('auth.requestFailed')
-      notifications.show({ color: 'red', message: msg })
+      notifyError(msg)
     } finally {
       setLoading(false)
     }

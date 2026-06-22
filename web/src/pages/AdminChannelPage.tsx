@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   ActionIcon,
   Anchor,
-  Badge,
   Breadcrumbs,
   Button,
   Card,
@@ -17,11 +16,12 @@ import {
   Tooltip,
 } from '@mantine/core'
 import { IconTrash } from '@tabler/icons-react'
-import { notifications } from '@mantine/notifications'
+import { notifyError, notifySuccess } from '../lib/notify'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import type { AdminChannel, ApiKey, Message } from '../lib/types'
+import { ChannelStatusBadge } from '../components/badges'
 
 export function AdminChannelPage() {
   const { id = '' } = useParams()
@@ -46,7 +46,7 @@ export function AdminChannelPage() {
         setMessages(page.messages)
         setCursor(page.nextCursor)
       })
-      .catch((e) => active && notifications.show({ color: 'red', message: `${t('admin.loadFailed')}: ${String(e)}` }))
+      .catch((e) => active && notifyError(t('admin.loadFailed'), e))
     api
       .adminListKeys(id)
       .then((ks) => active && setKeys(ks))
@@ -65,7 +65,7 @@ export function AdminChannelPage() {
       setMessages((prev) => [...prev, ...page.messages])
       setCursor(page.nextCursor)
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('admin.loadFailed')}: ${String(e)}` })
+      notifyError(t('admin.loadFailed'), e)
     } finally {
       setLoadingMore(false)
     }
@@ -75,9 +75,9 @@ export function AdminChannelPage() {
     try {
       await api.adminRevokeKey(id, keyId)
       setKeys(await api.adminListKeys(id))
-      notifications.show({ color: 'green', message: t('admin.keyRevoked') })
+      notifySuccess(t('admin.keyRevoked'))
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('admin.revokeFailed')}: ${String(e)}` })
+      notifyError(t('admin.revokeFailed'), e)
     }
   }
 
@@ -110,11 +110,7 @@ export function AdminChannelPage() {
                 <Code>{channel?.publicId ?? id}</Code>
               </Group>
             </Stack>
-            {channel && (
-              <Badge color={channel.status === 'disabled' ? 'red' : 'teal'} variant="light">
-                {channel.status === 'disabled' ? t('admin.statusDisabled') : t('admin.statusActive')}
-              </Badge>
-            )}
+            {channel && <ChannelStatusBadge status={channel.status} />}
           </Group>
         </Card>
 

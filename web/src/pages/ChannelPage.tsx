@@ -22,12 +22,14 @@ import {
   Tooltip,
 } from '@mantine/core'
 import { IconBellCheck, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
-import { notifications } from '@mantine/notifications'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Trans, useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { notifyError, notifySuccess } from '../lib/notify'
 import type { ApiKey, Channel, CreatedKey, Message, SubscriptionMode } from '../lib/types'
 import { useEventStream } from '../hooks/useEventStream'
+import { ConfirmModal } from '../components/ConfirmModal'
+import { ModeBadge } from '../components/badges'
 import { loadWebDeviceId, saveWebDeviceId } from '../lib/device'
 import { registerWebPushDevice, webPushSupported } from '../lib/webpush'
 
@@ -85,7 +87,7 @@ export function ChannelPage() {
         setMessages(page.messages)
         setCursor(page.nextCursor)
       })
-      .catch((e) => active && notifications.show({ color: 'red', message: `${t('dashboard.loadFailed')}: ${String(e)}` }))
+      .catch((e) => active && notifyError(t('dashboard.loadFailed'), e))
     return () => {
       active = false
     }
@@ -124,7 +126,7 @@ export function ChannelPage() {
       setMessages(page.messages)
       setCursor(page.nextCursor)
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('channel.searchFailed')}: ${String(e)}` })
+      notifyError(t('channel.searchFailed'), e)
     }
   }
 
@@ -136,7 +138,7 @@ export function ChannelPage() {
       setMessages((prev) => [...prev, ...page.messages])
       setCursor(page.nextCursor)
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('dashboard.loadFailed')}: ${String(e)}` })
+      notifyError(t('dashboard.loadFailed'), e)
     } finally {
       setLoadingMore(false)
     }
@@ -160,7 +162,7 @@ export function ChannelPage() {
       setCreatedKey(await api.createKey(id))
       await reloadKeys()
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('channel.keyFailed')}: ${String(e)}` })
+      notifyError(t('channel.keyFailed'), e)
     }
   }
 
@@ -168,9 +170,9 @@ export function ChannelPage() {
     try {
       await api.revokeKey(id, keyId)
       await reloadKeys()
-      notifications.show({ color: 'green', message: t('channel.keyRevoked') })
+      notifySuccess(t('channel.keyRevoked'))
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('channel.revokeFailed')}: ${String(e)}` })
+      notifyError(t('channel.revokeFailed'), e)
     }
   }
 
@@ -181,9 +183,9 @@ export function ChannelPage() {
       await api.notifyChannel(id, title.trim(), body.trim())
       setTitle('')
       setBody('')
-      notifications.show({ color: 'green', message: t('channel.messageSent') })
+      notifySuccess(t('channel.messageSent'))
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('channel.sendFailed')}: ${String(e)}` })
+      notifyError(t('channel.sendFailed'), e)
     } finally {
       setSending(false)
     }
@@ -200,9 +202,9 @@ export function ChannelPage() {
       await api.subscribe(id, deviceId)
       const status = await api.channelSubscription(id, deviceId)
       setSubStatus(status)
-      notifications.show({ color: 'green', message: t('channel.browserSubscribed') })
+      notifySuccess(t('channel.browserSubscribed'))
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('channel.subscribeFailed')}: ${(e as Error).message}` })
+      notifyError(t('channel.subscribeFailed'), e)
     } finally {
       setSubBusy(false)
     }
@@ -218,9 +220,9 @@ export function ChannelPage() {
     try {
       await api.unsubscribe(id, deviceId)
       setSubStatus('none')
-      notifications.show({ color: 'green', message: t('channel.unsubscribed') })
+      notifySuccess(t('channel.unsubscribed'))
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('channel.unsubscribeFailed')}: ${(e as Error).message}` })
+      notifyError(t('channel.unsubscribeFailed'), e)
     } finally {
       setSubBusy(false)
     }
@@ -231,9 +233,9 @@ export function ChannelPage() {
     try {
       const updated = await api.updateChannel(id, { name: editName.trim(), subscriptionMode: editMode })
       setChannel(updated)
-      notifications.show({ color: 'green', message: t('channel.channelUpdated') })
+      notifySuccess(t('channel.channelUpdated'))
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('channel.updateFailed')}: ${String(e)}` })
+      notifyError(t('channel.updateFailed'), e)
     } finally {
       setSavingSettings(false)
     }
@@ -243,10 +245,10 @@ export function ChannelPage() {
     setDeleting(true)
     try {
       await api.deleteChannel(id)
-      notifications.show({ color: 'green', message: t('channel.channelDeleted') })
+      notifySuccess(t('channel.channelDeleted'))
       navigate('/', { replace: true })
     } catch (e) {
-      notifications.show({ color: 'red', message: `${t('channel.deleteFailed')}: ${String(e)}` })
+      notifyError(t('channel.deleteFailed'), e)
       setDeleting(false)
     }
   }
@@ -271,25 +273,18 @@ export function ChannelPage() {
         </Stack>
       </Modal>
 
-      <Modal opened={confirmDelete} onClose={() => setConfirmDelete(false)} title={t('channel.deleteTitle')}>
-        <Stack>
-          <Text size="sm">
-            <Trans
-              i18nKey="channel.deleteConfirm"
-              values={{ name: channel?.name ?? '' }}
-              components={{ bold: <b /> }}
-            />
-          </Text>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setConfirmDelete(false)}>
-              {t('common.cancel')}
-            </Button>
-            <Button color="red" loading={deleting} onClick={deleteChannel}>
-              {t('channel.deleteTitle')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+      <ConfirmModal
+        opened={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={deleteChannel}
+        title={t('channel.deleteTitle')}
+        confirmLabel={t('channel.deleteTitle')}
+        loading={deleting}
+      >
+        <Text size="sm">
+          <Trans i18nKey="channel.deleteConfirm" values={{ name: channel?.name ?? '' }} components={{ bold: <b /> }} />
+        </Text>
+      </ConfirmModal>
 
       <Stack gap="lg">
         <Breadcrumbs>
@@ -317,11 +312,7 @@ export function ChannelPage() {
                 </CopyButton>
               </Group>
             </Stack>
-            {channel && (
-              <Badge color={channel.subscriptionMode === 'open' ? 'teal' : 'grape'}>
-                {t(`mode.${channel.subscriptionMode}`)}
-              </Badge>
-            )}
+            {channel && <ModeBadge mode={channel.subscriptionMode} />}
           </Group>
         </Card>
 
