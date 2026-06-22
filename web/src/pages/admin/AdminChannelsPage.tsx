@@ -102,15 +102,6 @@ export function AdminChannelsPage() {
       </Modal>
 
       <Stack gap="sm">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          onSubmit={() => {
-            setPage(1)
-            setQuery(search.trim())
-          }}
-          placeholder={t('admin.searchChannels')}
-        />
         {channels && channels.items.length === 0 ? (
           <Text c="dimmed" size="sm">
             {t('admin.noChannels')}
