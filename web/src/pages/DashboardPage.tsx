@@ -129,7 +129,7 @@ export function DashboardPage() {
         </Stack>
       </Modal>
 
-      <Stack gap="lg">
+      <Stack gap="md">
         <Group justify="space-between">
           <Title order={4}>{t('dashboard.yourChannels')}</Title>
           <Group gap="xs">
