@@ -51,7 +51,7 @@ export function Layout() {
       </AppShell.Header>
 
       <AppShell.Navbar p="md">
-        <AppShell.Section>
+        <AppShell.Section visibleFrom="sm">
           <Group justify="space-between" mb="lg" mt={4}>
             <Logo onClick={() => go('/')} />
           </Group>
