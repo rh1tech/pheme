@@ -30,7 +30,7 @@ export function LanguageSwitcher() {
               alignItems: 'center',
             }}
           >
-            <Group gap={6} c="gray">
+            <Group gap={6}>
               <IconLanguage size={18} />
               <Text size="sm" fw={500} tt="uppercase">
                 {current}

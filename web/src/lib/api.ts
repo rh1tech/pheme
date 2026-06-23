@@ -1,5 +1,6 @@
 // Pheme App API client with bearer auth and transparent access-token refresh.
 
+import { nprogress } from '@mantine/nprogress'
 import {
   loadTokens,
   saveTokens,
@@ -91,23 +92,40 @@ async function refresh(tokens: Tokens): Promise<string> {
   }
 }
 
+// A top loading bar is shown while any API request is in flight. A counter keeps
+// it visible until the last concurrent request finishes.
+let inflight = 0
+function progressStart(): void {
+  if (inflight === 0) nprogress.start()
+  inflight++
+}
+function progressDone(): void {
+  inflight = Math.max(0, inflight - 1)
+  if (inflight === 0) nprogress.complete()
+}
+
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  if (opts.public) return rawFetch<T>(path, opts)
-
-  const tokens = loadTokens()
-  if (!tokens) {
-    onAuthFailure?.()
-    throw new AuthError('not authenticated')
-  }
-
+  progressStart()
   try {
-    return await rawFetch<T>(path, opts, tokens.accessToken)
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 401) {
-      const newAccess = await refresh(tokens)
-      return rawFetch<T>(path, opts, newAccess)
+    if (opts.public) return await rawFetch<T>(path, opts)
+
+    const tokens = loadTokens()
+    if (!tokens) {
+      onAuthFailure?.()
+      throw new AuthError('not authenticated')
     }
-    throw err
+
+    try {
+      return await rawFetch<T>(path, opts, tokens.accessToken)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        const newAccess = await refresh(tokens)
+        return await rawFetch<T>(path, opts, newAccess)
+      }
+      throw err
+    }
+  } finally {
+    progressDone()
   }
 }
 
