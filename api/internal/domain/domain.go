@@ -103,8 +103,11 @@ type Device struct {
 	Platform   Platform  `bson:"platform" json:"platform"`
 	FCMToken   string    `bson:"fcmToken,omitempty" json:"fcmToken,omitempty"`
 	WebPushSub string    `bson:"webPushSub,omitempty" json:"webPushSub,omitempty"`
-	CreatedAt  time.Time `bson:"createdAt" json:"createdAt"`
-	LastSeenAt time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
+	// WebPushEndpoint is the subscription's endpoint URL, stored separately so a
+	// web device can be uniquely identified (and upserted) by it.
+	WebPushEndpoint string    `bson:"webPushEndpoint,omitempty" json:"-"`
+	CreatedAt       time.Time `bson:"createdAt" json:"createdAt"`
+	LastSeenAt      time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
 }
 
 // Subscription links a device to a channel.

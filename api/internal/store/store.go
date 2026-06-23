@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
@@ -14,6 +15,21 @@ import (
 
 // ErrNotFound is returned when a requested entity does not exist.
 var ErrNotFound = errors.New("not found")
+
+// webPushEndpoint extracts the endpoint URL from a Web Push subscription JSON
+// string, or returns "" if the input is empty or not a web push subscription.
+func webPushEndpoint(webPushSub string) string {
+	if webPushSub == "" {
+		return ""
+	}
+	var s struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.Unmarshal([]byte(webPushSub), &s); err != nil {
+		return ""
+	}
+	return s.Endpoint
+}
 
 // Store is the persistence contract used by the App API and Dispatcher.
 type Store interface {

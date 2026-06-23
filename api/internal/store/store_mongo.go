@@ -53,7 +53,7 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 		"users":         {{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}},
 		"channels":      {{Keys: bson.D{{Key: "publicId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "ownerId", Value: 1}}}},
 		"apiKeys":       {{Keys: bson.D{{Key: "channelId", Value: 1}}}},
-		"devices":       {{Keys: bson.D{{Key: "userId", Value: 1}}}},
+		"devices":       {{Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}, {Key: "webPushEndpoint", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"webPushEndpoint": bson.M{"$exists": true}})}},
 		"subscriptions": {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "deviceId", Value: 1}}}},
 		"messages":      {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "createdAt", Value: -1}}}},
 		"deliveries":    {{Keys: bson.D{{Key: "messageId", Value: 1}}}},
@@ -302,6 +302,28 @@ func (m *Mongo) RevokeAPIKey(ctx context.Context, keyID string) error {
 }
 
 func (m *Mongo) CreateDevice(ctx context.Context, d domain.Device) (domain.Device, error) {
+	// Web devices are identified by their push endpoint: re-registering the same
+	// browser subscription updates the existing device instead of creating a
+	// duplicate (and refreshes the stored subscription after a key change).
+	if endpoint := webPushEndpoint(d.WebPushSub); endpoint != "" {
+		filter := bson.M{"userId": d.UserID, "webPushEndpoint": endpoint}
+		var existing domain.Device
+		err := m.db.Collection("devices").FindOne(ctx, filter).Decode(&existing)
+		if err == nil {
+			_, uerr := m.db.Collection("devices").UpdateOne(ctx, bson.M{"_id": existing.ID},
+				bson.M{"$set": bson.M{"webPushSub": d.WebPushSub, "lastSeenAt": d.LastSeenAt}})
+			if uerr != nil {
+				return domain.Device{}, uerr
+			}
+			existing.WebPushSub = d.WebPushSub
+			existing.LastSeenAt = d.LastSeenAt
+			return existing, nil
+		}
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			return domain.Device{}, err
+		}
+		d.WebPushEndpoint = endpoint
+	}
 	if d.ID == "" {
 		d.ID = mongoID()
 	}

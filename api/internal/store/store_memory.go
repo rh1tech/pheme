@@ -381,6 +381,17 @@ func (m *Memory) RevokeAPIKey(_ context.Context, keyID string) error {
 func (m *Memory) CreateDevice(_ context.Context, d domain.Device) (domain.Device, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if endpoint := webPushEndpoint(d.WebPushSub); endpoint != "" {
+		for id, existing := range m.devices {
+			if existing.UserID == d.UserID && existing.WebPushEndpoint == endpoint {
+				existing.WebPushSub = d.WebPushSub
+				existing.LastSeenAt = d.LastSeenAt
+				m.devices[id] = existing
+				return existing, nil
+			}
+		}
+		d.WebPushEndpoint = endpoint
+	}
 	if d.ID == "" {
 		d.ID = newID()
 	}

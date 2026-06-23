@@ -196,11 +196,10 @@ export function ChannelPage() {
   async function subscribeBrowser() {
     setSubBusy(true)
     try {
-      let deviceId = loadWebDeviceId()
-      if (!deviceId) {
-        deviceId = await registerWebPushDevice()
-        saveWebDeviceId(deviceId)
-      }
+      // Always (re)register: the server upserts the web device by its push
+      // endpoint, so this self-heals a stale cached id or a deleted device.
+      const deviceId = await registerWebPushDevice()
+      saveWebDeviceId(deviceId)
       await api.subscribe(id, deviceId)
       const status = await api.channelSubscription(id, deviceId)
       setSubStatus(status)
