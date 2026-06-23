@@ -100,17 +100,29 @@ body {
   box-shadow: 0 8px 22px color-mix(in srgb, var(--mantine-color-iris-6) 45%, transparent);
 }
 
-/* Inputs: quiet filled fields that light up with a brand ring on focus. */
+/* Inputs: a clean 2px grey border that lights up with a brand ring on focus.
+   Note: border-color must NOT use light-dark() — the production CSS minifier
+   (lightningcss) polyfills it into two space-separated values, which the
+   multi-value border-color shorthand reads as top/bottom + left/right (causing
+   dark left/right edges). Use explicit color-scheme selectors instead. */
 .mantine-Input-input {
   border-width: 2px;
-  border-color: light-dark(var(--mantine-color-gray-4), var(--mantine-color-dark-4));
   transition:
     background-color 120ms ease,
     border-color 120ms ease,
     box-shadow 120ms ease;
 }
-.mantine-Input-input:hover {
-  border-color: light-dark(var(--mantine-color-gray-5), var(--mantine-color-dark-3));
+[data-mantine-color-scheme='light'] .mantine-Input-input {
+  border-color: var(--mantine-color-gray-4);
+}
+[data-mantine-color-scheme='dark'] .mantine-Input-input {
+  border-color: var(--mantine-color-dark-4);
+}
+[data-mantine-color-scheme='light'] .mantine-Input-input:hover {
+  border-color: var(--mantine-color-gray-5);
+}
+[data-mantine-color-scheme='dark'] .mantine-Input-input:hover {
+  border-color: var(--mantine-color-dark-3);
 }
 .mantine-Input-input:focus,
 .mantine-Input-input:focus-within {
