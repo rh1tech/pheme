@@ -78,6 +78,24 @@ function urlBase64ToUint8Array(base64: string): Uint8Array {
 }
 
 /**
+ * Reports whether an existing subscription was created with the given VAPID
+ * public key. A subscription bound to a different applicationServerKey must be
+ * recreated, otherwise the push service rejects deliveries (e.g. Apple returns
+ * 403 BadJwtToken).
+ */
+function subscriptionMatchesKey(sub: PushSubscription, vapidPublicKey: string): boolean {
+  const existing = sub.options?.applicationServerKey
+  if (!existing) return false
+  const a = new Uint8Array(existing)
+  const b = urlBase64ToUint8Array(vapidPublicKey)
+  if (a.byteLength !== b.byteLength) return false
+  for (let i = 0; i < a.byteLength; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+/**
  * Subscribes the browser to Web Push and registers it as a Pheme web device.
  * Returns the created device ID, or throws if permission is denied or the server
  * has no VAPID key configured.
@@ -94,13 +112,20 @@ export async function registerWebPushDevice(): Promise<string> {
   const registration = await navigator.serviceWorker.register('/sw.js')
   await navigator.serviceWorker.ready
 
-  const existing = await registration.pushManager.getSubscription()
-  const subscription =
-    existing ??
-    (await registration.pushManager.subscribe({
+  // Reuse an existing subscription only if it was created with the current
+  // server VAPID key; otherwise the push service rejects deliveries, so drop
+  // the stale subscription and create a fresh one.
+  let subscription = await registration.pushManager.getSubscription()
+  if (subscription && !subscriptionMatchesKey(subscription, vapidPublicKey)) {
+    await subscription.unsubscribe()
+    subscription = null
+  }
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
-    }))
+    })
+  }
 
   const device = await api.createDevice({
     platform: 'web',
