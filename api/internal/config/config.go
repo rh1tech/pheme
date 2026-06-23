@@ -35,7 +35,7 @@ type Config struct {
 	FCMCredentialsFile string // path to Firebase service-account JSON
 	VAPIDPublicKey     string
 	VAPIDPrivateKey    string
-	VAPIDSubject       string // mailto: contact for Web Push
+	VAPIDSubject       string // VAPID contact: an https: URL or mailto: address. Apple Web Push requires an https: URL (it rejects mailto: with 403 BadJwtToken).
 
 	// Authorization
 	AdminEmails []string // emails granted the admin role on register/login
@@ -73,7 +73,7 @@ func Load() Config {
 		FCMCredentialsFile: env("PHEME_FCM_CREDENTIALS", ""),
 		VAPIDPublicKey:     env("PHEME_VAPID_PUBLIC", ""),
 		VAPIDPrivateKey:    env("PHEME_VAPID_PRIVATE", ""),
-		VAPIDSubject:       env("PHEME_VAPID_SUBJECT", "mailto:admin@example.com"),
+		VAPIDSubject:       env("PHEME_VAPID_SUBJECT", "https://app.example.com"),
 
 		AdminEmails: envList("PHEME_ADMIN_EMAILS"),
 
