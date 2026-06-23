@@ -48,10 +48,10 @@ export const theme = createTheme({
     Button: { defaultProps: { radius: 'md' } },
     ActionIcon: { defaultProps: { radius: 'md' } },
     Badge: { defaultProps: { radius: 'sm' } },
-    TextInput: { defaultProps: { radius: 'md', variant: 'filled' } },
-    PasswordInput: { defaultProps: { radius: 'md', variant: 'filled' } },
-    Textarea: { defaultProps: { radius: 'md', variant: 'filled' } },
-    Select: { defaultProps: { radius: 'md', variant: 'filled' } },
+    TextInput: { defaultProps: { radius: 'md', variant: 'default' } },
+    PasswordInput: { defaultProps: { radius: 'md', variant: 'default' } },
+    Textarea: { defaultProps: { radius: 'md', variant: 'default' } },
+    Select: { defaultProps: { radius: 'md', variant: 'default' } },
     Menu: { defaultProps: { radius: 'md', shadow: 'md' } },
     Modal: {
       defaultProps: {
