@@ -11,6 +11,7 @@ const ru: Resources = {
     copied: 'Скопировано',
     save: 'Сохранить',
     delete: 'Удалить',
+    clear: 'Очистить',
     toggleTheme: 'Переключить светлую/тёмную тему',
     navChannels: 'Каналы',
     navAdmin: 'Админ',

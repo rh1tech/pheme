@@ -1,5 +1,5 @@
 import { ActionIcon, Button, Card, Container, Group, Stack, Text, TextInput, Title } from '@mantine/core'
-import { IconSearch } from '@tabler/icons-react'
+import { IconSearch, IconX } from '@tabler/icons-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -63,10 +63,21 @@ export function SearchBar({
       value={value}
       onChange={(e) => onChange(e.currentTarget.value)}
       onKeyDown={(e) => e.key === 'Enter' && onSubmit()}
+      leftSection={<IconSearch size={16} stroke={1.8} />}
       rightSection={
-        <ActionIcon variant="subtle" onClick={onSubmit}>
-          <IconSearch size={16} />
-        </ActionIcon>
+        value ? (
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            aria-label="Clear search"
+            onClick={() => {
+              onChange('')
+              onSubmit()
+            }}
+          >
+            <IconX size={16} />
+          </ActionIcon>
+        ) : null
       }
       w={260}
     />

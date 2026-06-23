@@ -21,11 +21,13 @@ import type { Channel, SubscriptionMode } from '../lib/types'
 import { getWebPushState, registerWebPushDevice, webPushSupported } from '../lib/webpush'
 import { saveWebDeviceId } from '../lib/device'
 import { ModeBadge } from '../components/badges'
+import { CardListSkeleton } from '../components/Skeletons'
 
 export function DashboardPage() {
   const navigate = useNavigate()
   const { t } = useTranslation()
   const [channels, setChannels] = useState<Channel[]>([])
+  const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [name, setName] = useState('')
   const [mode, setMode] = useState<SubscriptionMode>('approval')
@@ -47,6 +49,7 @@ export function DashboardPage() {
       .listChannels()
       .then((cs) => active && setChannels(cs))
       .catch((e) => active && notifyError(t('dashboard.loadFailed'), e))
+      .finally(() => active && setLoading(false))
     return () => {
       active = false
     }
@@ -165,27 +168,29 @@ export function DashboardPage() {
         </Group>
 
         <Stack gap="sm">
-          {channels.length === 0 && (
+          {loading && <CardListSkeleton rows={3} />}
+          {!loading && channels.length === 0 && (
             <Text c="dimmed" size="sm">
               {t('dashboard.noChannels')}
             </Text>
           )}
-          {channels.map((c) => (
-            <Card
-              key={c.id}
-              withBorder
-              padding="md"
-              className="pheme-card"
-              data-clickable="true"
-              style={{ cursor: 'pointer' }}
-              onClick={() => navigate(`/channels/${c.id}`)}
-            >
-              <Group justify="space-between">
-                <Text fw={600}>{c.name}</Text>
-<ModeBadge mode={c.subscriptionMode} />
-              </Group>
-            </Card>
-          ))}
+          {!loading &&
+            channels.map((c) => (
+              <Card
+                key={c.id}
+                withBorder
+                padding="md"
+                className="pheme-card"
+                data-clickable="true"
+                style={{ cursor: 'pointer' }}
+                onClick={() => navigate(`/channels/${c.id}`)}
+              >
+                <Group justify="space-between">
+                  <Text fw={600}>{c.name}</Text>
+                  <ModeBadge mode={c.subscriptionMode} />
+                </Group>
+              </Card>
+            ))}
         </Stack>
       </Stack>
     </Container>

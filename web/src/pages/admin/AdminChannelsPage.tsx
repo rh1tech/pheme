@@ -9,6 +9,7 @@ import type { AdminChannel, ChannelStatus, Paged } from '../../lib/types'
 import { ADMIN_PAGE_LIMIT, AdminPageShell, Pager, SearchBar } from '../../components/admin/AdminUI'
 import { ConfirmModal } from '../../components/ConfirmModal'
 import { ChannelStatusBadge, ModeBadge } from '../../components/badges'
+import { TableRowsSkeleton } from '../../components/Skeletons'
 
 export function AdminChannelsPage() {
   const { t } = useTranslation()
@@ -106,8 +107,11 @@ export function AdminChannelsPage() {
               <Table.Th />
             </Table.Tr>
           </Table.Thead>
-          <Table.Tbody>
-            {channels?.items.map((c) => (
+          {channels === null ? (
+            <TableRowsSkeleton rows={ADMIN_PAGE_LIMIT} cols={5} />
+          ) : (
+            <Table.Tbody>
+              {channels.items.map((c) => (
               <Table.Tr key={c.id}>
                 <Table.Td>
                   <Text style={{ cursor: 'pointer' }} fw={500} onClick={() => navigate(`/admin/channels/${c.id}`)}>
@@ -146,7 +150,8 @@ export function AdminChannelsPage() {
                 </Table.Td>
               </Table.Tr>
             ))}
-          </Table.Tbody>
+            </Table.Tbody>
+          )}
         </Table>
       )}
       <Pager

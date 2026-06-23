@@ -31,6 +31,7 @@ import type { ApiKey, Channel, CreatedKey, Message, SubscriptionMode } from '../
 import { useEventStream } from '../hooks/useEventStream'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { ModeBadge } from '../components/badges'
+import { CardListSkeleton } from '../components/Skeletons'
 import { loadWebDeviceId, saveWebDeviceId } from '../lib/device'
 import { registerWebPushDevice, webPushAvailability } from '../lib/webpush'
 
@@ -40,6 +41,7 @@ export function ChannelPage() {
   const { t } = useTranslation()
   const [channel, setChannel] = useState<Channel | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [loadingMessages, setLoadingMessages] = useState(true)
   const [cursor, setCursor] = useState('')
   const [loadingMore, setLoadingMore] = useState(false)
   const [search, setSearch] = useState('')
@@ -80,16 +82,22 @@ export function ChannelPage() {
 
   useEffect(() => {
     let active = true
-    api
-      .listMessages(id, '', '')
-      .then((page) => {
+    const load = async () => {
+      setLoadingMessages(true)
+      try {
+        const page = await api.listMessages(id, '', '')
         if (!active) return
         setActiveQuery('')
         setSearch('')
         setMessages(page.messages)
         setCursor(page.nextCursor)
-      })
-      .catch((e) => active && notifyError(t('dashboard.loadFailed'), e))
+      } catch (e) {
+        if (active) notifyError(t('dashboard.loadFailed'), e)
+      } finally {
+        if (active) setLoadingMessages(false)
+      }
+    }
+    load()
     return () => {
       active = false
     }
@@ -333,10 +341,13 @@ export function ChannelPage() {
                   value={search}
                   onChange={(e) => setSearch(e.currentTarget.value)}
                   onKeyDown={(e) => e.key === 'Enter' && runSearch(search.trim())}
+                  leftSection={<IconSearch size={16} stroke={1.8} />}
                   rightSection={
-                    activeQuery ? (
+                    activeQuery || search ? (
                       <ActionIcon
                         variant="subtle"
+                        color="gray"
+                        aria-label={t('common.clear')}
                         onClick={() => {
                           setSearch('')
                           runSearch('')
@@ -344,12 +355,9 @@ export function ChannelPage() {
                       >
                         <IconX size={16} />
                       </ActionIcon>
-                    ) : (
-                      <ActionIcon variant="subtle" onClick={() => runSearch(search.trim())}>
-                        <IconSearch size={16} />
-                      </ActionIcon>
-                    )
+                    ) : null
                   }
+                  w={260}
                 />
               </Group>
               {activeQuery && (
@@ -357,22 +365,24 @@ export function ChannelPage() {
                   {t('channel.filtering', { query: activeQuery })}
                 </Text>
               )}
-              {messages.length === 0 && (
+              {loadingMessages && <CardListSkeleton rows={4} />}
+              {!loadingMessages && messages.length === 0 && (
                 <Text c="dimmed" size="sm">
                   {activeQuery ? t('channel.noMessagesSearch') : t('channel.noMessages')}
                 </Text>
               )}
-              {messages.map((m) => (
-                <Card key={m.id} withBorder padding="sm">
-                  <Group justify="space-between" align="flex-start">
-                    <Text fw={600}>{m.title || '(no title)'}</Text>
-                    <Text size="xs" c="dimmed">
-                      {new Date(m.createdAt).toLocaleString()}
-                    </Text>
-                  </Group>
-                  {m.body && <Text size="sm">{m.body}</Text>}
-                </Card>
-              ))}
+              {!loadingMessages &&
+                messages.map((m) => (
+                  <Card key={m.id} withBorder padding="sm">
+                    <Group justify="space-between" align="flex-start">
+                      <Text fw={600}>{m.title || '(no title)'}</Text>
+                      <Text size="xs" c="dimmed">
+                        {new Date(m.createdAt).toLocaleString()}
+                      </Text>
+                    </Group>
+                    {m.body && <Text size="sm">{m.body}</Text>}
+                  </Card>
+                ))}
               {cursor && (
                 <Group justify="center">
                   <Button variant="subtle" loading={loadingMore} onClick={loadMore}>

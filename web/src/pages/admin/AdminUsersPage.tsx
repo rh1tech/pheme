@@ -9,6 +9,7 @@ import type { AdminUser, Paged, Role, UserStatus } from '../../lib/types'
 import { ADMIN_PAGE_LIMIT, AdminPageShell, Pager, SearchBar } from '../../components/admin/AdminUI'
 import { ConfirmModal } from '../../components/ConfirmModal'
 import { RoleBadge, UserStatusBadge } from '../../components/badges'
+import { TableRowsSkeleton } from '../../components/Skeletons'
 
 export function AdminUsersPage() {
   const { t } = useTranslation()
@@ -106,8 +107,11 @@ export function AdminUsersPage() {
               <Table.Th />
             </Table.Tr>
           </Table.Thead>
-          <Table.Tbody>
-            {users?.items.map((u) => (
+          {users === null ? (
+            <TableRowsSkeleton rows={ADMIN_PAGE_LIMIT} cols={5} />
+          ) : (
+            <Table.Tbody>
+              {users.items.map((u) => (
               <Table.Tr key={u.id}>
                 <Table.Td>
                   <Group gap="xs">
@@ -155,7 +159,8 @@ export function AdminUsersPage() {
                 </Table.Td>
               </Table.Tr>
             ))}
-          </Table.Tbody>
+            </Table.Tbody>
+          )}
         </Table>
       )}
       <Pager

@@ -102,14 +102,14 @@ body {
 
 /* Inputs: quiet filled fields that light up with a brand ring on focus. */
 .mantine-Input-input {
-  border-color: light-dark(var(--mantine-color-gray-5), var(--mantine-color-dark-3));
+  border-color: light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
   transition:
     background-color 120ms ease,
     border-color 120ms ease,
     box-shadow 120ms ease;
 }
 .mantine-Input-input:hover {
-  border-color: light-dark(var(--mantine-color-gray-6), var(--mantine-color-dark-2));
+  border-color: light-dark(var(--mantine-color-gray-4), var(--mantine-color-dark-3));
 }
 .mantine-Input-input:focus,
 .mantine-Input-input:focus-within {

@@ -9,6 +9,7 @@ const en = {
     copied: 'Copied',
     save: 'Save',
     delete: 'Delete',
+    clear: 'Clear',
     toggleTheme: 'Toggle light/dark theme',
     navChannels: 'Channels',
     navAdmin: 'Admin',
