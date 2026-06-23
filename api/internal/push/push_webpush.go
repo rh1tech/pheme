@@ -3,6 +3,8 @@ package push
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
@@ -55,17 +57,23 @@ func (s *WebPushSender) Send(ctx context.Context, msg domain.Message, devices []
 			VAPIDPublicKey:  s.vapidPublic,
 			VAPIDPrivateKey: s.vapidPrivate,
 			TTL:             60,
+			Urgency:         webpush.UrgencyHigh,
 		})
 		if err != nil {
 			results = append(results, Result{DeviceID: d.ID, Status: domain.DeliveryFailed, Error: err.Error()})
 			continue
 		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		_ = resp.Body.Close()
-		status := domain.DeliverySent
 		if resp.StatusCode >= http.StatusBadRequest {
-			status = domain.DeliveryFailed
+			results = append(results, Result{
+				DeviceID: d.ID,
+				Status:   domain.DeliveryFailed,
+				Error:    fmt.Sprintf("push service returned %d: %s", resp.StatusCode, string(body)),
+			})
+			continue
 		}
-		results = append(results, Result{DeviceID: d.ID, Status: status})
+		results = append(results, Result{DeviceID: d.ID, Status: domain.DeliverySent})
 	}
 	return results, nil
 }
