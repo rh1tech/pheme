@@ -4,16 +4,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/bootstrap"
 	"github.com/rh1tech/pheme/api/internal/channel"
 	"github.com/rh1tech/pheme/api/internal/config"
+	"github.com/rh1tech/pheme/api/internal/domain"
+	"github.com/rh1tech/pheme/api/internal/store"
 )
 
 func main() {
@@ -27,6 +32,8 @@ func main() {
 		logger.Error("store init", "error", err)
 		os.Exit(1)
 	}
+	maybeSeedAdmin(ctx, db, cfg.SeedAdminEmail, cfg.SeedAdminPassword, logger)
+
 	bus, err := b.Live()
 	if err != nil {
 		logger.Error("live init", "error", err)
@@ -95,6 +102,39 @@ func main() {
 	_ = db.Close(shutdownCtx)
 	_ = b.Close()
 	logger.Info("app API stopped")
+}
+
+// maybeSeedAdmin ensures an initial admin account exists when seed credentials
+// are configured. It is a no-op when either credential is empty or the email is
+// already registered, so it is safe to run on every startup. This bootstraps the
+// first admin without the email-verification flow (and powers the E2E suite).
+func maybeSeedAdmin(ctx context.Context, db store.Store, email, password string, logger *slog.Logger) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" || password == "" {
+		return
+	}
+	if _, err := db.UserByEmail(ctx, email); err == nil {
+		return // already present
+	} else if !errors.Is(err, store.ErrNotFound) {
+		logger.Error("seed admin lookup", "error", err)
+		return
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		logger.Error("seed admin hash", "error", err)
+		return
+	}
+	if _, err := db.CreateUser(ctx, domain.User{
+		Email:        email,
+		PasswordHash: hash,
+		Role:         domain.RoleAdmin,
+		Status:       domain.UserActive,
+		CreatedAt:    time.Now().UTC(),
+	}); err != nil {
+		logger.Error("seed admin create", "error", err)
+		return
+	}
+	logger.Info("seeded initial admin", "email", email)
 }
 
 // withCORS allows the local web dev server to call the API during development.

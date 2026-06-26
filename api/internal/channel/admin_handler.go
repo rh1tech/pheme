@@ -1,8 +1,10 @@
 package channel
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/domain"
@@ -21,6 +23,7 @@ type AdminHandler struct {
 func (h *AdminHandler) Register(protected *http.ServeMux) {
 	protected.HandleFunc("GET /v1/admin/stats", h.stats)
 	protected.HandleFunc("GET /v1/admin/users", h.listUsers)
+	protected.HandleFunc("POST /v1/admin/users", h.createUser)
 	protected.HandleFunc("PATCH /v1/admin/users/{id}", h.updateUser)
 	protected.HandleFunc("POST /v1/admin/users/{id}/reset-password", h.resetUserPassword)
 	protected.HandleFunc("DELETE /v1/admin/users/{id}", h.deleteUser)
@@ -100,6 +103,67 @@ func (h *AdminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 		out = append(out, userSummary{User: u, ChannelCount: counts[u.ID]})
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"users": out, "total": total, "page": page, "limit": limit})
+}
+
+type createUserRequest struct {
+	Email    string      `json:"email"`
+	Password string      `json:"password"`
+	Role     domain.Role `json:"role"`
+}
+
+// createUser lets an admin add a user directly, bypassing the email-verification
+// flow. The account is created active with the requested role (defaulting to
+// "user"). The email must be valid and unused; the password must satisfy the
+// same strength policy as self-service registration.
+func (h *AdminHandler) createUser(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	var req createUserRequest
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	email, ok := normalizeEmail(req.Email)
+	if !ok {
+		httpx.Error(w, http.StatusBadRequest, "a valid email is required")
+		return
+	}
+	if err := auth.ValidatePassword(req.Password); err != nil {
+		httpx.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	role := req.Role
+	if role == "" {
+		role = domain.RoleUser
+	}
+	if role != domain.RoleUser && role != domain.RoleAdmin {
+		httpx.Error(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+	if _, err := h.Store.UserByEmail(r.Context(), email); err == nil {
+		httpx.Error(w, http.StatusConflict, "email already registered")
+		return
+	} else if !errors.Is(err, store.ErrNotFound) {
+		httpx.Error(w, http.StatusInternalServerError, "could not create user")
+		return
+	}
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not create user")
+		return
+	}
+	u, err := h.Store.CreateUser(r.Context(), domain.User{
+		Email:        email,
+		PasswordHash: hash,
+		Role:         role,
+		Status:       domain.UserActive,
+		CreatedAt:    time.Now().UTC(),
+	})
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not create user")
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, userSummary{User: u, ChannelCount: 0})
 }
 
 type updateUserRequest struct {

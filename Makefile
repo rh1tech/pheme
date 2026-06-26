@@ -5,7 +5,7 @@
 SHELL := /bin/bash
 
 .PHONY: help setup dev stop infra-up infra-down infra-reset infra-status logs \
-        build test lint web-build vapid
+        build test test-cover lint web-build e2e e2e-install vapid
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -38,8 +38,11 @@ logs: ## Follow infrastructure container logs
 build: ## Build the Go binaries
 	@cd api && go build ./...
 
-test: ## Run Go tests
-	@cd api && go test ./...
+test: ## Run Go unit tests with the race detector
+	@cd api && go test -race ./...
+
+test-cover: ## Run Go unit tests with a coverage summary
+	@cd api && go test -race -cover ./...
 
 lint: ## Vet Go and lint web
 	@cd api && go vet ./...
@@ -47,6 +50,12 @@ lint: ## Vet Go and lint web
 
 web-build: ## Production build of the web app
 	@cd web && npm run build
+
+e2e-install: ## Install Playwright browsers for the E2E suite
+	@cd web && npm ci && npx playwright install --with-deps chromium
+
+e2e: ## Run the Playwright E2E suite (builds API + web automatically)
+	@cd web && npx playwright test
 
 vapid: ## Print a fresh VAPID key pair
 	@cd api && go run ./cmd/vapidgen

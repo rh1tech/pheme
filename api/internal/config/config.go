@@ -54,6 +54,13 @@ type Config struct {
 	// Authorization
 	AdminEmails []string // emails granted the admin role on register/login
 
+	// Initial admin seeding. When both are set, the App API ensures a verified,
+	// active admin with these credentials exists at startup (created if missing).
+	// Opt-in: leaving either empty disables seeding. Used to bootstrap the first
+	// admin without the email-verification flow, and by the E2E suite.
+	SeedAdminEmail    string
+	SeedAdminPassword string
+
 	// Backend selection. Each defaults to a zero-dependency in-memory/log
 	// implementation so the services run without external infrastructure.
 	// Switch to the real adapters once the docker-compose stack is running.
@@ -102,6 +109,9 @@ func Load() Config {
 		CodeCooldown: envDuration("PHEME_CODE_COOLDOWN", 2*time.Minute),
 
 		AdminEmails: envList("PHEME_ADMIN_EMAILS"),
+
+		SeedAdminEmail:    env("PHEME_SEED_ADMIN_EMAIL", ""),
+		SeedAdminPassword: env("PHEME_SEED_ADMIN_PASSWORD", ""),
 
 		StoreDriver:     env("PHEME_STORE_DRIVER", "memory"),
 		BrokerDriver:    env("PHEME_BROKER_DRIVER", "memory"),

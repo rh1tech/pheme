@@ -1,6 +1,19 @@
 import { useEffect, useState } from 'react'
-import { ActionIcon, Badge, Group, Menu, PasswordInput, Table, Text } from '@mantine/core'
-import { IconDots } from '@tabler/icons-react'
+import {
+  ActionIcon,
+  Badge,
+  Button,
+  Group,
+  Menu,
+  Modal,
+  PasswordInput,
+  Select,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+} from '@mantine/core'
+import { IconDots, IconUserPlus } from '@tabler/icons-react'
 import { Trans, useTranslation } from 'react-i18next'
 import { api } from '../../lib/api'
 import { notifyError, notifySuccess } from '../../lib/notify'
@@ -25,6 +38,11 @@ export function AdminUsersPage() {
   const [resetUser, setResetUser] = useState<{ id: string; email: string } | null>(null)
   const [newPassword, setNewPassword] = useState('')
   const [resetting, setResetting] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createEmail, setCreateEmail] = useState('')
+  const [createPassword, setCreatePassword] = useState('')
+  const [createRole, setCreateRole] = useState<Role>('user')
+  const [creating, setCreating] = useState(false)
 
   function reload() {
     api
@@ -52,6 +70,35 @@ export function AdminUsersPage() {
       reload()
     } catch (e) {
       notifyError(t('admin.updateFailed'), e)
+    }
+  }
+
+  function openCreate() {
+    setCreateEmail('')
+    setCreatePassword('')
+    setCreateRole('user')
+    setCreateOpen(true)
+  }
+
+  const canCreate = createEmail.trim() !== '' && checkPassword(createPassword).acceptable
+
+  async function confirmCreate() {
+    if (!canCreate) return
+    setCreating(true)
+    try {
+      await api.adminCreateUser({
+        email: createEmail.trim(),
+        password: createPassword,
+        role: createRole,
+      })
+      notifySuccess(t('admin.userCreated'))
+      setCreateOpen(false)
+      setPage(1)
+      reload()
+    } catch (e) {
+      notifyError(t('admin.createUserFailed'), e)
+    } finally {
+      setCreating(false)
     }
   }
 
@@ -93,17 +140,60 @@ export function AdminUsersPage() {
     <AdminPageShell
       title={t('admin.headerUsers')}
       actions={
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          onSubmit={() => {
-            setPage(1)
-            setQuery(search.trim())
-          }}
-          placeholder={t('admin.searchUsers')}
-        />
+        <Group gap="sm" wrap="wrap">
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            onSubmit={() => {
+              setPage(1)
+              setQuery(search.trim())
+            }}
+            placeholder={t('admin.searchUsers')}
+          />
+          <Button leftSection={<IconUserPlus size={16} />} onClick={openCreate}>
+            {t('admin.addUser')}
+          </Button>
+        </Group>
       }
     >
+      <Modal opened={createOpen} onClose={() => setCreateOpen(false)} title={t('admin.addUser')}>
+        <Stack gap="sm">
+          <TextInput
+            label={t('auth.email')}
+            type="email"
+            data-autofocus
+            value={createEmail}
+            onChange={(e) => setCreateEmail(e.currentTarget.value)}
+          />
+          <div>
+            <PasswordInput
+              label={t('auth.password')}
+              value={createPassword}
+              onChange={(e) => setCreatePassword(e.currentTarget.value)}
+            />
+            <PasswordStrength value={createPassword} />
+          </div>
+          <Select
+            label={t('admin.colRole')}
+            value={createRole}
+            onChange={(v) => setCreateRole((v as Role) ?? 'user')}
+            allowDeselect={false}
+            data={[
+              { value: 'user', label: t('admin.roleUser') },
+              { value: 'admin', label: t('admin.roleAdmin') },
+            ]}
+          />
+          <Group justify="flex-end" mt="sm">
+            <Button variant="default" onClick={() => setCreateOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button onClick={confirmCreate} loading={creating} disabled={!canCreate}>
+              {t('admin.addUser')}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
       <ConfirmModal
         opened={deleteId !== null}
         onClose={() => setDeleteId(null)}

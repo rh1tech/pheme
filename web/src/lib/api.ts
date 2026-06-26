@@ -204,6 +204,8 @@ export const api = {
       `/v1/admin/users?${p.toString()}`,
     ).then((r) => ({ items: r.users ?? [], total: r.total, page: r.page, limit: r.limit }))
   },
+  adminCreateUser: (body: { email: string; password: string; role: Role }) =>
+    request<AdminUser>('/v1/admin/users', { method: 'POST', body }),
   adminUpdateUser: (userId: string, body: { role?: Role; status?: UserStatus }) =>
     request<unknown>(`/v1/admin/users/${userId}`, { method: 'PATCH', body }),
   adminResetUserPassword: (userId: string, newPassword: string) =>

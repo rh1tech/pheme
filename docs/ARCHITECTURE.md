@@ -73,7 +73,7 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 
 ### Admin (JWT, admin role only) — `/v1/admin/*`
 - `GET /v1/admin/stats` — totals (users, channels, messages, deliveries, devices), top channels, recent messages
-- `GET /v1/admin/users` · `DELETE /v1/admin/users/{id}` (cascades the user's data) · `POST /v1/admin/users/{id}/reset-password`
+- `GET /v1/admin/users` · `POST /v1/admin/users` (create a user directly: email + password + role, bypassing email verification) · `PATCH /v1/admin/users/{id}` (role/status) · `DELETE /v1/admin/users/{id}` (cascades the user's data) · `POST /v1/admin/users/{id}/reset-password`
 - `GET /v1/admin/channels` · `DELETE /v1/admin/channels/{id}` (cascades)
 - `GET /v1/admin/channels/{id}/keys` · `DELETE /v1/admin/channels/{id}/keys/{keyId}`
 
@@ -83,7 +83,8 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - **Email-verified registration.** Register does not create a user; it stores a pending signup in the OTP store and emails a 6-digit code. `verify` confirms it (creating the account). Codes are stored as SHA-256 hashes, expire (default 30 min), invalidate after 3 wrong attempts, and are rate-limited to one send per email per 2 minutes. Password reset uses the same code mechanism.
 - **Transactional mail** is sent via the `email` driver (`log` for dev, `smtp` in prod). Production relays through a host Postfix + OpenDKIM (DKIM `d=app.example.com`), delivering direct-to-MX with SPF/DKIM/DMARC and forward-confirmed rDNS for inbox placement. The relay never sends third-party mail (Brevo is not used).
 - JWT: short-lived access token + rotating refresh token. The token carries the user's role.
-- Roles: `user` (default) and `admin`. Admins are designated by the `PHEME_ADMIN_EMAILS` allowlist and the role is (re)synced on every register/login, so changing the list takes effect on next login. Admin-only endpoints live under `/v1/admin/*` and verify the role from the JWT.
+- Roles: `user` (default) and `admin`. Admins are designated by the `PHEME_ADMIN_EMAILS` allowlist and the role is (re)synced on every register/login, so changing the list takes effect on next login. Admin-only endpoints live under `/v1/admin/*` and verify the role from the JWT. Admins can also add users directly from the panel (`POST /v1/admin/users`), creating an active account with no email step.
+- **Initial admin seeding.** When `PHEME_SEED_ADMIN_EMAIL` and `PHEME_SEED_ADMIN_PASSWORD` are both set, the App API ensures a verified, active admin with those credentials exists at startup (created only if missing). This is opt-in (no-op when unset), bootstraps the first admin without the email-verification flow, and backs the E2E suite.
 - Public ingest endpoint protected by per-key Redis token-bucket rate limiting and idempotency keys (dedupe website retries).
 - FCM service-account JSON and Web Push VAPID keys are injected as runtime secrets — never committed.
 

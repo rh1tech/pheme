@@ -23,7 +23,7 @@ jobs:
           cache-dependency-path: api/go.sum
       - run: go vet ./...
       - run: go build ./...
-      - run: go test ./...
+      - run: go test -race -cover ./...
 
   web:
     name: Web (Vite)
@@ -41,3 +41,33 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      # The Playwright config starts the App API (go run, in-memory drivers,
+      # seeded admin) and the Vite dev server, then tears them down. CI=true
+      # disables server reuse so each run is isolated.
+      - run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 7

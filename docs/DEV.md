@@ -178,12 +178,48 @@ gitignored `.env.dev`, `deploy/.env` and `web/.env.local`. To become an admin,
 set `PHEME_ADMIN_EMAILS` in `.env.dev`. Details in
 [../scripts/README.md](../scripts/README.md).
 
-## 9. Definition of done for a change
+## 9. Testing
 
-- Backend: `go build`/`go vet`/`gofmt -l`/`go test` clean; both store backends
-  updated together; new infra behind an interface + driver.
+Two layers, both run in CI (`.github/workflows/ci.yml`).
+
+**API unit tests (Go).** Standard `go test`, table-driven where it helps, run
+with the race detector. HTTP handlers are tested through their real routes:
+`AuthHandler`/`AdminHandler` mount on a bare mux and inject the caller's
+id+role into the context (mirroring the JWT middleware); `AppHandler` tests go
+through the full `Routes` wiring with real access tokens. In-memory store /
+broker / live drivers keep tests dependency-free.
+
+```bash
+make test         # cd api && go test -race ./...
+make test-cover   # adds a per-package coverage summary
+```
+
+**E2E (Playwright, `web/e2e/`).** Drives the real SPA against a live App API.
+`playwright.config.ts` starts two `webServer`s — the App API (`go run ./cmd/app`
+with in-memory drivers and a **seeded admin**, ports chosen to avoid a running
+`make dev` stack) and the Vite dev server pointed at it — then tears them down.
+The seeded admin (`PHEME_SEED_ADMIN_EMAIL` / `PHEME_SEED_ADMIN_PASSWORD`) lets
+the suite log in deterministically. Scenarios cover the login/auth guard,
+admin create-user and delete-user, channel creation, API-key (token) creation,
+and sending a message.
+
+```bash
+make e2e-install  # one-time: npm ci + playwright browsers
+make e2e          # npx playwright test (starts/stops the servers itself)
+```
+
+When adding a handler, add or extend a test in `internal/channel/*_test.go`.
+When adding a user-facing flow, add an E2E scenario; prefer role/label/text
+selectors over brittle DOM queries.
+
+## 10. Definition of done for a change
+
+- Backend: `go build`/`go vet`/`gofmt -l`/`go test -race` clean; both store
+  backends updated together; new infra behind an interface + driver; new/changed
+  handlers covered by a unit test.
 - Frontend: `npm run build` and `eslint --max-warnings 0` clean; no duplicated
   UI (reused shared components); all strings in en + ru with key parity; API
-  calls via `lib/api`; notifications via `lib/notify`.
+  calls via `lib/api`; notifications via `lib/notify`; new user flows covered by
+  an E2E scenario (`npm run e2e`).
 - Commits: do **not** include AI-trace trailers (a commit-msg hook rejects
   `Co-Authored-By: …(AI)` / "Generated with…").
