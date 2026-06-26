@@ -97,8 +97,9 @@ export function AdminChannelsPage() {
           {t('admin.noChannels')}
         </Text>
       ) : (
-        <Table verticalSpacing="xs" striped>
-          <Table.Thead>
+        <Table.ScrollContainer minWidth={640}>
+          <Table verticalSpacing="xs" striped>
+            <Table.Thead>
             <Table.Tr>
               <Table.Th>{t('admin.colName')}</Table.Th>
               <Table.Th>{t('admin.colOwner')}</Table.Th>
@@ -152,7 +153,8 @@ export function AdminChannelsPage() {
             ))}
             </Table.Tbody>
           )}
-        </Table>
+          </Table>
+        </Table.ScrollContainer>
       )}
       <Pager
         page={channels?.page ?? 1}

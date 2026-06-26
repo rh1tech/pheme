@@ -154,32 +154,34 @@ export function AdminChannelPage() {
                 {t('channel.noKeys')}
               </Text>
             ) : (
-              <Table verticalSpacing="xs">
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>{t('channel.colPrefix')}</Table.Th>
-                    <Table.Th>{t('channel.colCreated')}</Table.Th>
-                    <Table.Th />
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {activeKeys.map((k) => (
-                    <Table.Tr key={k.id}>
-                      <Table.Td>
-                        <Code>{k.prefix}…</Code>
-                      </Table.Td>
-                      <Table.Td>{new Date(k.createdAt).toLocaleDateString()}</Table.Td>
-                      <Table.Td align="right">
-                        <Tooltip label={t('admin.revoke')}>
-                          <ActionIcon color="red" variant="subtle" onClick={() => revokeKey(k.id)}>
-                            <IconTrash size={16} />
-                          </ActionIcon>
-                        </Tooltip>
-                      </Table.Td>
+              <Table.ScrollContainer minWidth={420}>
+                <Table verticalSpacing="xs">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>{t('channel.colPrefix')}</Table.Th>
+                      <Table.Th>{t('channel.colCreated')}</Table.Th>
+                      <Table.Th />
                     </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {activeKeys.map((k) => (
+                      <Table.Tr key={k.id}>
+                        <Table.Td>
+                          <Code>{k.prefix}…</Code>
+                        </Table.Td>
+                        <Table.Td>{new Date(k.createdAt).toLocaleDateString()}</Table.Td>
+                        <Table.Td align="right">
+                          <Tooltip label={t('admin.revoke')}>
+                            <ActionIcon color="red" variant="subtle" onClick={() => revokeKey(k.id)}>
+                              <IconTrash size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
             )}
           </Tabs.Panel>
         </Tabs>

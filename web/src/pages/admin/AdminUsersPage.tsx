@@ -233,8 +233,9 @@ export function AdminUsersPage() {
           {t('admin.noUsers')}
         </Text>
       ) : (
-        <Table verticalSpacing="xs" striped>
-          <Table.Thead>
+        <Table.ScrollContainer minWidth={640}>
+          <Table verticalSpacing="xs" striped>
+            <Table.Thead>
             <Table.Tr>
               <Table.Th>{t('admin.colEmail')}</Table.Th>
               <Table.Th>{t('admin.colRole')}</Table.Th>
@@ -300,7 +301,8 @@ export function AdminUsersPage() {
             ))}
             </Table.Tbody>
           )}
-        </Table>
+          </Table>
+        </Table.ScrollContainer>
       )}
       <Pager
         page={users?.page ?? 1}
