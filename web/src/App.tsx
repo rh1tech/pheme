@@ -4,6 +4,7 @@ import { AuthProvider } from './auth/AuthProvider'
 import { Layout } from './components/Layout'
 import { RequireAuth } from './components/RequireAuth'
 import { RequireAdmin } from './components/RequireAdmin'
+import { ScrollToTop } from './components/ScrollToTop'
 import { LoginPage } from './pages/LoginPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { DashboardPage } from './pages/DashboardPage'
@@ -21,6 +22,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <ScrollToTop />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />

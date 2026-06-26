@@ -10,13 +10,19 @@ import './styles.css'
 import './i18n'
 import { theme } from './theme'
 import App from './App.tsx'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { lockViewportZoom } from './lib/mobile'
+
+lockViewportZoom()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <MantineProvider theme={theme} defaultColorScheme="auto">
       <NavigationProgress />
       <Notifications />
-      <App />
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </MantineProvider>
   </StrictMode>,
 )

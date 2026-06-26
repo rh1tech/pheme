@@ -21,11 +21,17 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Stop the elastic rubber-band/overscroll bounce so the app feels native on
-   mobile (iOS 16.4+ / modern Android) without disabling normal scrolling. */
+/* Make the app feel native on mobile: stop the elastic rubber-band/overscroll
+   bounce, disable double-tap-to-zoom (touch-action: manipulation) and the
+   automatic font scaling iOS applies on orientation change, while leaving
+   normal one-finger scrolling intact. Pinch-zoom is blocked in JS (see
+   lib/mobile.ts) because iOS WebKit ignores the viewport hints. */
 html,
 body {
   overscroll-behavior: none;
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 [data-mantine-color-scheme='light'] body {
