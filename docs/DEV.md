@@ -199,9 +199,12 @@ make test-cover   # adds a per-package coverage summary
 with in-memory drivers and a **seeded admin**, ports chosen to avoid a running
 `make dev` stack) and the Vite dev server pointed at it — then tears them down.
 The seeded admin (`PHEME_SEED_ADMIN_EMAIL` / `PHEME_SEED_ADMIN_PASSWORD`) lets
-the suite log in deterministically. Scenarios cover the login/auth guard,
-admin create-user and delete-user, channel creation, API-key (token) creation,
-and sending a message.
+the suite log in deterministically, and every run executes on both Chromium and
+mobile WebKit. Scenarios cover the login/auth guard; the full admin user
+lifecycle (create, create-as-admin, promote/demote, block/unblock, the blocked
+user being unable to log in, password reset, delete); admin channel
+disable/enable and delete; and the owner flows of channel creation, API-key
+(token) creation and sending a message.
 
 ```bash
 make e2e-install  # one-time: npm ci + playwright browsers

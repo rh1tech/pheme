@@ -21,6 +21,44 @@ export async function login(page: Page, email: string, password: string): Promis
   await expect(page.getByRole('heading', { name: 'Your channels' })).toBeVisible()
 }
 
+/** Opens the admin "Add user" modal and creates a user with the given role. */
+export async function createUserViaAdmin(
+  page: Page,
+  email: string,
+  password: string,
+  role: 'user' | 'admin' = 'user',
+): Promise<void> {
+  await page.goto('/admin/users')
+  await page.getByRole('button', { name: 'Add user' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Email').fill(email)
+  await dialog.getByLabel('Password', { exact: true }).fill(password)
+  if (role === 'admin') {
+    await dialog.getByLabel('Role').click()
+    await page.getByRole('option', { name: 'admin' }).click()
+  }
+  await dialog.getByRole('button', { name: 'Add user' }).click()
+  await expect(page.getByText('User created')).toBeVisible()
+}
+
+/** Filters an admin list to a single term via its search bar. */
+export async function adminSearch(page: Page, placeholder: string, term: string): Promise<void> {
+  const search = page.getByPlaceholder(placeholder)
+  await search.fill(term)
+  await search.press('Enter')
+}
+
+/** Returns the table row containing the given text (email or channel name). */
+export function rowFor(page: Page, text: string) {
+  const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return page.getByRole('row', { name: new RegExp(escaped) })
+}
+
+/** Opens the actions (•••) menu on the row matching the given text. */
+export async function openRowMenu(page: Page, text: string): Promise<void> {
+  await rowFor(page, text).getByRole('button').click()
+}
+
 /** Creates a channel from the dashboard and lands on its page. */
 export async function createChannel(page: Page, name: string): Promise<void> {
   await page.goto('/')
