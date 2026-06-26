@@ -89,6 +89,18 @@ func (m *Memory) UpdateUserStatus(_ context.Context, userID string, status domai
 	return nil
 }
 
+func (m *Memory) UpdateUserPassword(_ context.Context, userID, passwordHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[userID]
+	if !ok {
+		return ErrNotFound
+	}
+	u.PasswordHash = passwordHash
+	m.users[userID] = u
+	return nil
+}
+
 func (m *Memory) ListUsers(_ context.Context) ([]domain.User, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

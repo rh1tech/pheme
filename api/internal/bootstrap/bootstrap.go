@@ -14,7 +14,9 @@ import (
 	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/broker"
 	"github.com/rh1tech/pheme/api/internal/config"
+	mailer "github.com/rh1tech/pheme/api/internal/email"
 	"github.com/rh1tech/pheme/api/internal/live"
+	"github.com/rh1tech/pheme/api/internal/otp"
 	"github.com/rh1tech/pheme/api/internal/push"
 	"github.com/rh1tech/pheme/api/internal/ratelimit"
 	"github.com/rh1tech/pheme/api/internal/store"
@@ -131,6 +133,33 @@ func (b *Builder) Push(ctx context.Context) (push.Sender, error) {
 		return push.NewLogSender(), nil
 	default:
 		return nil, fmt.Errorf("unknown push driver %q", b.cfg.PushDriver)
+	}
+}
+
+// Codes builds the verification-code store (pending signups, reset codes,
+// cooldowns).
+func (b *Builder) Codes() otp.Store {
+	switch b.cfg.OTPDriver {
+	case "redis":
+		b.logger.Info("otp: redis")
+		return otp.NewRedis(b.redisClient(), "pheme:otp")
+	default:
+		b.logger.Info("otp: in-memory")
+		return otp.NewMemory()
+	}
+}
+
+// Mailer builds the configured transactional mail sender.
+func (b *Builder) Mailer() (mailer.Sender, error) {
+	switch b.cfg.MailDriver {
+	case "smtp":
+		b.logger.Info("mail: smtp", "host", b.cfg.SMTPHost, "port", b.cfg.SMTPPort)
+		return mailer.NewSMTPSender(b.cfg.SMTPHost, b.cfg.SMTPPort, b.cfg.SMTPFrom, b.cfg.SMTPUser, b.cfg.SMTPPass)
+	case "log", "":
+		b.logger.Info("mail: log (not sent)")
+		return mailer.NewLogSender(b.logger), nil
+	default:
+		return nil, fmt.Errorf("unknown mail driver %q", b.cfg.MailDriver)
 	}
 }
 

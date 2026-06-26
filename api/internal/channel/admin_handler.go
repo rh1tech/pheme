@@ -22,6 +22,7 @@ func (h *AdminHandler) Register(protected *http.ServeMux) {
 	protected.HandleFunc("GET /v1/admin/stats", h.stats)
 	protected.HandleFunc("GET /v1/admin/users", h.listUsers)
 	protected.HandleFunc("PATCH /v1/admin/users/{id}", h.updateUser)
+	protected.HandleFunc("POST /v1/admin/users/{id}/reset-password", h.resetUserPassword)
 	protected.HandleFunc("DELETE /v1/admin/users/{id}", h.deleteUser)
 	protected.HandleFunc("GET /v1/admin/channels", h.listChannels)
 	protected.HandleFunc("PATCH /v1/admin/channels/{id}", h.updateChannel)
@@ -138,6 +139,36 @@ func (h *AdminHandler) updateUser(w http.ResponseWriter, r *http.Request) {
 			h.writeStoreErr(w, err, "could not update status")
 			return
 		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+type resetUserPasswordRequest struct {
+	NewPassword string `json:"newPassword"`
+}
+
+// resetUserPassword lets an admin set a new password for any user directly. The
+// new password must satisfy the same strength policy as self-service flows.
+func (h *AdminHandler) resetUserPassword(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	var req resetUserPasswordRequest
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if err := auth.ValidatePassword(req.NewPassword); err != nil {
+		httpx.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	hash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not reset password")
+		return
+	}
+	if err := h.Store.UpdateUserPassword(r.Context(), r.PathValue("id"), hash); err != nil {
+		h.writeStoreErr(w, err, "could not reset password")
+		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }

@@ -28,17 +28,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOnAuthFailure(() => setIdentity({ userId: null, role: null }))
   }, [])
 
-  const login = useCallback(async (email: string, password: string) => {
-    const res = await api.login(email, password)
+  const applyTokens = useCallback((res: { accessToken: string; refreshToken: string; userId: string; role: string }) => {
     saveTokens({ accessToken: res.accessToken, refreshToken: res.refreshToken })
     setIdentity({ userId: res.userId, role: res.role })
   }, [])
 
+  const login = useCallback(
+    async (email: string, password: string) => {
+      applyTokens(await api.login(email, password))
+    },
+    [applyTokens],
+  )
+
+  // Registration only triggers a verification email; the account is created (and
+  // the user logged in) once the code is confirmed via verifyEmail.
   const register = useCallback(async (email: string, password: string) => {
-    const res = await api.register(email, password)
-    saveTokens({ accessToken: res.accessToken, refreshToken: res.refreshToken })
-    setIdentity({ userId: res.userId, role: res.role })
+    await api.register(email, password)
   }, [])
+
+  const verifyEmail = useCallback(
+    async (email: string, code: string) => {
+      applyTokens(await api.verifyEmail(email, code))
+    },
+    [applyTokens],
+  )
+
+  const resetPassword = useCallback(
+    async (email: string, code: string, newPassword: string) => {
+      applyTokens(await api.resetPassword(email, code, newPassword))
+    },
+    [applyTokens],
+  )
 
   const value = useMemo<AuthState>(
     () => ({
@@ -48,9 +68,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAdmin: identity.role === 'admin',
       login,
       register,
+      verifyEmail,
+      resetPassword,
       logout,
     }),
-    [identity, login, register, logout],
+    [identity, login, register, verifyEmail, resetPassword, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

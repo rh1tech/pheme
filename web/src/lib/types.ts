@@ -13,6 +13,12 @@ export interface TokenResponse {
   role: Role
 }
 
+// Returned by endpoints that email a verification/reset code instead of logging
+// the user in (register, forgot-password).
+export interface CodeSentResponse {
+  status: string
+}
+
 export interface Channel {
   id: string
   publicId: string

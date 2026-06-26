@@ -1,42 +1,72 @@
 # Pheme Mobile
 
-Flutter application (iOS + Android) that registers the device for push via
-Firebase Cloud Messaging, subscribes to channels, and browses message history.
+Flutter application (iOS + Android) for Pheme: sign in, browse channels and live
+message history, send notifications as a channel owner, manage API keys, and
+register the device for push via Firebase Cloud Messaging.
 
-> **Not yet scaffolded.** Flutter is not installed in the current development
-> environment. Once Flutter is available, generate the project in place:
->
-> ```bash
-> cd mobile
-> flutter create --org tech.rh1.pheme --project-name pheme_mobile .
-> flutter pub add firebase_core firebase_messaging http
-> ```
+It talks to the same **App API** as the web client (JWT auth). See
+[../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for the endpoint list and
+[../docs/DEV.md](../docs/DEV.md) for the overall system.
 
-## Planned structure
+## Structure
+
 ```
-mobile/
-├── lib/
-│   ├── main.dart                # app entry + MaterialApp
-│   ├── api/pheme_client.dart    # App API client (Dio/http)
-│   ├── push/fcm.dart            # FCM token registration + handlers
-│   ├── features/
-│   │   ├── channels/            # subscribe, list
-│   │   └── history/             # message history browsing
-│   └── models/                  # Channel, Message, Device
-├── android/  ios/               # platform projects (generated)
-└── pubspec.yaml
+lib/
+├── main.dart                     # bootstrap: load persisted state, init push, runApp
+└── src/
+    ├── app.dart                  # MaterialApp.router: theme, locale, routing
+    ├── router.dart               # GoRouter with auth redirect
+    ├── theme.dart                # "Iris" violet brand theme (light + dark)
+    ├── core/                     # Dio client, token/settings stores, JWT, config, helpers
+    ├── auth/                     # AuthController + LoginPage
+    ├── channels/                 # ChannelsPage, ChannelPage + tabs (messages/send/keys/settings)
+    ├── settings/                 # SettingsController + SettingsPage
+    ├── data/                     # PhemeRepository + Riverpod providers (channels, live SSE)
+    ├── live/                     # SSE client for /v1/stream
+    ├── push/                     # FCM PushService + DeviceController
+    ├── models/                   # domain models (Channel, Message, ApiKey, Device, …)
+    ├── l10n/                     # English + Russian strings (key parity enforced by test)
+    └── widgets/                  # shared widgets (BrandLogo, ModeBadge, ErrorView)
 ```
+
+State management is **Riverpod**; routing is **go_router**; HTTP is **Dio** with
+transparent access-token refresh (mirrors `web/src/lib/api.ts`).
+
+## Configuration
+
+The API base URL defaults to `http://10.0.2.2:8080` (the Android emulator's view
+of the host) and is editable at runtime in **Settings**. On a physical device or
+iOS simulator, set it to your machine's address (e.g. `http://localhost:8080`).
 
 ## Push setup (FCM)
+
+Push is **optional** — the app degrades gracefully and still receives live
+updates over SSE when Firebase isn't configured.
+
 1. Create a Firebase project; add Android and iOS apps.
 2. Place `google-services.json` (Android) and `GoogleService-Info.plist` (iOS).
    These are secrets — keep them out of version control.
 3. For iOS, upload the APNs auth key to Firebase.
-4. On launch, request notification permission, obtain the FCM token, and call
-   `POST /v1/devices` on the App API with `{ "platform": "ios|android",
-   "fcmToken": "<token>" }`.
-5. Subscribe a device to a channel via `POST /v1/channels/{id}/subscribe`.
+4. In the app, tap the bell icon on the channels screen to request permission,
+   obtain the FCM token and register the device (`POST /v1/devices`).
+5. Subscribe the device to a channel from the channel's **Settings** tab.
 
-## API
-The mobile app talks to the same App API as the web client. See
-[../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for the endpoint list.
+The Android build already enables core-library desugaring and declares the
+`POST_NOTIFICATIONS` permission required by Android 13+.
+
+## Develop
+
+```bash
+flutter pub get
+flutter run                 # on a connected device/emulator
+```
+
+## Quality gate
+
+Before committing, all of these must pass clean:
+
+```bash
+dart format --set-exit-if-changed lib test
+flutter analyze
+flutter test
+```

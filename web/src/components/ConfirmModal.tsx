@@ -12,6 +12,7 @@ interface ConfirmModalProps {
   confirmLabel?: string
   confirmColor?: string
   loading?: boolean
+  confirmDisabled?: boolean
 }
 
 /**
@@ -27,6 +28,7 @@ export function ConfirmModal({
   confirmLabel,
   confirmColor = 'red',
   loading = false,
+  confirmDisabled = false,
 }: ConfirmModalProps) {
   const { t } = useTranslation()
   return (
@@ -37,7 +39,7 @@ export function ConfirmModal({
           <Button variant="default" onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button color={confirmColor} loading={loading} onClick={onConfirm}>
+          <Button color={confirmColor} loading={loading} disabled={confirmDisabled} onClick={onConfirm}>
             {confirmLabel ?? t('common.delete')}
           </Button>
         </Group>

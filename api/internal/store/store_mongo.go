@@ -109,6 +109,17 @@ func (m *Mongo) UpdateUserStatus(ctx context.Context, userID string, status doma
 	return nil
 }
 
+func (m *Mongo) UpdateUserPassword(ctx context.Context, userID, passwordHash string) error {
+	res, err := m.db.Collection("users").UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$set": bson.M{"passwordHash": passwordHash}})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (m *Mongo) ListUsers(ctx context.Context) ([]domain.User, error) {
 	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
 	cur, err := m.db.Collection("users").Find(ctx, bson.M{}, opts)

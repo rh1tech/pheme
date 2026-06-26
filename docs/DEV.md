@@ -56,7 +56,9 @@ api/          Go module github.com/rh1tech/pheme/api
     live/     live event Bus + Memory and Redis pub/sub
     ratelimit/ Limiter + in-memory and Redis token bucket
     push/     Sender + FCM, Web Push, MultiSender, LogSender
-    auth/     Argon2id passwords, JWT tokens, bearer middleware
+    email/    transactional mail Sender + LogSender and SMTPSender (verification/reset codes)
+    otp/      verification-code Store (Memory + Redis): pending signups, reset codes, send cooldowns
+    auth/     Argon2id passwords, password strength policy, JWT tokens, bearer middleware
     channel/  HTTP handlers: app.go, ingest.go, auth_handler.go, admin_handler.go
     config/   env-driven Config
     httpx/    small HTTP helpers (JSON, Error, Decode, Health)
@@ -71,7 +73,7 @@ web/          Vite + React + TypeScript + Mantine SPA
     pages/      route screens; pages/admin/ for the admin area
     i18n/       i18next setup + en.ts / ru.ts resources
     theme.ts    Mantine theme; styles.css global overrides
-mobile/       Flutter app (placeholder, not yet scaffolded)
+mobile/       Flutter app (Riverpod + go_router + Dio); see mobile/README.md
 deploy/       docker-compose for Mongo/RabbitMQ/Redis (+ k8s later)
 scripts/      dev scripts (setup, dev, infra, stop) — see scripts/README.md
 docs/         ARCHITECTURE.md, DEV.md (this file)

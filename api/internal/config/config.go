@@ -37,6 +37,19 @@ type Config struct {
 	VAPIDPrivateKey    string
 	VAPIDSubject       string // VAPID contact: an https: URL or mailto: address. Apple Web Push requires an https: URL (it rejects mailto: with 403 BadJwtToken).
 
+	// Email (transactional mail: verification + password-reset codes)
+	MailDriver string // log | smtp
+	SMTPHost   string
+	SMTPPort   int
+	SMTPFrom   string // From header, e.g. "Pheme <noreply@app.example.com>"
+	SMTPUser   string // optional SMTP AUTH user (empty = no auth)
+	SMTPPass   string
+
+	// Verification codes
+	OTPDriver    string // memory | redis
+	CodeTTL      time.Duration
+	CodeCooldown time.Duration // minimum interval between code sends per email
+
 	// Authorization
 	AdminEmails []string // emails granted the admin role on register/login
 
@@ -75,6 +88,17 @@ func Load() Config {
 		VAPIDPrivateKey:    env("PHEME_VAPID_PRIVATE", ""),
 		VAPIDSubject:       env("PHEME_VAPID_SUBJECT", "https://app.example.com"),
 
+		MailDriver: env("PHEME_MAIL_DRIVER", "log"),
+		SMTPHost:   env("PHEME_SMTP_HOST", "localhost"),
+		SMTPPort:   envInt("PHEME_SMTP_PORT", 25),
+		SMTPFrom:   env("PHEME_SMTP_FROM", "Pheme <noreply@app.example.com>"),
+		SMTPUser:   env("PHEME_SMTP_USER", ""),
+		SMTPPass:   env("PHEME_SMTP_PASS", ""),
+
+		OTPDriver:    env("PHEME_OTP_DRIVER", "memory"),
+		CodeTTL:      envDuration("PHEME_CODE_TTL", 30*time.Minute),
+		CodeCooldown: envDuration("PHEME_CODE_COOLDOWN", 2*time.Minute),
+
 		AdminEmails: envList("PHEME_ADMIN_EMAILS"),
 
 		StoreDriver:     env("PHEME_STORE_DRIVER", "memory"),
@@ -88,6 +112,15 @@ func Load() Config {
 func env(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
 	}
 	return def
 }

@@ -98,11 +98,11 @@ type APIKey struct {
 
 // Device is a push target registered by a user.
 type Device struct {
-	ID         string    `bson:"_id,omitempty" json:"id"`
-	UserID     string    `bson:"userId" json:"userId"`
-	Platform   Platform  `bson:"platform" json:"platform"`
-	FCMToken   string    `bson:"fcmToken,omitempty" json:"fcmToken,omitempty"`
-	WebPushSub string    `bson:"webPushSub,omitempty" json:"webPushSub,omitempty"`
+	ID         string   `bson:"_id,omitempty" json:"id"`
+	UserID     string   `bson:"userId" json:"userId"`
+	Platform   Platform `bson:"platform" json:"platform"`
+	FCMToken   string   `bson:"fcmToken,omitempty" json:"fcmToken,omitempty"`
+	WebPushSub string   `bson:"webPushSub,omitempty" json:"webPushSub,omitempty"`
 	// WebPushEndpoint is the subscription's endpoint URL, stored separately so a
 	// web device can be uniquely identified (and upserted) by it.
 	WebPushEndpoint string    `bson:"webPushEndpoint,omitempty" json:"-"`

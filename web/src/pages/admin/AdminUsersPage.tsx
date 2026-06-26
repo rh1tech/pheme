@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
-import { ActionIcon, Badge, Group, Menu, Table, Text } from '@mantine/core'
+import { ActionIcon, Badge, Group, Menu, PasswordInput, Table, Text } from '@mantine/core'
 import { IconDots } from '@tabler/icons-react'
 import { Trans, useTranslation } from 'react-i18next'
 import { api } from '../../lib/api'
 import { notifyError, notifySuccess } from '../../lib/notify'
+import { checkPassword } from '../../lib/password'
 import { useAuth } from '../../auth/context'
 import type { AdminUser, Paged, Role, UserStatus } from '../../lib/types'
 import { ADMIN_PAGE_LIMIT, AdminPageShell, Pager, SearchBar } from '../../components/admin/AdminUI'
 import { ConfirmModal } from '../../components/ConfirmModal'
+import { PasswordStrength } from '../../components/PasswordStrength'
 import { RoleBadge, UserStatusBadge } from '../../components/badges'
 import { TableRowsSkeleton } from '../../components/Skeletons'
 
@@ -20,6 +22,9 @@ export function AdminUsersPage() {
   const [users, setUsers] = useState<Paged<AdminUser> | null>(null)
   const [deleteId, setDeleteId] = useState<{ id: string; email: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [resetUser, setResetUser] = useState<{ id: string; email: string } | null>(null)
+  const [newPassword, setNewPassword] = useState('')
+  const [resetting, setResetting] = useState(false)
 
   function reload() {
     api
@@ -47,6 +52,25 @@ export function AdminUsersPage() {
       reload()
     } catch (e) {
       notifyError(t('admin.updateFailed'), e)
+    }
+  }
+
+  function openReset(user: { id: string; email: string }) {
+    setNewPassword('')
+    setResetUser(user)
+  }
+
+  async function confirmReset() {
+    if (!resetUser || !checkPassword(newPassword).acceptable) return
+    setResetting(true)
+    try {
+      await api.adminResetUserPassword(resetUser.id, newPassword)
+      notifySuccess(t('admin.passwordReset'))
+      setResetUser(null)
+    } catch (e) {
+      notifyError(t('admin.resetPasswordFailed'), e)
+    } finally {
+      setResetting(false)
     }
   }
 
@@ -90,6 +114,28 @@ export function AdminUsersPage() {
         <Text size="sm">
           <Trans i18nKey="admin.deleteUserConfirm" values={{ email: deleteId?.email ?? '' }} components={{ bold: <b /> }} />
         </Text>
+      </ConfirmModal>
+
+      <ConfirmModal
+        opened={resetUser !== null}
+        onClose={() => setResetUser(null)}
+        onConfirm={confirmReset}
+        title={t('admin.resetPassword')}
+        confirmLabel={t('admin.resetPassword')}
+        confirmColor="iris"
+        loading={resetting}
+        confirmDisabled={!checkPassword(newPassword).acceptable}
+      >
+        <Text size="sm">
+          <Trans i18nKey="admin.resetPasswordConfirm" values={{ email: resetUser?.email ?? '' }} components={{ bold: <b /> }} />
+        </Text>
+        <PasswordInput
+          label={t('auth.newPassword')}
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.currentTarget.value)}
+          mt="sm"
+        />
+        <PasswordStrength value={newPassword} />
       </ConfirmModal>
 
       {users && users.items.length === 0 ? (
@@ -149,6 +195,9 @@ export function AdminUsersPage() {
                         ) : (
                           <Menu.Item onClick={() => update(u.id, { status: 'blocked' })}>{t('admin.block')}</Menu.Item>
                         )}
+                        <Menu.Item onClick={() => openReset({ id: u.id, email: u.email })}>
+                          {t('admin.resetPassword')}
+                        </Menu.Item>
                         <Menu.Divider />
                         <Menu.Item color="red" onClick={() => setDeleteId({ id: u.id, email: u.email })}>
                           {t('common.delete')}

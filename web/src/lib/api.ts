@@ -14,6 +14,7 @@ import type {
   ApiKey,
   Channel,
   ChannelStatus,
+  CodeSentResponse,
   CreatedKey,
   Device,
   Meta,
@@ -132,9 +133,19 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 export const api = {
   // Auth (public)
   register: (email: string, password: string) =>
-    request<TokenResponse>('/v1/auth/register', { method: 'POST', body: { email, password }, public: true }),
+    request<CodeSentResponse>('/v1/auth/register', { method: 'POST', body: { email, password }, public: true }),
+  verifyEmail: (email: string, code: string) =>
+    request<TokenResponse>('/v1/auth/verify', { method: 'POST', body: { email, code }, public: true }),
   login: (email: string, password: string) =>
     request<TokenResponse>('/v1/auth/login', { method: 'POST', body: { email, password }, public: true }),
+  forgotPassword: (email: string) =>
+    request<CodeSentResponse>('/v1/auth/forgot-password', { method: 'POST', body: { email }, public: true }),
+  resetPassword: (email: string, code: string, newPassword: string) =>
+    request<TokenResponse>('/v1/auth/reset-password', {
+      method: 'POST',
+      body: { email, code, newPassword },
+      public: true,
+    }),
 
   // Meta (public)
   meta: () => request<Meta>('/v1/meta', { public: true }),
@@ -195,6 +206,8 @@ export const api = {
   },
   adminUpdateUser: (userId: string, body: { role?: Role; status?: UserStatus }) =>
     request<unknown>(`/v1/admin/users/${userId}`, { method: 'PATCH', body }),
+  adminResetUserPassword: (userId: string, newPassword: string) =>
+    request<unknown>(`/v1/admin/users/${userId}/reset-password`, { method: 'POST', body: { newPassword } }),
   adminDeleteUser: (userId: string) =>
     request<void>(`/v1/admin/users/${userId}`, { method: 'DELETE' }),
   adminListChannels: (q = '', page = 1, limit = 20) => {

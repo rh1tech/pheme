@@ -38,6 +38,12 @@ func main() {
 		os.Exit(1)
 	}
 	tokens := b.Tokens()
+	codes := b.Codes()
+	sender, err := b.Mailer()
+	if err != nil {
+		logger.Error("mailer init", "error", err)
+		os.Exit(1)
+	}
 
 	adminEmails := make(map[string]bool, len(cfg.AdminEmails))
 	for _, e := range cfg.AdminEmails {
@@ -45,7 +51,16 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	(&channel.AuthHandler{Store: db, Tokens: tokens, AdminEmails: adminEmails}).Routes(mux)
+	(&channel.AuthHandler{
+		Store:        db,
+		Tokens:       tokens,
+		Codes:        codes,
+		Mailer:       sender,
+		AdminEmails:  adminEmails,
+		Logger:       logger,
+		CodeTTL:      cfg.CodeTTL,
+		CodeCooldown: cfg.CodeCooldown,
+	}).Routes(mux)
 	(&channel.AppHandler{
 		Store:          db,
 		Live:           bus,

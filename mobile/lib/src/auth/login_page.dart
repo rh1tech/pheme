@@ -1,0 +1,300 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../core/providers.dart';
+import '../core/snackbar.dart';
+import '../core/validators.dart';
+import '../l10n/app_localizations.dart';
+import '../widgets/brand_logo.dart';
+import '../widgets/password_strength_bar.dart';
+
+const _resendSeconds = 120;
+
+/// Sign-in / register screen. Registration is two-step: submitting credentials
+/// emails a 6-digit code, then the user confirms it here to create the account.
+/// On success the router redirect navigates away automatically.
+class LoginPage extends ConsumerStatefulWidget {
+  const LoginPage({super.key});
+
+  @override
+  ConsumerState<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends ConsumerState<LoginPage> {
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _code = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  bool _registerMode = false;
+  bool _pendingVerify = false;
+  bool _loading = false;
+  int _cooldown = 0;
+  Timer? _timer;
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _email.dispose();
+    _password.dispose();
+    _code.dispose();
+    super.dispose();
+  }
+
+  void _startCooldown() {
+    _timer?.cancel();
+    setState(() => _cooldown = _resendSeconds);
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) return;
+      setState(() => _cooldown--);
+      if (_cooldown <= 0) t.cancel();
+    });
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _loading = true);
+    final auth = ref.read(authControllerProvider.notifier);
+    final email = _email.text.trim();
+    final password = _password.text;
+    try {
+      if (_registerMode) {
+        await auth.register(email, password);
+        if (mounted) {
+          setState(() => _pendingVerify = true);
+          _startCooldown();
+        }
+      } else {
+        await auth.login(email, password);
+        // Router redirect handles navigation on auth change.
+      }
+    } catch (e) {
+      if (mounted) {
+        notifyError(context, context.l10n.t('auth.requestFailed'), e);
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _verify() async {
+    if (_code.text.trim().length != 6) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _loading = true);
+    try {
+      await ref
+          .read(authControllerProvider.notifier)
+          .verifyEmail(_email.text.trim(), _code.text.trim());
+      // Router redirect handles navigation on auth change.
+    } catch (e) {
+      if (mounted) {
+        notifyError(context, context.l10n.t('auth.requestFailed'), e);
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _resend() async {
+    if (_cooldown > 0 || _loading) return;
+    setState(() => _loading = true);
+    try {
+      await ref
+          .read(authControllerProvider.notifier)
+          .register(_email.text.trim(), _password.text);
+      _startCooldown();
+    } catch (e) {
+      if (mounted) {
+        notifyError(context, context.l10n.t('auth.requestFailed'), e);
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Center(child: BrandLogo(size: 40)),
+                  const SizedBox(height: 28),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: _pendingVerify
+                          ? _buildVerify(l10n)
+                          : _buildCredentials(l10n),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCredentials(AppLocalizations l10n) {
+    return Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            _registerMode
+                ? l10n.t('auth.registerSubtitle')
+                : l10n.t('auth.signInSubtitle'),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            controller: _email,
+            autofocus: true,
+            keyboardType: TextInputType.emailAddress,
+            autofillHints: const [AutofillHints.email],
+            decoration: InputDecoration(labelText: l10n.t('auth.email')),
+            validator: (v) =>
+                (v == null || !v.contains('@')) ? l10n.t('auth.email') : null,
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: _password,
+            obscureText: true,
+            autofillHints: const [AutofillHints.password],
+            decoration: InputDecoration(labelText: l10n.t('auth.password')),
+            onChanged: _registerMode ? (_) => setState(() {}) : null,
+            onFieldSubmitted: (_) => _submit(),
+            validator: (v) {
+              final value = v ?? '';
+              if (_registerMode) {
+                return isPasswordAcceptable(value)
+                    ? null
+                    : l10n.t('auth.passwordWeak');
+              }
+              return value.isEmpty ? l10n.t('auth.password') : null;
+            },
+          ),
+          if (_registerMode) PasswordStrengthBar(password: _password.text),
+          if (!_registerMode)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: _loading
+                    ? null
+                    : () => context.push('/forgot-password'),
+                child: Text(l10n.t('auth.forgotPassword')),
+              ),
+            ),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: _loading ? null : _submit,
+            child: _loading
+                ? const _Spinner()
+                : Text(
+                    _registerMode
+                        ? l10n.t('auth.register')
+                        : l10n.t('auth.signIn'),
+                  ),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: _loading
+                ? null
+                : () => setState(() => _registerMode = !_registerMode),
+            child: Text(
+              _registerMode
+                  ? l10n.t('auth.haveAccount')
+                  : l10n.t('auth.noAccount'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVerify(AppLocalizations l10n) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          l10n.t('auth.verifyTitle'),
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          l10n
+              .t('auth.verifySubtitle')
+              .replaceAll('{email}', _email.text.trim()),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _code,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          maxLength: 6,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 24, letterSpacing: 8),
+          decoration: const InputDecoration(counterText: ''),
+          onChanged: (v) {
+            setState(() {});
+            if (v.trim().length == 6) _verify();
+          },
+        ),
+        const SizedBox(height: 12),
+        FilledButton(
+          onPressed: _loading || _code.text.trim().length != 6 ? null : _verify,
+          child: _loading
+              ? const _Spinner()
+              : Text(l10n.t('auth.verifyAction')),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            TextButton(
+              onPressed: _loading
+                  ? null
+                  : () => setState(() => _pendingVerify = false),
+              child: Text(l10n.t('auth.back')),
+            ),
+            TextButton(
+              onPressed: _cooldown > 0 || _loading ? null : _resend,
+              child: Text(
+                _cooldown > 0
+                    ? l10n
+                          .t('auth.resendIn')
+                          .replaceAll('{seconds}', '$_cooldown')
+                    : l10n.t('auth.resend'),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _Spinner extends StatelessWidget {
+  const _Spinner();
+
+  @override
+  Widget build(BuildContext context) => const SizedBox(
+    height: 20,
+    width: 20,
+    child: CircularProgressIndicator(strokeWidth: 2),
+  );
+}

@@ -38,6 +38,7 @@ type Store interface {
 	UserByEmail(ctx context.Context, email string) (domain.User, error)
 	UpdateUserRole(ctx context.Context, userID string, role domain.Role) error
 	UpdateUserStatus(ctx context.Context, userID string, status domain.UserStatus) error
+	UpdateUserPassword(ctx context.Context, userID, passwordHash string) error
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	AdminListUsers(ctx context.Context, query string, offset, limit int) ([]domain.User, int64, error)
 	DeleteUser(ctx context.Context, userID string) error
