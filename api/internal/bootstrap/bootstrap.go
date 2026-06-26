@@ -154,7 +154,7 @@ func (b *Builder) Mailer() (mailer.Sender, error) {
 	switch b.cfg.MailDriver {
 	case "smtp":
 		b.logger.Info("mail: smtp", "host", b.cfg.SMTPHost, "port", b.cfg.SMTPPort)
-		return mailer.NewSMTPSender(b.cfg.SMTPHost, b.cfg.SMTPPort, b.cfg.SMTPFrom, b.cfg.SMTPUser, b.cfg.SMTPPass)
+		return mailer.NewSMTPSender(b.cfg.SMTPHost, b.cfg.SMTPPort, b.cfg.SMTPFrom, b.cfg.SMTPUser, b.cfg.SMTPPass, b.cfg.SMTPInsecureTLS)
 	case "log", "":
 		b.logger.Info("mail: log (not sent)")
 		return mailer.NewLogSender(b.logger), nil

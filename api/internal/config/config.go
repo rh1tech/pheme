@@ -38,12 +38,13 @@ type Config struct {
 	VAPIDSubject       string // VAPID contact: an https: URL or mailto: address. Apple Web Push requires an https: URL (it rejects mailto: with 403 BadJwtToken).
 
 	// Email (transactional mail: verification + password-reset codes)
-	MailDriver string // log | smtp
-	SMTPHost   string
-	SMTPPort   int
-	SMTPFrom   string // From header, e.g. "Pheme <noreply@app.example.com>"
-	SMTPUser   string // optional SMTP AUTH user (empty = no auth)
-	SMTPPass   string
+	MailDriver      string // log | smtp
+	SMTPHost        string
+	SMTPPort        int
+	SMTPFrom        string // From header, e.g. "Pheme <noreply@app.example.com>"
+	SMTPUser        string // optional SMTP AUTH user (empty = no auth)
+	SMTPPass        string
+	SMTPInsecureTLS bool // skip STARTTLS cert verification (internal relay only)
 
 	// Verification codes
 	OTPDriver    string // memory | redis
@@ -88,12 +89,13 @@ func Load() Config {
 		VAPIDPrivateKey:    env("PHEME_VAPID_PRIVATE", ""),
 		VAPIDSubject:       env("PHEME_VAPID_SUBJECT", "https://app.example.com"),
 
-		MailDriver: env("PHEME_MAIL_DRIVER", "log"),
-		SMTPHost:   env("PHEME_SMTP_HOST", "localhost"),
-		SMTPPort:   envInt("PHEME_SMTP_PORT", 25),
-		SMTPFrom:   env("PHEME_SMTP_FROM", "Pheme <noreply@app.example.com>"),
-		SMTPUser:   env("PHEME_SMTP_USER", ""),
-		SMTPPass:   env("PHEME_SMTP_PASS", ""),
+		MailDriver:      env("PHEME_MAIL_DRIVER", "log"),
+		SMTPHost:        env("PHEME_SMTP_HOST", "localhost"),
+		SMTPPort:        envInt("PHEME_SMTP_PORT", 25),
+		SMTPFrom:        env("PHEME_SMTP_FROM", "Pheme <noreply@app.example.com>"),
+		SMTPUser:        env("PHEME_SMTP_USER", ""),
+		SMTPPass:        env("PHEME_SMTP_PASS", ""),
+		SMTPInsecureTLS: envBool("PHEME_SMTP_INSECURE_TLS", false),
 
 		OTPDriver:    env("PHEME_OTP_DRIVER", "memory"),
 		CodeTTL:      envDuration("PHEME_CODE_TTL", 30*time.Minute),
@@ -120,6 +122,18 @@ func envInt(key string, def int) int {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
 			return n
+		}
+	}
+	return def
+}
+
+func envBool(key string, def bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
 		}
 	}
 	return def

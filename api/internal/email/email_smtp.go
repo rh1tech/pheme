@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"net/mail"
@@ -15,17 +16,21 @@ import (
 // local Postfix instance (which DKIM-signs and delivers direct-to-MX); auth is
 // optional, so an internal no-auth relay works by leaving user/pass empty.
 type SMTPSender struct {
-	addr     string // host:port
-	host     string // host alone, for PlainAuth
-	from     string // full From header, e.g. "Pheme <noreply@app.example.com>"
-	fromAddr string // bare envelope address, e.g. "noreply@app.example.com"
-	auth     smtp.Auth
-	now      func() time.Time
+	addr        string // host:port
+	host        string // host alone, for PlainAuth / TLS ServerName
+	from        string // full From header, e.g. "Pheme <noreply@app.example.com>"
+	fromAddr    string // bare envelope address, e.g. "noreply@app.example.com"
+	auth        smtp.Auth
+	insecureTLS bool // skip STARTTLS cert verification (for an internal relay)
+	now         func() time.Time
 }
 
 // NewSMTPSender builds an SMTP-backed Sender. from accepts either a bare address
-// or a "Name <addr>" form. When user is empty no SMTP AUTH is attempted.
-func NewSMTPSender(host string, port int, from, user, pass string) (*SMTPSender, error) {
+// or a "Name <addr>" form. When user is empty no SMTP AUTH is attempted. Set
+// insecureTLS for an internal relay whose certificate name does not match the
+// dialed host (e.g. a host Postfix reached via host.docker.internal); the hop is
+// on the private docker bridge, and the outbound MX TLS is unaffected.
+func NewSMTPSender(host string, port int, from, user, pass string, insecureTLS bool) (*SMTPSender, error) {
 	addr, err := mail.ParseAddress(from)
 	if err != nil {
 		return nil, fmt.Errorf("parse from address %q: %w", from, err)
@@ -35,25 +40,60 @@ func NewSMTPSender(host string, port int, from, user, pass string) (*SMTPSender,
 		auth = smtp.PlainAuth("", user, pass, host)
 	}
 	return &SMTPSender{
-		addr:     fmt.Sprintf("%s:%d", host, port),
-		host:     host,
-		from:     from,
-		fromAddr: addr.Address,
-		auth:     auth,
-		now:      time.Now,
+		addr:        fmt.Sprintf("%s:%d", host, port),
+		host:        host,
+		from:        from,
+		fromAddr:    addr.Address,
+		auth:        auth,
+		insecureTLS: insecureTLS,
+		now:         time.Now,
 	}, nil
 }
 
-// Send transmits a multipart/alternative (text + HTML) message.
+// Send transmits a multipart/alternative (text + HTML) message. It uses
+// opportunistic STARTTLS so the TLS verification mode can be controlled for the
+// internal relay hop (net/smtp.SendMail always verifies against the dialed name).
 func (s *SMTPSender) Send(_ context.Context, to, subject, text, html string) error {
 	if _, err := mail.ParseAddress(to); err != nil {
 		return fmt.Errorf("invalid recipient %q: %w", to, err)
 	}
 	msg := s.build(to, subject, text, html)
-	if err := smtp.SendMail(s.addr, s.auth, s.fromAddr, []string{to}, msg); err != nil {
-		return fmt.Errorf("smtp send: %w", err)
+
+	c, err := smtp.Dial(s.addr)
+	if err != nil {
+		return fmt.Errorf("smtp dial: %w", err)
 	}
-	return nil
+	defer c.Close()
+
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: s.host, InsecureSkipVerify: s.insecureTLS}); err != nil { //nolint:gosec // internal relay hop; opt-in via PHEME_SMTP_INSECURE_TLS
+			return fmt.Errorf("smtp starttls: %w", err)
+		}
+	}
+	if s.auth != nil {
+		if ok, _ := c.Extension("AUTH"); ok {
+			if err := c.Auth(s.auth); err != nil {
+				return fmt.Errorf("smtp auth: %w", err)
+			}
+		}
+	}
+	if err := c.Mail(s.fromAddr); err != nil {
+		return fmt.Errorf("smtp mail from: %w", err)
+	}
+	if err := c.Rcpt(to); err != nil {
+		return fmt.Errorf("smtp rcpt to: %w", err)
+	}
+	w, err := c.Data()
+	if err != nil {
+		return fmt.Errorf("smtp data: %w", err)
+	}
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("smtp write: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("smtp close: %w", err)
+	}
+	return c.Quit()
 }
 
 // build assembles a MIME message with CRLF line endings.

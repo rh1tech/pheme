@@ -80,6 +80,10 @@ services:
       PHEME_SMTP_HOST: ${PHEME_SMTP_HOST:-host.docker.internal}
       PHEME_SMTP_PORT: ${PHEME_SMTP_PORT:-25}
       PHEME_SMTP_FROM: ${PHEME_SMTP_FROM:-Pheme <noreply@app.example.com>}
+      # The host Postfix presents its relay.example.com cert, which won't match
+      # host.docker.internal; the hop is on the private docker bridge, so skip
+      # STARTTLS verification for it (outbound MX TLS is unaffected).
+      PHEME_SMTP_INSECURE_TLS: ${PHEME_SMTP_INSECURE_TLS:-true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
