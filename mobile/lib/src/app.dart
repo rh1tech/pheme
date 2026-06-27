@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -73,6 +74,28 @@ class _PhemeAppState extends ConsumerState<PhemeApp> {
         GlobalCupertinoLocalizations.delegate,
       ],
       routerConfig: router,
+      // Cupertino widgets used on iOS read their accent/brightness from the
+      // ambient CupertinoTheme rather than Material's ThemeData, so seed one
+      // with the Iris brand colour and the resolved brightness.
+      builder: (context, child) => CupertinoTheme(
+        data: _cupertinoTheme(context, themeMode),
+        child: child ?? const SizedBox.shrink(),
+      ),
+    );
+  }
+
+  /// Brand-tinted Cupertino theme whose brightness follows the app theme mode
+  /// (falling back to the platform brightness for [ThemeMode.system]).
+  CupertinoThemeData _cupertinoTheme(BuildContext context, ThemeMode mode) {
+    final brightness = switch (mode) {
+      ThemeMode.light => Brightness.light,
+      ThemeMode.dark => Brightness.dark,
+      ThemeMode.system => MediaQuery.platformBrightnessOf(context),
+    };
+    return CupertinoThemeData(
+      brightness: brightness,
+      primaryColor: kIris,
+      applyThemeToAll: true,
     );
   }
 }

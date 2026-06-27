@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/providers.dart';
 import '../../core/snackbar.dart';
 import '../../l10n/app_localizations.dart';
+import '../../widgets/adaptive/adaptive.dart';
 
 /// Keep these in sync with the server limits (api/internal/channel/notify_input.go).
 const _maxImages = 10;
@@ -110,26 +111,20 @@ class _SendTabState extends ConsumerState<SendTab> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        TextField(
+        AdaptiveTextField(
           controller: _title,
+          label: l10n.t('channel.sendTitle'),
           textInputAction: TextInputAction.next,
           onChanged: (_) => setState(() {}),
-          decoration: InputDecoration(
-            labelText: l10n.t('channel.sendTitle'),
-            hintText: l10n.t('channel.titlePlaceholder'),
-          ),
         ),
         const SizedBox(height: 12),
-        TextField(
+        AdaptiveTextField(
           controller: _body,
+          label: l10n.t('channel.sendBody'),
+          placeholder: l10n.t('channel.bodyPlaceholder'),
           minLines: 3,
           maxLines: 6,
           onChanged: (_) => setState(() {}),
-          decoration: InputDecoration(
-            labelText: l10n.t('channel.sendBody'),
-            hintText: l10n.t('channel.bodyPlaceholder'),
-            alignLabelWithHint: true,
-          ),
         ),
         const SizedBox(height: 16),
         Row(
@@ -139,10 +134,16 @@ class _SendTabState extends ConsumerState<SendTab> {
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
             ),
             const Spacer(),
-            TextButton.icon(
+            AdaptiveButton.text(
               onPressed: _images.length >= _maxImages ? null : _pickImages,
-              icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
-              label: Text(l10n.t('channel.addImages')),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.add_photo_alternate_outlined, size: 18),
+                  const SizedBox(width: 8),
+                  Text(l10n.t('channel.addImages')),
+                ],
+              ),
             ),
           ],
         ),
@@ -157,16 +158,18 @@ class _SendTabState extends ConsumerState<SendTab> {
         else
           _ImagePreviewStrip(images: _images, onRemove: _removeImage),
         const SizedBox(height: 16),
-        FilledButton.icon(
+        AdaptiveButton.filled(
           onPressed: (_sending || !_canSend) ? null : _send,
-          icon: _sending
-              ? const SizedBox(
-                  height: 18,
-                  width: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.send_rounded, size: 18),
-          label: Text(l10n.t('channel.send')),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _sending
+                  ? const AdaptiveProgress(size: 18)
+                  : const Icon(Icons.send_rounded, size: 18),
+              const SizedBox(width: 8),
+              Text(l10n.t('channel.send')),
+            ],
+          ),
         ),
       ],
     );

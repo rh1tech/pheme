@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,7 @@ import '../../core/snackbar.dart';
 import '../../data/app_providers.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
+import '../../widgets/adaptive/adaptive.dart';
 
 /// Channel settings: rename and change subscription mode, subscribe this device
 /// to push, and delete the channel.
@@ -113,29 +115,15 @@ class _ChannelSettingsTabState extends ConsumerState<ChannelSettingsTab> {
 
   Future<void> _confirmDelete() async {
     final l10n = context.l10n;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(l10n.t('channel.dangerTitle')),
-        content: Text(
-          l10n.tp('channel.deleteConfirm', {'name': widget.channel.name}),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: Text(l10n.t('common.cancel')),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(dialogContext).colorScheme.error,
-            ),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: Text(l10n.t('common.delete')),
-          ),
-        ],
-      ),
+    final confirmed = await showAdaptiveConfirm(
+      context,
+      title: l10n.t('channel.dangerTitle'),
+      message: l10n.tp('channel.deleteConfirm', {'name': widget.channel.name}),
+      confirmLabel: l10n.t('common.delete'),
+      cancelLabel: l10n.t('common.cancel'),
+      isDestructive: true,
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
     await _delete();
   }
 
@@ -162,11 +150,9 @@ class _ChannelSettingsTabState extends ConsumerState<ChannelSettingsTab> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        TextField(
+        AdaptiveTextField(
           controller: _name,
-          decoration: InputDecoration(
-            labelText: l10n.t('channels.channelName'),
-          ),
+          label: l10n.t('channels.channelName'),
         ),
         const SizedBox(height: 16),
         Text(
@@ -174,101 +160,104 @@ class _ChannelSettingsTabState extends ConsumerState<ChannelSettingsTab> {
           style: const TextStyle(fontWeight: FontWeight.w500),
         ),
         const SizedBox(height: 8),
-        SegmentedButton<SubscriptionMode>(
-          segments: [
-            ButtonSegment(
-              value: SubscriptionMode.approval,
-              label: Text(l10n.t('mode.approval')),
+        if (isCupertino(context))
+          SizedBox(
+            width: double.infinity,
+            child: CupertinoSlidingSegmentedControl<SubscriptionMode>(
+              groupValue: _mode,
+              onValueChanged: (m) {
+                if (m != null) setState(() => _mode = m);
+              },
+              children: {
+                SubscriptionMode.approval: Text(l10n.t('mode.approval')),
+                SubscriptionMode.open: Text(l10n.t('mode.open')),
+              },
             ),
-            ButtonSegment(
-              value: SubscriptionMode.open,
-              label: Text(l10n.t('mode.open')),
-            ),
-          ],
-          selected: {_mode},
-          onSelectionChanged: (s) => setState(() => _mode = s.first),
-        ),
+          )
+        else
+          SegmentedButton<SubscriptionMode>(
+            segments: [
+              ButtonSegment(
+                value: SubscriptionMode.approval,
+                label: Text(l10n.t('mode.approval')),
+              ),
+              ButtonSegment(
+                value: SubscriptionMode.open,
+                label: Text(l10n.t('mode.open')),
+              ),
+            ],
+            selected: {_mode},
+            onSelectionChanged: (s) => setState(() => _mode = s.first),
+          ),
         const SizedBox(height: 16),
         Align(
           alignment: Alignment.centerRight,
-          child: FilledButton(
+          child: AdaptiveButton.filled(
             onPressed: _saving ? null : _save,
             child: _saving
-                ? const SizedBox(
-                    height: 18,
-                    width: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                ? const AdaptiveProgress(size: 18)
                 : Text(l10n.t('channel.saveChanges')),
           ),
         ),
         const SizedBox(height: 24),
 
         // Subscription card
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        l10n.t('channel.subscribeTitle'),
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                        ),
+        AdaptiveCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      l10n.t('channel.subscribeTitle'),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
                       ),
                     ),
-                    if (_subStatus == SubscriptionStatus.active)
-                      _StatusChip(
-                        label: l10n.t('channel.subscribed'),
-                        color: scheme.tertiary,
-                      ),
-                    if (_subStatus == SubscriptionStatus.pending)
-                      _StatusChip(
-                        label: l10n.t('channel.subscriptionPending'),
-                        color: scheme.secondary,
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  l10n.t('channel.subscribeDescription'),
-                  style: TextStyle(
-                    color: scheme.onSurfaceVariant,
-                    fontSize: 13,
                   ),
-                ),
-                if (!registered) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    l10n.t('channel.subscribeNeedsDevice'),
-                    style: TextStyle(color: scheme.error, fontSize: 12),
-                  ),
+                  if (_subStatus == SubscriptionStatus.active)
+                    _StatusChip(
+                      label: l10n.t('channel.subscribed'),
+                      color: scheme.tertiary,
+                    ),
+                  if (_subStatus == SubscriptionStatus.pending)
+                    _StatusChip(
+                      label: l10n.t('channel.subscriptionPending'),
+                      color: scheme.secondary,
+                    ),
                 ],
-                const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: _subStatus == SubscriptionStatus.none
-                      ? OutlinedButton(
-                          onPressed: (_subBusy || !registered)
-                              ? null
-                              : _subscribe,
-                          child: Text(l10n.t('channel.subscribe')),
-                        )
-                      : OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: scheme.error,
-                          ),
-                          onPressed: _subBusy ? null : _unsubscribe,
-                          child: Text(l10n.t('channel.unsubscribe')),
-                        ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                l10n.t('channel.subscribeDescription'),
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+              ),
+              if (!registered) ...[
+                const SizedBox(height: 8),
+                Text(
+                  l10n.t('channel.subscribeNeedsDevice'),
+                  style: TextStyle(color: scheme.error, fontSize: 12),
                 ),
               ],
-            ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: _subStatus == SubscriptionStatus.none
+                    ? AdaptiveButton.outlined(
+                        onPressed: (_subBusy || !registered)
+                            ? null
+                            : _subscribe,
+                        child: Text(l10n.t('channel.subscribe')),
+                      )
+                    : AdaptiveButton.outlined(
+                        isDestructive: true,
+                        onPressed: _subBusy ? null : _unsubscribe,
+                        child: Text(l10n.t('channel.unsubscribe')),
+                      ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 16),
@@ -302,13 +291,17 @@ class _ChannelSettingsTabState extends ConsumerState<ChannelSettingsTab> {
                 const SizedBox(height: 12),
                 Align(
                   alignment: Alignment.centerRight,
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: scheme.error,
-                    ),
+                  child: AdaptiveButton.outlined(
+                    isDestructive: true,
                     onPressed: _confirmDelete,
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    label: Text(l10n.t('common.delete')),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.delete_outline, size: 18),
+                        const SizedBox(width: 8),
+                        Text(l10n.t('common.delete')),
+                      ],
+                    ),
                   ),
                 ),
               ],

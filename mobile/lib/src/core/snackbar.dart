@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../widgets/adaptive/adaptive.dart';
 import 'api_exception.dart';
 
-/// Shows a transient success message. Centralises snackbar styling so screens
+/// Shows a transient success message. Centralises feedback styling so screens
 /// never call ScaffoldMessenger directly (mirrors the web app's lib/notify).
 void notifySuccess(BuildContext context, String message) {
   _show(context, message, isError: false);
@@ -27,6 +28,11 @@ String? _detail(Object? error) {
 }
 
 void _show(BuildContext context, String message, {required bool isError}) {
+  // iOS has no snackbar idiom — use a transient overlay toast instead.
+  if (isCupertino(context)) {
+    showCupertinoToast(context, message, isError: isError);
+    return;
+  }
   final messenger = ScaffoldMessenger.maybeOf(context);
   if (messenger == null) return;
   final scheme = Theme.of(context).colorScheme;

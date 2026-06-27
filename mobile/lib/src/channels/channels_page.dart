@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,6 +9,7 @@ import '../data/app_providers.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../push/push_service.dart';
+import '../widgets/adaptive/adaptive.dart';
 import '../widgets/brand_logo.dart';
 import '../widgets/error_view.dart';
 import '../widgets/mode_badge.dart';
@@ -63,77 +65,85 @@ class ChannelsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = context.l10n;
+    final ios = isCupertino(context);
     final channels = ref.watch(channelsProvider);
     final registered = ref.watch(deviceControllerProvider) != null;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const BrandLogo(size: 26),
-        actions: [
-          IconButton(
-            tooltip: registered
-                ? l10n.t('channels.notificationsOn')
-                : l10n.t('channels.enableNotifications'),
-            icon: Icon(
-              registered
-                  ? Icons.notifications_active_rounded
-                  : Icons.notifications_none_rounded,
+    final notifIcon = registered
+        ? (ios ? CupertinoIcons.bell_fill : Icons.notifications_active_rounded)
+        : (ios ? CupertinoIcons.bell : Icons.notifications_none_rounded);
+
+    return AdaptiveScaffold(
+      grouped: true,
+      title: const BrandLogo(size: 26),
+      trailing: [
+        AdaptiveIconButton(
+          icon: notifIcon,
+          semanticLabel: registered
+              ? l10n.t('channels.notificationsOn')
+              : l10n.t('channels.enableNotifications'),
+          onPressed: registered
+              ? null
+              : () => _enableNotifications(context, ref),
+        ),
+        AdaptiveIconButton(
+          icon: ios ? CupertinoIcons.settings : Icons.settings_outlined,
+          semanticLabel: l10n.t('common.settings'),
+          onPressed: () => context.push('/settings'),
+        ),
+        if (ios)
+          AdaptiveIconButton(
+            icon: CupertinoIcons.add,
+            semanticLabel: l10n.t('channels.newChannel'),
+            onPressed: () => _create(context, ref),
+          ),
+      ],
+      floatingActionButton: ios
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _create(context, ref),
+              icon: const Icon(Icons.add),
+              label: Text(l10n.t('channels.newChannel')),
             ),
-            onPressed: registered
-                ? null
-                : () => _enableNotifications(context, ref),
-          ),
-          IconButton(
-            tooltip: l10n.t('common.settings'),
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => context.push('/settings'),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _create(context, ref),
-        icon: const Icon(Icons.add),
-        label: Text(l10n.t('channels.newChannel')),
-      ),
-      body: RefreshIndicator(
+      body: AdaptiveRefreshableScrollView(
         onRefresh: () => ref.read(channelsProvider.notifier).refresh(),
-        child: channels.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => ListView(
-            children: [
-              SizedBox(
-                height: MediaQuery.sizeOf(context).height * 0.7,
-                child: ErrorView(
-                  message: l10n.t('channels.loadFailed'),
-                  onRetry: () => ref.read(channelsProvider.notifier).refresh(),
-                ),
+        slivers: channels.when(
+          loading: () => const [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: AdaptiveProgress()),
+            ),
+          ],
+          error: (e, _) => [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: ErrorView(
+                message: l10n.t('channels.loadFailed'),
+                onRetry: () => ref.read(channelsProvider.notifier).refresh(),
               ),
-            ],
-          ),
-          data: (list) => _ChannelList(channels: list),
+            ),
+          ],
+          data: (list) => _channelSlivers(context, list),
         ),
       ),
     );
   }
-}
 
-class _ChannelList extends StatelessWidget {
-  const _ChannelList({required this.channels});
-
-  final List<Channel> channels;
-
-  @override
-  Widget build(BuildContext context) {
+  List<Widget> _channelSlivers(BuildContext context, List<Channel> channels) {
     final l10n = context.l10n;
     if (channels.isEmpty) {
-      return ListView(
-        children: [
-          Padding(
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Padding(
             padding: const EdgeInsets.fromLTRB(24, 96, 24, 24),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  Icons.campaign_outlined,
+                  isCupertino(context)
+                      ? CupertinoIcons.antenna_radiowaves_left_right
+                      : Icons.campaign_outlined,
                   size: 48,
                   color: Theme.of(context).colorScheme.outline,
                 ),
@@ -148,40 +158,74 @@ class _ChannelList extends StatelessWidget {
               ],
             ),
           ),
-        ],
-      );
+        ),
+      ];
     }
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
-      itemCount: channels.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 10),
-      itemBuilder: (context, i) {
-        final c = channels[i];
-        return Card(
-          child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 6,
-            ),
-            title: Text(
-              c.name.isEmpty ? l10n.t('channel.fallbackName') : c.name,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                c.publicId,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontSize: 12,
+
+    if (isCupertino(context)) {
+      return [
+        SliverToBoxAdapter(
+          child: CupertinoListSection.insetGrouped(
+            margin: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            children: [
+              for (final c in channels)
+                CupertinoListTile.notched(
+                  title: Text(
+                    c.name.isEmpty ? l10n.t('channel.fallbackName') : c.name,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(c.publicId),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ModeBadge(mode: c.subscriptionMode),
+                      const SizedBox(width: 8),
+                      const CupertinoListTileChevron(),
+                    ],
+                  ),
+                  onTap: () => context.go('/channels/${c.id}'),
                 ),
-              ),
-            ),
-            trailing: ModeBadge(mode: c.subscriptionMode),
-            onTap: () => context.go('/channels/${c.id}'),
+            ],
           ),
-        );
-      },
-    );
+        ),
+      ];
+    }
+
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+        sliver: SliverList.separated(
+          itemCount: channels.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 10),
+          itemBuilder: (context, i) {
+            final c = channels[i];
+            return Card(
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 6,
+                ),
+                title: Text(
+                  c.name.isEmpty ? l10n.t('channel.fallbackName') : c.name,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    c.publicId,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                trailing: ModeBadge(mode: c.subscriptionMode),
+                onTap: () => context.go('/channels/${c.id}'),
+              ),
+            );
+          },
+        ),
+      ),
+    ];
   }
 }

@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,6 +9,7 @@ import '../../core/snackbar.dart';
 import '../../data/app_providers.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
+import '../../widgets/adaptive/adaptive.dart';
 import '../../widgets/error_view.dart';
 import '../../widgets/message_carousel.dart';
 
@@ -121,7 +123,7 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
     });
 
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: AdaptiveProgress());
     }
     if (_error) {
       return ErrorView(
@@ -134,22 +136,30 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: TextField(
-            controller: _search,
-            textInputAction: TextInputAction.search,
-            onSubmitted: (_) => _runSearch(),
-            decoration: InputDecoration(
-              hintText: l10n.t('channel.searchHint'),
-              prefixIcon: const Icon(Icons.search, size: 20),
-              suffixIcon: (_search.text.isNotEmpty || _activeQuery.isNotEmpty)
-                  ? IconButton(
-                      icon: const Icon(Icons.close, size: 18),
-                      onPressed: _clearSearch,
-                    )
-                  : null,
-              isDense: true,
-            ),
-          ),
+          child: isCupertino(context)
+              ? CupertinoSearchTextField(
+                  controller: _search,
+                  placeholder: l10n.t('channel.searchHint'),
+                  onSubmitted: (_) => _runSearch(),
+                  onSuffixTap: _clearSearch,
+                )
+              : TextField(
+                  controller: _search,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) => _runSearch(),
+                  decoration: InputDecoration(
+                    hintText: l10n.t('channel.searchHint'),
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon:
+                        (_search.text.isNotEmpty || _activeQuery.isNotEmpty)
+                        ? IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: _clearSearch,
+                          )
+                        : null,
+                    isDense: true,
+                  ),
+                ),
         ),
         if (_activeQuery.isNotEmpty)
           Padding(
@@ -186,33 +196,40 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
         ),
       );
     }
-    return RefreshIndicator(
+    return AdaptiveRefreshableScrollView(
       onRefresh: () => _load(query: _activeQuery),
-      child: ListView.separated(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        itemCount: _messages.length + (_cursor.isNotEmpty ? 1 : 0),
-        separatorBuilder: (_, _) => const SizedBox(height: 8),
-        itemBuilder: (context, i) {
-          if (i >= _messages.length) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Center(
-                child: _loadingMore
-                    ? const SizedBox(
-                        height: 24,
-                        width: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : OutlinedButton(
-                        onPressed: _loadMore,
-                        child: Text(l10n.t('channel.loadMore')),
-                      ),
-              ),
-            );
-          }
-          return _MessageCard(message: _messages[i]);
-        },
-      ),
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate((context, i) {
+              // Preserve the 8px inter-item spacing the old ListView.separated
+              // provided, without a real separator builder for slivers.
+              final top = i == 0 ? 0.0 : 8.0;
+              if (i >= _messages.length) {
+                return Padding(
+                  padding: EdgeInsets.only(top: top),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Center(
+                      child: _loadingMore
+                          ? const AdaptiveProgress(size: 24)
+                          : AdaptiveButton.outlined(
+                              onPressed: _loadMore,
+                              child: Text(l10n.t('channel.loadMore')),
+                            ),
+                    ),
+                  ),
+                );
+              }
+              return Padding(
+                padding: EdgeInsets.only(top: top),
+                child: _MessageCard(message: _messages[i]),
+              );
+            }, childCount: _messages.length + (_cursor.isNotEmpty ? 1 : 0)),
+          ),
+        ),
+      ],
     );
   }
 }

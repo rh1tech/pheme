@@ -1,6 +1,8 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
+import 'adaptive/adaptive.dart';
 
 /// Centered error state with a retry action, used for failed async loads.
 class ErrorView extends StatelessWidget {
@@ -12,13 +14,17 @@ class ErrorView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final cupertino = isCupertino(context);
+    final icon = cupertino
+        ? CupertinoIcons.wifi_slash
+        : Icons.cloud_off_rounded;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cloud_off_rounded, size: 40, color: scheme.outline),
+            Icon(icon, size: 40, color: scheme.outline),
             const SizedBox(height: 12),
             Text(
               message,
@@ -27,10 +33,9 @@ class ErrorView extends StatelessWidget {
             ),
             if (onRetry != null) ...[
               const SizedBox(height: 16),
-              OutlinedButton.icon(
+              AdaptiveButton.outlined(
                 onPressed: onRetry,
-                icon: const Icon(Icons.refresh_rounded, size: 18),
-                label: Text(context.l10n.t('common.retry')),
+                child: Text(context.l10n.t('common.retry')),
               ),
             ],
           ],

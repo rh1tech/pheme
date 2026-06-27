@@ -1,7 +1,9 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
+import '../widgets/adaptive/adaptive.dart';
 
 /// Bottom sheet that collects a new channel's name and subscription mode.
 /// Returns `(name, mode)` on submit, or null on dismiss.
@@ -26,6 +28,47 @@ class _CreateChannelSheetState extends State<CreateChannelSheet> {
     final name = _name.text.trim();
     if (name.isEmpty) return;
     Navigator.of(context).pop((name: name, mode: _mode));
+  }
+
+  /// Subscription-mode picker: a [CupertinoSlidingSegmentedControl] on iOS and
+  /// a Material [SegmentedButton] on Android. Behaviour is identical — picking a
+  /// segment updates [_mode].
+  Widget _buildModeSelector(AppLocalizations l10n) {
+    if (isCupertino(context)) {
+      return SizedBox(
+        width: double.infinity,
+        child: CupertinoSlidingSegmentedControl<SubscriptionMode>(
+          groupValue: _mode,
+          onValueChanged: (mode) {
+            if (mode != null) setState(() => _mode = mode);
+          },
+          children: {
+            SubscriptionMode.approval: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Text(l10n.t('mode.approval')),
+            ),
+            SubscriptionMode.open: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Text(l10n.t('mode.open')),
+            ),
+          },
+        ),
+      );
+    }
+    return SegmentedButton<SubscriptionMode>(
+      segments: [
+        ButtonSegment(
+          value: SubscriptionMode.approval,
+          label: Text(l10n.t('mode.approval')),
+        ),
+        ButtonSegment(
+          value: SubscriptionMode.open,
+          label: Text(l10n.t('mode.open')),
+        ),
+      ],
+      selected: {_mode},
+      onSelectionChanged: (s) => setState(() => _mode = s.first),
+    );
   }
 
   @override
@@ -60,15 +103,11 @@ class _CreateChannelSheetState extends State<CreateChannelSheet> {
                 ),
               ),
               const SizedBox(height: 16),
-              TextField(
+              AdaptiveTextField(
                 controller: _name,
                 autofocus: true,
-                textInputAction: TextInputAction.done,
+                label: l10n.t('channels.channelName'),
                 onSubmitted: (_) => _submit(),
-                decoration: InputDecoration(
-                  labelText: l10n.t('channels.channelName'),
-                  hintText: l10n.t('channels.channelNamePlaceholder'),
-                ),
               ),
               const SizedBox(height: 16),
               Text(
@@ -76,30 +115,17 @@ class _CreateChannelSheetState extends State<CreateChannelSheet> {
                 style: const TextStyle(fontWeight: FontWeight.w500),
               ),
               const SizedBox(height: 8),
-              SegmentedButton<SubscriptionMode>(
-                segments: [
-                  ButtonSegment(
-                    value: SubscriptionMode.approval,
-                    label: Text(l10n.t('mode.approval')),
-                  ),
-                  ButtonSegment(
-                    value: SubscriptionMode.open,
-                    label: Text(l10n.t('mode.open')),
-                  ),
-                ],
-                selected: {_mode},
-                onSelectionChanged: (s) => setState(() => _mode = s.first),
-              ),
+              _buildModeSelector(l10n),
               const SizedBox(height: 20),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  TextButton(
+                  AdaptiveButton.text(
                     onPressed: () => Navigator.of(context).pop(),
                     child: Text(l10n.t('common.cancel')),
                   ),
                   const SizedBox(width: 8),
-                  FilledButton(
+                  AdaptiveButton.filled(
                     onPressed: _submit,
                     child: Text(l10n.t('channels.create')),
                   ),

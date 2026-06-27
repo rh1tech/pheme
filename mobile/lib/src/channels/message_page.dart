@@ -5,6 +5,7 @@ import '../core/format.dart';
 import '../core/providers.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
+import '../widgets/adaptive/adaptive.dart';
 import '../widgets/error_view.dart';
 import '../widgets/message_carousel.dart';
 
@@ -61,15 +62,15 @@ class _MessagePageState extends ConsumerState<MessagePage> {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.t('channel.messageView'))),
+    return AdaptiveScaffold(
+      title: Text(l10n.t('channel.messageView')),
       body: _body(context, l10n),
     );
   }
 
   Widget _body(BuildContext context, AppLocalizations l10n) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: AdaptiveProgress());
     }
     final message = _message;
     if (_error || message == null) {

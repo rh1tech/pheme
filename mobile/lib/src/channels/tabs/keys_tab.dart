@@ -7,6 +7,7 @@ import '../../core/providers.dart';
 import '../../core/snackbar.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
+import '../../widgets/adaptive/adaptive.dart';
 import '../../widgets/error_view.dart';
 
 /// Manage a channel's API keys: list active keys, create new ones (the secret
@@ -139,7 +140,7 @@ class _KeysTabState extends ConsumerState<KeysTab> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: AdaptiveProgress());
     }
     if (_error) {
       return ErrorView(message: l10n.t('channels.loadFailed'), onRetry: _load);
@@ -150,16 +151,18 @@ class _KeysTabState extends ConsumerState<KeysTab> {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
           child: Align(
             alignment: Alignment.centerRight,
-            child: FilledButton.tonalIcon(
+            child: AdaptiveButton.outlined(
               onPressed: _creating ? null : _create,
-              icon: _creating
-                  ? const SizedBox(
-                      height: 16,
-                      width: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.add, size: 18),
-              label: Text(l10n.t('channel.createKey')),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _creating
+                      ? const AdaptiveProgress(size: 16)
+                      : const Icon(Icons.add, size: 18),
+                  const SizedBox(width: 8),
+                  Text(l10n.t('channel.createKey')),
+                ],
+              ),
             ),
           ),
         ),

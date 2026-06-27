@@ -8,6 +8,7 @@ import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../core/validators.dart';
 import '../l10n/app_localizations.dart';
+import '../widgets/adaptive/adaptive.dart';
 import '../widgets/brand_logo.dart';
 import '../widgets/password_strength_bar.dart';
 
@@ -109,8 +110,7 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    return Scaffold(
-      appBar: AppBar(),
+    return AdaptiveScaffold(
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -122,13 +122,9 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
                 children: [
                   const Center(child: BrandLogo(size: 40)),
                   const SizedBox(height: 28),
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: _codeSent
-                          ? _buildReset(l10n)
-                          : _buildRequest(l10n),
-                    ),
+                  AdaptiveCard(
+                    padding: const EdgeInsets.all(20),
+                    child: _codeSent ? _buildReset(l10n) : _buildRequest(l10n),
                   ),
                 ],
               ),
@@ -153,21 +149,23 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 16),
-        TextField(
+        AdaptiveTextField(
           controller: _email,
           autofocus: true,
           keyboardType: TextInputType.emailAddress,
           autofillHints: const [AutofillHints.email],
-          decoration: InputDecoration(labelText: l10n.t('auth.email')),
+          label: l10n.t('auth.email'),
           onSubmitted: (_) => _requestCode(),
         ),
         const SizedBox(height: 16),
-        FilledButton(
+        AdaptiveButton.filled(
           onPressed: _loading ? null : _requestCode,
-          child: _loading ? const _Spinner() : Text(l10n.t('auth.sendCode')),
+          child: _loading
+              ? const AdaptiveProgress(size: 20)
+              : Text(l10n.t('auth.sendCode')),
         ),
         const SizedBox(height: 8),
-        TextButton(
+        AdaptiveButton.text(
           onPressed: _loading ? null : () => context.pop(),
           child: Text(l10n.t('auth.backToSignIn')),
         ),
@@ -191,43 +189,44 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 16),
-        TextField(
+        AdaptiveTextField(
           controller: _code,
           autofocus: true,
           keyboardType: TextInputType.number,
           maxLength: 6,
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 24, letterSpacing: 8),
-          decoration: const InputDecoration(counterText: ''),
           onChanged: (_) => setState(() {}),
         ),
         const SizedBox(height: 12),
-        TextField(
+        AdaptiveTextField(
           controller: _password,
           obscureText: true,
-          decoration: InputDecoration(labelText: l10n.t('auth.newPassword')),
+          label: l10n.t('auth.newPassword'),
           onChanged: (_) => setState(() {}),
         ),
         PasswordStrengthBar(password: _password.text),
         const SizedBox(height: 16),
-        FilledButton(
+        AdaptiveButton.filled(
           onPressed:
               _loading ||
                   _code.text.trim().length != 6 ||
                   !isPasswordAcceptable(_password.text)
               ? null
               : _submitReset,
-          child: _loading ? const _Spinner() : Text(l10n.t('auth.resetAction')),
+          child: _loading
+              ? const AdaptiveProgress(size: 20)
+              : Text(l10n.t('auth.resetAction')),
         ),
         const SizedBox(height: 8),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            TextButton(
+            AdaptiveButton.text(
               onPressed: _loading ? null : () => context.pop(),
               child: Text(l10n.t('auth.backToSignIn')),
             ),
-            TextButton(
+            AdaptiveButton.text(
               onPressed: _cooldown > 0 || _loading ? null : _resend,
               child: Text(
                 _cooldown > 0
@@ -242,15 +241,4 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
       ],
     );
   }
-}
-
-class _Spinner extends StatelessWidget {
-  const _Spinner();
-
-  @override
-  Widget build(BuildContext context) => const SizedBox(
-    height: 20,
-    width: 20,
-    child: CircularProgressIndicator(strokeWidth: 2),
-  );
 }

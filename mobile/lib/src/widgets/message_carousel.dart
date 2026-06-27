@@ -54,8 +54,11 @@ class MessageCover extends ConsumerWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.photo_library_outlined,
-                      size: 13, color: Colors.white),
+                  const Icon(
+                    Icons.photo_library_outlined,
+                    size: 13,
+                    color: Colors.white,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     '${images.length}',
@@ -121,8 +124,9 @@ class _MessageCarouselState extends ConsumerState<MessageCarousel> {
                     margin: const EdgeInsets.symmetric(horizontal: 3),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color:
-                          i == _current ? scheme.primary : scheme.outlineVariant,
+                      color: i == _current
+                          ? scheme.primary
+                          : scheme.outlineVariant,
                     ),
                   ),
               ],
