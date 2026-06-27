@@ -3,6 +3,7 @@
 // for the Pheme device registry.
 
 import { api } from './api'
+import { SERVICE_WORKER_URL } from './sw'
 
 /** Reports whether the browser supports Web Push. */
 export function webPushSupported(): boolean {
@@ -109,7 +110,7 @@ export async function registerWebPushDevice(): Promise<string> {
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') throw new Error('notification permission denied')
 
-  const registration = await navigator.serviceWorker.register('/sw.js')
+  const registration = await navigator.serviceWorker.register(SERVICE_WORKER_URL)
   await navigator.serviceWorker.ready
 
   // Reuse an existing subscription only if it was created with the current
