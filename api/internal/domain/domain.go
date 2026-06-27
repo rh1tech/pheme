@@ -119,12 +119,23 @@ type Subscription struct {
 	CreatedAt time.Time          `bson:"createdAt" json:"createdAt"`
 }
 
-// Message is a persisted notification belonging to a channel.
+// MessageImage references a processed image stored in the blob store. Width and
+// Height are the final pixel dimensions, letting clients reserve aspect ratio
+// before the image loads (avoiding layout shift).
+type MessageImage struct {
+	ID     string `bson:"id" json:"id"`
+	Width  int    `bson:"width" json:"width"`
+	Height int    `bson:"height" json:"height"`
+}
+
+// Message is a persisted notification belonging to a channel. Images, when
+// present, are shown before the text (Instagram-style).
 type Message struct {
 	ID        string            `bson:"_id,omitempty" json:"id"`
 	ChannelID string            `bson:"channelId" json:"channelId"`
 	Title     string            `bson:"title" json:"title"`
 	Body      string            `bson:"body" json:"body"`
+	Images    []MessageImage    `bson:"images,omitempty" json:"images,omitempty"`
 	Data      map[string]string `bson:"data,omitempty" json:"data,omitempty"`
 	CreatedAt time.Time         `bson:"createdAt" json:"createdAt"`
 }
@@ -140,10 +151,13 @@ type Delivery struct {
 }
 
 // NotifyTask is the payload enqueued on the broker for the dispatcher to process.
+// Images carries already-processed blob references (ids + dimensions) only — image
+// bytes are stored before enqueue, so the broker payload stays small.
 type NotifyTask struct {
 	ChannelID      string            `json:"channelId"`
 	Title          string            `json:"title"`
 	Body           string            `json:"body"`
+	Images         []MessageImage    `json:"images,omitempty"`
 	Data           map[string]string `json:"data,omitempty"`
 	IdempotencyKey string            `json:"idempotencyKey,omitempty"`
 	EnqueuedAt     time.Time         `json:"enqueuedAt"`

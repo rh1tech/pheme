@@ -28,6 +28,11 @@ func main() {
 		logger.Error("store init", "error", err)
 		os.Exit(1)
 	}
+	blobs, err := b.Blob(ctx)
+	if err != nil {
+		logger.Error("blob init", "error", err)
+		os.Exit(1)
+	}
 	pub, err := b.Publisher()
 	if err != nil {
 		logger.Error("publisher init", "error", err)
@@ -35,7 +40,7 @@ func main() {
 	}
 	limiter := b.Limiter()
 
-	h := &channel.IngestHandler{Store: db, Publisher: pub, Limiter: limiter}
+	h := &channel.IngestHandler{Store: db, Publisher: pub, Limiter: limiter, Blob: blobs}
 	mux := http.NewServeMux()
 	h.Routes(mux)
 

@@ -59,13 +59,18 @@ interface RequestOptions {
 }
 
 async function rawFetch<T>(path: string, opts: RequestOptions, token?: string): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const isForm = opts.body instanceof FormData
+  const headers: Record<string, string> = {}
+  // For FormData the browser sets Content-Type (with the multipart boundary);
+  // setting it manually would break the upload.
+  if (!isForm) headers['Content-Type'] = 'application/json'
   if (token) headers.Authorization = `Bearer ${token}`
 
   const res = await fetch(`${BASE}${path}`, {
     method: opts.method ?? 'GET',
     headers,
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+    body:
+      opts.body === undefined ? undefined : isForm ? (opts.body as FormData) : JSON.stringify(opts.body),
   })
 
   if (res.status === 204) return undefined as T
@@ -166,9 +171,18 @@ export const api = {
   revokeKey: (channelId: string, keyId: string) =>
     request<unknown>(`/v1/channels/${channelId}/keys/${keyId}`, { method: 'DELETE' }),
 
-  // Send a message from the authenticated UI (owner only)
-  notifyChannel: (channelId: string, title: string, body: string) =>
-    request<unknown>(`/v1/channels/${channelId}/notify`, { method: 'POST', body: { title, body } }),
+  // Send a message from the authenticated UI (owner only). With images, the body
+  // is sent as multipart/form-data; text-only sends stay JSON.
+  notifyChannel: (channelId: string, title: string, body: string, images: File[] = []) => {
+    if (images.length === 0) {
+      return request<unknown>(`/v1/channels/${channelId}/notify`, { method: 'POST', body: { title, body } })
+    }
+    const form = new FormData()
+    form.set('title', title)
+    form.set('body', body)
+    for (const file of images) form.append('images', file)
+    return request<unknown>(`/v1/channels/${channelId}/notify`, { method: 'POST', body: form })
+  },
 
   // Devices & subscriptions
   createDevice: (body: { platform: Platform; fcmToken?: string; webPushSub?: string }) =>
@@ -235,6 +249,11 @@ export const api = {
     request<{ keys: ApiKey[] }>(`/v1/admin/channels/${channelId}/keys`).then((r) => r.keys ?? []),
   adminRevokeKey: (channelId: string, keyId: string) =>
     request<unknown>(`/v1/admin/channels/${channelId}/keys/${keyId}`, { method: 'DELETE' }),
+}
+
+/** Absolute URL of a processed message image (served publicly by the App API). */
+export function imageUrl(id: string): string {
+  return `${BASE}/v1/images/${id}`
 }
 
 /** Builds the SSE stream URL with the current access token as a query parameter. */

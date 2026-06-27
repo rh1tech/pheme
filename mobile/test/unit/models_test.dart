@@ -73,6 +73,25 @@ void main() {
     test('data is null when absent', () {
       expect(Message.fromJson({'id': 'm1'}).data, isNull);
     });
+
+    test('parses images with dimensions', () {
+      final m = Message.fromJson({
+        'id': 'm1',
+        'images': [
+          {'id': 'img1', 'width': 1000, 'height': 562},
+          {'id': 'img2', 'width': 800, 'height': 800},
+        ],
+      });
+      expect(m.images, hasLength(2));
+      expect(m.images.first.id, 'img1');
+      expect(m.images.first.width, 1000);
+      expect(m.images.first.aspectRatio, closeTo(1000 / 562, 0.001));
+      expect(m.images[1].aspectRatio, 1);
+    });
+
+    test('images defaults to empty list when absent', () {
+      expect(Message.fromJson({'id': 'm1'}).images, isEmpty);
+    });
   });
 
   group('ApiKey', () {

@@ -57,7 +57,7 @@ func seedUser(t *testing.T, db store.Store, email string, role domain.Role) doma
 }
 
 func TestAdminCreateUserHappyPath(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
 
@@ -89,7 +89,7 @@ func TestAdminCreateUserHappyPath(t *testing.T) {
 }
 
 func TestAdminCreateUserAsAdminRole(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
 
@@ -106,7 +106,7 @@ func TestAdminCreateUserAsAdminRole(t *testing.T) {
 }
 
 func TestAdminCreateUserValidation(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
 	seedUser(t, db, "taken@b.com", domain.RoleUser)
@@ -132,7 +132,7 @@ func TestAdminCreateUserValidation(t *testing.T) {
 }
 
 func TestAdminCreateUserForbiddenForNonAdmin(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	user := seedUser(t, db, "user@b.com", domain.RoleUser)
 
@@ -144,7 +144,7 @@ func TestAdminCreateUserForbiddenForNonAdmin(t *testing.T) {
 }
 
 func TestAdminListUsersCountsChannels(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
 	owner := seedUser(t, db, "owner@b.com", domain.RoleUser)
@@ -178,7 +178,7 @@ func TestAdminListUsersCountsChannels(t *testing.T) {
 }
 
 func TestAdminUpdateUserRoleAndStatus(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
 	target := seedUser(t, db, "target@b.com", domain.RoleUser)
@@ -207,7 +207,7 @@ func TestAdminUpdateUserRoleAndStatus(t *testing.T) {
 }
 
 func TestAdminCannotChangeOwnRole(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
 
@@ -220,7 +220,7 @@ func TestAdminCannotChangeOwnRole(t *testing.T) {
 }
 
 func TestAdminResetUserPassword(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
 	target := seedUser(t, db, "target@b.com", domain.RoleUser)
@@ -245,7 +245,7 @@ func TestAdminResetUserPassword(t *testing.T) {
 }
 
 func TestAdminDeleteUser(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
 	target := seedUser(t, db, "target@b.com", domain.RoleUser)
@@ -267,7 +267,7 @@ func TestAdminDeleteUser(t *testing.T) {
 }
 
 func TestAdminChannelLifecycle(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
 	owner := seedUser(t, db, "owner@b.com", domain.RoleUser)
@@ -309,7 +309,7 @@ func TestAdminChannelLifecycle(t *testing.T) {
 }
 
 func TestAdminEndpointsRejectNonAdmin(t *testing.T) {
-	db := store.NewMemory()
+	db := store.NewMemory(nil)
 	mux := adminMux(db)
 	user := seedUser(t, db, "user@b.com", domain.RoleUser)
 

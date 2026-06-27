@@ -35,7 +35,7 @@ func (c *captureMailer) code() string { return sixDigits.FindString(c.body) }
 func newTestAuth() (*AuthHandler, *captureMailer, *http.ServeMux) {
 	mail := &captureMailer{}
 	h := &AuthHandler{
-		Store:  store.NewMemory(),
+		Store:  store.NewMemory(nil),
 		Tokens: auth.NewTokenManager("test-secret", 15*time.Minute, 24*time.Hour),
 		Codes:  otp.NewMemory(),
 		Mailer: mail,

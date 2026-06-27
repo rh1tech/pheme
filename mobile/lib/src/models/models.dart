@@ -85,6 +85,24 @@ class Channel {
   );
 }
 
+/// A processed image attached to a message. Width/height are the final pixel
+/// dimensions, used to reserve aspect ratio before the image loads.
+class MessageImage {
+  MessageImage({required this.id, required this.width, required this.height});
+
+  final String id;
+  final int width;
+  final int height;
+
+  double get aspectRatio => height > 0 ? width / height : 1;
+
+  factory MessageImage.fromJson(Map<String, dynamic> j) => MessageImage(
+    id: j['id'] as String? ?? '',
+    width: (j['width'] as num?)?.toInt() ?? 0,
+    height: (j['height'] as num?)?.toInt() ?? 0,
+  );
+}
+
 class Message {
   Message({
     required this.id,
@@ -92,6 +110,7 @@ class Message {
     required this.title,
     required this.body,
     required this.createdAt,
+    this.images = const [],
     this.data,
   });
 
@@ -100,6 +119,7 @@ class Message {
   final String title;
   final String body;
   final String createdAt;
+  final List<MessageImage> images;
   final Map<String, dynamic>? data;
 
   factory Message.fromJson(Map<String, dynamic> j) => Message(
@@ -108,6 +128,9 @@ class Message {
     title: j['title'] as String? ?? '',
     body: j['body'] as String? ?? '',
     createdAt: j['createdAt'] as String? ?? '',
+    images: ((j['images'] as List?) ?? const [])
+        .map((e) => MessageImage.fromJson((e as Map).cast<String, dynamic>()))
+        .toList(),
     data: (j['data'] as Map?)?.cast<String, dynamic>(),
   );
 }

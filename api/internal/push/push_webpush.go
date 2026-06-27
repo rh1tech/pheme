@@ -16,27 +16,30 @@ import (
 // using VAPID authentication. A device's WebPushSub field holds the JSON
 // PushSubscription produced by the browser.
 type WebPushSender struct {
-	vapidPublic  string
-	vapidPrivate string
-	subscriber   string // mailto: or URL contact, per VAPID spec
+	vapidPublic   string
+	vapidPrivate  string
+	subscriber    string // mailto: or URL contact, per VAPID spec
+	publicBaseURL string
 }
 
 // NewWebPushSender configures a sender with the server's VAPID key pair and
-// subscriber contact.
-func NewWebPushSender(vapidPublic, vapidPrivate, subscriber string) *WebPushSender {
-	return &WebPushSender{vapidPublic: vapidPublic, vapidPrivate: vapidPrivate, subscriber: subscriber}
+// subscriber contact. publicBaseURL (may be empty) is the base used to build
+// absolute image URLs for notifications.
+func NewWebPushSender(vapidPublic, vapidPrivate, subscriber, publicBaseURL string) *WebPushSender {
+	return &WebPushSender{vapidPublic: vapidPublic, vapidPrivate: vapidPrivate, subscriber: subscriber, publicBaseURL: publicBaseURL}
 }
 
 type webPushPayload struct {
 	Title string            `json:"title"`
 	Body  string            `json:"body"`
+	Image string            `json:"image,omitempty"`
 	Data  map[string]string `json:"data,omitempty"`
 }
 
 // Send delivers msg to each device with a Web Push subscription. Devices without
 // one are reported as skipped.
 func (s *WebPushSender) Send(ctx context.Context, msg domain.Message, devices []domain.Device) ([]Result, error) {
-	payload, err := json.Marshal(webPushPayload{Title: msg.Title, Body: msg.Body, Data: msg.Data})
+	payload, err := json.Marshal(webPushPayload{Title: msg.Title, Body: msg.Body, Image: imageURL(s.publicBaseURL, msg), Data: msg.Data})
 	if err != nil {
 		return nil, err
 	}

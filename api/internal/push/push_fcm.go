@@ -14,12 +14,14 @@ import (
 // FCMSender delivers notifications to devices that have an FCM registration
 // token (Android, iOS via APNs, and Chrome/Firefox web when using FCM).
 type FCMSender struct {
-	client *messaging.Client
+	client        *messaging.Client
+	publicBaseURL string
 }
 
 // NewFCMSender initialises the Firebase Admin messaging client from a
-// service-account credentials file.
-func NewFCMSender(ctx context.Context, credentialsFile string) (*FCMSender, error) {
+// service-account credentials file. publicBaseURL (may be empty) is the base used
+// to build absolute image URLs for notifications.
+func NewFCMSender(ctx context.Context, credentialsFile, publicBaseURL string) (*FCMSender, error) {
 	app, err := firebase.NewApp(ctx, nil, option.WithCredentialsFile(credentialsFile))
 	if err != nil {
 		return nil, fmt.Errorf("firebase init: %w", err)
@@ -28,7 +30,7 @@ func NewFCMSender(ctx context.Context, credentialsFile string) (*FCMSender, erro
 	if err != nil {
 		return nil, fmt.Errorf("firebase messaging: %w", err)
 	}
-	return &FCMSender{client: client}, nil
+	return &FCMSender{client: client, publicBaseURL: publicBaseURL}, nil
 }
 
 // Send delivers msg to each device with an FCM token using a single batch
@@ -38,6 +40,7 @@ func (s *FCMSender) Send(ctx context.Context, msg domain.Message, devices []doma
 	var batch []*messaging.Message
 	var batched []string // device IDs aligned with batch order
 
+	img := imageURL(s.publicBaseURL, msg)
 	for _, d := range devices {
 		if d.FCMToken == "" {
 			results = append(results, Result{DeviceID: d.ID, Status: domain.DeliverySkipped})
@@ -45,7 +48,7 @@ func (s *FCMSender) Send(ctx context.Context, msg domain.Message, devices []doma
 		}
 		batch = append(batch, &messaging.Message{
 			Token:        d.FCMToken,
-			Notification: &messaging.Notification{Title: msg.Title, Body: msg.Body},
+			Notification: &messaging.Notification{Title: msg.Title, Body: msg.Body, ImageURL: img},
 			Data:         msg.Data,
 		})
 		batched = append(batched, d.ID)

@@ -39,6 +39,7 @@ func (d *Dispatcher) Handle(ctx context.Context, task domain.NotifyTask) error {
 		ChannelID: task.ChannelID,
 		Title:     task.Title,
 		Body:      task.Body,
+		Images:    task.Images,
 		Data:      task.Data,
 		CreatedAt: time.Now().UTC(),
 	})

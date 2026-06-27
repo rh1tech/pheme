@@ -37,6 +37,11 @@ type Config struct {
 	VAPIDPrivateKey    string
 	VAPIDSubject       string // VAPID contact: an https: URL or mailto: address. Apple Web Push requires an https: URL (it rejects mailto: with 403 BadJwtToken).
 
+	// PublicAPIURL is the externally reachable base URL of the App API (e.g.
+	// "https://pheme-api.rh1.tech"), used to build absolute image URLs for push
+	// notifications. Empty disables notification images (history still carries them).
+	PublicAPIURL string
+
 	// Email (transactional mail: verification + password-reset codes)
 	MailDriver      string // log | smtp
 	SMTPHost        string
@@ -65,6 +70,7 @@ type Config struct {
 	// implementation so the services run without external infrastructure.
 	// Switch to the real adapters once the docker-compose stack is running.
 	StoreDriver     string // memory | mongo
+	BlobDriver      string // memory | gridfs
 	BrokerDriver    string // memory | rabbit
 	LiveDriver      string // memory | redis
 	RateLimitDriver string // memory | redis
@@ -96,6 +102,8 @@ func Load() Config {
 		VAPIDPrivateKey:    env("PHEME_VAPID_PRIVATE", ""),
 		VAPIDSubject:       env("PHEME_VAPID_SUBJECT", "https://app.example.com"),
 
+		PublicAPIURL: env("PHEME_PUBLIC_API_URL", ""),
+
 		MailDriver:      env("PHEME_MAIL_DRIVER", "log"),
 		SMTPHost:        env("PHEME_SMTP_HOST", "localhost"),
 		SMTPPort:        envInt("PHEME_SMTP_PORT", 25),
@@ -114,6 +122,7 @@ func Load() Config {
 		SeedAdminPassword: env("PHEME_SEED_ADMIN_PASSWORD", ""),
 
 		StoreDriver:     env("PHEME_STORE_DRIVER", "memory"),
+		BlobDriver:      env("PHEME_BLOB_DRIVER", "memory"),
 		BrokerDriver:    env("PHEME_BROKER_DRIVER", "memory"),
 		LiveDriver:      env("PHEME_LIVE_DRIVER", "memory"),
 		RateLimitDriver: env("PHEME_RATELIMIT_DRIVER", "memory"),

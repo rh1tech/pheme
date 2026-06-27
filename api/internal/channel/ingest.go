@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/broker"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
@@ -19,18 +20,13 @@ type IngestHandler struct {
 	Store     store.Store
 	Publisher broker.Publisher
 	Limiter   ratelimit.Limiter
+	Blob      blob.Store
 }
 
 // Routes registers the ingest endpoints on a mux.
 func (h *IngestHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", httpx.Health("ingest"))
 	mux.HandleFunc("POST /v1/ingest/{channelId}/notify", h.notify)
-}
-
-type notifyRequest struct {
-	Title string            `json:"title"`
-	Body  string            `json:"body"`
-	Data  map[string]string `json:"data,omitempty"`
 }
 
 func (h *IngestHandler) notify(w http.ResponseWriter, r *http.Request) {
@@ -64,20 +60,21 @@ func (h *IngestHandler) notify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req notifyRequest
-	if !httpx.Decode(w, r, &req) {
+	in, ok := decodeNotify(w, r, h.Blob)
+	if !ok {
 		return
 	}
-	if strings.TrimSpace(req.Title) == "" && strings.TrimSpace(req.Body) == "" {
-		httpx.Error(w, http.StatusBadRequest, "title or body is required")
+	if strings.TrimSpace(in.Title) == "" && strings.TrimSpace(in.Body) == "" && len(in.Images) == 0 {
+		httpx.Error(w, http.StatusBadRequest, "title, body or an image is required")
 		return
 	}
 
 	task := domain.NotifyTask{
 		ChannelID:      ch.ID,
-		Title:          req.Title,
-		Body:           req.Body,
-		Data:           req.Data,
+		Title:          in.Title,
+		Body:           in.Body,
+		Images:         in.Images,
+		Data:           in.Data,
 		IdempotencyKey: strings.TrimSpace(r.Header.Get("Idempotency-Key")),
 		EnqueuedAt:     time.Now().UTC(),
 	}

@@ -23,8 +23,9 @@ Three Go services share one module and one set of `internal/` packages:
 | Ingest API   | `cmd/ingest`     | Channel API key | accept website triggers, rate-limit, enqueue |
 | Dispatcher   | `cmd/dispatcher` | —               | consume queue → persist message → fan-out push → record deliveries → emit live event |
 
-Infrastructure: **MongoDB** (persistence), **RabbitMQ** (durable queue + DLQ),
-**Redis** (rate limiting + pub/sub for live events), **FCM + Web Push** (delivery).
+Infrastructure: **MongoDB** (persistence, incl. **GridFS** for message images),
+**RabbitMQ** (durable queue + DLQ), **Redis** (rate limiting + pub/sub for live
+events), **FCM + Web Push** (delivery).
 
 **Trigger flow:** `website → Ingest (X-Api-Key) → RabbitMQ → Dispatcher →
 Mongo (history) → Redis pub/sub → App API SSE → browser`, and in parallel
@@ -50,8 +51,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and data model.
 api/          Go module github.com/rh1tech/pheme/api
   cmd/        app, ingest, dispatcher, vapidgen (entrypoints)
   internal/
-    domain/   core entities (User, Channel, APIKey, Device, Subscription, Message, …)
-    store/    Store interface + Memory and Mongo implementations
+    domain/   core entities (User, Channel, APIKey, Device, Subscription, Message, MessageImage, …)
+    store/    Store interface + Memory and Mongo implementations (cascades image-blob deletes)
+    blob/     blob Store interface + Memory and GridFS (processed message images)
+    imaging/  server-side image processing (decode, EXIF-orient, downscale ≤1000px, re-encode JPEG)
     broker/   Publisher/Consumer interface + Memory and RabbitMQ
     live/     live event Bus + Memory and Redis pub/sub
     ratelimit/ Limiter + in-memory and Redis token bucket
@@ -59,7 +62,7 @@ api/          Go module github.com/rh1tech/pheme/api
     email/    transactional mail Sender + LogSender and SMTPSender (verification/reset codes)
     otp/      verification-code Store (Memory + Redis): pending signups, reset codes, send cooldowns
     auth/     Argon2id passwords, password strength policy, JWT tokens, bearer middleware
-    channel/  HTTP handlers: app.go, ingest.go, auth_handler.go, admin_handler.go
+    channel/  HTTP handlers: app.go, ingest.go, auth_handler.go, admin_handler.go, notify_input.go (shared JSON/multipart parsing + image processing)
     config/   env-driven Config
     httpx/    small HTTP helpers (JSON, Error, Decode, Health)
     bootstrap/ assembles dependencies from Config
@@ -204,7 +207,7 @@ mobile WebKit. Scenarios cover the login/auth guard; the full admin user
 lifecycle (create, create-as-admin, promote/demote, block/unblock, the blocked
 user being unable to log in, password reset, delete); admin channel
 disable/enable and delete; and the owner flows of channel creation, API-key
-(token) creation and sending a message.
+(token) creation, sending a message, and attaching an image to a message.
 
 ```bash
 make e2e-install  # one-time: npm ci + playwright browsers

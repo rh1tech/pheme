@@ -58,12 +58,17 @@ services:
       redis: { condition: service_healthy }
     environment: &service_env
       PHEME_STORE_DRIVER: mongo
+      # Message images are stored in MongoDB GridFS (same Mongo as the store).
+      PHEME_BLOB_DRIVER: gridfs
       PHEME_BROKER_DRIVER: rabbit
       PHEME_LIVE_DRIVER: redis
       PHEME_RATELIMIT_DRIVER: redis
       PHEME_PUSH_DRIVER: webpush
       PHEME_MONGO_URI: "mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/?authSource=admin"
       PHEME_MONGO_DB: pheme
+      # Absolute App API base for image URLs in push notifications (reuses the
+      # same public API base the web container is built against).
+      PHEME_PUBLIC_API_URL: ${PHEME_API_BASE}
       PHEME_RABBIT_URI: "amqp://${RABBIT_USER}:${RABBIT_PASS}@rabbitmq:5672/"
       PHEME_REDIS_ADDR: "redis:6379"
       PHEME_JWT_SECRET: ${PHEME_JWT_SECRET}

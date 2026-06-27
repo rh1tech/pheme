@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/broker"
 	"github.com/rh1tech/pheme/api/internal/config"
 	mailer "github.com/rh1tech/pheme/api/internal/email"
@@ -28,6 +29,7 @@ type Builder struct {
 	cfg    config.Config
 	logger *slog.Logger
 	redis  *redis.Client
+	blob   blob.Store
 }
 
 // New returns a Builder for the given configuration.
@@ -45,15 +47,42 @@ func (b *Builder) redisClient() *redis.Client {
 	return b.redis
 }
 
-// Store builds the configured persistence backend.
+// Blob builds (and caches) the configured blob store for processed images.
+func (b *Builder) Blob(ctx context.Context) (blob.Store, error) {
+	if b.blob != nil {
+		return b.blob, nil
+	}
+	switch b.cfg.BlobDriver {
+	case "gridfs":
+		b.logger.Info("blob: gridfs", "db", b.cfg.MongoDB)
+		bs, err := blob.NewGridFS(ctx, b.cfg.MongoURI, b.cfg.MongoDB)
+		if err != nil {
+			return nil, err
+		}
+		b.blob = bs
+	case "memory", "":
+		b.logger.Info("blob: in-memory")
+		b.blob = blob.NewMemory()
+	default:
+		return nil, fmt.Errorf("unknown blob driver %q", b.cfg.BlobDriver)
+	}
+	return b.blob, nil
+}
+
+// Store builds the configured persistence backend. The blob store is threaded in
+// so cascade deletes can remove a deleted message's images.
 func (b *Builder) Store(ctx context.Context) (store.Store, error) {
+	bs, err := b.Blob(ctx)
+	if err != nil {
+		return nil, err
+	}
 	switch b.cfg.StoreDriver {
 	case "mongo":
 		b.logger.Info("store: mongodb", "db", b.cfg.MongoDB)
-		return store.NewMongo(ctx, b.cfg.MongoURI, b.cfg.MongoDB)
+		return store.NewMongo(ctx, b.cfg.MongoURI, b.cfg.MongoDB, bs)
 	case "memory", "":
 		b.logger.Info("store: in-memory")
-		return store.NewMemory(), nil
+		return store.NewMemory(bs), nil
 	default:
 		return nil, fmt.Errorf("unknown store driver %q", b.cfg.StoreDriver)
 	}
@@ -118,15 +147,15 @@ func (b *Builder) Limiter() ratelimit.Limiter {
 func (b *Builder) Push(ctx context.Context) (push.Sender, error) {
 	switch b.cfg.PushDriver {
 	case "fcm":
-		return push.NewFCMSender(ctx, b.cfg.FCMCredentialsFile)
+		return push.NewFCMSender(ctx, b.cfg.FCMCredentialsFile, b.cfg.PublicAPIURL)
 	case "webpush":
-		return push.NewWebPushSender(b.cfg.VAPIDPublicKey, b.cfg.VAPIDPrivateKey, b.cfg.VAPIDSubject), nil
+		return push.NewWebPushSender(b.cfg.VAPIDPublicKey, b.cfg.VAPIDPrivateKey, b.cfg.VAPIDSubject, b.cfg.PublicAPIURL), nil
 	case "both":
-		fcm, err := push.NewFCMSender(ctx, b.cfg.FCMCredentialsFile)
+		fcm, err := push.NewFCMSender(ctx, b.cfg.FCMCredentialsFile, b.cfg.PublicAPIURL)
 		if err != nil {
 			return nil, err
 		}
-		web := push.NewWebPushSender(b.cfg.VAPIDPublicKey, b.cfg.VAPIDPrivateKey, b.cfg.VAPIDSubject)
+		web := push.NewWebPushSender(b.cfg.VAPIDPublicKey, b.cfg.VAPIDPrivateKey, b.cfg.VAPIDSubject, b.cfg.PublicAPIURL)
 		return push.NewMultiSender(fcm, web), nil
 	case "log", "":
 		b.logger.Info("push: log (no-op)")
@@ -168,8 +197,11 @@ func (b *Builder) Tokens() *auth.TokenManager {
 	return auth.NewTokenManager(b.cfg.JWTSecret, b.cfg.AccessTokenTTL, b.cfg.RefreshTokenTTL)
 }
 
-// Close releases shared resources (currently the cached Redis client).
+// Close releases shared resources (the cached Redis client and blob store).
 func (b *Builder) Close() error {
+	if b.blob != nil {
+		_ = b.blob.Close(context.Background())
+	}
 	if b.redis != nil {
 		return b.redis.Close()
 	}

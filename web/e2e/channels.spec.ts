@@ -33,3 +33,28 @@ test('owner can send a message from the UI', async ({ page }) => {
 
   await expect(page.getByText('Message sent')).toBeVisible()
 })
+
+// A small valid 8x8 PNG, uploaded and processed (re-encoded as JPEG) server-side.
+const TEST_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAHElEQVR4nGJhYKhQYGDARCwgAhsYnBKAAAAA//9knwJZeWr4nQAAAABJRU5ErkJggg==',
+  'base64',
+)
+
+test('owner can attach an image and send', async ({ page }) => {
+  await createChannel(page, `Photos ${Date.now()}`)
+
+  await page.getByRole('tab', { name: 'Send' }).click()
+
+  // The Mantine FileButton renders a hidden file input; set files directly.
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'photo.png',
+    mimeType: 'image/png',
+    buffer: TEST_PNG,
+  })
+
+  // The selected image shows as a removable preview thumbnail.
+  await expect(page.getByRole('button', { name: 'Remove image' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(page.getByText('Message sent')).toBeVisible()
+})

@@ -22,6 +22,7 @@ self.addEventListener('push', (event) => {
   const title = payload.title || 'Pheme'
   const options = {
     body: payload.body || '',
+    image: payload.image || undefined,
     tag: payload.data && payload.data.channelId ? payload.data.channelId : undefined,
     renotify: true,
     data: payload.data || {},

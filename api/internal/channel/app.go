@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/broker"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
@@ -22,6 +23,7 @@ type AppHandler struct {
 	Live           live.Bus
 	Tokens         *auth.TokenManager
 	Publisher      broker.Publisher
+	Blob           blob.Store
 	Admin          *AdminHandler
 	VAPIDPublicKey string
 }
@@ -33,6 +35,10 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", httpx.Health("app"))
 	mux.HandleFunc("GET /v1/meta", h.meta)
 	mux.HandleFunc("GET /v1/stream", h.stream)
+	// Public so devices and <img>/notification fetches need no bearer token; the
+	// blob id is unguessable. This mirrors message history, already readable by
+	// any authenticated user.
+	mux.HandleFunc("GET /v1/images/{id}", h.serveImage)
 
 	protected := http.NewServeMux()
 	protected.HandleFunc("POST /v1/channels", h.createChannel)
@@ -263,15 +269,10 @@ func (h *AppHandler) revokeKey(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"status": "revoked", "id": keyID})
 }
 
-type notifyChannelRequest struct {
-	Title string            `json:"title"`
-	Body  string            `json:"body"`
-	Data  map[string]string `json:"data,omitempty"`
-}
-
 // notifyChannel lets a channel owner send a message from the authenticated UI,
-// without an API key. It enqueues the same NotifyTask the public ingest endpoint
-// produces, so delivery follows the identical pipeline.
+// without an API key. It accepts JSON (text only) or multipart/form-data (text +
+// images), then enqueues the same NotifyTask the public ingest endpoint produces,
+// so delivery follows the identical pipeline.
 func (h *AppHandler) notifyChannel(w http.ResponseWriter, r *http.Request) {
 	uid, ok := h.requireUser(w, r)
 	if !ok {
@@ -287,12 +288,12 @@ func (h *AppHandler) notifyChannel(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "channel is disabled")
 		return
 	}
-	var req notifyChannelRequest
-	if !httpx.Decode(w, r, &req) {
+	in, ok := decodeNotify(w, r, h.Blob)
+	if !ok {
 		return
 	}
-	if req.Title == "" && req.Body == "" {
-		httpx.Error(w, http.StatusBadRequest, "title or body is required")
+	if in.Title == "" && in.Body == "" && len(in.Images) == 0 {
+		httpx.Error(w, http.StatusBadRequest, "title, body or an image is required")
 		return
 	}
 	if h.Publisher == nil {
@@ -301,9 +302,10 @@ func (h *AppHandler) notifyChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	task := domain.NotifyTask{
 		ChannelID:  channelID,
-		Title:      req.Title,
-		Body:       req.Body,
-		Data:       req.Data,
+		Title:      in.Title,
+		Body:       in.Body,
+		Images:     in.Images,
+		Data:       in.Data,
 		EnqueuedAt: time.Now().UTC(),
 	}
 	if err := h.Publisher.Publish(r.Context(), task); err != nil {
@@ -311,6 +313,20 @@ func (h *AppHandler) notifyChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+// serveImage streams a processed image blob by id. Public by design (see Routes).
+func (h *AppHandler) serveImage(w http.ResponseWriter, r *http.Request) {
+	if h.Blob == nil {
+		httpx.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	data, contentType, err := h.Blob.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	httpx.Binary(w, contentType, data)
 }
 
 type createDeviceRequest struct {

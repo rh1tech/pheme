@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
 
@@ -23,10 +24,12 @@ type Memory struct {
 	subscriptions map[string]domain.Subscription
 	messages      map[string]domain.Message
 	deliveries    map[string]domain.Delivery
+	blobs         blob.Store
 }
 
-// NewMemory returns an initialised in-memory store.
-func NewMemory() *Memory {
+// NewMemory returns an initialised in-memory store. The blob store (may be nil)
+// is used to remove a deleted message's images during cascade deletes.
+func NewMemory(blobs blob.Store) *Memory {
 	return &Memory{
 		users:         map[string]domain.User{},
 		channels:      map[string]domain.Channel{},
@@ -35,6 +38,7 @@ func NewMemory() *Memory {
 		subscriptions: map[string]domain.Subscription{},
 		messages:      map[string]domain.Message{},
 		deliveries:    map[string]domain.Delivery{},
+		blobs:         blobs,
 	}
 }
 
@@ -238,10 +242,10 @@ func (m *Memory) UpdateChannelStatus(_ context.Context, id string, status domain
 	return c, nil
 }
 
-func (m *Memory) DeleteChannel(_ context.Context, id string) error {
+func (m *Memory) DeleteChannel(ctx context.Context, id string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if _, ok := m.channels[id]; !ok {
+		m.mu.Unlock()
 		return ErrNotFound
 	}
 	delete(m.channels, id)
@@ -256,9 +260,13 @@ func (m *Memory) DeleteChannel(_ context.Context, id string) error {
 		}
 	}
 	msgIDs := map[string]struct{}{}
+	var imageIDs []string
 	for mid, msg := range m.messages {
 		if msg.ChannelID == id {
 			msgIDs[mid] = struct{}{}
+			for _, img := range msg.Images {
+				imageIDs = append(imageIDs, img.ID)
+			}
 			delete(m.messages, mid)
 		}
 	}
@@ -267,6 +275,9 @@ func (m *Memory) DeleteChannel(_ context.Context, id string) error {
 			delete(m.deliveries, did)
 		}
 	}
+	m.mu.Unlock()
+	// Remove image blobs outside the lock (the blob store may do I/O).
+	deleteBlobs(ctx, m.blobs, imageIDs)
 	return nil
 }
 

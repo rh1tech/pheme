@@ -5,6 +5,7 @@ package push
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
@@ -19,6 +20,15 @@ type Result struct {
 // Sender delivers a message to a set of devices and reports per-device results.
 type Sender interface {
 	Send(ctx context.Context, msg domain.Message, devices []domain.Device) ([]Result, error)
+}
+
+// imageURL returns the absolute URL of a message's first image, or "" when the
+// message has no images or no public base URL is configured.
+func imageURL(publicBaseURL string, msg domain.Message) string {
+	if publicBaseURL == "" || len(msg.Images) == 0 {
+		return ""
+	}
+	return strings.TrimRight(publicBaseURL, "/") + "/v1/images/" + msg.Images[0].ID
 }
 
 // LogSender is a development Sender that logs instead of delivering. Every

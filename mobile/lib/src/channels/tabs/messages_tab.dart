@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -225,42 +226,125 @@ class _MessageCard extends StatelessWidget {
     final l10n = context.l10n;
     final scheme = Theme.of(context).colorScheme;
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Images first (Instagram-style), then the text below.
+          if (message.images.isNotEmpty) _MessageCarousel(images: message.images),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    message.title.isEmpty
-                        ? l10n.t('channel.noTitle')
-                        : message.title,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        message.title.isEmpty
+                            ? l10n.t('channel.noTitle')
+                            : message.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Text(
+                      formatDateTime(message.createdAt),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  formatDateTime(message.createdAt),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
+                if (message.body.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(message.body, style: const TextStyle(fontSize: 14)),
+                ],
               ],
             ),
-            if (message.body.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(message.body, style: const TextStyle(fontSize: 14)),
-            ],
-          ],
-        ),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+/// An Instagram-style image carousel: a swipeable PageView of cached network
+/// images with page-dot indicators. A single image renders without dots.
+class _MessageCarousel extends ConsumerStatefulWidget {
+  const _MessageCarousel({required this.images});
+
+  final List<MessageImage> images;
+
+  @override
+  ConsumerState<_MessageCarousel> createState() => _MessageCarouselState();
+}
+
+class _MessageCarouselState extends ConsumerState<_MessageCarousel> {
+  final _controller = PageController();
+  int _current = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = ref.read(repositoryProvider);
+    final scheme = Theme.of(context).colorScheme;
+    // Use the first image's aspect ratio for the viewport so single-image posts
+    // fit naturally; clamp to avoid extreme tall/wide crops.
+    final ratio = widget.images.first.aspectRatio.clamp(0.75, 1.91);
+
+    return Column(
+      children: [
+        AspectRatio(
+          aspectRatio: ratio,
+          child: PageView.builder(
+            controller: _controller,
+            itemCount: widget.images.length,
+            onPageChanged: (i) => setState(() => _current = i),
+            itemBuilder: (context, i) => CachedNetworkImage(
+              imageUrl: repo.imageUrl(widget.images[i].id),
+              fit: BoxFit.cover,
+              placeholder: (context, _) =>
+                  ColoredBox(color: scheme.surfaceContainerHighest),
+              errorWidget: (context, _, _) => ColoredBox(
+                color: scheme.surfaceContainerHighest,
+                child: Icon(Icons.broken_image_outlined, color: scheme.outline),
+              ),
+            ),
+          ),
+        ),
+        if (widget.images.length > 1)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                for (var i = 0; i < widget.images.length; i++)
+                  Container(
+                    width: 6,
+                    height: 6,
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: i == _current
+                          ? scheme.primary
+                          : scheme.outlineVariant,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

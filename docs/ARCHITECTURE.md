@@ -17,9 +17,9 @@ Push) and to any open web clients via WebSocket.
 | App API        | `cmd/app`         | User JWT        | Auth, channels, keys, devices, subscriptions, history, live stream |
 | Dispatcher     | `cmd/dispatcher`  | —               | Consume queue, persist message, fan-out push, write receipts, emit live event |
 
-Infrastructure: **MongoDB** (persistence), **RabbitMQ** (durable broker + DLQ),
-**Redis** (rate limiting, idempotency, pub/sub for WebSocket fan-out),
-**FCM + Web Push** (delivery).
+Infrastructure: **MongoDB** (persistence, incl. **GridFS** for message images),
+**RabbitMQ** (durable broker + DLQ), **Redis** (rate limiting, idempotency,
+pub/sub for WebSocket fan-out), **FCM + Web Push** (delivery).
 
 The three Go binaries share one module and `internal/` packages. Ingest and App
 are stateless and horizontally scalable; Dispatcher scales by adding consumers.
@@ -48,8 +48,9 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - **apiKeys** — `_id, channelId, hashedKey, prefix, label, createdAt, revokedAt?`
 - **devices** — `_id, userId, platform (ios|android|web), fcmToken?, webPushSub?, createdAt, lastSeenAt`
 - **subscriptions** — `_id, channelId, deviceId, status (active|pending|blocked), createdAt`
-- **messages** — `_id, channelId, title, body, data?, createdAt` (indexed `{channelId, _id}` for cursor pagination)
+- **messages** — `_id, channelId, title, body, images?, data?, createdAt` (indexed `{channelId, _id}` for cursor pagination). `images` is an ordered list of `{id, width, height}` (Instagram-style: shown before the text), up to 10 per message; `id` references a processed JPEG in the blob store.
 - **deliveries** — `_id, messageId, deviceId, status (sent|failed|skipped), error?, sentAt`
+- **images (blob store)** — processed JPEGs stored in **MongoDB GridFS** (`fs.files`/`fs.chunks`) under an unguessable random id, behind a `blob.Store` driver interface (memory | gridfs). Images are processed (validated, EXIF-oriented, downscaled so the longer edge ≤ 1000px, re-encoded as JPEG ~q82) at the API boundary **before** enqueue, so the broker payload only carries references. Deleting a channel/user cascades to its messages' image blobs.
 
 ### Subscription modes
 - `open` — any user with the public channel ID can subscribe; status `active` immediately.
@@ -58,8 +59,10 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 ## 5. API surface (v1)
 
 ### Ingest (public, header `X-Api-Key`)
-- `POST /v1/ingest/{channelId}/notify` — body `{title, body, data?}`, optional
-  `Idempotency-Key` header → `202 Accepted`.
+- `POST /v1/ingest/{channelId}/notify` — JSON body `{title, body, data?}` (text
+  only), or `multipart/form-data` with `title`/`body`/`data` fields plus up to 10
+  `images` file parts (≤ 10 MB each). Optional `Idempotency-Key` header → `202
+  Accepted`. At least one of title, body, or an image is required.
 
 ### App (user JWT)
 - `POST /v1/auth/register` (emails a 6-digit code) · `POST /v1/auth/verify` (confirms the code → creates the account, logs in) · `POST /v1/auth/login` · `POST /v1/auth/refresh`
@@ -68,7 +71,8 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - `POST /v1/channels/{id}/keys` (returns plaintext key once) · `DELETE /v1/channels/{id}/keys/{keyId}`
 - `POST /v1/devices` · `DELETE /v1/devices/{id}`
 - `POST /v1/channels/{id}/subscribe` · `POST /v1/channels/{id}/approvals/{deviceId}`
-- `GET /v1/channels/{id}/messages?cursor=&limit=&q=` · `POST /v1/channels/{id}/notify` (owner sends from the UI)
+- `GET /v1/channels/{id}/messages?cursor=&limit=&q=` · `POST /v1/channels/{id}/notify` (owner sends from the UI; JSON or `multipart/form-data` with `images`, same as ingest)
+- `GET /v1/images/{id}` — serves a processed JPEG by id. **Public** (no JWT): the id is unguessable, devices/`<img>`/push fetch it without a bearer, and message history is already readable by any authenticated user. Long-cached (`immutable`).
 - `GET /v1/stream` — SSE live messages (token via query parameter)
 
 ### Admin (JWT, admin role only) — `/v1/admin/*`
@@ -87,6 +91,7 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - **Initial admin seeding.** When `PHEME_SEED_ADMIN_EMAIL` and `PHEME_SEED_ADMIN_PASSWORD` are both set, the App API ensures a verified, active admin with those credentials exists at startup (created only if missing). This is opt-in (no-op when unset), bootstraps the first admin without the email-verification flow, and backs the E2E suite.
 - Public ingest endpoint protected by per-key Redis token-bucket rate limiting and idempotency keys (dedupe website retries).
 - FCM service-account JSON and Web Push VAPID keys are injected as runtime secrets — never committed.
+- **Message images** are processed server-side (validated, EXIF-oriented, downscaled to ≤ 1000px on the longer edge, re-encoded as JPEG ~q82), which also strips EXIF/GPS metadata. Per-image upload is capped at 10 MB and 10 images per message. Blobs use unguessable random ids and are served public, immutable, and long-cached. Push notifications include the first image's absolute URL when `PHEME_PUBLIC_API_URL` is set (the externally reachable App API base); unset simply omits the notification image.
 
 ## 7. Reliability — "no messages lost"
 1. Ingest acks the website only after RabbitMQ confirms the publish (publisher confirms).
@@ -109,6 +114,7 @@ docker-compose stack is up.
 | Concern     | Env var                   | Options                  | Real adapter |
 |-------------|---------------------------|--------------------------|--------------|
 | Persistence | `PHEME_STORE_DRIVER`      | `memory` \| `mongo`      | MongoDB (`internal/store`) |
+| Image blobs | `PHEME_BLOB_DRIVER`       | `memory` \| `gridfs`     | MongoDB GridFS (`internal/blob`); S3/MinIO is the documented future driver |
 | Broker      | `PHEME_BROKER_DRIVER`     | `memory` \| `rabbit`     | RabbitMQ, publisher confirms + DLX/DLQ (`internal/broker`) |
 | Live events | `PHEME_LIVE_DRIVER`       | `memory` \| `redis`      | Redis pub/sub (`internal/live`) |
 | Rate limit  | `PHEME_RATELIMIT_DRIVER`  | `memory` \| `redis`      | Redis Lua token-bucket (`internal/ratelimit`) |

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/broker"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/live"
@@ -23,11 +24,13 @@ type appFixture struct {
 	tokens *auth.TokenManager
 	store  store.Store
 	pub    *broker.Memory
+	blob   blob.Store
 }
 
 func newAppFixture(t *testing.T) *appFixture {
 	t.Helper()
-	db := store.NewMemory()
+	blobs := blob.NewMemory()
+	db := store.NewMemory(blobs)
 	tokens := auth.NewTokenManager("test-secret", 15*time.Minute, 24*time.Hour)
 	pub := broker.NewMemory(8)
 	h := &AppHandler{
@@ -35,11 +38,12 @@ func newAppFixture(t *testing.T) *appFixture {
 		Live:      live.NewMemoryBus(),
 		Tokens:    tokens,
 		Publisher: pub,
+		Blob:      blobs,
 		Admin:     &AdminHandler{Store: db},
 	}
 	mux := http.NewServeMux()
 	h.Routes(mux)
-	return &appFixture{mux: mux, tokens: tokens, store: db, pub: pub}
+	return &appFixture{mux: mux, tokens: tokens, store: db, pub: pub, blob: blobs}
 }
 
 // tokenFor issues an access token for a freshly created user and returns it.

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -7,12 +7,16 @@ import {
   Breadcrumbs,
   Button,
   Card,
+  CloseButton,
   Code,
   Container,
   CopyButton,
+  FileButton,
   Group,
+  Image,
   Modal,
   SegmentedControl,
+  SimpleGrid,
   Stack,
   Table,
   Tabs,
@@ -22,7 +26,7 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core'
-import { IconBellCheck, IconDeviceMobile, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
+import { IconBellCheck, IconDeviceMobile, IconPhoto, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Trans, useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
@@ -30,10 +34,15 @@ import { notifyError, notifySuccess } from '../lib/notify'
 import type { ApiKey, Channel, CreatedKey, Message, SubscriptionMode } from '../lib/types'
 import { useEventStream } from '../hooks/useEventStream'
 import { ConfirmModal } from '../components/ConfirmModal'
+import { ImageCarousel } from '../components/ImageCarousel'
 import { ModeBadge } from '../components/badges'
 import { CardListSkeleton } from '../components/Skeletons'
 import { loadWebDeviceId, saveWebDeviceId } from '../lib/device'
 import { registerWebPushDevice, webPushAvailability } from '../lib/webpush'
+
+// Keep these in sync with the server limits (internal/channel/notify_input.go).
+const MAX_IMAGES = 10
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 export function ChannelPage() {
   const { id = '' } = useParams()
@@ -50,6 +59,7 @@ export function ChannelPage() {
   const [createdKey, setCreatedKey] = useState<CreatedKey | null>(null)
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
+  const [images, setImages] = useState<File[]>([])
   const [sending, setSending] = useState(false)
 
   const [editName, setEditName] = useState('')
@@ -186,13 +196,41 @@ export function ChannelPage() {
     }
   }
 
+  function addImages(selected: File[]) {
+    if (selected.length === 0) return
+    const tooBig = selected.find((f) => f.size > MAX_IMAGE_BYTES)
+    if (tooBig) {
+      notifyError(t('channel.imageTooLarge', { name: tooBig.name }))
+      return
+    }
+    setImages((prev) => {
+      const next = [...prev, ...selected]
+      if (next.length > MAX_IMAGES) {
+        notifyError(t('channel.tooManyImages', { max: MAX_IMAGES }))
+        return next.slice(0, MAX_IMAGES)
+      }
+      return next
+    })
+  }
+
+  function removeImage(index: number) {
+    setImages((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  // Object URLs for local previews; revoked when the selection changes/unmounts.
+  const previews = useMemo(() => images.map((f) => URL.createObjectURL(f)), [images])
+  useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews])
+
+  const canSend = title.trim().length > 0 || body.trim().length > 0 || images.length > 0
+
   async function sendMessage() {
-    if (!title.trim() && !body.trim()) return
+    if (!canSend) return
     setSending(true)
     try {
-      await api.notifyChannel(id, title.trim(), body.trim())
+      await api.notifyChannel(id, title.trim(), body.trim(), images)
       setTitle('')
       setBody('')
+      setImages([])
       notifySuccess(t('channel.messageSent'))
     } catch (e) {
       notifyError(t('channel.sendFailed'), e)
@@ -374,13 +412,16 @@ export function ChannelPage() {
               {!loadingMessages &&
                 messages.map((m) => (
                   <Card key={m.id} withBorder padding="sm">
-                    <Group justify="space-between" align="flex-start">
-                      <Text fw={600}>{m.title || '(no title)'}</Text>
-                      <Text size="xs" c="dimmed">
-                        {new Date(m.createdAt).toLocaleString()}
-                      </Text>
-                    </Group>
-                    {m.body && <Text size="sm">{m.body}</Text>}
+                    <Stack gap="xs">
+                      {m.images && m.images.length > 0 && <ImageCarousel images={m.images} />}
+                      <Group justify="space-between" align="flex-start" wrap="nowrap">
+                        <Text fw={600}>{m.title || t('channel.noTitle')}</Text>
+                        <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+                          {new Date(m.createdAt).toLocaleString()}
+                        </Text>
+                      </Group>
+                      {m.body && <Text size="sm">{m.body}</Text>}
+                    </Stack>
                   </Card>
                 ))}
               {cursor && (
@@ -409,8 +450,53 @@ export function ChannelPage() {
                 value={body}
                 onChange={(e) => setBody(e.currentTarget.value)}
               />
+
+              <Stack gap={6}>
+                <Group justify="space-between" align="center">
+                  <Text size="sm" fw={500}>
+                    {t('channel.images')}
+                  </Text>
+                  <FileButton onChange={addImages} accept="image/*" multiple>
+                    {(props) => (
+                      <Button
+                        {...props}
+                        size="compact-sm"
+                        variant="light"
+                        leftSection={<IconPhoto size={16} />}
+                        disabled={images.length >= MAX_IMAGES}
+                      >
+                        {t('channel.addImages')}
+                      </Button>
+                    )}
+                  </FileButton>
+                </Group>
+                {images.length === 0 ? (
+                  <Text size="xs" c="dimmed">
+                    {t('channel.imagesHint', { max: MAX_IMAGES })}
+                  </Text>
+                ) : (
+                  <SimpleGrid cols={{ base: 3, sm: 4 }} spacing="xs">
+                    {images.map((file, i) => (
+                      <Card key={`${file.name}-${i}`} withBorder padding={0} pos="relative">
+                        <Image src={previews[i]} alt={file.name} h={84} fit="cover" />
+                        <CloseButton
+                          size="sm"
+                          variant="filled"
+                          color="dark"
+                          aria-label={t('channel.removeImage')}
+                          onClick={() => removeImage(i)}
+                          pos="absolute"
+                          top={4}
+                          right={4}
+                        />
+                      </Card>
+                    ))}
+                  </SimpleGrid>
+                )}
+              </Stack>
+
               <Group justify="flex-end">
-                <Button onClick={sendMessage} loading={sending} disabled={!title.trim() && !body.trim()}>
+                <Button onClick={sendMessage} loading={sending} disabled={!canSend}>
                   {t('channel.send')}
                 </Button>
               </Group>

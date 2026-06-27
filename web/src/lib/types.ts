@@ -29,11 +29,20 @@ export interface Channel {
   createdAt: string
 }
 
+// A processed image attached to a message. Width/height are the final pixel
+// dimensions, used to reserve aspect ratio before the image loads.
+export interface MessageImage {
+  id: string
+  width: number
+  height: number
+}
+
 export interface Message {
   id: string
   channelId: string
   title: string
   body: string
+  images?: MessageImage[]
   data?: Record<string, string>
   createdAt: string
 }

@@ -32,6 +32,11 @@ func main() {
 		logger.Error("store init", "error", err)
 		os.Exit(1)
 	}
+	blobs, err := b.Blob(ctx)
+	if err != nil {
+		logger.Error("blob init", "error", err)
+		os.Exit(1)
+	}
 	maybeSeedAdmin(ctx, db, cfg.SeedAdminEmail, cfg.SeedAdminPassword, logger)
 
 	bus, err := b.Live()
@@ -73,6 +78,7 @@ func main() {
 		Live:           bus,
 		Tokens:         tokens,
 		Publisher:      pub,
+		Blob:           blobs,
 		Admin:          &channel.AdminHandler{Store: db},
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
 	}).Routes(mux)

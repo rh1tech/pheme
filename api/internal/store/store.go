@@ -10,11 +10,24 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
 
 // ErrNotFound is returned when a requested entity does not exist.
 var ErrNotFound = errors.New("not found")
+
+// deleteBlobs best-effort removes image blobs for cascade deletes. A nil store or
+// a per-id failure is ignored: the history rows are already gone, so a leftover
+// blob is at worst harmless garbage to be reclaimed later.
+func deleteBlobs(ctx context.Context, blobs blob.Store, ids []string) {
+	if blobs == nil || len(ids) == 0 {
+		return
+	}
+	for _, id := range ids {
+		_ = blobs.Delete(ctx, id)
+	}
+}
 
 // webPushEndpoint extracts the endpoint URL from a Web Push subscription JSON
 // string, or returns "" if the input is empty or not a web push subscription.

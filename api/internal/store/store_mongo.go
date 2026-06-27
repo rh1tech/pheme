@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
 
@@ -22,10 +23,13 @@ import (
 type Mongo struct {
 	client *mongo.Client
 	db     *mongo.Database
+	blobs  blob.Store
 }
 
-// NewMongo connects to MongoDB, verifies connectivity, and ensures indexes.
-func NewMongo(ctx context.Context, uri, dbName string) (*Mongo, error) {
+// NewMongo connects to MongoDB, verifies connectivity, and ensures indexes. The
+// blob store (may be nil) is used to remove a deleted message's images during
+// cascade deletes.
+func NewMongo(ctx context.Context, uri, dbName string, blobs blob.Store) (*Mongo, error) {
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
 		return nil, err
@@ -34,7 +38,7 @@ func NewMongo(ctx context.Context, uri, dbName string) (*Mongo, error) {
 		_ = client.Disconnect(ctx)
 		return nil, err
 	}
-	m := &Mongo{client: client, db: client.Database(dbName)}
+	m := &Mongo{client: client, db: client.Database(dbName), blobs: blobs}
 	if err := m.ensureIndexes(ctx); err != nil {
 		_ = client.Disconnect(ctx)
 		return nil, err
@@ -248,10 +252,14 @@ func (m *Mongo) DeleteChannel(ctx context.Context, id string) error {
 	if err := cur.All(ctx, &msgs); err != nil {
 		return err
 	}
+	var imageIDs []string
 	if len(msgs) > 0 {
 		ids := make([]string, 0, len(msgs))
 		for _, msg := range msgs {
 			ids = append(ids, msg.ID)
+			for _, img := range msg.Images {
+				imageIDs = append(imageIDs, img.ID)
+			}
 		}
 		if _, err := m.db.Collection("deliveries").DeleteMany(ctx, bson.M{"messageId": bson.M{"$in": ids}}); err != nil {
 			return err
@@ -269,6 +277,7 @@ func (m *Mongo) DeleteChannel(ctx context.Context, id string) error {
 	if res.DeletedCount == 0 {
 		return ErrNotFound
 	}
+	deleteBlobs(ctx, m.blobs, imageIDs)
 	return nil
 }
 

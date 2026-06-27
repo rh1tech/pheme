@@ -98,8 +98,31 @@ class PhemeRepository {
 
   // --- Send (owner) ---
 
-  Future<void> notifyChannel(String channelId, String title, String body) =>
-      _post('/v1/channels/$channelId/notify', {'title': title, 'body': body});
+  /// Sends a message. With [imagePaths], the request is multipart/form-data (each
+  /// image is processed and stored server-side); text-only sends stay JSON.
+  Future<void> notifyChannel(
+    String channelId,
+    String title,
+    String body, {
+    List<String> imagePaths = const [],
+  }) {
+    final path = '/v1/channels/$channelId/notify';
+    if (imagePaths.isEmpty) {
+      return _post(path, {'title': title, 'body': body});
+    }
+    final form = FormData.fromMap({
+      'title': title,
+      'body': body,
+      'images': [
+        for (final p in imagePaths)
+          MultipartFile.fromFileSync(p, filename: p.split('/').last),
+      ],
+    });
+    return _post(path, form);
+  }
+
+  /// Absolute URL of a processed message image (served publicly by the App API).
+  String imageUrl(String id) => '${_dio.options.baseUrl}/v1/images/$id';
 
   // --- Devices & subscriptions ---
 
