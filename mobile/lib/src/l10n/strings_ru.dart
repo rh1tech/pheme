@@ -59,6 +59,21 @@ const Map<String, String> ruStrings = {
   'channels.enableNotifications': 'Включить уведомления',
   'channels.notificationsOn': 'Уведомления включены',
   'channels.enableFailed': 'Не удалось включить уведомления',
+  'channels.ownedSection': 'Ваши каналы',
+  'channels.joinedSection': 'Каналы, к которым вы присоединились',
+  'channels.addChannel': 'Добавить канал',
+
+  // join a channel
+  'join.title': 'Присоединиться к каналу',
+  'join.refLabel': 'ID триггера или phetag',
+  'join.refHint': 'ch_ab12cd34 или my-alias',
+  'join.scanQr': 'Сканировать QR-код',
+  'join.action': 'Присоединиться',
+  'join.joined': 'Вы присоединились к каналу',
+  'join.joinFailed': 'Не удалось присоединиться к каналу',
+
+  // QR scanner
+  'scan.instruction': 'Наведите камеру на QR-код канала.',
 
   // subscription mode
   'mode.open': 'Открытый',
@@ -71,6 +86,7 @@ const Map<String, String> ruStrings = {
   'channel.tabMessages': 'Сообщения',
   'channel.tabSend': 'Отправить',
   'channel.tabKeys': 'Ключи',
+  'channel.tabSubscribers': 'Подписчики',
   'channel.tabSettings': 'Настройки',
   'channel.searchHint': 'Поиск по заголовку или тексту',
   'channel.filtering': 'Фильтр по «{query}» — живые обновления приостановлены.',
@@ -129,6 +145,57 @@ const Map<String, String> ruStrings = {
   'channel.channelDeleted': 'Канал удалён',
   'channel.deleteFailed': 'Не удалось удалить',
   'channel.notFound': 'Канал не найден.',
+
+  // phetag + share (владелец)
+  'channel.phetag': 'Phetag',
+  'channel.phetagHint':
+      '2–24 символа: буквы, цифры, . _ - (не может начинаться с цифры, точки '
+      'или дефиса).',
+  'channel.phetagInvalid': 'Некорректный phetag',
+  'channel.shareTitle': 'Поделиться',
+  'channel.shareDescription':
+      'Другие могут отсканировать этот код или использовать ссылку ниже, '
+      'чтобы присоединиться.',
+  'channel.shareRef': 'Ссылка',
+  'channel.refCopied': 'Ссылка скопирована',
+
+  // выход (участник)
+  'channel.leaveTitle': 'Покинуть канал',
+  'channel.leaveDescription': 'Перестать получать сообщения этого канала.',
+  'channel.leaveAction': 'Покинуть канал',
+  'channel.leaveConfirm':
+      'Покинуть «{name}»? Вы сможете вернуться позже, если канал открытый '
+      'или вас одобрят повторно.',
+  'channel.left': 'Вы покинули канал',
+  'channel.leaveFailed': 'Не удалось покинуть канал',
+
+  // подписчики (владелец/админ)
+  'channel.pendingApprovals': 'Ожидают подтверждения',
+  'channel.noPendingApprovals': 'Нет запросов на подтверждение.',
+  'channel.approve': 'Одобрить',
+  'channel.deny': 'Отклонить',
+  'channel.memberApproved': 'Подписчик одобрен',
+  'channel.memberDenied': 'Запрос отклонён',
+  'channel.approveFailed': 'Не удалось одобрить',
+  'channel.denyFailed': 'Не удалось отклонить',
+  'channel.noSubscribers': 'Пока нет подписчиков.',
+  'channel.makeAdmin': 'Назначить админом',
+  'channel.makeUser': 'Сделать участником',
+  'channel.ban': 'Заблокировать',
+  'channel.unban': 'Разблокировать',
+  'channel.removeMember': 'Удалить',
+  'channel.memberUpdated': 'Подписчик обновлён',
+  'channel.memberRemoved': 'Подписчик удалён',
+  'channel.memberUpdateFailed': 'Не удалось обновить подписчика',
+  'channel.memberRemoveFailed': 'Не удалось удалить подписчика',
+  'channel.removeMemberConfirm': 'Удалить «{email}» из этого канала?',
+  'channel.banConfirm':
+      'Заблокировать «{email}»? Пользователь перестанет получать сообщения '
+      'этого канала.',
+  'channel.roleAdmin': 'Админ',
+  'channel.statusActive': 'Активен',
+  'channel.statusPending': 'Ожидает',
+  'channel.statusBlocked': 'Заблокирован',
 
   // settings
   'settings.title': 'Настройки',

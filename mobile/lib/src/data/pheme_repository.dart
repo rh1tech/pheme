@@ -69,14 +69,98 @@ class PhemeRepository {
     String id, {
     String? name,
     SubscriptionMode? mode,
+    String? alias,
   }) {
     final body = <String, dynamic>{};
     if (name != null) body['name'] = name;
     if (mode != null) body['subscriptionMode'] = mode.wire;
+    if (alias != null) body['alias'] = alias;
     return _patch('/v1/channels/$id', body).then((d) => Channel.fromJson(d));
   }
 
   Future<void> deleteChannel(String id) => _delete('/v1/channels/$id');
+
+  // --- Membership ---
+
+  /// The caller's relationship to a single channel. The server returns 404 when
+  /// the caller is neither the owner nor a member.
+  Future<ChannelRelation> getChannel(String id) async {
+    final data = await _get('/v1/channels/$id');
+    return ChannelRelation.fromJson(data);
+  }
+
+  /// Joins a channel by [ref] — either its trigger ID (publicId) or its phetag
+  /// (alias). Returns the joined channel.
+  Future<Channel> joinChannel(String ref, {String? deviceId}) {
+    final body = <String, dynamic>{'ref': ref};
+    if (deviceId != null) body['deviceId'] = deviceId;
+    return _post('/v1/channels/join', body).then(
+      (d) => Channel.fromJson((d['channel'] as Map).cast<String, dynamic>()),
+    );
+  }
+
+  Future<List<JoinedChannel>> listJoinedChannels() async {
+    final data = await _get('/v1/channels/joined');
+    final list = (data['channels'] as List?) ?? const [];
+    return list
+        .map((e) => JoinedChannel.fromJson((e as Map).cast<String, dynamic>()))
+        .toList();
+  }
+
+  /// Leaves a channel the caller has joined. The server returns 400 for owners.
+  Future<void> leaveChannel(String id) =>
+      _delete('/v1/channels/$id/membership');
+
+  // --- Subscriber management (owner/admin) ---
+
+  Future<List<ChannelMember>> listApprovals(String channelId) async {
+    final data = await _get('/v1/channels/$channelId/approvals');
+    final list = (data['members'] as List?) ?? const [];
+    return list
+        .map((e) => ChannelMember.fromJson((e as Map).cast<String, dynamic>()))
+        .toList();
+  }
+
+  Future<void> approveMember(String channelId, String userId) =>
+      _post('/v1/channels/$channelId/approvals/$userId', null);
+
+  Future<void> denyMember(String channelId, String userId) =>
+      _delete('/v1/channels/$channelId/approvals/$userId');
+
+  Future<({List<ChannelMember> items, int total})> listMembers(
+    String channelId, {
+    int offset = 0,
+    int limit = 50,
+  }) async {
+    final data = await _get(
+      '/v1/channels/$channelId/members',
+      query: {'offset': '$offset', 'limit': '$limit'},
+    );
+    final list = (data['members'] as List?) ?? const [];
+    return (
+      items: list
+          .map(
+            (e) => ChannelMember.fromJson((e as Map).cast<String, dynamic>()),
+          )
+          .toList(),
+      total: (data['total'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Future<void> updateMember(
+    String channelId,
+    String userId, {
+    ChannelRole? role,
+    MemberStatus? status,
+  }) {
+    final body = <String, dynamic>{};
+    if (role != null) body['role'] = role.wire;
+    if (status != null) body['status'] = status.wire;
+    return _patch('/v1/channels/$channelId/members/$userId', body);
+  }
+
+  Future<void> removeMember(String channelId, String userId) =>
+      _delete('/v1/channels/$channelId/members/$userId');
 
   // --- API keys ---
 

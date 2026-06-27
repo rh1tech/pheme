@@ -53,6 +53,19 @@ bool isPasswordAcceptable(String pw) {
       !_commonPasswords.contains(pw.toLowerCase());
 }
 
+final RegExp _phetagBody = RegExp(r'^[a-zA-Z0-9._-]{2,24}$');
+final RegExp _phetagBadStart = RegExp(r'[0-9.\-]');
+
+/// Client-side mirror of the server phetag rules (the server remains the source
+/// of truth). A phetag is 2–24 chars of `[a-zA-Z0-9._-]`, must not start with a
+/// digit, `.` or `-`, and must not start with the reserved `ch_` prefix.
+bool isPhetagValid(String alias) {
+  if (!_phetagBody.hasMatch(alias)) return false;
+  if (_phetagBadStart.hasMatch(alias[0])) return false;
+  if (alias.startsWith('ch_')) return false;
+  return true;
+}
+
 /// A 0–4 strength score for the meter.
 int passwordScore(String pw) {
   if (pw.isEmpty) return 0;

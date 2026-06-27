@@ -32,6 +32,60 @@ SubscriptionStatus subscriptionStatusFromWire(String? v) {
   }
 }
 
+/// A member's role within a channel.
+enum ChannelRole {
+  user,
+  admin;
+
+  String get wire => name;
+
+  static ChannelRole fromWire(String? v) =>
+      v == 'admin' ? ChannelRole.admin : ChannelRole.user;
+}
+
+/// Membership state of a member within a channel.
+enum MemberStatus {
+  active,
+  pending,
+  blocked;
+
+  String get wire => name;
+
+  static MemberStatus fromWire(String? v) {
+    switch (v) {
+      case 'pending':
+        return MemberStatus.pending;
+      case 'blocked':
+        return MemberStatus.blocked;
+      default:
+        return MemberStatus.active;
+    }
+  }
+}
+
+/// The caller's relationship to a channel, as returned by `GET /channels/{id}`
+/// and `GET /channels/{id}/membership`. [status] is `none` when the caller is
+/// the owner (not a member) or has no membership row.
+enum MembershipStatus {
+  active,
+  pending,
+  blocked,
+  none;
+
+  static MembershipStatus fromWire(String? v) {
+    switch (v) {
+      case 'active':
+        return MembershipStatus.active;
+      case 'pending':
+        return MembershipStatus.pending;
+      case 'blocked':
+        return MembershipStatus.blocked;
+      default:
+        return MembershipStatus.none;
+    }
+  }
+}
+
 class TokenResponse {
   TokenResponse({
     required this.accessToken,
@@ -62,6 +116,7 @@ class Channel {
     required this.subscriptionMode,
     required this.status,
     required this.createdAt,
+    this.alias,
   });
 
   final String id;
@@ -72,6 +127,15 @@ class Channel {
   final ChannelStatus status;
   final String createdAt;
 
+  /// The channel's optional "phetag" — a human-friendly handle that can be used
+  /// in place of [publicId] when joining. Null or empty when unset.
+  final String? alias;
+
+  /// The shareable reference others use to join: the [alias] when set,
+  /// otherwise the [publicId].
+  String get joinRef =>
+      (alias != null && alias!.isNotEmpty) ? alias! : publicId;
+
   factory Channel.fromJson(Map<String, dynamic> j) => Channel(
     id: j['id'] as String? ?? '',
     publicId: j['publicId'] as String? ?? '',
@@ -81,6 +145,85 @@ class Channel {
       j['subscriptionMode'] as String?,
     ),
     status: ChannelStatus.fromWire(j['status'] as String?),
+    createdAt: j['createdAt'] as String? ?? '',
+    alias: j['alias'] as String?,
+  );
+}
+
+/// The caller's relationship to a channel, returned by `GET /channels/{id}`.
+class ChannelRelation {
+  ChannelRelation({
+    required this.channel,
+    required this.isOwner,
+    required this.role,
+    required this.status,
+  });
+
+  final Channel channel;
+  final bool isOwner;
+  final ChannelRole role;
+  final MembershipStatus status;
+
+  /// True when the caller may manage subscribers (owner or admin).
+  bool get canManage => isOwner || role == ChannelRole.admin;
+
+  factory ChannelRelation.fromJson(Map<String, dynamic> j) => ChannelRelation(
+    channel: Channel.fromJson((j['channel'] as Map).cast<String, dynamic>()),
+    isOwner: j['isOwner'] as bool? ?? false,
+    role: ChannelRole.fromWire(j['role'] as String?),
+    status: MembershipStatus.fromWire(j['status'] as String?),
+  );
+}
+
+/// A channel the caller has joined (not owned), returned by
+/// `GET /channels/joined`: the channel fields plus the caller's role and
+/// membership status (the wire field is `memberStatus`, not `status`).
+class JoinedChannel {
+  JoinedChannel({
+    required this.channel,
+    required this.role,
+    required this.memberStatus,
+  });
+
+  final Channel channel;
+  final ChannelRole role;
+  final MemberStatus memberStatus;
+
+  factory JoinedChannel.fromJson(Map<String, dynamic> j) => JoinedChannel(
+    channel: Channel.fromJson(j),
+    role: ChannelRole.fromWire(j['role'] as String?),
+    memberStatus: MemberStatus.fromWire(j['memberStatus'] as String?),
+  );
+}
+
+/// A subscriber/member of a channel, returned by the approvals and members
+/// endpoints.
+class ChannelMember {
+  ChannelMember({
+    required this.id,
+    required this.channelId,
+    required this.userId,
+    required this.email,
+    required this.role,
+    required this.status,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String channelId;
+  final String userId;
+  final String email;
+  final ChannelRole role;
+  final MemberStatus status;
+  final String createdAt;
+
+  factory ChannelMember.fromJson(Map<String, dynamic> j) => ChannelMember(
+    id: j['id'] as String? ?? '',
+    channelId: j['channelId'] as String? ?? '',
+    userId: j['userId'] as String? ?? '',
+    email: j['email'] as String? ?? '',
+    role: ChannelRole.fromWire(j['role'] as String?),
+    status: MemberStatus.fromWire(j['status'] as String?),
     createdAt: j['createdAt'] as String? ?? '',
   );
 }

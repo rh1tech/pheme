@@ -60,3 +60,41 @@ final channelProvider = Provider.family<Channel?, String>((ref, id) {
         orElse: () => null,
       );
 });
+
+/// Loads and mutates the channels the user has joined (does not own).
+class JoinedChannelsController extends AsyncNotifier<List<JoinedChannel>> {
+  @override
+  Future<List<JoinedChannel>> build() =>
+      ref.read(repositoryProvider).listJoinedChannels();
+
+  Future<void> refresh() async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(
+      () => ref.read(repositoryProvider).listJoinedChannels(),
+    );
+  }
+
+  /// Joins a channel by reference (trigger ID or phetag) and refreshes the list.
+  Future<Channel> join(String reference, {String? deviceId}) async {
+    final channel = await ref
+        .read(repositoryProvider)
+        .joinChannel(reference, deviceId: deviceId);
+    await refresh();
+    return channel;
+  }
+}
+
+final joinedChannelsProvider =
+    AsyncNotifierProvider<JoinedChannelsController, List<JoinedChannel>>(
+      JoinedChannelsController.new,
+    );
+
+/// The caller's relationship to a single channel (owner/role/status). Loaded
+/// from the server so it works for owned and joined channels alike, and on cold
+/// deep-links where the channel lists aren't populated yet.
+final channelRelationProvider = FutureProvider.family<ChannelRelation, String>((
+  ref,
+  id,
+) async {
+  return ref.watch(repositoryProvider).getChannel(id);
+});

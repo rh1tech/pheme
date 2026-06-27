@@ -62,6 +62,21 @@ const Map<String, String> enStrings = {
   'channels.enableNotifications': 'Enable notifications',
   'channels.notificationsOn': 'Notifications enabled',
   'channels.enableFailed': 'Could not enable notifications',
+  'channels.ownedSection': 'Your channels',
+  'channels.joinedSection': 'Joined channels',
+  'channels.addChannel': 'Add channel',
+
+  // join a channel
+  'join.title': 'Join a channel',
+  'join.refLabel': 'Trigger ID or phetag',
+  'join.refHint': 'ch_ab12cd34 or my-alias',
+  'join.scanQr': 'Scan QR code',
+  'join.action': 'Join',
+  'join.joined': 'Joined channel',
+  'join.joinFailed': 'Could not join channel',
+
+  // QR scanner
+  'scan.instruction': 'Point your camera at a channel QR code.',
 
   // subscription mode
   'mode.open': 'Open',
@@ -74,6 +89,7 @@ const Map<String, String> enStrings = {
   'channel.tabMessages': 'Messages',
   'channel.tabSend': 'Send',
   'channel.tabKeys': 'Keys',
+  'channel.tabSubscribers': 'Subscribers',
   'channel.tabSettings': 'Settings',
   'channel.searchHint': 'Search title or body',
   'channel.filtering': 'Filtering by “{query}” — live updates paused.',
@@ -132,6 +148,55 @@ const Map<String, String> enStrings = {
   'channel.channelDeleted': 'Channel deleted',
   'channel.deleteFailed': 'Delete failed',
   'channel.notFound': 'Channel not found.',
+
+  // phetag + share (owner)
+  'channel.phetag': 'Phetag',
+  'channel.phetagHint':
+      "2–24 characters: letters, numbers, . _ - (can't start with a digit, "
+      'dot or dash).',
+  'channel.phetagInvalid': 'Invalid phetag',
+  'channel.shareTitle': 'Share',
+  'channel.shareDescription':
+      'Others can scan this code or use the reference below to join.',
+  'channel.shareRef': 'Reference',
+  'channel.refCopied': 'Reference copied',
+
+  // leave (joined member)
+  'channel.leaveTitle': 'Leave channel',
+  'channel.leaveDescription': 'Stop receiving messages from this channel.',
+  'channel.leaveAction': 'Leave channel',
+  'channel.leaveConfirm':
+      'Leave “{name}”? You can rejoin later if it is open or you are '
+      're-approved.',
+  'channel.left': 'You left the channel',
+  'channel.leaveFailed': 'Could not leave channel',
+
+  // subscribers (owner/admin)
+  'channel.pendingApprovals': 'Pending approvals',
+  'channel.noPendingApprovals': 'No pending approvals.',
+  'channel.approve': 'Approve',
+  'channel.deny': 'Deny',
+  'channel.memberApproved': 'Subscriber approved',
+  'channel.memberDenied': 'Request denied',
+  'channel.approveFailed': 'Could not approve',
+  'channel.denyFailed': 'Could not deny',
+  'channel.noSubscribers': 'No subscribers yet.',
+  'channel.makeAdmin': 'Make admin',
+  'channel.makeUser': 'Make member',
+  'channel.ban': 'Ban',
+  'channel.unban': 'Unban',
+  'channel.removeMember': 'Remove',
+  'channel.memberUpdated': 'Subscriber updated',
+  'channel.memberRemoved': 'Subscriber removed',
+  'channel.memberUpdateFailed': 'Could not update subscriber',
+  'channel.memberRemoveFailed': 'Could not remove subscriber',
+  'channel.removeMemberConfirm': 'Remove “{email}” from this channel?',
+  'channel.banConfirm':
+      'Ban “{email}”? They will stop receiving messages from this channel.',
+  'channel.roleAdmin': 'Admin',
+  'channel.statusActive': 'Active',
+  'channel.statusPending': 'Pending',
+  'channel.statusBlocked': 'Blocked',
 
   // settings
   'settings.title': 'Settings',

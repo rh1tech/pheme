@@ -2,6 +2,9 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Runtime notification permission on Android 13+ (requested at startup). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Camera permission for scanning channel QR codes (mobile_scanner). -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <application
         android:label="Pheme"
         android:name="${applicationName}"

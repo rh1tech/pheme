@@ -117,4 +117,54 @@ void main() {
       expect(e.message.title, 'hi');
     });
   });
+
+  group('Channel.alias', () {
+    test('reads alias and exposes joinRef preferring it over publicId', () {
+      final withAlias = Channel.fromJson({
+        'id': 'c1',
+        'publicId': 'ch_abc',
+        'name': 'A',
+        'alias': 'skg_news',
+      });
+      expect(withAlias.alias, 'skg_news');
+      expect(withAlias.joinRef, 'skg_news');
+
+      final noAlias = Channel.fromJson({'id': 'c2', 'publicId': 'ch_def'});
+      expect(noAlias.alias, isNull);
+      expect(noAlias.joinRef, 'ch_def');
+    });
+  });
+
+  group('ChannelMember.fromJson', () {
+    test('reads role, status and email', () {
+      final m = ChannelMember.fromJson({
+        'id': 'm1',
+        'channelId': 'c1',
+        'userId': 'u1',
+        'email': 'a@b.com',
+        'role': 'admin',
+        'status': 'pending',
+      });
+      expect(m.userId, 'u1');
+      expect(m.email, 'a@b.com');
+      expect(m.role, ChannelRole.admin);
+      expect(m.status, MemberStatus.pending);
+    });
+  });
+
+  group('JoinedChannel.fromJson', () {
+    test('reads memberStatus (not the channel status) and role', () {
+      final j = JoinedChannel.fromJson({
+        'id': 'c1',
+        'publicId': 'ch_abc',
+        'name': 'A',
+        'status': 'active',
+        'role': 'user',
+        'memberStatus': 'pending',
+      });
+      expect(j.channel.id, 'c1');
+      expect(j.role, ChannelRole.user);
+      expect(j.memberStatus, MemberStatus.pending);
+    });
+  });
 }
