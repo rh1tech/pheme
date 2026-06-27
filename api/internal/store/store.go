@@ -17,6 +17,10 @@ import (
 // ErrNotFound is returned when a requested entity does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrAliasTaken is returned when setting a channel alias that another channel
+// already uses (case-insensitively). Handlers map it to HTTP 409.
+var ErrAliasTaken = errors.New("alias taken")
+
 // deleteBlobs best-effort removes image blobs for cascade deletes. A nil store or
 // a per-id failure is ignored: the history rows are already gone, so a leftover
 // blob is at worst harmless garbage to be reclaimed later.
@@ -60,12 +64,28 @@ type Store interface {
 	CreateChannel(ctx context.Context, c domain.Channel) (domain.Channel, error)
 	ChannelByID(ctx context.Context, id string) (domain.Channel, error)
 	ChannelByPublicID(ctx context.Context, publicID string) (domain.Channel, error)
+	ChannelByAlias(ctx context.Context, aliasLower string) (domain.Channel, error)
 	ChannelsByOwner(ctx context.Context, ownerID string) ([]domain.Channel, error)
 	UpdateChannel(ctx context.Context, id, name string, mode domain.SubscriptionMode) (domain.Channel, error)
+	// SetChannelAlias sets (or clears, when alias is "") a channel's phetag.
+	// Returns ErrAliasTaken if another channel already uses it case-insensitively.
+	SetChannelAlias(ctx context.Context, channelID, alias string) (domain.Channel, error)
 	UpdateChannelStatus(ctx context.Context, id string, status domain.ChannelStatus) (domain.Channel, error)
 	DeleteChannel(ctx context.Context, id string) error
 	ListAllChannels(ctx context.Context) ([]domain.Channel, error)
 	AdminListChannels(ctx context.Context, query string, offset, limit int) ([]domain.Channel, int64, error)
+
+	// Channel members (per-user membership: approvals, bans, per-channel roles).
+	// The channel owner is the implicit top authority and has no member row.
+	UpsertMember(ctx context.Context, m domain.ChannelMember) (domain.ChannelMember, error)
+	MembershipForUser(ctx context.Context, channelID, userID string) (domain.ChannelMember, error)
+	// ListMembers returns a channel's members newest-first with the total count.
+	// A non-empty status filters to that status (e.g. pending = approvals queue).
+	ListMembers(ctx context.Context, channelID string, status domain.MemberStatus, offset, limit int) ([]domain.ChannelMember, int64, error)
+	UpdateMemberStatus(ctx context.Context, channelID, userID string, status domain.MemberStatus) error
+	UpdateMemberRole(ctx context.Context, channelID, userID string, role domain.Role) error
+	RemoveMember(ctx context.Context, channelID, userID string) error
+	ChannelsForMember(ctx context.Context, userID string) ([]domain.Channel, error)
 
 	// API keys
 	CreateAPIKey(ctx context.Context, k domain.APIKey) (domain.APIKey, error)
@@ -77,6 +97,10 @@ type Store interface {
 	Subscribe(ctx context.Context, s domain.Subscription) (domain.Subscription, error)
 	SubscriptionForDevice(ctx context.Context, channelID, deviceID string) (domain.Subscription, error)
 	Unsubscribe(ctx context.Context, channelID, deviceID string) error
+	// SetSubscriptionStatusForUser flips the status of every subscription the
+	// user's devices have in the channel. It is how a membership approval/ban
+	// propagates to push delivery (no-op when the user has no device subscriptions).
+	SetSubscriptionStatusForUser(ctx context.Context, channelID, userID string, status domain.SubscriptionStatus) error
 	ActiveDevicesForChannel(ctx context.Context, channelID string) ([]domain.Device, error)
 
 	// Messages & deliveries

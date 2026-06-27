@@ -54,13 +54,14 @@ func mongoID() string {
 
 func (m *Mongo) ensureIndexes(ctx context.Context) error {
 	specs := map[string][]mongo.IndexModel{
-		"users":         {{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}},
-		"channels":      {{Keys: bson.D{{Key: "publicId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "ownerId", Value: 1}}}},
-		"apiKeys":       {{Keys: bson.D{{Key: "channelId", Value: 1}}}},
-		"devices":       {{Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}, {Key: "webPushEndpoint", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"webPushEndpoint": bson.M{"$exists": true}})}},
-		"subscriptions": {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "deviceId", Value: 1}}}},
-		"messages":      {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "createdAt", Value: -1}}}},
-		"deliveries":    {{Keys: bson.D{{Key: "messageId", Value: 1}}}},
+		"users":          {{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}},
+		"channels":       {{Keys: bson.D{{Key: "publicId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "ownerId", Value: 1}}}, {Keys: bson.D{{Key: "aliasLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"aliasLower": bson.M{"$exists": true}})}},
+		"apiKeys":        {{Keys: bson.D{{Key: "channelId", Value: 1}}}},
+		"devices":        {{Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}, {Key: "webPushEndpoint", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"webPushEndpoint": bson.M{"$exists": true}})}},
+		"subscriptions":  {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "deviceId", Value: 1}}}},
+		"channelMembers": {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}}}},
+		"messages":       {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "createdAt", Value: -1}}}},
+		"deliveries":     {{Keys: bson.D{{Key: "messageId", Value: 1}}}},
 	}
 	for coll, models := range specs {
 		if _, err := m.db.Collection(coll).Indexes().CreateMany(ctx, models); err != nil {
@@ -176,6 +177,11 @@ func (m *Mongo) DeleteUser(ctx context.Context, userID string) error {
 		}
 	}
 
+	// Remove the user's memberships across all channels (not just owned ones).
+	if _, err := m.db.Collection("channelMembers").DeleteMany(ctx, bson.M{"userId": userID}); err != nil {
+		return err
+	}
+
 	res, err := m.db.Collection("users").DeleteOne(ctx, bson.M{"_id": userID})
 	if err != nil {
 		return err
@@ -204,6 +210,51 @@ func (m *Mongo) ChannelByPublicID(ctx context.Context, publicID string) (domain.
 	var c domain.Channel
 	err := m.db.Collection("channels").FindOne(ctx, bson.M{"publicId": publicID}).Decode(&c)
 	return c, mapErr(err)
+}
+
+func (m *Mongo) ChannelByAlias(ctx context.Context, aliasLower string) (domain.Channel, error) {
+	if aliasLower == "" {
+		return domain.Channel{}, ErrNotFound
+	}
+	var c domain.Channel
+	err := m.db.Collection("channels").FindOne(ctx, bson.M{"aliasLower": aliasLower}).Decode(&c)
+	return c, mapErr(err)
+}
+
+func (m *Mongo) SetChannelAlias(ctx context.Context, channelID, alias string) (domain.Channel, error) {
+	trimmed := strings.TrimSpace(alias)
+	lower := strings.ToLower(trimmed)
+	if lower != "" {
+		// Guard against another channel already holding the alias. The unique
+		// partial index is the real backstop; this gives a clean ErrAliasTaken
+		// instead of a raw duplicate-key error.
+		var clash domain.Channel
+		err := m.db.Collection("channels").
+			FindOne(ctx, bson.M{"aliasLower": lower, "_id": bson.M{"$ne": channelID}}).Decode(&clash)
+		if err == nil {
+			return domain.Channel{}, ErrAliasTaken
+		}
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			return domain.Channel{}, err
+		}
+	}
+	var update bson.M
+	if lower == "" {
+		update = bson.M{"$unset": bson.M{"alias": "", "aliasLower": ""}}
+	} else {
+		update = bson.M{"$set": bson.M{"alias": trimmed, "aliasLower": lower}}
+	}
+	res, err := m.db.Collection("channels").UpdateOne(ctx, bson.M{"_id": channelID}, update)
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return domain.Channel{}, ErrAliasTaken
+		}
+		return domain.Channel{}, err
+	}
+	if res.MatchedCount == 0 {
+		return domain.Channel{}, ErrNotFound
+	}
+	return m.ChannelByID(ctx, channelID)
 }
 
 func (m *Mongo) ChannelsByOwner(ctx context.Context, ownerID string) ([]domain.Channel, error) {
@@ -265,7 +316,7 @@ func (m *Mongo) DeleteChannel(ctx context.Context, id string) error {
 			return err
 		}
 	}
-	for _, coll := range []string{"messages", "subscriptions", "apiKeys"} {
+	for _, coll := range []string{"messages", "subscriptions", "apiKeys", "channelMembers"} {
 		if _, err := m.db.Collection(coll).DeleteMany(ctx, bson.M{"channelId": id}); err != nil {
 			return err
 		}
@@ -394,6 +445,28 @@ func (m *Mongo) Unsubscribe(ctx context.Context, channelID, deviceID string) err
 	return nil
 }
 
+func (m *Mongo) SetSubscriptionStatusForUser(ctx context.Context, channelID, userID string, status domain.SubscriptionStatus) error {
+	cur, err := m.db.Collection("devices").Find(ctx, bson.M{"userId": userID})
+	if err != nil {
+		return err
+	}
+	var devices []domain.Device
+	if err := cur.All(ctx, &devices); err != nil {
+		return err
+	}
+	if len(devices) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(devices))
+	for _, d := range devices {
+		ids = append(ids, d.ID)
+	}
+	_, err = m.db.Collection("subscriptions").UpdateMany(ctx,
+		bson.M{"channelId": channelID, "deviceId": bson.M{"$in": ids}},
+		bson.M{"$set": bson.M{"status": status}})
+	return err
+}
+
 func (m *Mongo) ActiveDevicesForChannel(ctx context.Context, channelID string) ([]domain.Device, error) {
 	subs, err := m.db.Collection("subscriptions").Find(ctx,
 		bson.M{"channelId": channelID, "status": domain.SubActive})
@@ -417,6 +490,113 @@ func (m *Mongo) ActiveDevicesForChannel(ctx context.Context, channelID string) (
 	}
 	var out []domain.Device
 	return out, cur.All(ctx, &out)
+}
+
+// --- Channel members ---
+
+func (m *Mongo) UpsertMember(ctx context.Context, mem domain.ChannelMember) (domain.ChannelMember, error) {
+	filter := bson.M{"channelId": mem.ChannelID, "userId": mem.UserID}
+	var existing domain.ChannelMember
+	err := m.db.Collection("channelMembers").FindOne(ctx, filter).Decode(&existing)
+	if err == nil {
+		// Keep the existing membership: never downgrade active→pending on re-join.
+		return existing, nil
+	}
+	if !errors.Is(err, mongo.ErrNoDocuments) {
+		return domain.ChannelMember{}, err
+	}
+	if mem.ID == "" {
+		mem.ID = mongoID()
+	}
+	if _, ierr := m.db.Collection("channelMembers").InsertOne(ctx, mem); ierr != nil {
+		if mongo.IsDuplicateKeyError(ierr) {
+			// Lost a race with a concurrent join; return the row that won.
+			var raced domain.ChannelMember
+			if ferr := m.db.Collection("channelMembers").FindOne(ctx, filter).Decode(&raced); ferr == nil {
+				return raced, nil
+			}
+		}
+		return domain.ChannelMember{}, ierr
+	}
+	return mem, nil
+}
+
+func (m *Mongo) MembershipForUser(ctx context.Context, channelID, userID string) (domain.ChannelMember, error) {
+	var mem domain.ChannelMember
+	err := m.db.Collection("channelMembers").
+		FindOne(ctx, bson.M{"channelId": channelID, "userId": userID}).Decode(&mem)
+	return mem, mapErr(err)
+}
+
+func (m *Mongo) ListMembers(ctx context.Context, channelID string, status domain.MemberStatus, offset, limit int) ([]domain.ChannelMember, int64, error) {
+	filter := bson.M{"channelId": channelID}
+	if status != "" {
+		filter["status"] = status
+	}
+	return findPaged[domain.ChannelMember](ctx, m.db.Collection("channelMembers"), filter, offset, limit)
+}
+
+func (m *Mongo) UpdateMemberStatus(ctx context.Context, channelID, userID string, status domain.MemberStatus) error {
+	res, err := m.db.Collection("channelMembers").UpdateOne(ctx,
+		bson.M{"channelId": channelID, "userId": userID},
+		bson.M{"$set": bson.M{"status": status}})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *Mongo) UpdateMemberRole(ctx context.Context, channelID, userID string, role domain.Role) error {
+	res, err := m.db.Collection("channelMembers").UpdateOne(ctx,
+		bson.M{"channelId": channelID, "userId": userID},
+		bson.M{"$set": bson.M{"role": role}})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *Mongo) RemoveMember(ctx context.Context, channelID, userID string) error {
+	res, err := m.db.Collection("channelMembers").
+		DeleteOne(ctx, bson.M{"channelId": channelID, "userId": userID})
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *Mongo) ChannelsForMember(ctx context.Context, userID string) ([]domain.Channel, error) {
+	cur, err := m.db.Collection("channelMembers").Find(ctx, bson.M{"userId": userID})
+	if err != nil {
+		return nil, err
+	}
+	var members []domain.ChannelMember
+	if err := cur.All(ctx, &members); err != nil {
+		return nil, err
+	}
+	if len(members) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(members))
+	for _, mem := range members {
+		ids = append(ids, mem.ChannelID)
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	ccur, err := m.db.Collection("channels").Find(ctx, bson.M{"_id": bson.M{"$in": ids}}, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.Channel
+	return out, ccur.All(ctx, &out)
 }
 
 func (m *Mongo) CreateMessage(ctx context.Context, msg domain.Message) (domain.Message, error) {

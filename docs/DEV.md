@@ -114,8 +114,11 @@ The web app is **component-based** and must stay **DRY**. When adding UI:
    Existing shared building blocks — use these rather than re-implementing:
    - `components/ConfirmModal` — every confirm/delete dialog.
    - `components/badges` — `ModeBadge`, `ChannelStatusBadge`, `UserStatusBadge`,
-     `RoleBadge`. Never inline a status/role/mode `<Badge>`; add a badge
-     component if a new kind appears.
+     `RoleBadge`, `ChannelRoleBadge` (per-channel admin/user), `MemberStatusBadge`
+     (active/pending/blocked). Never inline a status/role/mode `<Badge>`; add a
+     badge component if a new kind appears.
+   - `components/SubscribersPanel` — owner/channel-admin approvals queue +
+     lazily-paginated subscriber list with ban/remove/role actions.
    - `components/admin/AdminUI` — `AdminPageShell` (title + header actions row),
      `SearchBar`, `Pager`, `StatCard`, `ADMIN_PAGE_LIMIT` for admin list pages.
    - `lib/notify` — `notifyError(message, err?)` / `notifySuccess(message)`.
@@ -206,8 +209,10 @@ the suite log in deterministically, and every run executes on both Chromium and
 mobile WebKit. Scenarios cover the login/auth guard; the full admin user
 lifecycle (create, create-as-admin, promote/demote, block/unblock, the blocked
 user being unable to log in, password reset, delete); admin channel
-disable/enable and delete; and the owner flows of channel creation, API-key
-(token) creation, sending a message, and attaching an image to a message.
+disable/enable and delete; the owner flows of channel creation, API-key
+(token) creation, sending a message, and attaching an image to a message; and
+the membership flows (setting a phetag + duplicate rejection, and a second user
+joining by phetag with the owner approving the request).
 
 ```bash
 make e2e-install  # one-time: npm ci + playwright browsers

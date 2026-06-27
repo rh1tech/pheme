@@ -22,6 +22,7 @@ type Memory struct {
 	apiKeys       map[string]domain.APIKey
 	devices       map[string]domain.Device
 	subscriptions map[string]domain.Subscription
+	members       map[string]domain.ChannelMember
 	messages      map[string]domain.Message
 	deliveries    map[string]domain.Delivery
 	blobs         blob.Store
@@ -36,6 +37,7 @@ func NewMemory(blobs blob.Store) *Memory {
 		apiKeys:       map[string]domain.APIKey{},
 		devices:       map[string]domain.Device{},
 		subscriptions: map[string]domain.Subscription{},
+		members:       map[string]domain.ChannelMember{},
 		messages:      map[string]domain.Message{},
 		deliveries:    map[string]domain.Delivery{},
 		blobs:         blobs,
@@ -167,6 +169,12 @@ func (m *Memory) DeleteUser(ctx context.Context, userID string) error {
 			delete(m.subscriptions, sid)
 		}
 	}
+	// Remove the user's memberships in every channel, not just channels they own.
+	for mid, mem := range m.members {
+		if mem.UserID == userID {
+			delete(m.members, mid)
+		}
+	}
 	delete(m.users, userID)
 	return nil
 }
@@ -199,6 +207,41 @@ func (m *Memory) ChannelByPublicID(_ context.Context, publicID string) (domain.C
 		}
 	}
 	return domain.Channel{}, ErrNotFound
+}
+
+func (m *Memory) ChannelByAlias(_ context.Context, aliasLower string) (domain.Channel, error) {
+	if aliasLower == "" {
+		return domain.Channel{}, ErrNotFound
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.channels {
+		if c.AliasLower == aliasLower {
+			return c, nil
+		}
+	}
+	return domain.Channel{}, ErrNotFound
+}
+
+func (m *Memory) SetChannelAlias(_ context.Context, channelID, alias string) (domain.Channel, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.channels[channelID]
+	if !ok {
+		return domain.Channel{}, ErrNotFound
+	}
+	lower := strings.ToLower(strings.TrimSpace(alias))
+	if lower != "" {
+		for id, other := range m.channels {
+			if id != channelID && other.AliasLower == lower {
+				return domain.Channel{}, ErrAliasTaken
+			}
+		}
+	}
+	c.Alias = strings.TrimSpace(alias)
+	c.AliasLower = lower
+	m.channels[channelID] = c
+	return c, nil
 }
 
 func (m *Memory) ChannelsByOwner(_ context.Context, ownerID string) ([]domain.Channel, error) {
@@ -257,6 +300,11 @@ func (m *Memory) DeleteChannel(ctx context.Context, id string) error {
 	for sid, s := range m.subscriptions {
 		if s.ChannelID == id {
 			delete(m.subscriptions, sid)
+		}
+	}
+	for mid, mem := range m.members {
+		if mem.ChannelID == id {
+			delete(m.members, mid)
 		}
 	}
 	msgIDs := map[string]struct{}{}
@@ -464,6 +512,27 @@ func (m *Memory) Unsubscribe(_ context.Context, channelID, deviceID string) erro
 	return ErrNotFound
 }
 
+func (m *Memory) SetSubscriptionStatusForUser(_ context.Context, channelID, userID string, status domain.SubscriptionStatus) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	deviceSet := map[string]struct{}{}
+	for _, d := range m.devices {
+		if d.UserID == userID {
+			deviceSet[d.ID] = struct{}{}
+		}
+	}
+	for id, s := range m.subscriptions {
+		if s.ChannelID != channelID {
+			continue
+		}
+		if _, ok := deviceSet[s.DeviceID]; ok {
+			s.Status = status
+			m.subscriptions[id] = s
+		}
+	}
+	return nil
+}
+
 func (m *Memory) ActiveDevicesForChannel(_ context.Context, channelID string) ([]domain.Device, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -475,6 +544,107 @@ func (m *Memory) ActiveDevicesForChannel(_ context.Context, channelID string) ([
 			}
 		}
 	}
+	return out, nil
+}
+
+// --- Channel members ---
+
+func (m *Memory) UpsertMember(_ context.Context, mem domain.ChannelMember) (domain.ChannelMember, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// One membership per (channel, user); re-joining returns the existing row so
+	// an already-active member is never downgraded back to pending.
+	for _, existing := range m.members {
+		if existing.ChannelID == mem.ChannelID && existing.UserID == mem.UserID {
+			return existing, nil
+		}
+	}
+	if mem.ID == "" {
+		mem.ID = newID()
+	}
+	m.members[mem.ID] = mem
+	return mem, nil
+}
+
+func (m *Memory) MembershipForUser(_ context.Context, channelID, userID string) (domain.ChannelMember, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, mem := range m.members {
+		if mem.ChannelID == channelID && mem.UserID == userID {
+			return mem, nil
+		}
+	}
+	return domain.ChannelMember{}, ErrNotFound
+}
+
+func (m *Memory) ListMembers(_ context.Context, channelID string, status domain.MemberStatus, offset, limit int) ([]domain.ChannelMember, int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var all []domain.ChannelMember
+	for _, mem := range m.members {
+		if mem.ChannelID != channelID {
+			continue
+		}
+		if status != "" && mem.Status != status {
+			continue
+		}
+		all = append(all, mem)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	return paginate(all, offset, limit), int64(len(all)), nil
+}
+
+func (m *Memory) UpdateMemberStatus(_ context.Context, channelID, userID string, status domain.MemberStatus) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, mem := range m.members {
+		if mem.ChannelID == channelID && mem.UserID == userID {
+			mem.Status = status
+			m.members[id] = mem
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) UpdateMemberRole(_ context.Context, channelID, userID string, role domain.Role) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, mem := range m.members {
+		if mem.ChannelID == channelID && mem.UserID == userID {
+			mem.Role = role
+			m.members[id] = mem
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) RemoveMember(_ context.Context, channelID, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, mem := range m.members {
+		if mem.ChannelID == channelID && mem.UserID == userID {
+			delete(m.members, id)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) ChannelsForMember(_ context.Context, userID string) ([]domain.Channel, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.Channel
+	for _, mem := range m.members {
+		if mem.UserID != userID {
+			continue
+		}
+		if c, ok := m.channels[mem.ChannelID]; ok {
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
 }
 

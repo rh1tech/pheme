@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
@@ -43,6 +44,10 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected := http.NewServeMux()
 	protected.HandleFunc("POST /v1/channels", h.createChannel)
 	protected.HandleFunc("GET /v1/channels", h.listChannels)
+	// Literal segments; Go 1.22 mux prefers them over the {id} wildcard.
+	protected.HandleFunc("POST /v1/channels/join", h.joinChannel)
+	protected.HandleFunc("GET /v1/channels/joined", h.listJoinedChannels)
+	protected.HandleFunc("GET /v1/channels/{id}", h.getChannel)
 	protected.HandleFunc("PATCH /v1/channels/{id}", h.updateChannel)
 	protected.HandleFunc("DELETE /v1/channels/{id}", h.deleteChannel)
 	protected.HandleFunc("POST /v1/channels/{id}/keys", h.createKey)
@@ -53,6 +58,15 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("POST /v1/channels/{id}/subscribe", h.subscribe)
 	protected.HandleFunc("DELETE /v1/channels/{id}/subscribe", h.unsubscribe)
 	protected.HandleFunc("GET /v1/channels/{id}/subscription", h.subscriptionStatus)
+	// Membership (per-user), approvals queue, and subscriber management.
+	protected.HandleFunc("GET /v1/channels/{id}/membership", h.membership)
+	protected.HandleFunc("DELETE /v1/channels/{id}/membership", h.leaveChannel)
+	protected.HandleFunc("GET /v1/channels/{id}/approvals", h.listApprovals)
+	protected.HandleFunc("POST /v1/channels/{id}/approvals/{userId}", h.approveMember)
+	protected.HandleFunc("DELETE /v1/channels/{id}/approvals/{userId}", h.denyMember)
+	protected.HandleFunc("GET /v1/channels/{id}/members", h.listMembers)
+	protected.HandleFunc("PATCH /v1/channels/{id}/members/{userId}", h.updateMember)
+	protected.HandleFunc("DELETE /v1/channels/{id}/members/{userId}", h.removeMember)
 	protected.HandleFunc("GET /v1/channels/{id}/messages", h.listMessages)
 	protected.HandleFunc("GET /v1/channels/{id}/messages/{messageId}", h.getMessage)
 
@@ -139,6 +153,9 @@ func (h *AppHandler) listChannels(w http.ResponseWriter, r *http.Request) {
 type updateChannelRequest struct {
 	Name             string                  `json:"name"`
 	SubscriptionMode domain.SubscriptionMode `json:"subscriptionMode"`
+	// Alias is the phetag. A nil pointer leaves it unchanged; an empty string
+	// clears it; a non-empty string sets it (owner-only, validated, unique).
+	Alias *string `json:"alias,omitempty"`
 }
 
 func (h *AppHandler) updateChannel(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +181,24 @@ func (h *AppHandler) updateChannel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not update channel")
 		return
+	}
+	if req.Alias != nil {
+		alias := strings.TrimSpace(*req.Alias)
+		if alias != "" {
+			if verr := domain.ValidateAlias(alias); verr != nil {
+				httpx.Error(w, http.StatusBadRequest, verr.Error())
+				return
+			}
+		}
+		ch, err = h.Store.SetChannelAlias(r.Context(), channelID, alias)
+		if err != nil {
+			if err == store.ErrAliasTaken {
+				httpx.Error(w, http.StatusConflict, "that phetag is already taken")
+				return
+			}
+			httpx.Error(w, http.StatusInternalServerError, "could not update phetag")
+			return
+		}
 	}
 	httpx.JSON(w, http.StatusOK, ch)
 }
@@ -280,8 +315,8 @@ func (h *AppHandler) notifyChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	channelID := r.PathValue("id")
-	ch, err := h.channelByID(r, channelID)
-	if err != nil || ch.OwnerID != uid {
+	ch, ok := h.canAdminister(r, uid, channelID)
+	if !ok {
 		httpx.Error(w, http.StatusForbidden, "not your channel")
 		return
 	}
@@ -369,7 +404,6 @@ func (h *AppHandler) subscribe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_ = uid
 	channelID := r.PathValue("id")
 	var req subscribeRequest
 	if !httpx.Decode(w, r, &req) {
@@ -384,22 +418,15 @@ func (h *AppHandler) subscribe(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "channel not found")
 		return
 	}
-	// Open channels activate immediately; approval channels start pending.
-	status := domain.SubActive
-	if ch.SubscriptionMode == domain.ModeApproval && ch.OwnerID != uid {
-		status = domain.SubPending
-	}
-	sub, err := h.Store.Subscribe(r.Context(), domain.Subscription{
-		ChannelID: channelID,
-		DeviceID:  req.DeviceID,
-		Status:    status,
-		CreatedAt: time.Now().UTC(),
-	})
+	// Subscribing also establishes the caller's per-user membership (open →
+	// active, approval → pending), and the device subscription inherits the
+	// resulting status so push delivery stays consistent with approval state.
+	mem, err := h.join(r.Context(), uid, ch, req.DeviceID)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not subscribe")
 		return
 	}
-	httpx.JSON(w, http.StatusCreated, sub)
+	httpx.JSON(w, http.StatusCreated, map[string]any{"status": mem.Status, "membership": mem})
 }
 
 func (h *AppHandler) unsubscribe(w http.ResponseWriter, r *http.Request) {

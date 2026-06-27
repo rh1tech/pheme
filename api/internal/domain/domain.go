@@ -1,7 +1,12 @@
 // Package domain defines the core Pheme entities shared across services.
 package domain
 
-import "time"
+import (
+	"errors"
+	"regexp"
+	"strings"
+	"time"
+)
 
 // SubscriptionMode controls who may subscribe a device to a channel.
 type SubscriptionMode string
@@ -74,15 +79,46 @@ const (
 	ChannelDisabled ChannelStatus = "disabled"
 )
 
-// Channel is a named notification target with a public trigger ID.
+// Channel is a named notification target with a public trigger ID and an
+// optional public alias ("phetag") used to share and join it.
 type Channel struct {
-	ID               string           `bson:"_id,omitempty" json:"id"`
-	PublicID         string           `bson:"publicId" json:"publicId"`
-	OwnerID          string           `bson:"ownerId" json:"ownerId"`
-	Name             string           `bson:"name" json:"name"`
+	ID       string `bson:"_id,omitempty" json:"id"`
+	PublicID string `bson:"publicId" json:"publicId"`
+	OwnerID  string `bson:"ownerId" json:"ownerId"`
+	Name     string `bson:"name" json:"name"`
+	// Alias is the human-facing, shareable handle ("phetag"), e.g. "skg_news".
+	// Empty when unset. AliasLower is the lowercased form persisted alongside it
+	// so uniqueness can be enforced case-insensitively (mirrors Device.WebPushEndpoint).
+	Alias            string           `bson:"alias,omitempty" json:"alias,omitempty"`
+	AliasLower       string           `bson:"aliasLower,omitempty" json:"-"`
 	SubscriptionMode SubscriptionMode `bson:"subscriptionMode" json:"subscriptionMode"`
 	Status           ChannelStatus    `bson:"status" json:"status"`
 	CreatedAt        time.Time        `bson:"createdAt" json:"createdAt"`
+}
+
+// MemberStatus is the lifecycle state of a user's membership in a channel. It
+// mirrors SubscriptionStatus but is kept distinct: membership is the per-user
+// authority record (approval/ban/role), while a Subscription is per-device and
+// drives push delivery.
+type MemberStatus string
+
+const (
+	MemberActive  MemberStatus = "active"
+	MemberPending MemberStatus = "pending"
+	MemberBlocked MemberStatus = "blocked"
+)
+
+// ChannelMember is a user's membership in a channel: the per-channel role and
+// status used for approvals, bans, and moderation. The channel owner is the
+// implicit top authority and is not represented by a member row. Role reuses the
+// Role type but is a per-channel grant, distinct from the global User.Role.
+type ChannelMember struct {
+	ID        string       `bson:"_id,omitempty" json:"id"`
+	ChannelID string       `bson:"channelId" json:"channelId"`
+	UserID    string       `bson:"userId" json:"userId"`
+	Role      Role         `bson:"role" json:"role"`
+	Status    MemberStatus `bson:"status" json:"status"`
+	CreatedAt time.Time    `bson:"createdAt" json:"createdAt"`
 }
 
 // APIKey authenticates ingest requests for a channel. Only the hash is stored.
@@ -179,4 +215,27 @@ type AdminStats struct {
 	Devices        int64           `json:"devices"`
 	TopChannels    []ChannelVolume `json:"topChannels"`
 	RecentMessages []Message       `json:"recentMessages"`
+}
+
+// aliasPattern enforces the phetag charset and start-character rule. The length
+// bound (2–24) is implied by the quantifier and re-checked in ValidateAlias for
+// a clearer error message.
+var aliasPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9._-]{1,23}$`)
+
+// ErrInvalidAlias is returned by ValidateAlias when the alias is malformed.
+var ErrInvalidAlias = errors.New(
+	"alias must be 2–24 characters of letters, digits, '.', '-' or '_', not start with a digit, '.' or '-', and not use the reserved 'ch_' prefix")
+
+// ValidateAlias checks a channel alias ("phetag"): 2–24 characters drawn from
+// [a-zA-Z0-9._-], not starting with a digit, '.' or '-', and not using the
+// reserved "ch_" prefix (the shape of an auto-generated public trigger ID, so
+// aliases can never shadow that namespace).
+func ValidateAlias(alias string) error {
+	if len(alias) < 2 || len(alias) > 24 || !aliasPattern.MatchString(alias) {
+		return ErrInvalidAlias
+	}
+	if strings.HasPrefix(strings.ToLower(alias), "ch_") {
+		return ErrInvalidAlias
+	}
+	return nil
 }

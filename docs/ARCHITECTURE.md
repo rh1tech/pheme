@@ -44,17 +44,23 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 ## 4. Data model (MongoDB collections)
 
 - **users** — `_id, email, passwordHash (argon2id), createdAt`
-- **channels** — `_id, publicId, ownerId, name, subscriptionMode (open|approval), createdAt`
+- **channels** — `_id, publicId, ownerId, name, alias? ("phetag", unique case-insensitively via `aliasLower`), subscriptionMode (open|approval), createdAt`
 - **apiKeys** — `_id, channelId, hashedKey, prefix, label, createdAt, revokedAt?`
 - **devices** — `_id, userId, platform (ios|android|web), fcmToken?, webPushSub?, createdAt, lastSeenAt`
-- **subscriptions** — `_id, channelId, deviceId, status (active|pending|blocked), createdAt`
+- **subscriptions** — `_id, channelId, deviceId, status (active|pending|blocked), createdAt` — **per-device**, drives push delivery.
+- **channelMembers** — `_id, channelId, userId, role (admin|user), status (active|pending|blocked), createdAt` (unique `{channelId,userId}`). The **per-user** membership layer: the unit of approval, ban, and per-channel moderation role. The channel owner is the implicit top authority and has **no** member row. Membership does not gate the dispatcher; instead approve/ban/remove flip the user's device-subscription statuses, so delivery stays driven by `subscriptions`.
 - **messages** — `_id, channelId, title, body, images?, data?, createdAt` (indexed `{channelId, _id}` for cursor pagination). `images` is an ordered list of `{id, width, height}` (Instagram-style: shown before the text), up to 10 per message; `id` references a processed JPEG in the blob store.
 - **deliveries** — `_id, messageId, deviceId, status (sent|failed|skipped), error?, sentAt`
 - **images (blob store)** — processed JPEGs stored in **MongoDB GridFS** (`fs.files`/`fs.chunks`) under an unguessable random id, behind a `blob.Store` driver interface (memory | gridfs). Images are processed (validated, EXIF-oriented, downscaled so the longer edge ≤ 1000px, re-encoded as JPEG ~q82) at the API boundary **before** enqueue, so the broker payload only carries references. Deleting a channel/user cascades to its messages' image blobs.
 
 ### Subscription modes
-- `open` — any user with the public channel ID can subscribe; status `active` immediately.
-- `approval` — subscribing creates a `pending` row; the channel owner must approve.
+- `open` — any user with the channel's trigger ID or phetag can join; membership is `active` immediately.
+- `approval` — joining creates a `pending` membership; the owner (or a channel-admin) must approve it, which activates the user's devices.
+
+### Channel roles (per-channel)
+- **owner** — the single `ownerId`; can do everything, including delete the channel, change the phetag, and manage API keys.
+- **admin** (member role) — can approve/deny pending, ban/remove subscribers, change other members' roles, and send messages. Cannot delete the channel, change the phetag, or manage API keys.
+- **user** (member role) — a plain subscriber.
 
 ## 5. API surface (v1)
 
@@ -67,10 +73,13 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 ### App (user JWT)
 - `POST /v1/auth/register` (emails a 6-digit code) · `POST /v1/auth/verify` (confirms the code → creates the account, logs in) · `POST /v1/auth/login` · `POST /v1/auth/refresh`
 - `POST /v1/auth/forgot-password` (emails a reset code) · `POST /v1/auth/reset-password`
-- `POST /v1/channels` · `GET /v1/channels`
+- `POST /v1/channels` · `GET /v1/channels` (owned) · `GET /v1/channels/{id}` (single, with caller's relation) · `PATCH /v1/channels/{id}` (name/mode, and `alias` owner-only) · `DELETE /v1/channels/{id}`
 - `POST /v1/channels/{id}/keys` (returns plaintext key once) · `DELETE /v1/channels/{id}/keys/{keyId}`
 - `POST /v1/devices` · `DELETE /v1/devices/{id}`
-- `POST /v1/channels/{id}/subscribe` · `POST /v1/channels/{id}/approvals/{deviceId}`
+- **Join & membership:** `POST /v1/channels/join` (`{ref, deviceId?}` — ref is a trigger ID or phetag) · `GET /v1/channels/joined` · `GET /v1/channels/{id}/membership` · `DELETE /v1/channels/{id}/membership` (leave)
+- **Approvals (owner/admin):** `GET /v1/channels/{id}/approvals` · `POST /v1/channels/{id}/approvals/{userId}` (approve) · `DELETE /v1/channels/{id}/approvals/{userId}` (deny)
+- **Subscribers (owner/admin):** `GET /v1/channels/{id}/members?offset=&limit=` (lazy) · `PATCH /v1/channels/{id}/members/{userId}` (`{role?, status?}` — ban/unban, role change) · `DELETE /v1/channels/{id}/members/{userId}` (remove)
+- `POST /v1/channels/{id}/subscribe` (device-level; also establishes membership)
 - `GET /v1/channels/{id}/messages?cursor=&limit=&q=` · `GET /v1/channels/{id}/messages/{messageId}` (single message, for the detail view and notification deep-links) · `POST /v1/channels/{id}/notify` (owner sends from the UI; JSON or `multipart/form-data` with `images`, same as ingest)
 - `GET /v1/images/{id}` — serves a processed JPEG by id. **Public** (no JWT): the id is unguessable, devices/`<img>`/push fetch it without a bearer, and message history is already readable by any authenticated user. Long-cached (`immutable`).
 - `GET /v1/stream` — SSE live messages (token via query parameter)
