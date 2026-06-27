@@ -9,6 +9,7 @@ import { LoginPage } from './pages/LoginPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ChannelPage } from './pages/ChannelPage'
+import { JoinPage } from './pages/JoinPage'
 import { MessagePage } from './pages/MessagePage'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage'
@@ -35,6 +36,7 @@ export default function App() {
             }
           >
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/join" element={<JoinPage />} />
             <Route path="/channels/:id" element={<ChannelPage />} />
             <Route path="/channels/:id/messages/:messageId" element={<MessagePage />} />
             <Route path="/admin" element={adminRoute(<AdminOverviewPage />)} />

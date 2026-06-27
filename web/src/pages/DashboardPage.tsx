@@ -17,27 +17,34 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { notifyError, notifySuccess } from '../lib/notify'
-import type { Channel, SubscriptionMode } from '../lib/types'
+import type { Channel, JoinedChannel, SubscriptionMode } from '../lib/types'
 import { getWebPushState, registerWebPushDevice, webPushSupported } from '../lib/webpush'
 import { saveWebDeviceId } from '../lib/device'
-import { ModeBadge } from '../components/badges'
+import { ChannelRoleBadge, MemberStatusBadge, ModeBadge } from '../components/badges'
 import { CardListSkeleton } from '../components/Skeletons'
 
 export function DashboardPage() {
   const navigate = useNavigate()
   const { t } = useTranslation()
   const [channels, setChannels] = useState<Channel[]>([])
+  const [joined, setJoined] = useState<JoinedChannel[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
   const [name, setName] = useState('')
   const [mode, setMode] = useState<SubscriptionMode>('approval')
   const [creating, setCreating] = useState(false)
+  const [joinOpen, setJoinOpen] = useState(false)
+  const [joinRef, setJoinRef] = useState('')
+  const [joining, setJoining] = useState(false)
   const [pushOn, setPushOn] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
+  const joinRefInput = useRef<HTMLInputElement>(null)
 
   async function refresh() {
     try {
-      setChannels(await api.listChannels())
+      const [owned, mine] = await Promise.all([api.listChannels(), api.listJoinedChannels()])
+      setChannels(owned)
+      setJoined(mine)
     } catch (e) {
       notifyError(t('dashboard.loadFailed'), e)
     }
@@ -45,9 +52,12 @@ export function DashboardPage() {
 
   useEffect(() => {
     let active = true
-    api
-      .listChannels()
-      .then((cs) => active && setChannels(cs))
+    Promise.all([api.listChannels(), api.listJoinedChannels()])
+      .then(([owned, mine]) => {
+        if (!active) return
+        setChannels(owned)
+        setJoined(mine)
+      })
       .catch((e) => active && notifyError(t('dashboard.loadFailed'), e))
       .finally(() => active && setLoading(false))
     return () => {
@@ -60,6 +70,11 @@ export function DashboardPage() {
     setName('')
     setMode('approval')
     setModalOpen(true)
+  }
+
+  function openJoin() {
+    setJoinRef('')
+    setJoinOpen(true)
   }
 
   useEffect(() => {
@@ -85,6 +100,23 @@ export function DashboardPage() {
       notifyError(t('dashboard.createFailed'), e)
     } finally {
       setCreating(false)
+    }
+  }
+
+  async function joinChannel() {
+    const ref = joinRef.trim()
+    if (!ref) return
+    setJoining(true)
+    try {
+      const { channel } = await api.joinChannel(ref)
+      setJoinOpen(false)
+      await refresh()
+      notifySuccess(t('dashboard.joined'))
+      navigate(`/channels/${channel.id}`)
+    } catch (e) {
+      notifyError(t('dashboard.joinFailed'), e)
+    } finally {
+      setJoining(false)
     }
   }
 
@@ -142,56 +174,125 @@ export function DashboardPage() {
         </Stack>
       </Modal>
 
-      <Stack gap="md">
-        <Group justify="space-between">
-          <Title order={4}>{t('dashboard.yourChannels')}</Title>
-          <Group gap="xs">
-            {webPushSupported() &&
-              (pushOn ? (
-                <Badge
-                  color="teal"
-                  variant="light"
-                  size="lg"
-                  leftSection={<IconBellCheck size={14} />}
-                >
-                  {t('dashboard.notificationsOn')}
-                </Badge>
-              ) : (
-                <Button variant="subtle" size="xs" onClick={enableNotifications}>
-                  {t('dashboard.enableNotifications')}
-                </Button>
-              ))}
-            <Button size="xs" onClick={openCreate}>
-              {t('dashboard.newChannel')}
+      <Modal
+        opened={joinOpen}
+        onClose={() => setJoinOpen(false)}
+        title={t('dashboard.addChannelTitle')}
+        onEnterTransitionEnd={() => joinRefInput.current?.focus()}
+      >
+        <Stack gap="sm">
+          <TextInput
+            ref={joinRefInput}
+            label={t('dashboard.addChannelRef')}
+            placeholder={t('dashboard.addChannelRefPlaceholder')}
+            description={t('dashboard.addChannelRefHint')}
+            data-autofocus
+            value={joinRef}
+            onChange={(e) => setJoinRef(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === 'Enter' && joinChannel()}
+          />
+          <Group justify="flex-end" mt="sm">
+            <Button variant="default" onClick={() => setJoinOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button onClick={joinChannel} loading={joining} disabled={!joinRef.trim()}>
+              {t('dashboard.add')}
             </Button>
           </Group>
-        </Group>
-
-        <Stack gap="sm">
-          {loading && <CardListSkeleton rows={3} />}
-          {!loading && channels.length === 0 && (
-            <Text c="dimmed" size="sm">
-              {t('dashboard.noChannels')}
-            </Text>
-          )}
-          {!loading &&
-            channels.map((c) => (
-              <Card
-                key={c.id}
-                withBorder
-                padding="md"
-                className="pheme-card"
-                data-clickable="true"
-                style={{ cursor: 'pointer' }}
-                onClick={() => navigate(`/channels/${c.id}`)}
-              >
-                <Group justify="space-between">
-                  <Text fw={600}>{c.name}</Text>
-                  <ModeBadge mode={c.subscriptionMode} />
-                </Group>
-              </Card>
-            ))}
         </Stack>
+      </Modal>
+
+      <Stack gap="xl">
+        <Stack gap="md">
+          <Group justify="space-between">
+            <Title order={4}>{t('dashboard.yourChannels')}</Title>
+            <Group gap="xs">
+              {webPushSupported() &&
+                (pushOn ? (
+                  <Badge color="teal" variant="light" size="lg" leftSection={<IconBellCheck size={14} />}>
+                    {t('dashboard.notificationsOn')}
+                  </Badge>
+                ) : (
+                  <Button variant="subtle" size="xs" onClick={enableNotifications}>
+                    {t('dashboard.enableNotifications')}
+                  </Button>
+                ))}
+              <Button size="xs" variant="default" onClick={openJoin}>
+                {t('dashboard.addChannel')}
+              </Button>
+              <Button size="xs" onClick={openCreate}>
+                {t('dashboard.newChannel')}
+              </Button>
+            </Group>
+          </Group>
+
+          <Stack gap="sm">
+            {loading && <CardListSkeleton rows={3} />}
+            {!loading && channels.length === 0 && (
+              <Text c="dimmed" size="sm">
+                {t('dashboard.noChannels')}
+              </Text>
+            )}
+            {!loading &&
+              channels.map((c) => (
+                <Card
+                  key={c.id}
+                  withBorder
+                  padding="md"
+                  className="pheme-card"
+                  data-clickable="true"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => navigate(`/channels/${c.id}`)}
+                >
+                  <Group justify="space-between">
+                    <Group gap="xs">
+                      <Text fw={600}>{c.name}</Text>
+                      {c.alias && (
+                        <Text size="sm" c="dimmed">
+                          @{c.alias}
+                        </Text>
+                      )}
+                    </Group>
+                    <ModeBadge mode={c.subscriptionMode} />
+                  </Group>
+                </Card>
+              ))}
+          </Stack>
+        </Stack>
+
+        {!loading && joined.length > 0 && (
+          <Stack gap="md">
+            <Title order={4}>{t('dashboard.joinedChannels')}</Title>
+            <Stack gap="sm">
+              {joined.map((c) => (
+                <Card
+                  key={c.id}
+                  withBorder
+                  padding="md"
+                  className="pheme-card"
+                  data-clickable="true"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => navigate(`/channels/${c.id}`)}
+                >
+                  <Group justify="space-between">
+                    <Group gap="xs">
+                      <Text fw={600}>{c.name}</Text>
+                      {c.alias && (
+                        <Text size="sm" c="dimmed">
+                          @{c.alias}
+                        </Text>
+                      )}
+                    </Group>
+                    <Group gap="xs">
+                      {c.role === 'admin' && <ChannelRoleBadge role={c.role} />}
+                      <MemberStatusBadge status={c.memberStatus} />
+                    </Group>
+                  </Group>
+                </Card>
+              ))}
+            </Stack>
+          </Stack>
+        )}
       </Stack>
     </Container>
   )

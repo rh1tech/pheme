@@ -1,6 +1,6 @@
 import { Badge } from '@mantine/core'
 import { useTranslation } from 'react-i18next'
-import type { ChannelStatus, Role, SubscriptionMode, UserStatus } from '../lib/types'
+import type { ChannelRole, ChannelStatus, MemberStatus, Role, SubscriptionMode, UserStatus } from '../lib/types'
 
 /** Subscription mode (open / approval). Used on user and admin channel views. */
 export function ModeBadge({ mode }: { mode: SubscriptionMode }) {
@@ -34,6 +34,27 @@ export function RoleBadge({ role }: { role: Role }) {
   return (
     <Badge color={role === 'admin' ? 'grape' : 'gray'}>
       {role === 'admin' ? t('admin.roleAdmin') : t('admin.roleUser')}
+    </Badge>
+  )
+}
+
+/** Per-channel membership role (admin / user). */
+export function ChannelRoleBadge({ role }: { role: ChannelRole }) {
+  const { t } = useTranslation()
+  return (
+    <Badge color={role === 'admin' ? 'grape' : 'gray'} variant="light">
+      {role === 'admin' ? t('admin.roleAdmin') : t('admin.roleUser')}
+    </Badge>
+  )
+}
+
+/** Per-channel membership status (active / pending / blocked). */
+export function MemberStatusBadge({ status }: { status: MemberStatus }) {
+  const { t } = useTranslation()
+  const color = status === 'blocked' ? 'red' : status === 'pending' ? 'yellow' : 'teal'
+  return (
+    <Badge color={color} variant="light">
+      {t(`memberStatus.${status}`)}
     </Badge>
   )
 }

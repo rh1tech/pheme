@@ -26,15 +26,17 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core'
-import { IconBellCheck, IconDeviceMobile, IconPhoto, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
+import { IconBellCheck, IconDeviceMobile, IconLogout, IconPhoto, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
+import { QRCodeSVG } from 'qrcode.react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Trans, useTranslation } from 'react-i18next'
 import { api, imageUrl } from '../lib/api'
 import { notifyError, notifySuccess } from '../lib/notify'
-import type { ApiKey, Channel, CreatedKey, Message, SubscriptionMode } from '../lib/types'
+import type { ApiKey, ChannelRole, Channel, CreatedKey, Message, SubscriptionMode } from '../lib/types'
 import { useEventStream } from '../hooks/useEventStream'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { ModeBadge } from '../components/badges'
+import { SubscribersPanel } from '../components/SubscribersPanel'
 import { CardListSkeleton } from '../components/Skeletons'
 import { loadWebDeviceId, saveWebDeviceId } from '../lib/device'
 import { registerWebPushDevice, webPushAvailability } from '../lib/webpush'
@@ -48,6 +50,8 @@ export function ChannelPage() {
   const navigate = useNavigate()
   const { t } = useTranslation()
   const [channel, setChannel] = useState<Channel | null>(null)
+  const [isOwner, setIsOwner] = useState(false)
+  const [myRole, setMyRole] = useState<ChannelRole | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [loadingMessages, setLoadingMessages] = useState(true)
   const [cursor, setCursor] = useState('')
@@ -63,25 +67,32 @@ export function ChannelPage() {
 
   const [editName, setEditName] = useState('')
   const [editMode, setEditMode] = useState<SubscriptionMode>('approval')
+  const [editAlias, setEditAlias] = useState('')
   const [savingSettings, setSavingSettings] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [confirmLeave, setConfirmLeave] = useState(false)
+  const [leaving, setLeaving] = useState(false)
   const [subStatus, setSubStatus] = useState<'active' | 'pending' | 'none'>('none')
   const [subBusy, setSubBusy] = useState(false)
   const pushAvailability = webPushAvailability()
+  const canModerate = isOwner || myRole === 'admin'
+  // Absolute deep link encoded in the share QR (resolved by the /join route).
+  const shareRef = channel?.alias || channel?.publicId || id
+  const shareUrl = `${window.location.origin}/join?ref=${encodeURIComponent(shareRef)}`
 
   useEffect(() => {
     let active = true
     api
-      .listChannels()
-      .then((cs) => {
+      .getChannel(id)
+      .then((rel) => {
         if (!active) return
-        const found = cs.find((c) => c.id === id) ?? null
-        setChannel(found)
-        if (found) {
-          setEditName(found.name)
-          setEditMode(found.subscriptionMode)
-        }
+        setChannel(rel.channel)
+        setIsOwner(rel.isOwner)
+        setMyRole(rel.role)
+        setEditName(rel.channel.name)
+        setEditMode(rel.channel.subscriptionMode)
+        setEditAlias(rel.channel.alias ?? '')
       })
       .catch(() => active && setChannel(null))
     return () => {
@@ -114,6 +125,7 @@ export function ChannelPage() {
   }, [id])
 
   useEffect(() => {
+    if (!isOwner) return
     let active = true
     api
       .listKeys(id)
@@ -122,7 +134,7 @@ export function ChannelPage() {
     return () => {
       active = false
     }
-  }, [id])
+  }, [id, isOwner])
 
   // Load whether this browser's device is subscribed to the channel.
   useEffect(() => {
@@ -277,13 +289,30 @@ export function ChannelPage() {
   async function saveSettings() {
     setSavingSettings(true)
     try {
-      const updated = await api.updateChannel(id, { name: editName.trim(), subscriptionMode: editMode })
+      const updated = await api.updateChannel(id, {
+        name: editName.trim(),
+        subscriptionMode: editMode,
+        alias: editAlias.trim(),
+      })
       setChannel(updated)
+      setEditAlias(updated.alias ?? '')
       notifySuccess(t('channel.channelUpdated'))
     } catch (e) {
       notifyError(t('channel.updateFailed'), e)
     } finally {
       setSavingSettings(false)
+    }
+  }
+
+  async function leaveChannel() {
+    setLeaving(true)
+    try {
+      await api.leaveChannel(id)
+      notifySuccess(t('channel.left'))
+      navigate('/', { replace: true })
+    } catch (e) {
+      notifyError(t('channel.leaveFailed'), e)
+      setLeaving(false)
     }
   }
 
@@ -332,6 +361,19 @@ export function ChannelPage() {
         </Text>
       </ConfirmModal>
 
+      <ConfirmModal
+        opened={confirmLeave}
+        onClose={() => setConfirmLeave(false)}
+        onConfirm={leaveChannel}
+        title={t('channel.leave')}
+        confirmLabel={t('channel.leave')}
+        loading={leaving}
+      >
+        <Text size="sm">
+          <Trans i18nKey="channel.leaveConfirm" values={{ name: channel?.name ?? '' }} components={{ bold: <b /> }} />
+        </Text>
+      </ConfirmModal>
+
       <Stack gap="lg">
         <Breadcrumbs>
           <Anchor component={Link} to="/">
@@ -343,7 +385,14 @@ export function ChannelPage() {
         <Card withBorder padding="lg">
           <Group justify="space-between" align="flex-start">
             <Stack gap={4}>
-              <Title order={4}>{channel?.name ?? t('channel.fallbackName')}</Title>
+              <Group gap="xs" align="center">
+                <Title order={4}>{channel?.name ?? t('channel.fallbackName')}</Title>
+                {channel?.alias && (
+                  <Text size="sm" c="dimmed">
+                    @{channel.alias}
+                  </Text>
+                )}
+              </Group>
               <Group gap="xs">
                 <Text size="sm" c="dimmed">
                   {t('channel.triggerId')}
@@ -365,8 +414,9 @@ export function ChannelPage() {
         <Tabs defaultValue="messages" keepMounted={false}>
           <Tabs.List mb="md">
             <Tabs.Tab value="messages">{t('channel.tabs.messages')}</Tabs.Tab>
-            <Tabs.Tab value="send">{t('channel.tabs.send')}</Tabs.Tab>
-            <Tabs.Tab value="keys">{t('channel.tabs.keys')}</Tabs.Tab>
+            {canModerate && <Tabs.Tab value="send">{t('channel.tabs.send')}</Tabs.Tab>}
+            {canModerate && <Tabs.Tab value="subscribers">{t('channel.tabs.subscribers')}</Tabs.Tab>}
+            {isOwner && <Tabs.Tab value="keys">{t('channel.tabs.keys')}</Tabs.Tab>}
             <Tabs.Tab value="settings">{t('channel.tabs.settings')}</Tabs.Tab>
           </Tabs.List>
 
@@ -465,6 +515,13 @@ export function ChannelPage() {
             </Stack>
           </Tabs.Panel>
 
+          {canModerate && (
+          <Tabs.Panel value="subscribers">
+            <SubscribersPanel channelId={id} />
+          </Tabs.Panel>
+          )}
+
+          {canModerate && (
           <Tabs.Panel value="send">
             <Stack gap="sm">
               <TextInput
@@ -533,7 +590,9 @@ export function ChannelPage() {
               </Group>
             </Stack>
           </Tabs.Panel>
+          )}
 
+          {isOwner && (
           <Tabs.Panel value="keys">
             <Stack gap="sm">
               <Group justify="flex-end">
@@ -577,34 +636,71 @@ export function ChannelPage() {
               )}
             </Stack>
           </Tabs.Panel>
+          )}
 
           <Tabs.Panel value="settings">
             <Stack gap="lg">
-              <Stack gap="sm">
-                <TextInput
-                  label={t('dashboard.channelName')}
-                  value={editName}
-                  onChange={(e) => setEditName(e.currentTarget.value)}
-                />
-                <div>
-                  <Text size="sm" fw={500} mb={4}>
-                    {t('channel.subscriptionMode')}
-                  </Text>
-                  <SegmentedControl
-                    value={editMode}
-                    onChange={(v) => setEditMode(v as SubscriptionMode)}
-                    data={[
-                      { label: t('mode.approval'), value: 'approval' },
-                      { label: t('mode.open'), value: 'open' },
-                    ]}
-                  />
-                </div>
-                <Group justify="flex-end">
-                  <Button onClick={saveSettings} loading={savingSettings} disabled={!editName.trim()}>
-                    {t('channel.saveChanges')}
-                  </Button>
-                </Group>
-              </Stack>
+              {isOwner && (
+                <>
+                  <Stack gap="sm">
+                    <TextInput
+                      label={t('dashboard.channelName')}
+                      value={editName}
+                      onChange={(e) => setEditName(e.currentTarget.value)}
+                    />
+                    <TextInput
+                      label={t('channel.phetagLabel')}
+                      placeholder={t('channel.phetagPlaceholder')}
+                      description={t('channel.phetagHint')}
+                      leftSection={<Text size="sm" c="dimmed">@</Text>}
+                      value={editAlias}
+                      onChange={(e) => setEditAlias(e.currentTarget.value)}
+                    />
+                    <div>
+                      <Text size="sm" fw={500} mb={4}>
+                        {t('channel.subscriptionMode')}
+                      </Text>
+                      <SegmentedControl
+                        value={editMode}
+                        onChange={(v) => setEditMode(v as SubscriptionMode)}
+                        data={[
+                          { label: t('mode.approval'), value: 'approval' },
+                          { label: t('mode.open'), value: 'open' },
+                        ]}
+                      />
+                    </div>
+                    <Group justify="flex-end">
+                      <Button onClick={saveSettings} loading={savingSettings} disabled={!editName.trim()}>
+                        {t('channel.saveChanges')}
+                      </Button>
+                    </Group>
+                  </Stack>
+
+                  <Card withBorder padding="md">
+                    <Stack gap="sm" align="center">
+                      <Stack gap={2} align="center">
+                        <Text fw={600}>{t('channel.shareTitle')}</Text>
+                        <Text size="sm" c="dimmed" ta="center">
+                          {t('channel.shareDescription')}
+                        </Text>
+                      </Stack>
+                      <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
+                        <QRCodeSVG value={shareUrl} size={168} />
+                      </div>
+                      <Group gap="xs">
+                        <Code>{channel?.alias ? `@${channel.alias}` : (channel?.publicId ?? id)}</Code>
+                        <CopyButton value={shareRef}>
+                          {({ copied, copy }) => (
+                            <Button size="compact-xs" variant="subtle" onClick={copy}>
+                              {copied ? t('common.copied') : t('common.copy')}
+                            </Button>
+                          )}
+                        </CopyButton>
+                      </Group>
+                    </Stack>
+                  </Card>
+                </>
+              )}
 
               <Card withBorder padding="md">
                 <Group justify="space-between">
@@ -651,19 +747,40 @@ export function ChannelPage() {
                 )}
               </Card>
 
-              <Card withBorder padding="md" style={{ borderColor: 'var(--mantine-color-red-4)' }}>
-                <Group justify="space-between">
-                  <Stack gap={2}>
-                    <Text fw={600}>{t('channel.dangerTitle')}</Text>
-                    <Text size="sm" c="dimmed">
-                      {t('channel.dangerDescription')}
-                    </Text>
-                  </Stack>
-                  <Button color="red" variant="outline" onClick={() => setConfirmDelete(true)}>
-                    {t('common.delete')}
-                  </Button>
-                </Group>
-              </Card>
+              {isOwner ? (
+                <Card withBorder padding="md" style={{ borderColor: 'var(--mantine-color-red-4)' }}>
+                  <Group justify="space-between">
+                    <Stack gap={2}>
+                      <Text fw={600}>{t('channel.dangerTitle')}</Text>
+                      <Text size="sm" c="dimmed">
+                        {t('channel.dangerDescription')}
+                      </Text>
+                    </Stack>
+                    <Button color="red" variant="outline" onClick={() => setConfirmDelete(true)}>
+                      {t('common.delete')}
+                    </Button>
+                  </Group>
+                </Card>
+              ) : (
+                <Card withBorder padding="md" style={{ borderColor: 'var(--mantine-color-red-4)' }}>
+                  <Group justify="space-between">
+                    <Stack gap={2}>
+                      <Text fw={600}>{t('channel.leaveTitle')}</Text>
+                      <Text size="sm" c="dimmed">
+                        {t('channel.leaveDescription')}
+                      </Text>
+                    </Stack>
+                    <Button
+                      color="red"
+                      variant="outline"
+                      leftSection={<IconLogout size={16} />}
+                      onClick={() => setConfirmLeave(true)}
+                    >
+                      {t('channel.leave')}
+                    </Button>
+                  </Group>
+                </Card>
+              )}
             </Stack>
           </Tabs.Panel>
         </Tabs>

@@ -13,10 +13,15 @@ import type {
   AdminUser,
   ApiKey,
   Channel,
+  ChannelRelation,
+  ChannelRole,
   ChannelStatus,
   CodeSentResponse,
   CreatedKey,
   Device,
+  JoinedChannel,
+  Member,
+  MemberStatus,
   Message,
   Meta,
   MessagesPage,
@@ -158,11 +163,39 @@ export const api = {
 
   // Channels
   listChannels: () => request<{ channels: Channel[] }>('/v1/channels').then((r) => r.channels ?? []),
+  getChannel: (id: string) => request<ChannelRelation>(`/v1/channels/${id}`),
   createChannel: (name: string, subscriptionMode: SubscriptionMode) =>
     request<Channel>('/v1/channels', { method: 'POST', body: { name, subscriptionMode } }),
-  updateChannel: (id: string, body: { name?: string; subscriptionMode?: SubscriptionMode }) =>
+  updateChannel: (id: string, body: { name?: string; subscriptionMode?: SubscriptionMode; alias?: string }) =>
     request<Channel>(`/v1/channels/${id}`, { method: 'PATCH', body }),
   deleteChannel: (id: string) => request<void>(`/v1/channels/${id}`, { method: 'DELETE' }),
+
+  // Membership: join by trigger ID or phetag, the caller's joined channels, and leaving.
+  joinChannel: (ref: string, deviceId?: string) =>
+    request<{ channel: Channel }>('/v1/channels/join', { method: 'POST', body: { ref, deviceId } }),
+  listJoinedChannels: () =>
+    request<{ channels: JoinedChannel[] }>('/v1/channels/joined').then((r) => r.channels ?? []),
+  leaveChannel: (id: string) => request<void>(`/v1/channels/${id}/membership`, { method: 'DELETE' }),
+
+  // Approvals & subscriber management (owner / channel-admin).
+  listApprovals: (channelId: string) =>
+    request<{ members: Member[]; total: number }>(`/v1/channels/${channelId}/approvals`).then(
+      (r) => r.members ?? [],
+    ),
+  approveMember: (channelId: string, userId: string) =>
+    request<unknown>(`/v1/channels/${channelId}/approvals/${userId}`, { method: 'POST' }),
+  denyMember: (channelId: string, userId: string) =>
+    request<void>(`/v1/channels/${channelId}/approvals/${userId}`, { method: 'DELETE' }),
+  listMembers: (channelId: string, offset = 0, limit = 50) => {
+    const p = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+    return request<{ members: Member[]; total: number; offset: number; limit: number }>(
+      `/v1/channels/${channelId}/members?${p.toString()}`,
+    ).then((r) => ({ items: r.members ?? [], total: r.total, offset: r.offset, limit: r.limit }))
+  },
+  updateMember: (channelId: string, userId: string, body: { role?: ChannelRole; status?: MemberStatus }) =>
+    request<unknown>(`/v1/channels/${channelId}/members/${userId}`, { method: 'PATCH', body }),
+  removeMember: (channelId: string, userId: string) =>
+    request<void>(`/v1/channels/${channelId}/members/${userId}`, { method: 'DELETE' }),
 
   // API keys
   createKey: (channelId: string) =>

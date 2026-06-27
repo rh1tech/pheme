@@ -5,6 +5,9 @@ export type Platform = 'ios' | 'android' | 'web'
 export type Role = 'user' | 'admin'
 export type UserStatus = 'active' | 'blocked'
 export type ChannelStatus = 'active' | 'disabled'
+// Per-channel membership role (distinct from the global user Role) and status.
+export type ChannelRole = 'user' | 'admin'
+export type MemberStatus = 'active' | 'pending' | 'blocked'
 
 export interface TokenResponse {
   accessToken: string
@@ -24,8 +27,34 @@ export interface Channel {
   publicId: string
   ownerId: string
   name: string
+  alias?: string
   subscriptionMode: SubscriptionMode
   status: ChannelStatus
+  createdAt: string
+}
+
+// A channel the caller has joined, with their per-channel role and member status.
+export interface JoinedChannel extends Channel {
+  role: ChannelRole
+  memberStatus: MemberStatus
+}
+
+// The caller's relationship to a channel (from GET /v1/channels/:id).
+export interface ChannelRelation {
+  channel: Channel
+  isOwner: boolean
+  role: ChannelRole
+  status: MemberStatus | 'none'
+}
+
+// A channel subscriber (member), with the user's email for display.
+export interface Member {
+  id: string
+  channelId: string
+  userId: string
+  email: string
+  role: ChannelRole
+  status: MemberStatus
   createdAt: string
 }
 
