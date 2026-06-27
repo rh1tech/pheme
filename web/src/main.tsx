@@ -12,8 +12,10 @@ import { theme } from './theme'
 import App from './App.tsx'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { lockViewportZoom } from './lib/mobile'
+import { registerServiceWorker } from './lib/sw'
 
 lockViewportZoom()
+registerServiceWorker()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
