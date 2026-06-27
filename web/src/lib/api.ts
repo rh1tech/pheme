@@ -17,6 +17,7 @@ import type {
   CodeSentResponse,
   CreatedKey,
   Device,
+  Message,
   Meta,
   MessagesPage,
   Platform,
@@ -199,6 +200,8 @@ export const api = {
     ).then((r) => r.status),
 
   // Messages
+  getMessage: (channelId: string, messageId: string) =>
+    request<Message>(`/v1/channels/${channelId}/messages/${messageId}`),
   listMessages: (channelId: string, cursor = '', query = '', limit = 50) => {
     const q = new URLSearchParams()
     if (cursor) q.set('cursor', cursor)

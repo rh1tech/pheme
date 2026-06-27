@@ -213,3 +213,44 @@ func TestServeMissingImageIs404(t *testing.T) {
 		t.Fatalf("missing image status = %d, want 404", rec.Code)
 	}
 }
+
+func TestGetSingleMessage(t *testing.T) {
+	f := newAppFixture(t)
+	token, _ := f.tokenFor(t, "owner@b.com")
+	ch := f.newChannel(t, token, "Detail")
+
+	// Persist a message directly (the dispatcher would normally do this).
+	saved, err := f.store.CreateMessage(context.Background(), domain.Message{
+		ChannelID: ch.ID,
+		Title:     "Hello",
+		Body:      "World",
+		Images:    []domain.MessageImage{{ID: "img1", Width: 800, Height: 600}},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+
+	rec := f.do(http.MethodGet, "/v1/channels/"+ch.ID+"/messages/"+saved.ID, token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get message status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	var got domain.Message
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode message: %v", err)
+	}
+	if got.ID != saved.ID || got.Title != "Hello" || len(got.Images) != 1 {
+		t.Fatalf("unexpected message: %+v", got)
+	}
+
+	// Unknown id → 404.
+	if rec := f.do(http.MethodGet, "/v1/channels/"+ch.ID+"/messages/nope", token, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing message status = %d, want 404", rec.Code)
+	}
+
+	// Mismatched channel → 404 (message exists but not in that channel).
+	other := f.newChannel(t, token, "Other")
+	if rec := f.do(http.MethodGet, "/v1/channels/"+other.ID+"/messages/"+saved.ID, token, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-channel status = %d, want 404", rec.Code)
+	}
+}

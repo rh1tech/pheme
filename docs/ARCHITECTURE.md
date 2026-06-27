@@ -71,7 +71,7 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - `POST /v1/channels/{id}/keys` (returns plaintext key once) · `DELETE /v1/channels/{id}/keys/{keyId}`
 - `POST /v1/devices` · `DELETE /v1/devices/{id}`
 - `POST /v1/channels/{id}/subscribe` · `POST /v1/channels/{id}/approvals/{deviceId}`
-- `GET /v1/channels/{id}/messages?cursor=&limit=&q=` · `POST /v1/channels/{id}/notify` (owner sends from the UI; JSON or `multipart/form-data` with `images`, same as ingest)
+- `GET /v1/channels/{id}/messages?cursor=&limit=&q=` · `GET /v1/channels/{id}/messages/{messageId}` (single message, for the detail view and notification deep-links) · `POST /v1/channels/{id}/notify` (owner sends from the UI; JSON or `multipart/form-data` with `images`, same as ingest)
 - `GET /v1/images/{id}` — serves a processed JPEG by id. **Public** (no JWT): the id is unguessable, devices/`<img>`/push fetch it without a bearer, and message history is already readable by any authenticated user. Long-cached (`immutable`).
 - `GET /v1/stream` — SSE live messages (token via query parameter)
 
@@ -92,6 +92,7 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - Public ingest endpoint protected by per-key Redis token-bucket rate limiting and idempotency keys (dedupe website retries).
 - FCM service-account JSON and Web Push VAPID keys are injected as runtime secrets — never committed.
 - **Message images** are processed server-side (validated, EXIF-oriented, downscaled to ≤ 1000px on the longer edge, re-encoded as JPEG ~q82), which also strips EXIF/GPS metadata. Per-image upload is capped at 10 MB and 10 images per message. Blobs use unguessable random ids and are served public, immutable, and long-cached. Push notifications include the first image's absolute URL when `PHEME_PUBLIC_API_URL` is set (the externally reachable App API base); unset simply omits the notification image.
+- **Notification deep-linking.** Push payloads carry `channelId` and `messageId` in their data; tapping a notification opens the message-detail view (web service worker, and mobile via `onMessageOpenedApp`/`getInitialMessage`) rather than the channel list. Message lists show only the first image as a cover; the detail view shows all images in a carousel.
 
 ## 7. Reliability — "no messages lost"
 1. Ingest acks the website only after RabbitMQ confirms the publish (publisher confirms).

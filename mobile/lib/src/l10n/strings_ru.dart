@@ -86,6 +86,8 @@ const Map<String, String> ruStrings = {
   'channel.send': 'Отправить',
   'channel.messageSent': 'Сообщение отправлено',
   'channel.sendFailed': 'Не удалось отправить',
+  'channel.messageView': 'Сообщение',
+  'channel.messageNotFound': 'Это сообщение не найдено.',
   'channel.images': 'Изображения',
   'channel.addImages': 'Добавить изображения',
   'channel.imagesHint': 'До {max} изображений (не более 10 МБ каждое).',

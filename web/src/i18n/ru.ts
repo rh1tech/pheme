@@ -99,6 +99,8 @@ const ru: Resources = {
     sendFailed: 'Не удалось отправить',
     searchFailed: 'Ошибка поиска',
     noTitle: '(без заголовка)',
+    messageView: 'Сообщение',
+    messageNotFound: 'Это сообщение не найдено.',
     images: 'Изображения',
     addImages: 'Добавить изображения',
     imagesHint: 'До {{max}} изображений (JPG/PNG/WebP, не более 10 МБ каждое).',

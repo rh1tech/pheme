@@ -49,7 +49,7 @@ func (s *FCMSender) Send(ctx context.Context, msg domain.Message, devices []doma
 		batch = append(batch, &messaging.Message{
 			Token:        d.FCMToken,
 			Notification: &messaging.Notification{Title: msg.Title, Body: msg.Body, ImageURL: img},
-			Data:         msg.Data,
+			Data:         notificationData(msg),
 		})
 		batched = append(batched, d.ID)
 	}

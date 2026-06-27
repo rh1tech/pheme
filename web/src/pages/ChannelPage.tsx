@@ -29,12 +29,11 @@ import {
 import { IconBellCheck, IconDeviceMobile, IconPhoto, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Trans, useTranslation } from 'react-i18next'
-import { api } from '../lib/api'
+import { api, imageUrl } from '../lib/api'
 import { notifyError, notifySuccess } from '../lib/notify'
 import type { ApiKey, Channel, CreatedKey, Message, SubscriptionMode } from '../lib/types'
 import { useEventStream } from '../hooks/useEventStream'
 import { ConfirmModal } from '../components/ConfirmModal'
-import { ImageCarousel } from '../components/ImageCarousel'
 import { ModeBadge } from '../components/badges'
 import { CardListSkeleton } from '../components/Skeletons'
 import { loadWebDeviceId, saveWebDeviceId } from '../lib/device'
@@ -411,16 +410,48 @@ export function ChannelPage() {
               )}
               {!loadingMessages &&
                 messages.map((m) => (
-                  <Card key={m.id} withBorder padding="sm">
+                  <Card
+                    key={m.id}
+                    withBorder
+                    padding="sm"
+                    component={Link}
+                    to={`/channels/${id}/messages/${m.id}`}
+                    className="pheme-card"
+                    data-clickable="true"
+                  >
                     <Stack gap="xs">
-                      {m.images && m.images.length > 0 && <ImageCarousel images={m.images} />}
+                      {m.images && m.images.length > 0 && (
+                        <div style={{ position: 'relative' }}>
+                          <Image
+                            src={imageUrl(m.images[0].id)}
+                            alt={m.title || t('channel.noTitle')}
+                            h={160}
+                            radius="sm"
+                            fit="cover"
+                          />
+                          {m.images.length > 1 && (
+                            <Badge
+                              variant="filled"
+                              color="dark"
+                              leftSection={<IconPhoto size={12} />}
+                              style={{ position: 'absolute', top: 8, right: 8 }}
+                            >
+                              {m.images.length}
+                            </Badge>
+                          )}
+                        </div>
+                      )}
                       <Group justify="space-between" align="flex-start" wrap="nowrap">
                         <Text fw={600}>{m.title || t('channel.noTitle')}</Text>
                         <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
                           {new Date(m.createdAt).toLocaleString()}
                         </Text>
                       </Group>
-                      {m.body && <Text size="sm">{m.body}</Text>}
+                      {m.body && (
+                        <Text size="sm" lineClamp={2}>
+                          {m.body}
+                        </Text>
+                      )}
                     </Stack>
                   </Card>
                 ))}

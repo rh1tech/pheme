@@ -39,7 +39,7 @@ type webPushPayload struct {
 // Send delivers msg to each device with a Web Push subscription. Devices without
 // one are reported as skipped.
 func (s *WebPushSender) Send(ctx context.Context, msg domain.Message, devices []domain.Device) ([]Result, error) {
-	payload, err := json.Marshal(webPushPayload{Title: msg.Title, Body: msg.Body, Image: imageURL(s.publicBaseURL, msg), Data: msg.Data})
+	payload, err := json.Marshal(webPushPayload{Title: msg.Title, Body: msg.Body, Image: imageURL(s.publicBaseURL, msg), Data: notificationData(msg)})
 	if err != nil {
 		return nil, err
 	}

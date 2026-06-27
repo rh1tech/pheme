@@ -54,6 +54,7 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("DELETE /v1/channels/{id}/subscribe", h.unsubscribe)
 	protected.HandleFunc("GET /v1/channels/{id}/subscription", h.subscriptionStatus)
 	protected.HandleFunc("GET /v1/channels/{id}/messages", h.listMessages)
+	protected.HandleFunc("GET /v1/channels/{id}/messages/{messageId}", h.getMessage)
 
 	if h.Admin != nil {
 		h.Admin.Register(protected)
@@ -461,6 +462,22 @@ func (h *AppHandler) listMessages(w http.ResponseWriter, r *http.Request) {
 		next = msgs[len(msgs)-1].ID
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"messages": msgs, "nextCursor": next})
+}
+
+// getMessage returns a single message by id (for the message-detail view and
+// notification deep-links). Like listMessages, it is readable by any
+// authenticated user; the message must belong to the channel in the path.
+func (h *AppHandler) getMessage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireUser(w, r); !ok {
+		return
+	}
+	channelID := r.PathValue("id")
+	msg, err := h.Store.MessageByID(r.Context(), r.PathValue("messageId"))
+	if err != nil || msg.ChannelID != channelID {
+		httpx.Error(w, http.StatusNotFound, "message not found")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, msg)
 }
 
 // stream is a Server-Sent Events endpoint delivering live messages. It accepts

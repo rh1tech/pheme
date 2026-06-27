@@ -155,6 +155,11 @@ class PhemeRepository {
 
   // --- Messages ---
 
+  Future<Message> getMessage(String channelId, String messageId) async {
+    final data = await _get('/v1/channels/$channelId/messages/$messageId');
+    return Message.fromJson(data);
+  }
+
   Future<MessagesPage> listMessages(
     String channelId, {
     String cursor = '',

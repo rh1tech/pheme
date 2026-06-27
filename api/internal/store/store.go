@@ -82,6 +82,7 @@ type Store interface {
 	// Messages & deliveries
 	CreateMessage(ctx context.Context, m domain.Message) (domain.Message, error)
 	MessagesByChannel(ctx context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error)
+	MessageByID(ctx context.Context, id string) (domain.Message, error)
 	CreateDelivery(ctx context.Context, d domain.Delivery) (domain.Delivery, error)
 
 	// Admin

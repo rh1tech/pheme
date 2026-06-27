@@ -491,6 +491,16 @@ func (m *Memory) CreateMessage(_ context.Context, msg domain.Message) (domain.Me
 // MessagesByChannel returns messages newest-first. cursor is an exclusive upper
 // bound on message ID; empty means from the newest. query, if non-empty, keeps
 // only messages whose title or body contains it (case-insensitive).
+func (m *Memory) MessageByID(_ context.Context, id string) (domain.Message, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	msg, ok := m.messages[id]
+	if !ok {
+		return domain.Message{}, ErrNotFound
+	}
+	return msg, nil
+}
+
 func (m *Memory) MessagesByChannel(_ context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

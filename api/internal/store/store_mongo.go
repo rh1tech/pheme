@@ -433,6 +433,15 @@ func (m *Mongo) CreateMessage(ctx context.Context, msg domain.Message) (domain.M
 // MessagesByChannel returns messages newest-first. cursor is an exclusive
 // message ID: results continue from just after that message. query, if
 // non-empty, keeps only messages whose title or body matches (case-insensitive).
+func (m *Mongo) MessageByID(ctx context.Context, id string) (domain.Message, error) {
+	var msg domain.Message
+	err := m.db.Collection("messages").FindOne(ctx, bson.M{"_id": id}).Decode(&msg)
+	if err != nil {
+		return domain.Message{}, mapErr(err)
+	}
+	return msg, nil
+}
+
 func (m *Mongo) MessagesByChannel(ctx context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error) {
 	filter := bson.M{"channelId": channelID}
 	if q := strings.TrimSpace(query); q != "" {

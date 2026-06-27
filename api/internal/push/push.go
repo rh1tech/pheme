@@ -31,6 +31,19 @@ func imageURL(publicBaseURL string, msg domain.Message) string {
 	return strings.TrimRight(publicBaseURL, "/") + "/v1/images/" + msg.Images[0].ID
 }
 
+// notificationData returns the data payload sent with a push notification: the
+// message's user-supplied data plus channelId and messageId, so a notification
+// tap can deep-link to the specific message.
+func notificationData(msg domain.Message) map[string]string {
+	data := make(map[string]string, len(msg.Data)+2)
+	for k, v := range msg.Data {
+		data[k] = v
+	}
+	data["channelId"] = msg.ChannelID
+	data["messageId"] = msg.ID
+	return data
+}
+
 // LogSender is a development Sender that logs instead of delivering. Every
 // device is reported as skipped so the pipeline can be exercised without
 // configured FCM/Web Push credentials.

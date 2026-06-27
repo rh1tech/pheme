@@ -33,5 +33,25 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  event.waitUntil(self.clients.openWindow('/'))
+
+  // Deep-link to the specific message when the server provided the ids; else
+  // fall back to the app root.
+  const data = event.notification.data || {}
+  const target =
+    data.channelId && data.messageId
+      ? `/channels/${data.channelId}/messages/${data.messageId}`
+      : '/'
+
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      // Reuse an open tab if one exists: navigate it and bring it to the front.
+      for (const client of clients) {
+        if ('focus' in client) {
+          client.navigate(target).catch(() => {})
+          return client.focus()
+        }
+      }
+      return self.clients.openWindow(target)
+    }),
+  )
 })

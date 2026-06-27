@@ -6,6 +6,7 @@ import 'auth/forgot_password_page.dart';
 import 'auth/login_page.dart';
 import 'channels/channel_page.dart';
 import 'channels/channels_page.dart';
+import 'channels/message_page.dart';
 import 'core/providers.dart';
 import 'settings/settings_page.dart';
 
@@ -45,6 +46,15 @@ final routerProvider = Provider<GoRouter>((ref) {
             path: 'channels/:id',
             builder: (context, state) =>
                 ChannelPage(channelId: state.pathParameters['id']!),
+            routes: [
+              GoRoute(
+                path: 'messages/:mid',
+                builder: (context, state) => MessagePage(
+                  channelId: state.pathParameters['id']!,
+                  messageId: state.pathParameters['mid']!,
+                ),
+              ),
+            ],
           ),
         ],
       ),

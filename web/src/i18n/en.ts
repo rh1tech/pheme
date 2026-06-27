@@ -97,6 +97,8 @@ const en = {
     sendFailed: 'Send failed',
     searchFailed: 'Search failed',
     noTitle: '(no title)',
+    messageView: 'Message',
+    messageNotFound: 'This message could not be found.',
     images: 'Images',
     addImages: 'Add images',
     imagesHint: 'Add up to {{max}} images (JPG/PNG/WebP, max 10 MB each).',

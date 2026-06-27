@@ -89,6 +89,8 @@ const Map<String, String> enStrings = {
   'channel.send': 'Send',
   'channel.messageSent': 'Message sent',
   'channel.sendFailed': 'Send failed',
+  'channel.messageView': 'Message',
+  'channel.messageNotFound': 'This message could not be found.',
   'channel.images': 'Images',
   'channel.addImages': 'Add images',
   'channel.imagesHint': 'Add up to {max} images (max 10 MB each).',

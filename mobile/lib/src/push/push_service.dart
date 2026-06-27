@@ -24,6 +24,25 @@ class PushUnavailableException implements Exception {
   String toString() => message;
 }
 
+/// Identifies the message a tapped notification should open.
+class MessageRef {
+  const MessageRef(this.channelId, this.messageId);
+  final String channelId;
+  final String messageId;
+}
+
+/// Extracts a [MessageRef] from a push message's data, or null if it lacks the
+/// channelId/messageId the server injects.
+MessageRef? _refOf(RemoteMessage? message) {
+  if (message == null) return null;
+  final cid = message.data['channelId'];
+  final mid = message.data['messageId'];
+  if (cid is String && cid.isNotEmpty && mid is String && mid.isNotEmpty) {
+    return MessageRef(cid, mid);
+  }
+  return null;
+}
+
 /// Wraps Firebase Cloud Messaging with graceful degradation: if Firebase isn't
 /// configured (no google-services.json), [available] stays false and the rest
 /// of the app keeps working (in-app live updates still arrive over SSE).
@@ -31,11 +50,24 @@ class PushService {
   PushService();
 
   final _local = FlutterLocalNotificationsPlugin();
+  final _taps = StreamController<MessageRef>.broadcast();
 
   bool _available = false;
   bool _initialized = false;
+  MessageRef? _initial;
 
   bool get available => _available;
+
+  /// Emits when the user taps a notification while the app is running.
+  Stream<MessageRef> get onMessageTap => _taps.stream;
+
+  /// Returns (once) the message a notification opened the app with from a cold
+  /// start, or null. Clears it so it is consumed only once.
+  MessageRef? takeInitialMessage() {
+    final ref = _initial;
+    _initial = null;
+    return ref;
+  }
 
   static const _androidChannel = AndroidNotificationChannel(
     'pheme_messages',
@@ -64,6 +96,14 @@ class PushService {
 
       FirebaseMessaging.onBackgroundMessage(phemeFirebaseBackgroundHandler);
       FirebaseMessaging.onMessage.listen(_showForeground);
+
+      // Notification taps: while backgrounded (onMessageOpenedApp) and the tap
+      // that cold-started the app (getInitialMessage).
+      FirebaseMessaging.onMessageOpenedApp.listen((message) {
+        final ref = _refOf(message);
+        if (ref != null) _taps.add(ref);
+      });
+      _initial = _refOf(await FirebaseMessaging.instance.getInitialMessage());
 
       _available = true;
     } catch (e) {
