@@ -11,9 +11,11 @@ import { DashboardPage } from './pages/DashboardPage'
 import { ChannelPage } from './pages/ChannelPage'
 import { JoinPage } from './pages/JoinPage'
 import { MessagePage } from './pages/MessagePage'
+import { ProfilePage } from './pages/ProfilePage'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage'
 import { AdminChannelsPage } from './pages/admin/AdminChannelsPage'
+import { AdminCommentsPage } from './pages/admin/AdminCommentsPage'
 import { AdminChannelPage } from './pages/AdminChannelPage'
 
 function adminRoute(element: ReactNode) {
@@ -37,11 +39,13 @@ export default function App() {
           >
             <Route path="/" element={<DashboardPage />} />
             <Route path="/join" element={<JoinPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
             <Route path="/channels/:id" element={<ChannelPage />} />
             <Route path="/channels/:id/messages/:messageId" element={<MessagePage />} />
             <Route path="/admin" element={adminRoute(<AdminOverviewPage />)} />
             <Route path="/admin/users" element={adminRoute(<AdminUsersPage />)} />
             <Route path="/admin/channels" element={adminRoute(<AdminChannelsPage />)} />
+            <Route path="/admin/comments" element={adminRoute(<AdminCommentsPage />)} />
             <Route path="/admin/channels/:id" element={adminRoute(<AdminChannelPage />)} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -18,6 +18,7 @@ import {
   SegmentedControl,
   SimpleGrid,
   Stack,
+  Switch,
   Table,
   Tabs,
   Text,
@@ -63,6 +64,7 @@ export function ChannelPage() {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [images, setImages] = useState<File[]>([])
+  const [allowComments, setAllowComments] = useState(true)
   const [sending, setSending] = useState(false)
 
   const [editName, setEditName] = useState('')
@@ -238,10 +240,11 @@ export function ChannelPage() {
     if (!canSend) return
     setSending(true)
     try {
-      await api.notifyChannel(id, title.trim(), body.trim(), images)
+      await api.notifyChannel(id, title.trim(), body.trim(), images, allowComments)
       setTitle('')
       setBody('')
       setImages([])
+      setAllowComments(true)
       notifySuccess(t('channel.messageSent'))
     } catch (e) {
       notifyError(t('channel.sendFailed'), e)
@@ -582,6 +585,13 @@ export function ChannelPage() {
                   </SimpleGrid>
                 )}
               </Stack>
+
+              <Switch
+                checked={allowComments}
+                onChange={(e) => setAllowComments(e.currentTarget.checked)}
+                label={t('channel.allowComments')}
+                description={t('channel.allowCommentsHint')}
+              />
 
               <Group justify="flex-end">
                 <Button onClick={sendMessage} loading={sending} disabled={!canSend}>

@@ -1,6 +1,13 @@
 import { ActionIcon, AppShell, Burger, Group, NavLink, ScrollArea, Stack, Tooltip } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconBroadcast, IconShieldCog, IconLogout, IconUsers } from '@tabler/icons-react'
+import {
+  IconBroadcast,
+  IconShieldCog,
+  IconLogout,
+  IconUsers,
+  IconUserCircle,
+  IconMessage,
+} from '@tabler/icons-react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
@@ -26,9 +33,11 @@ export function Layout() {
   }
 
   const onChannels = location.pathname === '/' || location.pathname.startsWith('/channels')
+  const onProfile = location.pathname === '/profile'
   const isOverview = location.pathname === '/admin'
   const onAdminUsers = location.pathname.startsWith('/admin/users')
   const onAdminChannels = location.pathname.startsWith('/admin/channels')
+  const onAdminComments = location.pathname.startsWith('/admin/comments')
 
   return (
     <AppShell
@@ -66,6 +75,13 @@ export function Layout() {
               onClick={() => go('/')}
               variant="filled"
             />
+            <NavLink
+              active={onProfile}
+              label={t('common.navProfile')}
+              leftSection={<IconUserCircle size={18} />}
+              onClick={() => go('/profile')}
+              variant="filled"
+            />
             {isAdmin && (
               <NavLink
                 active={isOverview}
@@ -88,6 +104,13 @@ export function Layout() {
                   label={t('admin.navChannels')}
                   leftSection={<IconBroadcast size={18} />}
                   onClick={() => go('/admin/channels')}
+                  variant="filled"
+                />
+                <NavLink
+                  active={onAdminComments}
+                  label={t('admin.navComments')}
+                  leftSection={<IconMessage size={18} />}
+                  onClick={() => go('/admin/comments')}
                   variant="filled"
                 />
               </NavLink>

@@ -4,15 +4,16 @@ import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { notifyError } from '../lib/notify'
-import type { Channel, Message } from '../lib/types'
+import type { ChannelRelation, Message } from '../lib/types'
 import { ImageCarousel } from '../components/ImageCarousel'
+import { CommentsPanel } from '../components/CommentsPanel'
 import { CardListSkeleton } from '../components/Skeletons'
 
 export function MessagePage() {
   const { id = '', messageId = '' } = useParams()
   const { t } = useTranslation()
   const [message, setMessage] = useState<Message | null>(null)
-  const [channel, setChannel] = useState<Channel | null>(null)
+  const [relation, setRelation] = useState<ChannelRelation | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -38,8 +39,8 @@ export function MessagePage() {
   useEffect(() => {
     let active = true
     api
-      .listChannels()
-      .then((cs) => active && setChannel(cs.find((c) => c.id === id) ?? null))
+      .getChannel(id)
+      .then((rel) => active && setRelation(rel))
       .catch(() => undefined)
     return () => {
       active = false
@@ -54,7 +55,7 @@ export function MessagePage() {
             {t('dashboard.yourChannels')}
           </Anchor>
           <Anchor component={Link} to={`/channels/${id}`}>
-            {channel?.name ?? t('channel.fallbackName')}
+            {relation?.channel.name ?? t('channel.fallbackName')}
           </Anchor>
           <Text>{t('channel.messageView')}</Text>
         </Breadcrumbs>
@@ -84,6 +85,16 @@ export function MessagePage() {
               )}
             </Stack>
           </Card>
+        )}
+
+        {message && (
+          <CommentsPanel
+            channelId={id}
+            messageId={messageId}
+            commentsAllowed={message.commentsAllowed}
+            canComment={relation?.status === 'active'}
+            canModerate={relation ? relation.isOwner || relation.role === 'admin' : false}
+          />
         )}
       </Stack>
     </Container>

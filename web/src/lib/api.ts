@@ -9,6 +9,7 @@ import {
 } from './tokens'
 import type {
   AdminChannel,
+  AdminComment,
   AdminStats,
   AdminUser,
   ApiKey,
@@ -17,6 +18,8 @@ import type {
   ChannelRole,
   ChannelStatus,
   CodeSentResponse,
+  Comment,
+  CommentsPage,
   CreatedKey,
   Device,
   JoinedChannel,
@@ -29,6 +32,7 @@ import type {
   Role,
   SubscriptionMode,
   TokenResponse,
+  User,
   UserStatus,
 } from './types'
 
@@ -161,6 +165,22 @@ export const api = {
   // Meta (public)
   meta: () => request<Meta>('/v1/meta', { public: true }),
 
+  // Profile (self)
+  getMe: () => request<User>('/v1/me'),
+  updateMe: (body: {
+    username?: string
+    displayName?: string
+    bio?: string
+    phone?: string
+    website?: string
+  }) => request<User>('/v1/me', { method: 'PATCH', body }),
+  uploadAvatar: (file: File) => {
+    const form = new FormData()
+    form.set('avatar', file)
+    return request<User>('/v1/me/avatar', { method: 'POST', body: form })
+  },
+  deleteAvatar: () => request<User>('/v1/me/avatar', { method: 'DELETE' }),
+
   // Channels
   listChannels: () => request<{ channels: Channel[] }>('/v1/channels').then((r) => r.channels ?? []),
   getChannel: (id: string) => request<ChannelRelation>(`/v1/channels/${id}`),
@@ -207,13 +227,23 @@ export const api = {
 
   // Send a message from the authenticated UI (owner only). With images, the body
   // is sent as multipart/form-data; text-only sends stay JSON.
-  notifyChannel: (channelId: string, title: string, body: string, images: File[] = []) => {
+  notifyChannel: (
+    channelId: string,
+    title: string,
+    body: string,
+    images: File[] = [],
+    allowComments = true,
+  ) => {
     if (images.length === 0) {
-      return request<unknown>(`/v1/channels/${channelId}/notify`, { method: 'POST', body: { title, body } })
+      return request<unknown>(`/v1/channels/${channelId}/notify`, {
+        method: 'POST',
+        body: { title, body, commentsAllowed: allowComments },
+      })
     }
     const form = new FormData()
     form.set('title', title)
     form.set('body', body)
+    form.set('commentsAllowed', String(allowComments))
     for (const file of images) form.append('images', file)
     return request<unknown>(`/v1/channels/${channelId}/notify`, { method: 'POST', body: form })
   },
@@ -244,6 +274,25 @@ export const api = {
       (page) => ({ messages: page.messages ?? [], nextCursor: page.nextCursor ?? '' }),
     )
   },
+
+  // Comments on a message
+  listComments: (channelId: string, messageId: string, cursor = '', limit = 50) => {
+    const q = new URLSearchParams()
+    if (cursor) q.set('cursor', cursor)
+    q.set('limit', String(limit))
+    return request<CommentsPage>(
+      `/v1/channels/${channelId}/messages/${messageId}/comments?${q.toString()}`,
+    ).then((page) => ({ comments: page.comments ?? [], nextCursor: page.nextCursor ?? '' }))
+  },
+  postComment: (channelId: string, messageId: string, body: string) =>
+    request<Comment>(`/v1/channels/${channelId}/messages/${messageId}/comments`, {
+      method: 'POST',
+      body: { body },
+    }),
+  deleteComment: (channelId: string, messageId: string, commentId: string) =>
+    request<void>(`/v1/channels/${channelId}/messages/${messageId}/comments/${commentId}`, {
+      method: 'DELETE',
+    }),
 
   // --- Admin ---
   adminStats: () => request<AdminStats>('/v1/admin/stats'),
@@ -285,6 +334,15 @@ export const api = {
     request<{ keys: ApiKey[] }>(`/v1/admin/channels/${channelId}/keys`).then((r) => r.keys ?? []),
   adminRevokeKey: (channelId: string, keyId: string) =>
     request<unknown>(`/v1/admin/channels/${channelId}/keys/${keyId}`, { method: 'DELETE' }),
+  adminListComments: (q = '', page = 1, limit = 20) => {
+    const p = new URLSearchParams({ page: String(page), limit: String(limit) })
+    if (q) p.set('q', q)
+    return request<{ comments: AdminComment[]; total: number; page: number; limit: number }>(
+      `/v1/admin/comments?${p.toString()}`,
+    ).then((r) => ({ items: r.comments ?? [], total: r.total, page: r.page, limit: r.limit }))
+  },
+  adminDeleteComment: (commentId: string) =>
+    request<void>(`/v1/admin/comments/${commentId}`, { method: 'DELETE' }),
 }
 
 /** Absolute URL of a processed message image (served publicly by the App API). */

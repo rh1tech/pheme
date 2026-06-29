@@ -16,6 +16,29 @@ export interface TokenResponse {
   role: Role
 }
 
+// The authenticated user's own account + profile (from GET/PATCH /v1/me).
+export interface User {
+  id: string
+  email: string
+  role: Role
+  status: UserStatus
+  username?: string
+  displayName?: string
+  bio?: string
+  phone?: string
+  website?: string
+  avatarId?: string
+  createdAt: string
+}
+
+// The public, non-sensitive view of a user (e.g. a comment author). Never email.
+export interface PublicUser {
+  id: string
+  username?: string
+  displayName?: string
+  avatarId?: string
+}
+
 // Returned by endpoints that email a verification/reset code instead of logging
 // the user in (register, forgot-password).
 export interface CodeSentResponse {
@@ -73,7 +96,24 @@ export interface Message {
   body: string
   images?: MessageImage[]
   data?: Record<string, string>
+  commentsAllowed: boolean
   createdAt: string
+}
+
+// A comment on a message, with its author's public profile.
+export interface Comment {
+  id: string
+  messageId: string
+  channelId: string
+  userId: string
+  body: string
+  createdAt: string
+  author: PublicUser
+}
+
+export interface CommentsPage {
+  comments: Comment[]
+  nextCursor: string
 }
 
 export interface Device {
@@ -130,6 +170,20 @@ export interface AdminUser {
 
 export interface AdminChannel extends Channel {
   ownerEmail: string
+}
+
+// A comment enriched for the admin moderation panel.
+export interface AdminComment {
+  id: string
+  messageId: string
+  channelId: string
+  userId: string
+  body: string
+  createdAt: string
+  authorEmail: string
+  authorId: string
+  channelName: string
+  messageTitle: string
 }
 
 export interface Paged<T> {
