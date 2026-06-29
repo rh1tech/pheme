@@ -22,6 +22,7 @@ import { getWebPushState, registerWebPushDevice, webPushSupported } from '../lib
 import { saveWebDeviceId } from '../lib/device'
 import { ChannelRoleBadge, MemberStatusBadge, ModeBadge } from '../components/badges'
 import { CardListSkeleton } from '../components/Skeletons'
+import { PullToRefresh } from '../components/PullToRefresh'
 
 export function DashboardPage() {
   const navigate = useNavigate()
@@ -202,6 +203,7 @@ export function DashboardPage() {
         </Stack>
       </Modal>
 
+      <PullToRefresh onRefresh={refresh}>
       <Stack gap="xl">
         <Stack gap="md">
           <Group justify="space-between">
@@ -294,6 +296,7 @@ export function DashboardPage() {
           </Stack>
         )}
       </Stack>
+      </PullToRefresh>
     </Container>
   )
 }

@@ -48,6 +48,8 @@ import { ConfirmModal } from '../components/ConfirmModal'
 import { ModeBadge } from '../components/badges'
 import { SubscribersPanel } from '../components/SubscribersPanel'
 import { CardListSkeleton } from '../components/Skeletons'
+import { PullToRefresh } from '../components/PullToRefresh'
+import { BRAND_GRADIENT } from '../theme'
 import { loadWebDeviceId, saveWebDeviceId } from '../lib/device'
 import { registerWebPushDevice, webPushAvailability } from '../lib/webpush'
 
@@ -170,6 +172,16 @@ export function ChannelPage() {
       setCursor(page.nextCursor)
     } catch (e) {
       notifyError(t('channel.searchFailed'), e)
+    }
+  }
+
+  async function refreshMessages() {
+    try {
+      const page = await api.listMessages(id, '', activeQuery)
+      setMessages(page.messages)
+      setCursor(page.nextCursor)
+    } catch (e) {
+      notifyError(t('dashboard.loadFailed'), e)
     }
   }
 
@@ -496,14 +508,18 @@ export function ChannelPage() {
           </Tabs.List>
 
           <Tabs.Panel value="messages">
+            <PullToRefresh onRefresh={refreshMessages}>
             <Stack gap="sm">
-              <Group justify="space-between" wrap="wrap" gap="sm">
-                {canModerate ? (
-                  <Button leftSection={<IconSend size={16} />} onClick={() => setSendOpen(true)}>
+              <Group justify="flex-end" wrap="wrap" gap="sm">
+                {canModerate && (
+                  <Button
+                    visibleFrom="sm"
+                    mr="auto"
+                    leftSection={<IconSend size={16} />}
+                    onClick={() => setSendOpen(true)}
+                  >
                     {t('channel.send')}
                   </Button>
-                ) : (
-                  <span />
                 )}
                 <TextInput
                   placeholder={t('channel.searchPlaceholder')}
@@ -595,6 +611,7 @@ export function ChannelPage() {
                 </Group>
               )}
             </Stack>
+            </PullToRefresh>
           </Tabs.Panel>
 
           <Tabs.Panel value="settings">
@@ -821,6 +838,21 @@ export function ChannelPage() {
           </Tabs.Panel>
         </Tabs>
       </Stack>
+
+      {canModerate && (
+        <ActionIcon
+          aria-label={t('channel.send')}
+          onClick={() => setSendOpen(true)}
+          hiddenFrom="sm"
+          variant="gradient"
+          gradient={BRAND_GRADIENT}
+          radius="xl"
+          size={56}
+          style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 200, boxShadow: 'var(--mantine-shadow-lg)' }}
+        >
+          <IconSend size={24} />
+        </ActionIcon>
+      )}
     </Container>
   )
 }
