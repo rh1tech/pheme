@@ -43,7 +43,26 @@ func NewMongo(ctx context.Context, uri, dbName string, blobs blob.Store) (*Mongo
 		_ = client.Disconnect(ctx)
 		return nil, err
 	}
+	if err := m.migrate(ctx); err != nil {
+		_ = client.Disconnect(ctx)
+		return nil, err
+	}
 	return m, nil
+}
+
+// migrate runs idempotent, additive data backfills on startup.
+func (m *Mongo) migrate(ctx context.Context) error {
+	// The per-message comments flag is new: messages created before it existed
+	// have no `commentsAllowed` field and would otherwise decode to false,
+	// silently disabling comments on all history. Backfill them to true (the
+	// field's intended default). Idempotent: matches only documents missing it.
+	if _, err := m.db.Collection("messages").UpdateMany(ctx,
+		bson.M{"commentsAllowed": bson.M{"$exists": false}},
+		bson.M{"$set": bson.M{"commentsAllowed": true}},
+	); err != nil {
+		return err
+	}
+	return nil
 }
 
 func mongoID() string {
@@ -54,7 +73,7 @@ func mongoID() string {
 
 func (m *Mongo) ensureIndexes(ctx context.Context) error {
 	specs := map[string][]mongo.IndexModel{
-		"users":          {{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}},
+		"users":          {{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "usernameLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"usernameLower": bson.M{"$exists": true}})}},
 		"channels":       {{Keys: bson.D{{Key: "publicId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "ownerId", Value: 1}}}, {Keys: bson.D{{Key: "aliasLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"aliasLower": bson.M{"$exists": true}})}},
 		"apiKeys":        {{Keys: bson.D{{Key: "channelId", Value: 1}}}},
 		"devices":        {{Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}, {Key: "webPushEndpoint", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"webPushEndpoint": bson.M{"$exists": true}})}},
@@ -62,6 +81,7 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 		"channelMembers": {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}}}},
 		"messages":       {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "createdAt", Value: -1}}}},
 		"deliveries":     {{Keys: bson.D{{Key: "messageId", Value: 1}}}},
+		"comments":       {{Keys: bson.D{{Key: "messageId", Value: 1}, {Key: "createdAt", Value: -1}}}, {Keys: bson.D{{Key: "channelId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "createdAt", Value: -1}}}},
 	}
 	for coll, models := range specs {
 		if _, err := m.db.Collection(coll).Indexes().CreateMany(ctx, models); err != nil {
@@ -86,10 +106,106 @@ func (m *Mongo) CreateUser(ctx context.Context, u domain.User) (domain.User, err
 	return u, err
 }
 
+func (m *Mongo) UserByID(ctx context.Context, id string) (domain.User, error) {
+	var u domain.User
+	err := m.db.Collection("users").FindOne(ctx, bson.M{"_id": id}).Decode(&u)
+	return u, mapErr(err)
+}
+
 func (m *Mongo) UserByEmail(ctx context.Context, email string) (domain.User, error) {
 	var u domain.User
 	err := m.db.Collection("users").FindOne(ctx, bson.M{"email": email}).Decode(&u)
 	return u, mapErr(err)
+}
+
+func (m *Mongo) UserByUsername(ctx context.Context, usernameLower string) (domain.User, error) {
+	if usernameLower == "" {
+		return domain.User{}, ErrNotFound
+	}
+	var u domain.User
+	err := m.db.Collection("users").FindOne(ctx, bson.M{"usernameLower": usernameLower}).Decode(&u)
+	return u, mapErr(err)
+}
+
+func (m *Mongo) UsersByIDs(ctx context.Context, ids []string) (map[string]domain.User, error) {
+	out := map[string]domain.User{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	cur, err := m.db.Collection("users").Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	if err != nil {
+		return nil, err
+	}
+	var users []domain.User
+	if err := cur.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		out[u.ID] = u
+	}
+	return out, nil
+}
+
+func (m *Mongo) UpdateUserProfile(ctx context.Context, userID string, p domain.UserProfileUpdate) (domain.User, error) {
+	trimmed := strings.TrimSpace(p.Username)
+	lower := strings.ToLower(trimmed)
+	if lower != "" {
+		// Clean ErrUsernameTaken instead of a raw duplicate-key error; the unique
+		// partial index is the real backstop.
+		var clash domain.User
+		err := m.db.Collection("users").
+			FindOne(ctx, bson.M{"usernameLower": lower, "_id": bson.M{"$ne": userID}}).Decode(&clash)
+		if err == nil {
+			return domain.User{}, ErrUsernameTaken
+		}
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			return domain.User{}, err
+		}
+	}
+	set := bson.M{
+		"displayName": strings.TrimSpace(p.DisplayName),
+		"bio":         strings.TrimSpace(p.Bio),
+		"phone":       strings.TrimSpace(p.Phone),
+		"website":     strings.TrimSpace(p.Website),
+	}
+	update := bson.M{"$set": set}
+	if lower == "" {
+		update["$unset"] = bson.M{"username": "", "usernameLower": ""}
+	} else {
+		set["username"] = trimmed
+		set["usernameLower"] = lower
+	}
+	res, err := m.db.Collection("users").UpdateOne(ctx, bson.M{"_id": userID}, update)
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return domain.User{}, ErrUsernameTaken
+		}
+		return domain.User{}, err
+	}
+	if res.MatchedCount == 0 {
+		return domain.User{}, ErrNotFound
+	}
+	return m.UserByID(ctx, userID)
+}
+
+func (m *Mongo) SetUserAvatar(ctx context.Context, userID, avatarID string) (domain.User, error) {
+	prev, err := m.UserByID(ctx, userID)
+	if err != nil {
+		return domain.User{}, err
+	}
+	var update bson.M
+	if avatarID == "" {
+		update = bson.M{"$unset": bson.M{"avatarId": ""}}
+	} else {
+		update = bson.M{"$set": bson.M{"avatarId": avatarID}}
+	}
+	if _, err := m.db.Collection("users").UpdateOne(ctx, bson.M{"_id": userID}, update); err != nil {
+		return domain.User{}, err
+	}
+	if prev.AvatarID != "" && prev.AvatarID != avatarID {
+		deleteBlobs(ctx, m.blobs, []string{prev.AvatarID})
+	}
+	return m.UserByID(ctx, userID)
 }
 
 func (m *Mongo) UpdateUserRole(ctx context.Context, userID string, role domain.Role) error {
@@ -144,6 +260,11 @@ func (m *Mongo) AdminListUsers(ctx context.Context, query string, offset, limit 
 }
 
 func (m *Mongo) DeleteUser(ctx context.Context, userID string) error {
+	// Capture the avatar blob id before deletion so it can be reclaimed after.
+	prev, err := m.UserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
 	// Cascade: delete the user's channels (and their dependents), then devices
 	// and their subscriptions, then the user.
 	channels, err := m.ChannelsByOwner(ctx, userID)
@@ -182,12 +303,20 @@ func (m *Mongo) DeleteUser(ctx context.Context, userID string) error {
 		return err
 	}
 
+	// Remove the user's comments across all channels.
+	if _, err := m.db.Collection("comments").DeleteMany(ctx, bson.M{"userId": userID}); err != nil {
+		return err
+	}
+
 	res, err := m.db.Collection("users").DeleteOne(ctx, bson.M{"_id": userID})
 	if err != nil {
 		return err
 	}
 	if res.DeletedCount == 0 {
 		return ErrNotFound
+	}
+	if prev.AvatarID != "" {
+		deleteBlobs(ctx, m.blobs, []string{prev.AvatarID})
 	}
 	return nil
 }
@@ -316,7 +445,7 @@ func (m *Mongo) DeleteChannel(ctx context.Context, id string) error {
 			return err
 		}
 	}
-	for _, coll := range []string{"messages", "subscriptions", "apiKeys", "channelMembers"} {
+	for _, coll := range []string{"messages", "subscriptions", "apiKeys", "channelMembers", "comments"} {
 		if _, err := m.db.Collection(coll).DeleteMany(ctx, bson.M{"channelId": id}); err != nil {
 			return err
 		}
@@ -656,6 +785,64 @@ func (m *Mongo) CreateDelivery(ctx context.Context, d domain.Delivery) (domain.D
 	}
 	_, err := m.db.Collection("deliveries").InsertOne(ctx, d)
 	return d, err
+}
+
+// --- Comments ---
+
+func (m *Mongo) CreateComment(ctx context.Context, c domain.Comment) (domain.Comment, error) {
+	if c.ID == "" {
+		c.ID = mongoID()
+	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = time.Now().UTC()
+	}
+	_, err := m.db.Collection("comments").InsertOne(ctx, c)
+	return c, err
+}
+
+func (m *Mongo) CommentByID(ctx context.Context, id string) (domain.Comment, error) {
+	var c domain.Comment
+	err := m.db.Collection("comments").FindOne(ctx, bson.M{"_id": id}).Decode(&c)
+	return c, mapErr(err)
+}
+
+func (m *Mongo) CommentsByMessage(ctx context.Context, messageID, cursor string, limit int) ([]domain.Comment, error) {
+	filter := bson.M{"messageId": messageID}
+	if cursor != "" {
+		var anchor domain.Comment
+		if err := m.db.Collection("comments").FindOne(ctx, bson.M{"_id": cursor}).Decode(&anchor); err == nil {
+			filter["createdAt"] = bson.M{"$lt": anchor.CreatedAt}
+		}
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
+	cur, err := m.db.Collection("comments").Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.Comment
+	return out, cur.All(ctx, &out)
+}
+
+func (m *Mongo) DeleteComment(ctx context.Context, id string) error {
+	res, err := m.db.Collection("comments").DeleteOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *Mongo) AdminListComments(ctx context.Context, query string, offset, limit int) ([]domain.Comment, int64, error) {
+	filter := bson.M{}
+	if q := strings.TrimSpace(query); q != "" {
+		filter["body"] = primitive.Regex{Pattern: regexp.QuoteMeta(q), Options: "i"}
+	}
+	return findPaged[domain.Comment](ctx, m.db.Collection("comments"), filter, offset, limit)
 }
 
 func (m *Mongo) ListAllChannels(ctx context.Context) ([]domain.Channel, error) {

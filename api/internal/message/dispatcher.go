@@ -36,12 +36,13 @@ func NewDispatcher(s store.Store, p push.Sender, b live.Bus, l *slog.Logger) *Di
 // asks the broker to retry (and ultimately dead-letter) the task.
 func (d *Dispatcher) Handle(ctx context.Context, task domain.NotifyTask) error {
 	msg, err := d.Store.CreateMessage(ctx, domain.Message{
-		ChannelID: task.ChannelID,
-		Title:     task.Title,
-		Body:      task.Body,
-		Images:    task.Images,
-		Data:      task.Data,
-		CreatedAt: time.Now().UTC(),
+		ChannelID:       task.ChannelID,
+		Title:           task.Title,
+		Body:            task.Body,
+		Images:          task.Images,
+		Data:            task.Data,
+		CommentsAllowed: task.CommentsAllowed,
+		CreatedAt:       time.Now().UTC(),
 	})
 	if err != nil {
 		return err // persistence failed: retry, do not ack

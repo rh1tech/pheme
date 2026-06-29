@@ -29,10 +29,11 @@ const (
 // notifyInput is the parsed payload of a notify request, from either a JSON body
 // (text only) or a multipart/form-data body (text + processed images).
 type notifyInput struct {
-	Title  string
-	Body   string
-	Data   map[string]string
-	Images []domain.MessageImage
+	Title           string
+	Body            string
+	Data            map[string]string
+	Images          []domain.MessageImage
+	CommentsAllowed bool
 }
 
 // isMultipart reports whether the request carries a multipart/form-data body.
@@ -50,11 +51,19 @@ func decodeNotify(w http.ResponseWriter, r *http.Request, blobs blob.Store) (not
 			Title string            `json:"title"`
 			Body  string            `json:"body"`
 			Data  map[string]string `json:"data,omitempty"`
+			// CommentsAllowed is a pointer so an absent field defaults to true
+			// (comments on) rather than Go's false zero value.
+			CommentsAllowed *bool `json:"commentsAllowed,omitempty"`
 		}
 		if !httpx.Decode(w, r, &req) {
 			return notifyInput{}, false
 		}
-		return notifyInput{Title: req.Title, Body: req.Body, Data: req.Data}, true
+		return notifyInput{
+			Title:           req.Title,
+			Body:            req.Body,
+			Data:            req.Data,
+			CommentsAllowed: req.CommentsAllowed == nil || *req.CommentsAllowed,
+		}, true
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxNotifyBytes)
@@ -72,6 +81,9 @@ func decodeNotify(w http.ResponseWriter, r *http.Request, blobs blob.Store) (not
 	in := notifyInput{
 		Title: r.FormValue("title"),
 		Body:  r.FormValue("body"),
+		// Default-on: only an explicit "false"/"0" disables comments; an absent or
+		// empty field leaves them allowed.
+		CommentsAllowed: !isFalsey(r.FormValue("commentsAllowed")),
 	}
 	if raw := strings.TrimSpace(r.FormValue("data")); raw != "" {
 		var data map[string]string
@@ -127,4 +139,14 @@ func processUpload(w http.ResponseWriter, fh *multipart.FileHeader, blobs blob.S
 		return domain.MessageImage{}, false
 	}
 	return domain.MessageImage{ID: id, Width: width, Height: height}, true
+}
+
+// isFalsey reports whether a form value explicitly disables a default-on flag.
+func isFalsey(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "false", "0", "no", "off":
+		return true
+	default:
+		return false
+	}
 }

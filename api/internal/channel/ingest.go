@@ -70,13 +70,14 @@ func (h *IngestHandler) notify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task := domain.NotifyTask{
-		ChannelID:      ch.ID,
-		Title:          in.Title,
-		Body:           in.Body,
-		Images:         in.Images,
-		Data:           in.Data,
-		IdempotencyKey: strings.TrimSpace(r.Header.Get("Idempotency-Key")),
-		EnqueuedAt:     time.Now().UTC(),
+		ChannelID:       ch.ID,
+		Title:           in.Title,
+		Body:            in.Body,
+		Images:          in.Images,
+		Data:            in.Data,
+		CommentsAllowed: in.CommentsAllowed,
+		IdempotencyKey:  strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+		EnqueuedAt:      time.Now().UTC(),
 	}
 	if err := h.Publisher.Publish(r.Context(), task); err != nil {
 		httpx.Error(w, http.StatusServiceUnavailable, "could not enqueue notification")

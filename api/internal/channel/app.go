@@ -43,6 +43,11 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/images/{id}", h.serveImage)
 
 	protected := http.NewServeMux()
+	// Profile (self).
+	protected.HandleFunc("GET /v1/me", h.me)
+	protected.HandleFunc("PATCH /v1/me", h.updateProfile)
+	protected.HandleFunc("POST /v1/me/avatar", h.uploadAvatar)
+	protected.HandleFunc("DELETE /v1/me/avatar", h.deleteAvatar)
 	protected.HandleFunc("POST /v1/channels", h.createChannel)
 	protected.HandleFunc("GET /v1/channels", h.listChannels)
 	// Literal segments; Go 1.22 mux prefers them over the {id} wildcard.
@@ -70,6 +75,10 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("DELETE /v1/channels/{id}/members/{userId}", h.removeMember)
 	protected.HandleFunc("GET /v1/channels/{id}/messages", h.listMessages)
 	protected.HandleFunc("GET /v1/channels/{id}/messages/{messageId}", h.getMessage)
+	// Comments on a message.
+	protected.HandleFunc("GET /v1/channels/{id}/messages/{messageId}/comments", h.listComments)
+	protected.HandleFunc("POST /v1/channels/{id}/messages/{messageId}/comments", h.postComment)
+	protected.HandleFunc("DELETE /v1/channels/{id}/messages/{messageId}/comments/{commentId}", h.deleteComment)
 
 	if h.Admin != nil {
 		h.Admin.Register(protected)
@@ -338,12 +347,13 @@ func (h *AppHandler) notifyChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task := domain.NotifyTask{
-		ChannelID:  channelID,
-		Title:      in.Title,
-		Body:       in.Body,
-		Images:     in.Images,
-		Data:       in.Data,
-		EnqueuedAt: time.Now().UTC(),
+		ChannelID:       channelID,
+		Title:           in.Title,
+		Body:            in.Body,
+		Images:          in.Images,
+		Data:            in.Data,
+		CommentsAllowed: in.CommentsAllowed,
+		EnqueuedAt:      time.Now().UTC(),
 	}
 	if err := h.Publisher.Publish(r.Context(), task); err != nil {
 		httpx.Error(w, http.StatusServiceUnavailable, "could not enqueue message")

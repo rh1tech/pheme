@@ -21,6 +21,10 @@ var ErrNotFound = errors.New("not found")
 // already uses (case-insensitively). Handlers map it to HTTP 409.
 var ErrAliasTaken = errors.New("alias taken")
 
+// ErrUsernameTaken is returned when setting a username that another user already
+// uses (case-insensitively). Handlers map it to HTTP 409.
+var ErrUsernameTaken = errors.New("username taken")
+
 // deleteBlobs best-effort removes image blobs for cascade deletes. A nil store or
 // a per-id failure is ignored: the history rows are already gone, so a leftover
 // blob is at worst harmless garbage to be reclaimed later.
@@ -52,10 +56,21 @@ func webPushEndpoint(webPushSub string) string {
 type Store interface {
 	// Users
 	CreateUser(ctx context.Context, u domain.User) (domain.User, error)
+	UserByID(ctx context.Context, id string) (domain.User, error)
 	UserByEmail(ctx context.Context, email string) (domain.User, error)
+	// UserByUsername looks up a user by the lowercased username key.
+	UserByUsername(ctx context.Context, usernameLower string) (domain.User, error)
+	// UsersByIDs returns the requested users keyed by id (missing ids are omitted).
+	UsersByIDs(ctx context.Context, ids []string) (map[string]domain.User, error)
 	UpdateUserRole(ctx context.Context, userID string, role domain.Role) error
 	UpdateUserStatus(ctx context.Context, userID string, status domain.UserStatus) error
 	UpdateUserPassword(ctx context.Context, userID, passwordHash string) error
+	// UpdateUserProfile sets the editable profile fields. An empty Username clears
+	// it. Returns ErrUsernameTaken if another user already uses the username.
+	UpdateUserProfile(ctx context.Context, userID string, p domain.UserProfileUpdate) (domain.User, error)
+	// SetUserAvatar sets (or clears, when avatarID is "") a user's avatar blob id,
+	// deleting any previously referenced blob.
+	SetUserAvatar(ctx context.Context, userID, avatarID string) (domain.User, error)
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	AdminListUsers(ctx context.Context, query string, offset, limit int) ([]domain.User, int64, error)
 	DeleteUser(ctx context.Context, userID string) error
@@ -108,6 +123,17 @@ type Store interface {
 	MessagesByChannel(ctx context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error)
 	MessageByID(ctx context.Context, id string) (domain.Message, error)
 	CreateDelivery(ctx context.Context, d domain.Delivery) (domain.Delivery, error)
+
+	// Comments (members comment on a message; posted instantly).
+	CreateComment(ctx context.Context, c domain.Comment) (domain.Comment, error)
+	CommentByID(ctx context.Context, id string) (domain.Comment, error)
+	// CommentsByMessage returns a message's comments newest-first with cursor
+	// pagination (cursor is an exclusive anchor comment id).
+	CommentsByMessage(ctx context.Context, messageID, cursor string, limit int) ([]domain.Comment, error)
+	DeleteComment(ctx context.Context, id string) error
+	// AdminListComments returns comments newest-first with the total count; a
+	// non-empty query matches the comment body (case-insensitive substring).
+	AdminListComments(ctx context.Context, query string, offset, limit int) ([]domain.Comment, int64, error)
 
 	// Admin
 	AdminStats(ctx context.Context, topN, recentN int) (domain.AdminStats, error)

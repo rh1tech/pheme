@@ -85,6 +85,81 @@ func TestMemberCascades(t *testing.T) {
 	}
 }
 
+// TestCommentCascades verifies that deleting a channel removes its comments, and
+// deleting a user removes that user's comments across all channels.
+func TestCommentCascades(t *testing.T) {
+	ctx := context.Background()
+	db := NewMemory(nil)
+
+	owner, _ := db.CreateUser(ctx, domain.User{Email: "o@x.com", Role: domain.RoleUser, Status: domain.UserActive, CreatedAt: time.Now()})
+	author, _ := db.CreateUser(ctx, domain.User{Email: "a@x.com", Role: domain.RoleUser, Status: domain.UserActive, CreatedAt: time.Now()})
+	ch, _ := db.CreateChannel(ctx, domain.Channel{PublicID: "ch_c", OwnerID: owner.ID, Name: "C", SubscriptionMode: domain.ModeOpen, Status: domain.ChannelActive, CreatedAt: time.Now()})
+	msg, _ := db.CreateMessage(ctx, domain.Message{ChannelID: ch.ID, Title: "p", CommentsAllowed: true, CreatedAt: time.Now()})
+	c1, _ := db.CreateComment(ctx, domain.Comment{MessageID: msg.ID, ChannelID: ch.ID, UserID: author.ID, Body: "one", CreatedAt: time.Now()})
+
+	// Deleting the author removes their comment.
+	if err := db.DeleteUser(ctx, author.ID); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if _, err := db.CommentByID(ctx, c1.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("comment present after author delete (err=%v)", err)
+	}
+
+	// A comment in the channel is removed when the channel is deleted.
+	c2, _ := db.CreateComment(ctx, domain.Comment{MessageID: msg.ID, ChannelID: ch.ID, UserID: owner.ID, Body: "two", CreatedAt: time.Now()})
+	if err := db.DeleteChannel(ctx, ch.ID); err != nil {
+		t.Fatalf("DeleteChannel: %v", err)
+	}
+	if _, err := db.CommentByID(ctx, c2.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("comment present after channel delete (err=%v)", err)
+	}
+}
+
+// TestDeleteUserCascadesAvatarBlob verifies the user's avatar blob is reclaimed
+// when the account is deleted.
+func TestDeleteUserCascadesAvatarBlob(t *testing.T) {
+	ctx := context.Background()
+	blobs := blob.NewMemory()
+	db := NewMemory(blobs)
+
+	u, _ := db.CreateUser(ctx, domain.User{Email: "av@x.com", Role: domain.RoleUser, Status: domain.UserActive, CreatedAt: time.Now()})
+	id, _ := blobs.Put(ctx, []byte("jpeg"), "image/jpeg")
+	if _, err := db.SetUserAvatar(ctx, u.ID, id); err != nil {
+		t.Fatalf("SetUserAvatar: %v", err)
+	}
+	if err := db.DeleteUser(ctx, u.ID); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if _, _, err := blobs.Get(ctx, id); !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("avatar blob still present after user delete (err=%v)", err)
+	}
+}
+
+// TestUpdateUserProfileUsernameUniqueness verifies case-insensitive username
+// uniqueness and that clearing a username frees it for reuse.
+func TestUpdateUserProfileUsernameUniqueness(t *testing.T) {
+	ctx := context.Background()
+	db := NewMemory(nil)
+	a, _ := db.CreateUser(ctx, domain.User{Email: "a@x.com", Role: domain.RoleUser, Status: domain.UserActive, CreatedAt: time.Now()})
+	b, _ := db.CreateUser(ctx, domain.User{Email: "b@x.com", Role: domain.RoleUser, Status: domain.UserActive, CreatedAt: time.Now()})
+
+	if _, err := db.UpdateUserProfile(ctx, a.ID, domain.UserProfileUpdate{Username: "News"}); err != nil {
+		t.Fatalf("set username: %v", err)
+	}
+	if got, _ := db.UserByUsername(ctx, "news"); got.ID != a.ID {
+		t.Fatalf("UserByUsername(news) = %q, want %q", got.ID, a.ID)
+	}
+	if _, err := db.UpdateUserProfile(ctx, b.ID, domain.UserProfileUpdate{Username: "news"}); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("duplicate username err = %v, want ErrUsernameTaken", err)
+	}
+	if _, err := db.UpdateUserProfile(ctx, a.ID, domain.UserProfileUpdate{Username: ""}); err != nil {
+		t.Fatalf("clear username: %v", err)
+	}
+	if _, err := db.UpdateUserProfile(ctx, b.ID, domain.UserProfileUpdate{Username: "news"}); err != nil {
+		t.Fatalf("reuse freed username: %v", err)
+	}
+}
+
 // TestSetChannelAliasUniqueness verifies case-insensitive alias uniqueness and
 // that clearing an alias frees it for reuse.
 func TestSetChannelAliasUniqueness(t *testing.T) {

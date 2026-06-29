@@ -33,6 +33,8 @@ func (h *AdminHandler) Register(protected *http.ServeMux) {
 	protected.HandleFunc("GET /v1/admin/channels/{id}/messages", h.channelMessages)
 	protected.HandleFunc("GET /v1/admin/channels/{id}/keys", h.listKeys)
 	protected.HandleFunc("DELETE /v1/admin/channels/{id}/keys/{keyId}", h.revokeKey)
+	protected.HandleFunc("GET /v1/admin/comments", h.listComments)
+	protected.HandleFunc("DELETE /v1/admin/comments/{id}", h.deleteComment)
 }
 
 func (h *AdminHandler) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
@@ -368,7 +370,7 @@ func (h *AdminHandler) revokeKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) writeStoreErr(w http.ResponseWriter, err error, msg string) {
-	if err == store.ErrNotFound {
+	if errors.Is(err, store.ErrNotFound) {
 		httpx.Error(w, http.StatusNotFound, "not found")
 		return
 	}

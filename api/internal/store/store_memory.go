@@ -25,6 +25,7 @@ type Memory struct {
 	members       map[string]domain.ChannelMember
 	messages      map[string]domain.Message
 	deliveries    map[string]domain.Delivery
+	comments      map[string]domain.Comment
 	blobs         blob.Store
 }
 
@@ -40,6 +41,7 @@ func NewMemory(blobs blob.Store) *Memory {
 		members:       map[string]domain.ChannelMember{},
 		messages:      map[string]domain.Message{},
 		deliveries:    map[string]domain.Delivery{},
+		comments:      map[string]domain.Comment{},
 		blobs:         blobs,
 	}
 }
@@ -60,6 +62,15 @@ func (m *Memory) CreateUser(_ context.Context, u domain.User) (domain.User, erro
 	return u, nil
 }
 
+func (m *Memory) UserByID(_ context.Context, id string) (domain.User, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if u, ok := m.users[id]; ok {
+		return u, nil
+	}
+	return domain.User{}, ErrNotFound
+}
+
 func (m *Memory) UserByEmail(_ context.Context, email string) (domain.User, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -69,6 +80,74 @@ func (m *Memory) UserByEmail(_ context.Context, email string) (domain.User, erro
 		}
 	}
 	return domain.User{}, ErrNotFound
+}
+
+func (m *Memory) UserByUsername(_ context.Context, usernameLower string) (domain.User, error) {
+	if usernameLower == "" {
+		return domain.User{}, ErrNotFound
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, u := range m.users {
+		if u.UsernameLower == usernameLower {
+			return u, nil
+		}
+	}
+	return domain.User{}, ErrNotFound
+}
+
+func (m *Memory) UsersByIDs(_ context.Context, ids []string) (map[string]domain.User, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]domain.User, len(ids))
+	for _, id := range ids {
+		if u, ok := m.users[id]; ok {
+			out[id] = u
+		}
+	}
+	return out, nil
+}
+
+func (m *Memory) UpdateUserProfile(_ context.Context, userID string, p domain.UserProfileUpdate) (domain.User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[userID]
+	if !ok {
+		return domain.User{}, ErrNotFound
+	}
+	lower := strings.ToLower(strings.TrimSpace(p.Username))
+	if lower != "" {
+		for id, other := range m.users {
+			if id != userID && other.UsernameLower == lower {
+				return domain.User{}, ErrUsernameTaken
+			}
+		}
+	}
+	u.Username = strings.TrimSpace(p.Username)
+	u.UsernameLower = lower
+	u.DisplayName = strings.TrimSpace(p.DisplayName)
+	u.Bio = strings.TrimSpace(p.Bio)
+	u.Phone = strings.TrimSpace(p.Phone)
+	u.Website = strings.TrimSpace(p.Website)
+	m.users[userID] = u
+	return u, nil
+}
+
+func (m *Memory) SetUserAvatar(ctx context.Context, userID, avatarID string) (domain.User, error) {
+	m.mu.Lock()
+	u, ok := m.users[userID]
+	if !ok {
+		m.mu.Unlock()
+		return domain.User{}, ErrNotFound
+	}
+	old := u.AvatarID
+	u.AvatarID = avatarID
+	m.users[userID] = u
+	m.mu.Unlock()
+	if old != "" && old != avatarID {
+		deleteBlobs(ctx, m.blobs, []string{old})
+	}
+	return u, nil
 }
 
 func (m *Memory) UpdateUserRole(_ context.Context, userID string, role domain.Role) error {
@@ -134,7 +213,7 @@ func (m *Memory) AdminListUsers(_ context.Context, query string, offset, limit i
 
 func (m *Memory) DeleteUser(ctx context.Context, userID string) error {
 	m.mu.RLock()
-	_, ok := m.users[userID]
+	u, ok := m.users[userID]
 	var channelIDs, deviceIDs []string
 	for _, c := range m.channels {
 		if c.OwnerID == userID {
@@ -158,7 +237,6 @@ func (m *Memory) DeleteUser(ctx context.Context, userID string) error {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	deviceSet := map[string]struct{}{}
 	for _, did := range deviceIDs {
 		deviceSet[did] = struct{}{}
@@ -175,7 +253,17 @@ func (m *Memory) DeleteUser(ctx context.Context, userID string) error {
 			delete(m.members, mid)
 		}
 	}
+	// Remove the user's comments across all channels.
+	for cid, c := range m.comments {
+		if c.UserID == userID {
+			delete(m.comments, cid)
+		}
+	}
 	delete(m.users, userID)
+	m.mu.Unlock()
+	if u.AvatarID != "" {
+		deleteBlobs(ctx, m.blobs, []string{u.AvatarID})
+	}
 	return nil
 }
 
@@ -321,6 +409,11 @@ func (m *Memory) DeleteChannel(ctx context.Context, id string) error {
 	for did, d := range m.deliveries {
 		if _, ok := msgIDs[d.MessageID]; ok {
 			delete(m.deliveries, did)
+		}
+	}
+	for cid, c := range m.comments {
+		if c.ChannelID == id {
+			delete(m.comments, cid)
 		}
 	}
 	m.mu.Unlock()
@@ -716,6 +809,85 @@ func (m *Memory) CreateDelivery(_ context.Context, d domain.Delivery) (domain.De
 	}
 	m.deliveries[d.ID] = d
 	return d, nil
+}
+
+// --- Comments ---
+
+func (m *Memory) CreateComment(_ context.Context, c domain.Comment) (domain.Comment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c.ID == "" {
+		c.ID = newID()
+	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = time.Now().UTC()
+	}
+	m.comments[c.ID] = c
+	return c, nil
+}
+
+func (m *Memory) CommentByID(_ context.Context, id string) (domain.Comment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if c, ok := m.comments[id]; ok {
+		return c, nil
+	}
+	return domain.Comment{}, ErrNotFound
+}
+
+// CommentsByMessage returns a message's comments newest-first. cursor is an
+// exclusive anchor comment ID; empty means from the newest.
+func (m *Memory) CommentsByMessage(_ context.Context, messageID, cursor string, limit int) ([]domain.Comment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.Comment
+	for _, c := range m.comments {
+		if c.MessageID == messageID {
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if cursor != "" {
+		filtered := out[:0]
+		seen := false
+		for _, c := range out {
+			if seen {
+				filtered = append(filtered, c)
+			}
+			if c.ID == cursor {
+				seen = true
+			}
+		}
+		out = filtered
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (m *Memory) DeleteComment(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.comments[id]; !ok {
+		return ErrNotFound
+	}
+	delete(m.comments, id)
+	return nil
+}
+
+func (m *Memory) AdminListComments(_ context.Context, query string, offset, limit int) ([]domain.Comment, int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	q := strings.ToLower(strings.TrimSpace(query))
+	var all []domain.Comment
+	for _, c := range m.comments {
+		if q == "" || strings.Contains(strings.ToLower(c.Body), q) {
+			all = append(all, c)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+	return paginate(all, offset, limit), int64(len(all)), nil
 }
 
 func (m *Memory) Close(context.Context) error { return nil }

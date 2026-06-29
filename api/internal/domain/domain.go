@@ -62,13 +62,52 @@ const (
 )
 
 // User is an authenticated account that owns channels and devices.
+//
+// Username is an optional, system-wide unique public handle used for display
+// (e.g. on comments) — it is not a login credential; email remains the login.
+// UsernameLower is the lowercased form persisted alongside it so uniqueness can
+// be enforced case-insensitively (mirrors Channel.AliasLower). DisplayName, Bio,
+// Phone and Website are optional profile/contact fields. AvatarID references a
+// processed image in the blob store (served via the public GET /v1/images/{id}).
 type User struct {
-	ID           string     `bson:"_id,omitempty" json:"id"`
-	Email        string     `bson:"email" json:"email"`
-	PasswordHash string     `bson:"passwordHash" json:"-"`
-	Role         Role       `bson:"role" json:"role"`
-	Status       UserStatus `bson:"status" json:"status"`
-	CreatedAt    time.Time  `bson:"createdAt" json:"createdAt"`
+	ID            string     `bson:"_id,omitempty" json:"id"`
+	Email         string     `bson:"email" json:"email"`
+	PasswordHash  string     `bson:"passwordHash" json:"-"`
+	Role          Role       `bson:"role" json:"role"`
+	Status        UserStatus `bson:"status" json:"status"`
+	Username      string     `bson:"username,omitempty" json:"username,omitempty"`
+	UsernameLower string     `bson:"usernameLower,omitempty" json:"-"`
+	DisplayName   string     `bson:"displayName,omitempty" json:"displayName,omitempty"`
+	Bio           string     `bson:"bio,omitempty" json:"bio,omitempty"`
+	Phone         string     `bson:"phone,omitempty" json:"phone,omitempty"`
+	Website       string     `bson:"website,omitempty" json:"website,omitempty"`
+	AvatarID      string     `bson:"avatarId,omitempty" json:"avatarId,omitempty"`
+	CreatedAt     time.Time  `bson:"createdAt" json:"createdAt"`
+}
+
+// UserProfileUpdate carries the editable profile fields for UpdateUserProfile.
+// Username is the canonical (display-cased) handle; an empty Username clears it.
+// The store derives and persists the lowercased uniqueness key.
+type UserProfileUpdate struct {
+	Username    string
+	DisplayName string
+	Bio         string
+	Phone       string
+	Website     string
+}
+
+// PublicUser is the non-sensitive view of a user safe to expose to other
+// members (e.g. as a comment author). It never includes the email.
+type PublicUser struct {
+	ID          string `json:"id"`
+	Username    string `json:"username,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	AvatarID    string `json:"avatarId,omitempty"`
+}
+
+// Public returns the PublicUser projection of u.
+func (u User) Public() PublicUser {
+	return PublicUser{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, AvatarID: u.AvatarID}
 }
 
 // ChannelStatus controls whether a channel accepts and delivers notifications.
@@ -165,15 +204,30 @@ type MessageImage struct {
 }
 
 // Message is a persisted notification belonging to a channel. Images, when
-// present, are shown before the text (Instagram-style).
+// present, are shown before the text (Instagram-style). CommentsAllowed records
+// whether members may comment on this message (decided per-message when sending;
+// defaults to true).
 type Message struct {
-	ID        string            `bson:"_id,omitempty" json:"id"`
-	ChannelID string            `bson:"channelId" json:"channelId"`
-	Title     string            `bson:"title" json:"title"`
-	Body      string            `bson:"body" json:"body"`
-	Images    []MessageImage    `bson:"images,omitempty" json:"images,omitempty"`
-	Data      map[string]string `bson:"data,omitempty" json:"data,omitempty"`
-	CreatedAt time.Time         `bson:"createdAt" json:"createdAt"`
+	ID              string            `bson:"_id,omitempty" json:"id"`
+	ChannelID       string            `bson:"channelId" json:"channelId"`
+	Title           string            `bson:"title" json:"title"`
+	Body            string            `bson:"body" json:"body"`
+	Images          []MessageImage    `bson:"images,omitempty" json:"images,omitempty"`
+	Data            map[string]string `bson:"data,omitempty" json:"data,omitempty"`
+	CommentsAllowed bool              `bson:"commentsAllowed" json:"commentsAllowed"`
+	CreatedAt       time.Time         `bson:"createdAt" json:"createdAt"`
+}
+
+// Comment is a member's comment on a message. ChannelID is denormalized so
+// deletes cascade by channel and admin moderation can resolve the channel
+// without a message lookup.
+type Comment struct {
+	ID        string    `bson:"_id,omitempty" json:"id"`
+	MessageID string    `bson:"messageId" json:"messageId"`
+	ChannelID string    `bson:"channelId" json:"channelId"`
+	UserID    string    `bson:"userId" json:"userId"`
+	Body      string    `bson:"body" json:"body"`
+	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
 }
 
 // Delivery records a push attempt to a single device for a message.
@@ -190,13 +244,14 @@ type Delivery struct {
 // Images carries already-processed blob references (ids + dimensions) only — image
 // bytes are stored before enqueue, so the broker payload stays small.
 type NotifyTask struct {
-	ChannelID      string            `json:"channelId"`
-	Title          string            `json:"title"`
-	Body           string            `json:"body"`
-	Images         []MessageImage    `json:"images,omitempty"`
-	Data           map[string]string `json:"data,omitempty"`
-	IdempotencyKey string            `json:"idempotencyKey,omitempty"`
-	EnqueuedAt     time.Time         `json:"enqueuedAt"`
+	ChannelID       string            `json:"channelId"`
+	Title           string            `json:"title"`
+	Body            string            `json:"body"`
+	Images          []MessageImage    `json:"images,omitempty"`
+	Data            map[string]string `json:"data,omitempty"`
+	CommentsAllowed bool              `json:"commentsAllowed"`
+	IdempotencyKey  string            `json:"idempotencyKey,omitempty"`
+	EnqueuedAt      time.Time         `json:"enqueuedAt"`
 }
 
 // ChannelVolume reports a channel's message count, used for "top channels".
@@ -236,6 +291,23 @@ func ValidateAlias(alias string) error {
 	}
 	if strings.HasPrefix(strings.ToLower(alias), "ch_") {
 		return ErrInvalidAlias
+	}
+	return nil
+}
+
+// usernamePattern enforces the username charset and start-character rule.
+var usernamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.]{2,29}$`)
+
+// ErrInvalidUsername is returned by ValidateUsername when the username is malformed.
+var ErrInvalidUsername = errors.New(
+	"username must be 3–30 characters of letters, digits, '.' or '_', and not start with a digit or '.'")
+
+// ValidateUsername checks a user handle: 3–30 characters drawn from [a-zA-Z0-9_.],
+// not starting with a digit or '.'. It is display-only (not a login credential)
+// but unique system-wide, case-insensitively.
+func ValidateUsername(username string) error {
+	if len(username) < 3 || len(username) > 30 || !usernamePattern.MatchString(username) {
+		return ErrInvalidUsername
 	}
 	return nil
 }
