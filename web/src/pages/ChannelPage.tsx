@@ -477,19 +477,17 @@ export function ChannelPage() {
           <Text>{channel?.name ?? t('channel.fallbackName')}</Text>
         </Breadcrumbs>
 
-        <Card withBorder padding="lg">
-          <Group justify="space-between" align="center">
-            <Group gap="xs" align="center">
-              <Title order={4}>{channel?.name ?? t('channel.fallbackName')}</Title>
-              {channel?.alias && (
-                <Text size="sm" c="dimmed">
-                  @{channel.alias}
-                </Text>
-              )}
-            </Group>
-            {channel && <ModeBadge mode={channel.subscriptionMode} />}
+        <Group justify="space-between" align="center" wrap="nowrap">
+          <Group gap="xs" align="center">
+            <Title order={2}>{channel?.name ?? t('channel.fallbackName')}</Title>
+            {channel?.alias && (
+              <Text size="sm" c="dimmed">
+                @{channel.alias}
+              </Text>
+            )}
           </Group>
-        </Card>
+          {channel && <ModeBadge mode={channel.subscriptionMode} />}
+        </Group>
 
         <Tabs defaultValue="messages" keepMounted={false}>
           <Tabs.List mb="md">
