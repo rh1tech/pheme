@@ -27,7 +27,16 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core'
-import { IconBellCheck, IconDeviceMobile, IconLogout, IconPhoto, IconSearch, IconTrash, IconX } from '@tabler/icons-react'
+import {
+  IconBellCheck,
+  IconDeviceMobile,
+  IconLogout,
+  IconPhoto,
+  IconSearch,
+  IconSend,
+  IconTrash,
+  IconX,
+} from '@tabler/icons-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Trans, useTranslation } from 'react-i18next'
@@ -66,6 +75,7 @@ export function ChannelPage() {
   const [images, setImages] = useState<File[]>([])
   const [allowComments, setAllowComments] = useState(true)
   const [sending, setSending] = useState(false)
+  const [sendOpen, setSendOpen] = useState(false)
 
   const [editName, setEditName] = useState('')
   const [editMode, setEditMode] = useState<SubscriptionMode>('approval')
@@ -245,6 +255,7 @@ export function ChannelPage() {
       setBody('')
       setImages([])
       setAllowComments(true)
+      setSendOpen(false)
       notifySuccess(t('channel.messageSent'))
     } catch (e) {
       notifyError(t('channel.sendFailed'), e)
@@ -377,6 +388,87 @@ export function ChannelPage() {
         </Text>
       </ConfirmModal>
 
+      {canModerate && (
+        <Modal opened={sendOpen} onClose={() => setSendOpen(false)} title={t('channel.tabs.send')} size="lg">
+          <Stack gap="sm">
+            <TextInput
+              label={t('channel.title')}
+              placeholder={t('channel.titlePlaceholder')}
+              value={title}
+              onChange={(e) => setTitle(e.currentTarget.value)}
+            />
+            <Textarea
+              label={t('channel.body')}
+              placeholder={t('channel.bodyPlaceholder')}
+              autosize
+              minRows={3}
+              value={body}
+              onChange={(e) => setBody(e.currentTarget.value)}
+            />
+
+            <Stack gap={6}>
+              <Group justify="space-between" align="center">
+                <Text size="sm" fw={500}>
+                  {t('channel.images')}
+                </Text>
+                <FileButton onChange={addImages} accept="image/*" multiple>
+                  {(props) => (
+                    <Button
+                      {...props}
+                      size="compact-sm"
+                      variant="light"
+                      leftSection={<IconPhoto size={16} />}
+                      disabled={images.length >= MAX_IMAGES}
+                    >
+                      {t('channel.addImages')}
+                    </Button>
+                  )}
+                </FileButton>
+              </Group>
+              {images.length === 0 ? (
+                <Text size="xs" c="dimmed">
+                  {t('channel.imagesHint', { max: MAX_IMAGES })}
+                </Text>
+              ) : (
+                <SimpleGrid cols={{ base: 3, sm: 4 }} spacing="xs">
+                  {images.map((file, i) => (
+                    <Card key={`${file.name}-${i}`} withBorder padding={0} pos="relative">
+                      <Image src={previews[i]} alt={file.name} h={84} fit="cover" />
+                      <CloseButton
+                        size="sm"
+                        variant="filled"
+                        color="dark"
+                        aria-label={t('channel.removeImage')}
+                        onClick={() => removeImage(i)}
+                        pos="absolute"
+                        top={4}
+                        right={4}
+                      />
+                    </Card>
+                  ))}
+                </SimpleGrid>
+              )}
+            </Stack>
+
+            <Switch
+              checked={allowComments}
+              onChange={(e) => setAllowComments(e.currentTarget.checked)}
+              label={t('channel.allowComments')}
+              description={t('channel.allowCommentsHint')}
+            />
+
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setSendOpen(false)}>
+                {t('common.cancel')}
+              </Button>
+              <Button onClick={sendMessage} loading={sending} disabled={!canSend}>
+                {t('channel.send')}
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
+      )}
+
       <Stack gap="lg">
         <Breadcrumbs>
           <Anchor component={Link} to="/">
@@ -386,30 +478,15 @@ export function ChannelPage() {
         </Breadcrumbs>
 
         <Card withBorder padding="lg">
-          <Group justify="space-between" align="flex-start">
-            <Stack gap={4}>
-              <Group gap="xs" align="center">
-                <Title order={4}>{channel?.name ?? t('channel.fallbackName')}</Title>
-                {channel?.alias && (
-                  <Text size="sm" c="dimmed">
-                    @{channel.alias}
-                  </Text>
-                )}
-              </Group>
-              <Group gap="xs">
+          <Group justify="space-between" align="center">
+            <Group gap="xs" align="center">
+              <Title order={4}>{channel?.name ?? t('channel.fallbackName')}</Title>
+              {channel?.alias && (
                 <Text size="sm" c="dimmed">
-                  {t('channel.triggerId')}
+                  @{channel.alias}
                 </Text>
-                <Code>{channel?.publicId ?? id}</Code>
-                <CopyButton value={channel?.publicId ?? ''}>
-                  {({ copied, copy }) => (
-                    <Button size="compact-xs" variant="subtle" onClick={copy}>
-                      {copied ? t('common.copied') : t('common.copy')}
-                    </Button>
-                  )}
-                </CopyButton>
-              </Group>
-            </Stack>
+              )}
+            </Group>
             {channel && <ModeBadge mode={channel.subscriptionMode} />}
           </Group>
         </Card>
@@ -417,15 +494,19 @@ export function ChannelPage() {
         <Tabs defaultValue="messages" keepMounted={false}>
           <Tabs.List mb="md">
             <Tabs.Tab value="messages">{t('channel.tabs.messages')}</Tabs.Tab>
-            {canModerate && <Tabs.Tab value="send">{t('channel.tabs.send')}</Tabs.Tab>}
-            {canModerate && <Tabs.Tab value="subscribers">{t('channel.tabs.subscribers')}</Tabs.Tab>}
-            {isOwner && <Tabs.Tab value="keys">{t('channel.tabs.keys')}</Tabs.Tab>}
             <Tabs.Tab value="settings">{t('channel.tabs.settings')}</Tabs.Tab>
           </Tabs.List>
 
           <Tabs.Panel value="messages">
             <Stack gap="sm">
-              <Group justify="flex-end">
+              <Group justify="space-between" wrap="wrap" gap="sm">
+                {canModerate ? (
+                  <Button leftSection={<IconSend size={16} />} onClick={() => setSendOpen(true)}>
+                    {t('channel.send')}
+                  </Button>
+                ) : (
+                  <span />
+                )}
                 <TextInput
                   placeholder={t('channel.searchPlaceholder')}
                   value={search}
@@ -518,136 +599,6 @@ export function ChannelPage() {
             </Stack>
           </Tabs.Panel>
 
-          {canModerate && (
-          <Tabs.Panel value="subscribers">
-            <SubscribersPanel channelId={id} />
-          </Tabs.Panel>
-          )}
-
-          {canModerate && (
-          <Tabs.Panel value="send">
-            <Stack gap="sm">
-              <TextInput
-                label={t('channel.title')}
-                placeholder={t('channel.titlePlaceholder')}
-                value={title}
-                onChange={(e) => setTitle(e.currentTarget.value)}
-              />
-              <Textarea
-                label={t('channel.body')}
-                placeholder={t('channel.bodyPlaceholder')}
-                autosize
-                minRows={3}
-                value={body}
-                onChange={(e) => setBody(e.currentTarget.value)}
-              />
-
-              <Stack gap={6}>
-                <Group justify="space-between" align="center">
-                  <Text size="sm" fw={500}>
-                    {t('channel.images')}
-                  </Text>
-                  <FileButton onChange={addImages} accept="image/*" multiple>
-                    {(props) => (
-                      <Button
-                        {...props}
-                        size="compact-sm"
-                        variant="light"
-                        leftSection={<IconPhoto size={16} />}
-                        disabled={images.length >= MAX_IMAGES}
-                      >
-                        {t('channel.addImages')}
-                      </Button>
-                    )}
-                  </FileButton>
-                </Group>
-                {images.length === 0 ? (
-                  <Text size="xs" c="dimmed">
-                    {t('channel.imagesHint', { max: MAX_IMAGES })}
-                  </Text>
-                ) : (
-                  <SimpleGrid cols={{ base: 3, sm: 4 }} spacing="xs">
-                    {images.map((file, i) => (
-                      <Card key={`${file.name}-${i}`} withBorder padding={0} pos="relative">
-                        <Image src={previews[i]} alt={file.name} h={84} fit="cover" />
-                        <CloseButton
-                          size="sm"
-                          variant="filled"
-                          color="dark"
-                          aria-label={t('channel.removeImage')}
-                          onClick={() => removeImage(i)}
-                          pos="absolute"
-                          top={4}
-                          right={4}
-                        />
-                      </Card>
-                    ))}
-                  </SimpleGrid>
-                )}
-              </Stack>
-
-              <Switch
-                checked={allowComments}
-                onChange={(e) => setAllowComments(e.currentTarget.checked)}
-                label={t('channel.allowComments')}
-                description={t('channel.allowCommentsHint')}
-              />
-
-              <Group justify="flex-end">
-                <Button onClick={sendMessage} loading={sending} disabled={!canSend}>
-                  {t('channel.send')}
-                </Button>
-              </Group>
-            </Stack>
-          </Tabs.Panel>
-          )}
-
-          {isOwner && (
-          <Tabs.Panel value="keys">
-            <Stack gap="sm">
-              <Group justify="flex-end">
-                <Button size="xs" variant="light" onClick={createKey}>
-                  {t('channel.createKey')}
-                </Button>
-              </Group>
-              {activeKeys.length === 0 ? (
-                <Text c="dimmed" size="sm">
-                  {t('channel.noKeys')}
-                </Text>
-              ) : (
-                <Table.ScrollContainer minWidth={420}>
-                  <Table verticalSpacing="xs">
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>{t('channel.colPrefix')}</Table.Th>
-                        <Table.Th>{t('channel.colCreated')}</Table.Th>
-                        <Table.Th />
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {activeKeys.map((k) => (
-                        <Table.Tr key={k.id}>
-                          <Table.Td>
-                            <Code>{k.prefix}…</Code>
-                          </Table.Td>
-                          <Table.Td>{new Date(k.createdAt).toLocaleDateString()}</Table.Td>
-                          <Table.Td align="right">
-                            <Tooltip label={t('channel.revoke')}>
-                              <ActionIcon color="red" variant="subtle" onClick={() => revokeKey(k.id)}>
-                                <IconTrash size={16} />
-                              </ActionIcon>
-                            </Tooltip>
-                          </Table.Td>
-                        </Table.Tr>
-                      ))}
-                    </Table.Tbody>
-                  </Table>
-                </Table.ScrollContainer>
-              )}
-            </Stack>
-          </Tabs.Panel>
-          )}
-
           <Tabs.Panel value="settings">
             <Stack gap="lg">
               {isOwner && (
@@ -697,19 +648,91 @@ export function ChannelPage() {
                       <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
                         <QRCodeSVG value={shareUrl} size={168} />
                       </div>
-                      <Group gap="xs">
-                        <Code>{channel?.alias ? `@${channel.alias}` : (channel?.publicId ?? id)}</Code>
-                        <CopyButton value={shareRef}>
-                          {({ copied, copy }) => (
-                            <Button size="compact-xs" variant="subtle" onClick={copy}>
-                              {copied ? t('common.copied') : t('common.copy')}
-                            </Button>
-                          )}
-                        </CopyButton>
-                      </Group>
+                      <Stack gap="xs" align="center">
+                        <Group gap="xs">
+                          <Text size="sm" c="dimmed">
+                            {t('channel.triggerId')}
+                          </Text>
+                          <Code>{channel?.publicId ?? id}</Code>
+                          <CopyButton value={channel?.publicId ?? ''}>
+                            {({ copied, copy }) => (
+                              <Button size="compact-xs" variant="subtle" onClick={copy}>
+                                {copied ? t('common.copied') : t('common.copy')}
+                              </Button>
+                            )}
+                          </CopyButton>
+                        </Group>
+                        {channel?.alias && (
+                          <Group gap="xs">
+                            <Text size="sm" c="dimmed">
+                              {t('channel.phetag')}
+                            </Text>
+                            <Code>@{channel.alias}</Code>
+                            <CopyButton value={channel.alias}>
+                              {({ copied, copy }) => (
+                                <Button size="compact-xs" variant="subtle" onClick={copy}>
+                                  {copied ? t('common.copied') : t('common.copy')}
+                                </Button>
+                              )}
+                            </CopyButton>
+                          </Group>
+                        )}
+                      </Stack>
                     </Stack>
                   </Card>
                 </>
+              )}
+
+              {canModerate && (
+                <Stack gap="sm">
+                  <Title order={5}>{t('channel.tabs.subscribers')}</Title>
+                  <SubscribersPanel channelId={id} />
+                </Stack>
+              )}
+
+              {isOwner && (
+                <Card withBorder padding="md">
+                  <Group justify="space-between" mb="sm">
+                    <Text fw={600}>{t('channel.tabs.keys')}</Text>
+                    <Button size="xs" variant="light" onClick={createKey}>
+                      {t('channel.createKey')}
+                    </Button>
+                  </Group>
+                  {activeKeys.length === 0 ? (
+                    <Text c="dimmed" size="sm">
+                      {t('channel.noKeys')}
+                    </Text>
+                  ) : (
+                    <Table.ScrollContainer minWidth={420}>
+                      <Table verticalSpacing="xs">
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>{t('channel.colPrefix')}</Table.Th>
+                            <Table.Th>{t('channel.colCreated')}</Table.Th>
+                            <Table.Th />
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {activeKeys.map((k) => (
+                            <Table.Tr key={k.id}>
+                              <Table.Td>
+                                <Code>{k.prefix}…</Code>
+                              </Table.Td>
+                              <Table.Td>{new Date(k.createdAt).toLocaleDateString()}</Table.Td>
+                              <Table.Td align="right">
+                                <Tooltip label={t('channel.revoke')}>
+                                  <ActionIcon color="red" variant="subtle" onClick={() => revokeKey(k.id)}>
+                                    <IconTrash size={16} />
+                                  </ActionIcon>
+                                </Tooltip>
+                              </Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </Table.ScrollContainer>
+                  )}
+                </Card>
               )}
 
               <Card withBorder padding="md">

@@ -51,9 +51,9 @@ test('a user joins by phetag and the owner approves the request', async ({ brows
   await dialog.getByRole('button', { name: 'Add', exact: true }).click()
   await expect(member).toHaveURL(/\/channels\//)
 
-  // The owner approves the pending request from the Subscribers tab.
+  // The owner approves the pending request from the Subscribers section in Settings.
   await owner.goto(channelUrl)
-  await owner.getByRole('tab', { name: 'Subscribers' }).click()
+  await owner.getByRole('tab', { name: 'Settings' }).click()
   await expect(owner.getByText(memberEmail).first()).toBeVisible()
   await owner.getByRole('button', { name: 'Approve' }).click()
   await expect(owner.getByText('Member approved')).toBeVisible()
