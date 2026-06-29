@@ -78,6 +78,27 @@ func TestSetPhetagAndUniqueness(t *testing.T) {
 	}
 }
 
+func TestJoinedChannelsExcludesOwnedAfterSelfJoin(t *testing.T) {
+	f := newAppFixture(t)
+	owner, _ := f.tokenFor(t, "owner@b.com")
+	ch := f.createChannelMode(t, owner, "Medved", domain.ModeOpen)
+
+	// Owner joins their own channel (e.g. to subscribe a device); this creates a
+	// membership row but the channel must not appear under "joined channels".
+	if rec := f.do(http.MethodPost, "/v1/channels/join", owner, map[string]any{"ref": ch.PublicID}); rec.Code != http.StatusCreated {
+		t.Fatalf("self-join: %d %s", rec.Code, rec.Body)
+	}
+
+	rec := f.do(http.MethodGet, "/v1/channels/joined", owner, nil)
+	var jl struct {
+		Channels []joinedChannel `json:"channels"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &jl)
+	if len(jl.Channels) != 0 {
+		t.Fatalf("joined channels = %d (%+v), want 0 — owned channels must not duplicate", len(jl.Channels), jl.Channels)
+	}
+}
+
 func TestJoinByTriggerIDAndPhetag(t *testing.T) {
 	f := newAppFixture(t)
 	owner, _ := f.tokenFor(t, "owner@b.com")

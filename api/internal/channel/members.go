@@ -205,6 +205,11 @@ func (h *AppHandler) listJoinedChannels(w http.ResponseWriter, r *http.Request) 
 	}
 	out := make([]joinedChannel, 0, len(channels))
 	for _, c := range channels {
+		// Owned channels surface under "your channels"; a self-join must not also
+		// list them here, or they appear twice on the client.
+		if c.OwnerID == uid {
+			continue
+		}
 		mem, err := h.Store.MembershipForUser(r.Context(), c.ID, uid)
 		if err != nil {
 			continue
