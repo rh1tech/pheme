@@ -8,6 +8,7 @@ import 'channels/channel_page.dart';
 import 'channels/channels_page.dart';
 import 'channels/message_page.dart';
 import 'core/providers.dart';
+import 'profile/profile_page.dart';
 import 'settings/settings_page.dart';
 
 /// The app router. Redirects to /login when unauthenticated and away from
@@ -41,6 +42,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'settings',
             builder: (context, state) => const SettingsPage(),
+          ),
+          GoRoute(
+            path: 'profile',
+            builder: (context, state) => const ProfilePage(),
           ),
           GoRoute(
             path: 'channels/:id',

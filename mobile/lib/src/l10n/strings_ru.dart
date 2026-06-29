@@ -145,6 +145,26 @@ const Map<String, String> ruStrings = {
   'channel.channelDeleted': 'Канал удалён',
   'channel.deleteFailed': 'Не удалось удалить',
   'channel.notFound': 'Канал не найден.',
+  'channel.allowComments': 'Разрешить комментарии',
+  'channel.allowCommentsHint':
+      'Разрешить подписчикам комментировать это сообщение.',
+
+  // comments
+  'comment.title': 'Комментарии',
+  'comment.placeholder': 'Написать комментарий…',
+  'comment.post': 'Комментировать',
+  'comment.posted': 'Комментарий добавлен',
+  'comment.postFailed': 'Не удалось добавить комментарий',
+  'comment.empty': 'Комментариев пока нет. Будьте первым.',
+  'comment.closed': 'Комментарии к этому сообщению закрыты.',
+  'comment.joinToComment': 'Присоединитесь к каналу, чтобы комментировать.',
+  'comment.loadFailed': 'Не удалось загрузить комментарии',
+  'comment.loadMore': 'Загрузить ещё',
+  'comment.delete': 'Удалить комментарий',
+  'comment.deleteConfirm': 'Удалить этот комментарий? Действие необратимо.',
+  'comment.deleted': 'Комментарий удалён',
+  'comment.deleteFailed': 'Не удалось удалить комментарий',
+  'comment.anonymous': 'Подписчик',
 
   // phetag + share (владелец)
   'channel.phetag': 'Phetag',
@@ -217,4 +237,27 @@ const Map<String, String> ruStrings = {
   'settings.deviceRegistered': 'Зарегистрировано для push-уведомлений',
   'settings.deviceNotRegistered': 'Не зарегистрировано для push-уведомлений',
   'settings.account': 'Аккаунт',
+  'settings.profile': 'Профиль',
+
+  // profile
+  'profile.title': 'Ваш профиль',
+  'profile.subtitle': 'Как вас видят другие в Pheme.',
+  'profile.uploadAvatar': 'Изменить аватар',
+  'profile.removeAvatar': 'Удалить аватар',
+  'profile.avatarUpdated': 'Аватар обновлён',
+  'profile.avatarRemoved': 'Аватар удалён',
+  'profile.avatarFailed': 'Не удалось обновить аватар',
+  'profile.username': 'Имя пользователя',
+  'profile.usernameHint':
+      '3–30 символов: буквы, цифры, «.» или «_». Должно быть уникальным.',
+  'profile.usernameTaken': 'Это имя пользователя уже занято.',
+  'profile.displayName': 'Отображаемое имя',
+  'profile.bio': 'О себе',
+  'profile.phone': 'Телефон',
+  'profile.website': 'Веб-сайт',
+  'profile.contactInfo': 'Контактная информация',
+  'profile.save': 'Сохранить профиль',
+  'profile.saved': 'Профиль сохранён',
+  'profile.saveFailed': 'Не удалось сохранить профиль',
+  'profile.loadFailed': 'Не удалось загрузить профиль',
 };

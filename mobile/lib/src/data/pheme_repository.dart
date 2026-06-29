@@ -50,6 +50,45 @@ class PhemeRepository {
     'newPassword': newPassword,
   }, public: true).then((d) => TokenResponse.fromJson(d));
 
+  // --- Profile (self) ---
+
+  /// The authenticated user's own account and profile.
+  Future<User> getMe() => _get('/v1/me').then((d) => User.fromJson(d));
+
+  /// Updates the caller's username and contact fields. An empty [username]
+  /// clears it. The server returns 409 when the username is taken.
+  Future<User> updateMe({
+    String? username,
+    String? displayName,
+    String? bio,
+    String? phone,
+    String? website,
+  }) {
+    final body = <String, dynamic>{};
+    if (username != null) body['username'] = username;
+    if (displayName != null) body['displayName'] = displayName;
+    if (bio != null) body['bio'] = bio;
+    if (phone != null) body['phone'] = phone;
+    if (website != null) body['website'] = website;
+    return _patch('/v1/me', body).then((d) => User.fromJson(d));
+  }
+
+  /// Uploads a new avatar (processed and stored server-side) and returns the
+  /// updated user.
+  Future<User> uploadAvatar(String imagePath) {
+    final form = FormData.fromMap({
+      'avatar': MultipartFile.fromFileSync(
+        imagePath,
+        filename: imagePath.split('/').last,
+      ),
+    });
+    return _post('/v1/me/avatar', form).then((d) => User.fromJson(d));
+  }
+
+  /// Removes the caller's avatar.
+  Future<User> deleteAvatar() =>
+      _delete('/v1/me/avatar').then((d) => User.fromJson(d));
+
   // --- Channels ---
 
   Future<List<Channel>> listChannels() async {
@@ -189,14 +228,20 @@ class PhemeRepository {
     String title,
     String body, {
     List<String> imagePaths = const [],
+    bool allowComments = true,
   }) {
     final path = '/v1/channels/$channelId/notify';
     if (imagePaths.isEmpty) {
-      return _post(path, {'title': title, 'body': body});
+      return _post(path, {
+        'title': title,
+        'body': body,
+        'commentsAllowed': allowComments,
+      });
     }
     final form = FormData.fromMap({
       'title': title,
       'body': body,
+      'commentsAllowed': '$allowComments',
       'images': [
         for (final p in imagePaths)
           MultipartFile.fromFileSync(p, filename: p.split('/').last),
@@ -262,6 +307,45 @@ class PhemeRepository {
       nextCursor: data['nextCursor'] as String? ?? '',
     );
   }
+
+  // --- Comments ---
+
+  Future<CommentsPage> listComments(
+    String channelId,
+    String messageId, {
+    String cursor = '',
+    int limit = 50,
+  }) async {
+    final q = <String, dynamic>{'limit': '$limit'};
+    if (cursor.isNotEmpty) q['cursor'] = cursor;
+    final data = await _get(
+      '/v1/channels/$channelId/messages/$messageId/comments',
+      query: q,
+    );
+    final list = (data['comments'] as List?) ?? const [];
+    return CommentsPage(
+      comments: list
+          .map((e) => Comment.fromJson((e as Map).cast<String, dynamic>()))
+          .toList(),
+      nextCursor: data['nextCursor'] as String? ?? '',
+    );
+  }
+
+  Future<Comment> postComment(
+    String channelId,
+    String messageId,
+    String body,
+  ) => _post('/v1/channels/$channelId/messages/$messageId/comments', {
+    'body': body,
+  }).then((d) => Comment.fromJson(d));
+
+  Future<void> deleteComment(
+    String channelId,
+    String messageId,
+    String commentId,
+  ) => _delete(
+    '/v1/channels/$channelId/messages/$messageId/comments/$commentId',
+  );
 
   // --- HTTP helpers ---
 

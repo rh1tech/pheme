@@ -29,6 +29,7 @@ class _SendTabState extends ConsumerState<SendTab> {
   final _body = TextEditingController();
   final _picker = ImagePicker();
   final List<XFile> _images = [];
+  bool _allowComments = true;
   bool _sending = false;
 
   @override
@@ -92,11 +93,15 @@ class _SendTabState extends ConsumerState<SendTab> {
             _title.text.trim(),
             _body.text.trim(),
             imagePaths: _images.map((f) => f.path).toList(),
+            allowComments: _allowComments,
           );
       if (!mounted) return;
       _title.clear();
       _body.clear();
-      setState(_images.clear);
+      setState(() {
+        _images.clear();
+        _allowComments = true;
+      });
       notifySuccess(context, l10n.t('channel.messageSent'));
     } catch (e) {
       if (mounted) notifyError(context, l10n.t('channel.sendFailed'), e);
@@ -157,6 +162,14 @@ class _SendTabState extends ConsumerState<SendTab> {
           )
         else
           _ImagePreviewStrip(images: _images, onRemove: _removeImage),
+        const SizedBox(height: 8),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          value: _allowComments,
+          onChanged: (v) => setState(() => _allowComments = v),
+          title: Text(l10n.t('channel.allowComments')),
+          subtitle: Text(l10n.t('channel.allowCommentsHint')),
+        ),
         const SizedBox(height: 16),
         AdaptiveButton.filled(
           onPressed: (_sending || !_canSend) ? null : _send,

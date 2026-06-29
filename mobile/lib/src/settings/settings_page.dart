@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../core/providers.dart';
 import '../core/snackbar.dart';
@@ -166,6 +167,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         const Divider(height: 24),
         _SectionHeader(title: l10n.t('settings.account')),
         ListTile(
+          leading: const Icon(Icons.person_outline),
+          title: Text(l10n.t('settings.profile')),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.push('/profile'),
+        ),
+        ListTile(
           leading: Icon(
             Icons.logout,
             color: Theme.of(context).colorScheme.error,
@@ -256,6 +263,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         CupertinoListSection.insetGrouped(
           header: Text(l10n.t('settings.account')),
           children: [
+            CupertinoListTile.notched(
+              leading: const Icon(CupertinoIcons.person),
+              title: Text(l10n.t('settings.profile')),
+              trailing: const CupertinoListTileChevron(),
+              onTap: () => context.push('/profile'),
+            ),
             CupertinoListTile.notched(
               leading: const Icon(
                 CupertinoIcons.square_arrow_right,

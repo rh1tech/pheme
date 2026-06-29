@@ -147,6 +147,25 @@ const Map<String, String> enStrings = {
       'subscriptions and message history. This cannot be undone.',
   'channel.channelDeleted': 'Channel deleted',
   'channel.deleteFailed': 'Delete failed',
+  'channel.allowComments': 'Allow comments',
+  'channel.allowCommentsHint': 'Let members comment on this message.',
+
+  // comments
+  'comment.title': 'Comments',
+  'comment.placeholder': 'Write a comment…',
+  'comment.post': 'Comment',
+  'comment.posted': 'Comment posted',
+  'comment.postFailed': 'Could not post comment',
+  'comment.empty': 'No comments yet. Be the first to comment.',
+  'comment.closed': 'Comments are closed for this message.',
+  'comment.joinToComment': 'Join this channel to comment.',
+  'comment.loadFailed': 'Could not load comments',
+  'comment.loadMore': 'Load more',
+  'comment.delete': 'Delete comment',
+  'comment.deleteConfirm': 'Delete this comment? This cannot be undone.',
+  'comment.deleted': 'Comment deleted',
+  'comment.deleteFailed': 'Could not delete comment',
+  'comment.anonymous': 'Member',
   'channel.notFound': 'Channel not found.',
 
   // phetag + share (owner)
@@ -218,4 +237,27 @@ const Map<String, String> enStrings = {
   'settings.deviceRegistered': 'Registered for push notifications',
   'settings.deviceNotRegistered': 'Not registered for push notifications',
   'settings.account': 'Account',
+  'settings.profile': 'Profile',
+
+  // profile
+  'profile.title': 'Your profile',
+  'profile.subtitle': 'How you appear to others across Pheme.',
+  'profile.uploadAvatar': 'Change avatar',
+  'profile.removeAvatar': 'Remove avatar',
+  'profile.avatarUpdated': 'Avatar updated',
+  'profile.avatarRemoved': 'Avatar removed',
+  'profile.avatarFailed': 'Could not update avatar',
+  'profile.username': 'Username',
+  'profile.usernameHint':
+      '3–30 characters: letters, digits, “.” or “_”. Must be unique.',
+  'profile.usernameTaken': 'That username is already taken.',
+  'profile.displayName': 'Display name',
+  'profile.bio': 'Bio',
+  'profile.phone': 'Phone',
+  'profile.website': 'Website',
+  'profile.contactInfo': 'Contact information',
+  'profile.save': 'Save profile',
+  'profile.saved': 'Profile saved',
+  'profile.saveFailed': 'Could not save profile',
+  'profile.loadFailed': 'Could not load your profile',
 };

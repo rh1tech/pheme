@@ -255,6 +255,7 @@ class Message {
     required this.createdAt,
     this.images = const [],
     this.data,
+    this.commentsAllowed = true,
   });
 
   final String id;
@@ -264,6 +265,10 @@ class Message {
   final String createdAt;
   final List<MessageImage> images;
   final Map<String, dynamic>? data;
+
+  /// Whether members may comment on this message (decided per-message when
+  /// sending; defaults to true for older payloads without the field).
+  final bool commentsAllowed;
 
   factory Message.fromJson(Map<String, dynamic> j) => Message(
     id: j['id'] as String? ?? '',
@@ -275,7 +280,115 @@ class Message {
         .map((e) => MessageImage.fromJson((e as Map).cast<String, dynamic>()))
         .toList(),
     data: (j['data'] as Map?)?.cast<String, dynamic>(),
+    commentsAllowed: j['commentsAllowed'] as bool? ?? true,
   );
+}
+
+/// The non-sensitive public profile of a user (e.g. a comment author).
+class PublicUser {
+  PublicUser({
+    required this.id,
+    this.username,
+    this.displayName,
+    this.avatarId,
+  });
+
+  final String id;
+  final String? username;
+  final String? displayName;
+  final String? avatarId;
+
+  /// A human label for display: the display name, else the username, else a
+  /// caller-provided fallback.
+  String label(String fallback) {
+    if (displayName != null && displayName!.isNotEmpty) return displayName!;
+    if (username != null && username!.isNotEmpty) return username!;
+    return fallback;
+  }
+
+  factory PublicUser.fromJson(Map<String, dynamic> j) => PublicUser(
+    id: j['id'] as String? ?? '',
+    username: j['username'] as String?,
+    displayName: j['displayName'] as String?,
+    avatarId: j['avatarId'] as String?,
+  );
+}
+
+/// The authenticated user's own account and profile (`GET/PATCH /v1/me`).
+class User {
+  User({
+    required this.id,
+    required this.email,
+    required this.role,
+    this.username,
+    this.displayName,
+    this.bio,
+    this.phone,
+    this.website,
+    this.avatarId,
+  });
+
+  final String id;
+  final String email;
+  final String role;
+  final String? username;
+  final String? displayName;
+  final String? bio;
+  final String? phone;
+  final String? website;
+  final String? avatarId;
+
+  factory User.fromJson(Map<String, dynamic> j) => User(
+    id: j['id'] as String? ?? '',
+    email: j['email'] as String? ?? '',
+    role: j['role'] as String? ?? 'user',
+    username: j['username'] as String?,
+    displayName: j['displayName'] as String?,
+    bio: j['bio'] as String?,
+    phone: j['phone'] as String?,
+    website: j['website'] as String?,
+    avatarId: j['avatarId'] as String?,
+  );
+}
+
+/// A comment on a message, with its author's public profile.
+class Comment {
+  Comment({
+    required this.id,
+    required this.messageId,
+    required this.channelId,
+    required this.userId,
+    required this.body,
+    required this.createdAt,
+    required this.author,
+  });
+
+  final String id;
+  final String messageId;
+  final String channelId;
+  final String userId;
+  final String body;
+  final String createdAt;
+  final PublicUser author;
+
+  factory Comment.fromJson(Map<String, dynamic> j) => Comment(
+    id: j['id'] as String? ?? '',
+    messageId: j['messageId'] as String? ?? '',
+    channelId: j['channelId'] as String? ?? '',
+    userId: j['userId'] as String? ?? '',
+    body: j['body'] as String? ?? '',
+    createdAt: j['createdAt'] as String? ?? '',
+    author: PublicUser.fromJson(
+      ((j['author'] as Map?) ?? const {}).cast<String, dynamic>(),
+    ),
+  );
+}
+
+class CommentsPage {
+  CommentsPage({required this.comments, required this.nextCursor});
+
+  final List<Comment> comments;
+  final String nextCursor;
 }
 
 class MessagesPage {
