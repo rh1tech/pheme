@@ -9,10 +9,10 @@ interface PullToRefreshProps {
 
 // Damped finger travel needed to trigger, the visual cap, and the damping factor.
 const TRIGGER = 64
-const MAX = 96
+const MAX = 104
 const DAMP = 0.5
-// Where the spinner rests while refreshing.
-const REST = 44
+// Height of the revealed strip the spinner sits centred in while refreshing.
+const REST = 56
 
 /**
  * Touch pull-to-refresh for the window-scrolled SPA. The app sets
@@ -85,19 +85,32 @@ export function PullToRefresh({ onRefresh, children }: PullToRefreshProps) {
   const indicatorOpacity = refreshing ? 1 : Math.min(1, pull / TRIGGER)
 
   return (
-    <div onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}>
-      <div style={{ height: 0, position: 'relative', display: 'flex', justifyContent: 'center' }}>
-        <div
-          style={{
-            position: 'absolute',
-            top: offset - 28,
-            opacity: indicatorOpacity,
-            pointerEvents: 'none',
-            transition: settling ? 'top 200ms ease, opacity 150ms ease' : 'none',
-          }}
-        >
-          <Loader size="sm" />
-        </div>
+    <div
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onTouchCancel={onTouchEnd}
+      style={{ position: 'relative' }}
+    >
+      {/* The spinner sits centred in the strip the translated content reveals,
+          so it always keeps clearance from the content below. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: offset,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+          opacity: indicatorOpacity,
+          pointerEvents: 'none',
+          transition: settling ? 'height 200ms ease, opacity 150ms ease' : 'none',
+        }}
+      >
+        <Loader size="sm" />
       </div>
       <div
         style={{

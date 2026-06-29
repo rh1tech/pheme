@@ -14,6 +14,7 @@ const en = {
     navChannels: 'Channels',
     navAdmin: 'Admin',
     navProfile: 'Profile',
+    notificationsOff: 'Notifications are off — you won’t be alerted about new messages.',
     menu: 'Menu',
     errorTitle: 'Something went wrong',
     errorBody: 'The page hit an unexpected error. Reloading usually fixes it.',

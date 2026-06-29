@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -7,16 +7,13 @@ import {
   Breadcrumbs,
   Button,
   Card,
-  CloseButton,
   Code,
   Container,
   CopyButton,
-  FileButton,
   Group,
   Image,
   Modal,
   SegmentedControl,
-  SimpleGrid,
   Stack,
   Switch,
   Table,
@@ -49,6 +46,8 @@ import { ModeBadge } from '../components/badges'
 import { SubscribersPanel } from '../components/SubscribersPanel'
 import { CardListSkeleton } from '../components/Skeletons'
 import { PullToRefresh } from '../components/PullToRefresh'
+import { ResponsiveModal } from '../components/ResponsiveModal'
+import { ImagePicker } from '../components/ImagePicker'
 import { BRAND_GRADIENT } from '../theme'
 import { loadWebDeviceId, saveWebDeviceId } from '../lib/device'
 import { registerWebPushDevice, webPushAvailability } from '../lib/webpush'
@@ -78,6 +77,7 @@ export function ChannelPage() {
   const [allowComments, setAllowComments] = useState(true)
   const [sending, setSending] = useState(false)
   const [sendOpen, setSendOpen] = useState(false)
+  const titleRef = useRef<HTMLInputElement>(null)
 
   const [editName, setEditName] = useState('')
   const [editMode, setEditMode] = useState<SubscriptionMode>('approval')
@@ -252,10 +252,6 @@ export function ChannelPage() {
     setImages((prev) => prev.filter((_, i) => i !== index))
   }
 
-  // Object URLs for local previews; revoked when the selection changes/unmounts.
-  const previews = useMemo(() => images.map((f) => URL.createObjectURL(f)), [images])
-  useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews])
-
   const canSend = title.trim().length > 0 || body.trim().length > 0 || images.length > 0
 
   async function sendMessage() {
@@ -401,9 +397,17 @@ export function ChannelPage() {
       </ConfirmModal>
 
       {canModerate && (
-        <Modal opened={sendOpen} onClose={() => setSendOpen(false)} title={t('channel.tabs.send')} size="lg">
+        <ResponsiveModal
+          opened={sendOpen}
+          onClose={() => setSendOpen(false)}
+          title={t('channel.tabs.send')}
+          size="lg"
+          onEnterTransitionEnd={() => titleRef.current?.focus()}
+        >
           <Stack gap="sm">
             <TextInput
+              ref={titleRef}
+              data-autofocus
               label={t('channel.title')}
               placeholder={t('channel.titlePlaceholder')}
               value={title}
@@ -418,49 +422,7 @@ export function ChannelPage() {
               onChange={(e) => setBody(e.currentTarget.value)}
             />
 
-            <Stack gap={6}>
-              <Group justify="space-between" align="center">
-                <Text size="sm" fw={500}>
-                  {t('channel.images')}
-                </Text>
-                <FileButton onChange={addImages} accept="image/*" multiple>
-                  {(props) => (
-                    <Button
-                      {...props}
-                      size="compact-sm"
-                      variant="light"
-                      leftSection={<IconPhoto size={16} />}
-                      disabled={images.length >= MAX_IMAGES}
-                    >
-                      {t('channel.addImages')}
-                    </Button>
-                  )}
-                </FileButton>
-              </Group>
-              {images.length === 0 ? (
-                <Text size="xs" c="dimmed">
-                  {t('channel.imagesHint', { max: MAX_IMAGES })}
-                </Text>
-              ) : (
-                <SimpleGrid cols={{ base: 3, sm: 4 }} spacing="xs">
-                  {images.map((file, i) => (
-                    <Card key={`${file.name}-${i}`} withBorder padding={0} pos="relative">
-                      <Image src={previews[i]} alt={file.name} h={84} fit="cover" />
-                      <CloseButton
-                        size="sm"
-                        variant="filled"
-                        color="dark"
-                        aria-label={t('channel.removeImage')}
-                        onClick={() => removeImage(i)}
-                        pos="absolute"
-                        top={4}
-                        right={4}
-                      />
-                    </Card>
-                  ))}
-                </SimpleGrid>
-              )}
-            </Stack>
+            <ImagePicker files={images} max={MAX_IMAGES} onAdd={addImages} onRemove={removeImage} />
 
             <Switch
               checked={allowComments}
@@ -478,7 +440,7 @@ export function ChannelPage() {
               </Button>
             </Group>
           </Stack>
-        </Modal>
+        </ResponsiveModal>
       )}
 
       <Stack gap="lg">

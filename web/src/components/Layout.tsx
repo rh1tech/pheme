@@ -14,6 +14,7 @@ import { useAuth } from '../auth/context'
 import { LanguageSwitcher } from './LanguageSwitcher'
 import { ThemeToggle } from './ThemeToggle'
 import { Logo } from './Logo'
+import { NotificationsBanner } from './NotificationsBanner'
 
 export function Layout() {
   const { logout, isAdmin } = useAuth()
@@ -138,6 +139,7 @@ export function Layout() {
       </AppShell.Navbar>
 
       <AppShell.Main>
+        <NotificationsBanner />
         <Outlet />
       </AppShell.Main>
     </AppShell>

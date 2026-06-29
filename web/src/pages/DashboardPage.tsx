@@ -1,28 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Badge,
   Button,
   Card,
   Container,
   Group,
-  Modal,
   SegmentedControl,
   Stack,
   Text,
   TextInput,
   Title,
 } from '@mantine/core'
-import { IconBellCheck } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { notifyError, notifySuccess } from '../lib/notify'
 import type { Channel, JoinedChannel, SubscriptionMode } from '../lib/types'
-import { getWebPushState, registerWebPushDevice, webPushSupported } from '../lib/webpush'
-import { saveWebDeviceId } from '../lib/device'
 import { ChannelRoleBadge, MemberStatusBadge, ModeBadge } from '../components/badges'
 import { CardListSkeleton } from '../components/Skeletons'
 import { PullToRefresh } from '../components/PullToRefresh'
+import { ResponsiveModal } from '../components/ResponsiveModal'
 
 export function DashboardPage() {
   const navigate = useNavigate()
@@ -37,7 +33,6 @@ export function DashboardPage() {
   const [joinOpen, setJoinOpen] = useState(false)
   const [joinRef, setJoinRef] = useState('')
   const [joining, setJoining] = useState(false)
-  const [pushOn, setPushOn] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
   const joinRefInput = useRef<HTMLInputElement>(null)
 
@@ -78,16 +73,6 @@ export function DashboardPage() {
     setJoinOpen(true)
   }
 
-  useEffect(() => {
-    let active = true
-    getWebPushState()
-      .then((s) => active && setPushOn(s.supported && s.permission === 'granted' && s.subscribed))
-      .catch(() => undefined)
-    return () => {
-      active = false
-    }
-  }, [])
-
   async function createChannel() {
     if (!name.trim()) return
     setCreating(true)
@@ -121,20 +106,9 @@ export function DashboardPage() {
     }
   }
 
-  async function enableNotifications() {
-    try {
-      const deviceId = await registerWebPushDevice()
-      saveWebDeviceId(deviceId)
-      setPushOn(true)
-      notifySuccess(t('dashboard.notificationsEnabled'))
-    } catch (e) {
-      notifyError(t('dashboard.enableFailed'), e)
-    }
-  }
-
   return (
     <Container size="sm">
-      <Modal
+      <ResponsiveModal
         opened={modalOpen}
         onClose={() => setModalOpen(false)}
         title={t('dashboard.newChannel')}
@@ -173,9 +147,9 @@ export function DashboardPage() {
             </Button>
           </Group>
         </Stack>
-      </Modal>
+      </ResponsiveModal>
 
-      <Modal
+      <ResponsiveModal
         opened={joinOpen}
         onClose={() => setJoinOpen(false)}
         title={t('dashboard.addChannelTitle')}
@@ -201,7 +175,7 @@ export function DashboardPage() {
             </Button>
           </Group>
         </Stack>
-      </Modal>
+      </ResponsiveModal>
 
       <PullToRefresh onRefresh={refresh}>
       <Stack gap="xl">
@@ -209,16 +183,6 @@ export function DashboardPage() {
           <Group justify="space-between">
             <Title order={4}>{t('dashboard.yourChannels')}</Title>
             <Group gap="xs">
-              {webPushSupported() &&
-                (pushOn ? (
-                  <Badge color="teal" variant="light" size="lg" leftSection={<IconBellCheck size={14} />}>
-                    {t('dashboard.notificationsOn')}
-                  </Badge>
-                ) : (
-                  <Button variant="subtle" size="xs" onClick={enableNotifications}>
-                    {t('dashboard.enableNotifications')}
-                  </Button>
-                ))}
               <Button size="xs" variant="default" onClick={openJoin}>
                 {t('dashboard.addChannel')}
               </Button>
