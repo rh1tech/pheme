@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -466,11 +467,36 @@ func (h *AppHandler) subscriptionStatus(w http.ResponseWriter, r *http.Request) 
 	httpx.JSON(w, http.StatusOK, map[string]any{"status": sub.Status})
 }
 
+// canReadChannel reports whether uid may read a channel's content: the owner, or
+// a member whose membership is active. Pending, blocked, and non-members are
+// denied, as is a missing channel. It is evaluated against live store state on
+// every call, so a block (or removal) takes effect on the next request or live
+// event — there is no cached grant to outlive the change.
+func (h *AppHandler) canReadChannel(ctx context.Context, uid, channelID string) bool {
+	ch, err := h.Store.ChannelByID(ctx, channelID)
+	if err != nil {
+		return false
+	}
+	rel, ok := h.relationFor(ctx, uid, ch)
+	return ok && rel.Status == domain.MemberActive
+}
+
+// canReadMessages is the request-scoped form of canReadChannel for HTTP handlers.
+// Callers respond 404 on false, so channel existence is never leaked to outsiders.
+func (h *AppHandler) canReadMessages(r *http.Request, uid, channelID string) bool {
+	return h.canReadChannel(r.Context(), uid, channelID)
+}
+
 func (h *AppHandler) listMessages(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireUser(w, r); !ok {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
 		return
 	}
 	channelID := r.PathValue("id")
+	if !h.canReadMessages(r, uid, channelID) {
+		httpx.Error(w, http.StatusNotFound, "channel not found")
+		return
+	}
 	limit := 50
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
@@ -492,13 +518,18 @@ func (h *AppHandler) listMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // getMessage returns a single message by id (for the message-detail view and
-// notification deep-links). Like listMessages, it is readable by any
-// authenticated user; the message must belong to the channel in the path.
+// notification deep-links). Like listMessages, it is readable only by the owner
+// or an active member; the message must belong to the channel in the path.
 func (h *AppHandler) getMessage(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireUser(w, r); !ok {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
 		return
 	}
 	channelID := r.PathValue("id")
+	if !h.canReadMessages(r, uid, channelID) {
+		httpx.Error(w, http.StatusNotFound, "message not found")
+		return
+	}
 	msg, err := h.Store.MessageByID(r.Context(), r.PathValue("messageId"))
 	if err != nil || msg.ChannelID != channelID {
 		httpx.Error(w, http.StatusNotFound, "message not found")
@@ -511,8 +542,14 @@ func (h *AppHandler) getMessage(w http.ResponseWriter, r *http.Request) {
 // the access token via the "token" query parameter because EventSource cannot
 // set an Authorization header. Production may expose this as a WebSocket and fan
 // out via Redis pub/sub.
+//
+// Each event is authorized per channel against live store state before it is
+// forwarded, so a client only ever receives channels it is an active member of,
+// and a block (or removal) silences an already-open connection on the next event
+// rather than only on reconnect.
 func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
-	if _, err := h.Tokens.Parse(r.URL.Query().Get("token"), auth.AccessToken); err != nil {
+	uid, err := h.Tokens.Parse(r.URL.Query().Get("token"), auth.AccessToken)
+	if err != nil {
 		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -538,6 +575,9 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 		case e, ok := <-events:
 			if !ok {
 				return
+			}
+			if !h.canReadChannel(r.Context(), uid, e.ChannelID) {
+				continue // not (or no longer) an active member of this channel
 			}
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", mustJSON(e))
 			flusher.Flush()

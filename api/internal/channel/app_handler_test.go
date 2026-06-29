@@ -25,6 +25,7 @@ type appFixture struct {
 	store  store.Store
 	pub    *broker.Memory
 	blob   blob.Store
+	h      *AppHandler
 }
 
 func newAppFixture(t *testing.T) *appFixture {
@@ -43,7 +44,7 @@ func newAppFixture(t *testing.T) *appFixture {
 	}
 	mux := http.NewServeMux()
 	h.Routes(mux)
-	return &appFixture{mux: mux, tokens: tokens, store: db, pub: pub, blob: blobs}
+	return &appFixture{mux: mux, tokens: tokens, store: db, pub: pub, blob: blobs, h: h}
 }
 
 // tokenFor issues an access token for a freshly created user and returns it.
