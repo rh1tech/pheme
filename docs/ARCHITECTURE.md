@@ -43,13 +43,14 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 
 ## 4. Data model (MongoDB collections)
 
-- **users** — `_id, email, passwordHash (argon2id), createdAt`
+- **users** — `_id, email, passwordHash (argon2id), role, status, username? + usernameLower (unique handle, display-only), displayName?, bio?, phone?, website?, avatarId? (blob ref), createdAt`. `username` is optional, unique case-insensitively (partial unique index on `usernameLower`, mirroring channel `aliasLower`), and is **not** a login credential — email remains the login.
 - **channels** — `_id, publicId, ownerId, name, alias? ("phetag", unique case-insensitively via `aliasLower`), subscriptionMode (open|approval), createdAt`
 - **apiKeys** — `_id, channelId, hashedKey, prefix, label, createdAt, revokedAt?`
 - **devices** — `_id, userId, platform (ios|android|web), fcmToken?, webPushSub?, createdAt, lastSeenAt`
 - **subscriptions** — `_id, channelId, deviceId, status (active|pending|blocked), createdAt` — **per-device**, drives push delivery.
 - **channelMembers** — `_id, channelId, userId, role (admin|user), status (active|pending|blocked), createdAt` (unique `{channelId,userId}`). The **per-user** membership layer: the unit of approval, ban, and per-channel moderation role. The channel owner is the implicit top authority and has **no** member row. Membership does not gate the dispatcher; instead approve/ban/remove flip the user's device-subscription statuses, so delivery stays driven by `subscriptions`.
-- **messages** — `_id, channelId, title, body, images?, data?, createdAt` (indexed `{channelId, _id}` for cursor pagination). `images` is an ordered list of `{id, width, height}` (Instagram-style: shown before the text), up to 10 per message; `id` references a processed JPEG in the blob store.
+- **messages** — `_id, channelId, title, body, images?, data?, commentsAllowed, createdAt` (indexed `{channelId, createdAt}` for cursor pagination). `images` is an ordered list of `{id, width, height}` (Instagram-style: shown before the text), up to 10 per message; `id` references a processed JPEG in the blob store. `commentsAllowed` is decided per-message when sending (default true) and gates commenting on that message.
+- **comments** — `_id, messageId, channelId, userId, body, createdAt` (indexed `{messageId, createdAt}` for cursor pagination, plus `{channelId}`/`{userId}` for cascades and `{createdAt}` for admin moderation). `channelId` is denormalized so deletes cascade by channel and the moderation panel resolves the channel without a message lookup. Active members (and the owner) post instantly; the author or a channel owner/admin can delete.
 - **deliveries** — `_id, messageId, deviceId, status (sent|failed|skipped), error?, sentAt`
 - **images (blob store)** — processed JPEGs stored in **MongoDB GridFS** (`fs.files`/`fs.chunks`) under an unguessable random id, behind a `blob.Store` driver interface (memory | gridfs). Images are processed (validated, EXIF-oriented, downscaled so the longer edge ≤ 1000px, re-encoded as JPEG ~q82) at the API boundary **before** enqueue, so the broker payload only carries references. Deleting a channel/user cascades to its messages' image blobs.
 
@@ -72,6 +73,7 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 
 ### App (user JWT)
 - `POST /v1/auth/register` (emails a 6-digit code) · `POST /v1/auth/verify` (confirms the code → creates the account, logs in) · `POST /v1/auth/login` · `POST /v1/auth/refresh`
+- **Profile (self):** `GET /v1/me` · `PATCH /v1/me` (`{username?, displayName?, bio?, phone?, website?}` — username validated + unique, empty clears it) · `POST /v1/me/avatar` (multipart `avatar`, reuses the image pipeline) · `DELETE /v1/me/avatar`
 - `POST /v1/auth/forgot-password` (emails a reset code) · `POST /v1/auth/reset-password`
 - `POST /v1/channels` · `GET /v1/channels` (owned) · `GET /v1/channels/{id}` (single, with caller's relation) · `PATCH /v1/channels/{id}` (name/mode, and `alias` owner-only) · `DELETE /v1/channels/{id}`
 - `POST /v1/channels/{id}/keys` (returns plaintext key once) · `DELETE /v1/channels/{id}/keys/{keyId}`
@@ -80,7 +82,8 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - **Approvals (owner/admin):** `GET /v1/channels/{id}/approvals` · `POST /v1/channels/{id}/approvals/{userId}` (approve) · `DELETE /v1/channels/{id}/approvals/{userId}` (deny)
 - **Subscribers (owner/admin):** `GET /v1/channels/{id}/members?offset=&limit=` (lazy) · `PATCH /v1/channels/{id}/members/{userId}` (`{role?, status?}` — ban/unban, role change) · `DELETE /v1/channels/{id}/members/{userId}` (remove)
 - `POST /v1/channels/{id}/subscribe` (device-level; also establishes membership)
-- `GET /v1/channels/{id}/messages?cursor=&limit=&q=` · `GET /v1/channels/{id}/messages/{messageId}` (single message, for the detail view and notification deep-links) · `POST /v1/channels/{id}/notify` (owner sends from the UI; JSON or `multipart/form-data` with `images`, same as ingest)
+- `GET /v1/channels/{id}/messages?cursor=&limit=&q=` · `GET /v1/channels/{id}/messages/{messageId}` (single message, for the detail view and notification deep-links) · `POST /v1/channels/{id}/notify` (owner sends from the UI; JSON or `multipart/form-data` with `images`, same as ingest; accepts `commentsAllowed`, default true)
+- **Comments (active members):** `GET /v1/channels/{id}/messages/{messageId}/comments?cursor=&limit=` (author public profile only — never email) · `POST /v1/channels/{id}/messages/{messageId}/comments` (`{body}`; requires active membership and `commentsAllowed`) · `DELETE /v1/channels/{id}/messages/{messageId}/comments/{commentId}` (author, or channel owner/admin)
 - `GET /v1/images/{id}` — serves a processed JPEG by id. **Public** (no JWT): the id is unguessable, devices/`<img>`/push fetch it without a bearer, and message history is already readable by any authenticated user. Long-cached (`immutable`).
 - `GET /v1/stream` — SSE live messages (token via query parameter)
 
@@ -89,6 +92,7 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - `GET /v1/admin/users` · `POST /v1/admin/users` (create a user directly: email + password + role, bypassing email verification) · `PATCH /v1/admin/users/{id}` (role/status) · `DELETE /v1/admin/users/{id}` (cascades the user's data) · `POST /v1/admin/users/{id}/reset-password`
 - `GET /v1/admin/channels` · `DELETE /v1/admin/channels/{id}` (cascades)
 - `GET /v1/admin/channels/{id}/keys` · `DELETE /v1/admin/channels/{id}/keys/{keyId}`
+- **Comment moderation:** `GET /v1/admin/comments?q=&page=&limit=` (every comment, enriched with author email, channel name and message title) · `DELETE /v1/admin/comments/{id}`. Banning a comment's author reuses `PATCH /v1/admin/users/{id}` (`status: blocked`).
 
 ## 6. Security
 - API keys stored hashed (SHA-256 of a high-entropy secret); shown once on creation; multiple keys per channel with revocation.

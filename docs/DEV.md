@@ -51,7 +51,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and data model.
 api/          Go module github.com/rh1tech/pheme/api
   cmd/        app, ingest, dispatcher, vapidgen (entrypoints)
   internal/
-    domain/   core entities (User, Channel, APIKey, Device, Subscription, Message, MessageImage, …)
+    domain/   core entities (User, Channel, APIKey, Device, Subscription, Message, MessageImage, Comment, …)
     store/    Store interface + Memory and Mongo implementations (cascades image-blob deletes)
     blob/     blob Store interface + Memory and GridFS (processed message images)
     imaging/  server-side image processing (decode, EXIF-orient, downscale ≤1000px, re-encode JPEG)
