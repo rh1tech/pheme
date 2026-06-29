@@ -603,39 +603,42 @@ export function ChannelPage() {
             <Stack gap="lg">
               {isOwner && (
                 <>
-                  <Stack gap="sm">
-                    <TextInput
-                      label={t('dashboard.channelName')}
-                      value={editName}
-                      onChange={(e) => setEditName(e.currentTarget.value)}
-                    />
-                    <TextInput
-                      label={t('channel.phetagLabel')}
-                      placeholder={t('channel.phetagPlaceholder')}
-                      description={t('channel.phetagHint')}
-                      leftSection={<Text size="sm" c="dimmed">@</Text>}
-                      value={editAlias}
-                      onChange={(e) => setEditAlias(e.currentTarget.value)}
-                    />
-                    <div>
-                      <Text size="sm" fw={500} mb={4}>
-                        {t('channel.subscriptionMode')}
-                      </Text>
-                      <SegmentedControl
-                        value={editMode}
-                        onChange={(v) => setEditMode(v as SubscriptionMode)}
-                        data={[
-                          { label: t('mode.approval'), value: 'approval' },
-                          { label: t('mode.open'), value: 'open' },
-                        ]}
+                  <Card withBorder padding="md">
+                    <Stack gap="sm">
+                      <Text fw={600}>{t('channel.detailsTitle')}</Text>
+                      <TextInput
+                        label={t('dashboard.channelName')}
+                        value={editName}
+                        onChange={(e) => setEditName(e.currentTarget.value)}
                       />
-                    </div>
-                    <Group justify="flex-end">
-                      <Button onClick={saveSettings} loading={savingSettings} disabled={!editName.trim()}>
-                        {t('channel.saveChanges')}
-                      </Button>
-                    </Group>
-                  </Stack>
+                      <TextInput
+                        label={t('channel.phetagLabel')}
+                        placeholder={t('channel.phetagPlaceholder')}
+                        description={t('channel.phetagHint')}
+                        leftSection={<Text size="sm" c="dimmed">@</Text>}
+                        value={editAlias}
+                        onChange={(e) => setEditAlias(e.currentTarget.value)}
+                      />
+                      <div>
+                        <Text size="sm" fw={500} mb={4}>
+                          {t('channel.subscriptionMode')}
+                        </Text>
+                        <SegmentedControl
+                          value={editMode}
+                          onChange={(v) => setEditMode(v as SubscriptionMode)}
+                          data={[
+                            { label: t('mode.approval'), value: 'approval' },
+                            { label: t('mode.open'), value: 'open' },
+                          ]}
+                        />
+                      </div>
+                      <Group justify="flex-end">
+                        <Button onClick={saveSettings} loading={savingSettings} disabled={!editName.trim()}>
+                          {t('channel.saveChanges')}
+                        </Button>
+                      </Group>
+                    </Stack>
+                  </Card>
 
                   <Card withBorder padding="md">
                     <Stack gap="sm" align="center">
@@ -684,10 +687,12 @@ export function ChannelPage() {
               )}
 
               {canModerate && (
-                <Stack gap="sm">
-                  <Title order={5}>{t('channel.tabs.subscribers')}</Title>
-                  <SubscribersPanel channelId={id} />
-                </Stack>
+                <Card withBorder padding="md">
+                  <Stack gap="sm">
+                    <Text fw={600}>{t('channel.tabs.subscribers')}</Text>
+                    <SubscribersPanel channelId={id} />
+                  </Stack>
+                </Card>
               )}
 
               {isOwner && (

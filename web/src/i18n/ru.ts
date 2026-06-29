@@ -130,6 +130,7 @@ const ru: Resources = {
       subscribers: 'Подписчики',
       settings: 'Настройки',
     },
+    detailsTitle: 'Параметры канала',
     phetag: 'Phetag',
     phetagLabel: 'Phetag (идентификатор канала)',
     phetagPlaceholder: 'skg_news',

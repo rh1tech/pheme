@@ -128,6 +128,7 @@ const en = {
       subscribers: 'Subscribers',
       settings: 'Settings',
     },
+    detailsTitle: 'Channel details',
     phetag: 'Phetag',
     phetagLabel: 'Phetag (channel handle)',
     phetagPlaceholder: 'skg_news',
