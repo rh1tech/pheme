@@ -59,11 +59,23 @@ export function CommentsPanel({
 
   const canPost = commentsAllowed && canComment
 
+  // Bring the comment box above the keyboard. The discussion opens scrolled to
+  // the post (which can be a full-height image), leaving the input off-screen
+  // below it; focusing then raises the keyboard over a field the reader cannot
+  // even see. Scrolling it into view — deferred past the keyboard animation —
+  // is what makes it usable on a phone.
+  function revealInput() {
+    const el = inputRef.current
+    if (!el) return
+    window.setTimeout(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300)
+  }
+
   // Re-focus when another message's discussion opens in the same pane, not only
   // on first mount.
   useEffect(() => {
     if (!autoFocus || !canPost) return
     inputRef.current?.focus()
+    revealInput()
   }, [autoFocus, canPost, messageId])
 
   useEffect(() => {
@@ -139,6 +151,7 @@ export function CommentsPanel({
             placeholder={t('channel.comments.placeholder')}
             value={body}
             onChange={(e) => setBody(e.currentTarget.value)}
+            onFocus={revealInput}
           />
           <Button onClick={post} loading={posting} disabled={body.trim() === ''}>
             {t('channel.comments.post')}

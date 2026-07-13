@@ -502,7 +502,16 @@
      and below every dialog and dropdown. */
   .pheme-info {
     position: fixed;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    /* Height tracks the visual viewport (the shell sets --pheme-viewport-h from
+       visualViewport.height), NOT inset:0 which is the full layout viewport. With
+       inset:0 the sheet stayed full-height when the keyboard opened, so its
+       comment field sat behind the keyboard, invisible. Sizing to the visible
+       viewport puts the sheet's bottom at the top of the keyboard, and its
+       scrollable body can bring the focused field into view. */
+    height: var(--pheme-viewport-h, 100dvh);
     z-index: 150;
     border-left: 0;
     background-color: var(--pheme-sheet-bg);
