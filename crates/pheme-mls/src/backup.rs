@@ -18,15 +18,21 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
+use zeroize::Zeroizing;
 
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
 
-// OWASP Argon2id guidance: 19 MiB memory, 2 iterations, 1 lane. Comfortable in a
-// browser for a one-off backup/restore, painful to brute-force.
-const ARGON_MEM_KIB: u32 = 19 * 1024;
-const ARGON_ITERS: u32 = 2;
+// Argon2id cost. Deliberately well above OWASP's 19 MiB / t=2 floor: that floor is
+// calibrated for a server-side login path that must stay fast under load, and this
+// is the opposite situation. The sealed blob sits on a server we do not trust, so
+// an attacker who takes the database can brute-force a human passphrase entirely
+// offline, with no rate limit and unlimited attempts. Backup and restore are
+// one-off, user-initiated operations — a slow derivation costs the honest user a
+// moment once, and costs the attacker on every one of billions of guesses.
+const ARGON_MEM_KIB: u32 = 64 * 1024; // 64 MiB
+const ARGON_ITERS: u32 = 3;
 const ARGON_LANES: u32 = 1;
 
 /// A sealed backup: the random salt and nonce (public) plus the ciphertext. All
@@ -37,13 +43,16 @@ pub struct Backup {
     pub ciphertext: Vec<u8>,
 }
 
-fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<[u8; KEY_LEN], String> {
+// Zeroizing wipes the derived key from memory when it drops. WASM linear memory is
+// never returned to the OS, so a key left behind lingers for the life of the tab and
+// widens the blast radius of any unrelated memory-disclosure bug.
+fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>, String> {
     let params = Params::new(ARGON_MEM_KIB, ARGON_ITERS, ARGON_LANES, Some(KEY_LEN))
         .map_err(|e| format!("argon2 params: {e}"))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut key = [0u8; KEY_LEN];
+    let mut key = Zeroizing::new([0u8; KEY_LEN]);
     argon
-        .hash_password_into(passphrase, salt, &mut key)
+        .hash_password_into(passphrase, salt, key.as_mut())
         .map_err(|e| format!("argon2 derive: {e}"))?;
     Ok(key)
 }
@@ -56,7 +65,7 @@ pub fn encrypt(passphrase: &[u8], plaintext: &[u8]) -> Result<Backup, String> {
     getrandom::getrandom(&mut nonce).map_err(|e| format!("rng nonce: {e}"))?;
 
     let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("aes key: {e}"))?;
+    let cipher = Aes256Gcm::new_from_slice(key.as_slice()).map_err(|e| format!("aes key: {e}"))?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce), plaintext)
         .map_err(|e| format!("seal: {e}"))?;
@@ -77,7 +86,7 @@ pub fn decrypt(
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, String> {
     let key = derive_key(passphrase, salt)?;
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("aes key: {e}"))?;
+    let cipher = Aes256Gcm::new_from_slice(key.as_slice()).map_err(|e| format!("aes key: {e}"))?;
     cipher
         .decrypt(Nonce::from_slice(nonce), ciphertext)
         .map_err(|_| "wrong passphrase or corrupt backup".to_string())

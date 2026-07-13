@@ -117,6 +117,11 @@ func (h *Handler) requireMember(w http.ResponseWriter, r *http.Request) (uid, co
 
 const maxGroupMembers = 200
 
+// A ceiling for request bodies that carry only ids and short strings (creating a
+// conversation, adding a member). Generous next to what they need, tiny next to
+// what an attacker would like to make the server buffer.
+const maxSmallBodyBytes = 64 * 1024
+
 type createConversationRequest struct {
 	Kind domain.ConversationKind `json:"kind"`
 	// The other participant (direct) or the initial members besides the creator
@@ -131,7 +136,7 @@ func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createConversationRequest
-	if !httpx.Decode(w, r, &req) {
+	if !httpx.DecodeLimited(w, r, &req, maxSmallBodyBytes) {
 		return
 	}
 

@@ -29,7 +29,9 @@ func (h *Handler) publishKeyPackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req publishKeyPackagesRequest
-	if !httpx.Decode(w, r, &req) {
+	// A full batch is maxKeyPackageBatch × maxKeyPackageBytes, base64-encoded; the
+	// ceiling leaves room for that plus the JSON around it.
+	if !httpx.DecodeLimited(w, r, &req, 2*maxKeyPackageBatch*maxKeyPackageBytes) {
 		return
 	}
 	if req.DeviceID == "" {
@@ -97,7 +99,7 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req putKeyBackupRequest
-	if !httpx.Decode(w, r, &req) {
+	if !httpx.DecodeLimited(w, r, &req, 2*maxKeyBackupBytes) {
 		return
 	}
 	if len(req.Salt) == 0 || len(req.Nonce) == 0 || len(req.Ciphertext) == 0 {

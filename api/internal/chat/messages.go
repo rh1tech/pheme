@@ -55,7 +55,9 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req postMessageRequest
-	if !httpx.Decode(w, r, &req) {
+	// The ciphertext arrives base64-encoded (~4/3 of its size), so the body ceiling
+	// is the byte limit with room for the encoding and the surrounding JSON.
+	if !httpx.DecodeLimited(w, r, &req, 2*maxCiphertextBytes) {
 		return
 	}
 	if len(req.Ciphertext) == 0 {
@@ -197,7 +199,7 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req addMemberRequest
-	if !httpx.Decode(w, r, &req) {
+	if !httpx.DecodeLimited(w, r, &req, maxSmallBodyBytes) {
 		return
 	}
 	if _, err := h.Store.UserByID(r.Context(), req.UserID); err != nil {

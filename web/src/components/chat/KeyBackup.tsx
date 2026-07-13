@@ -7,7 +7,12 @@ import { backupExists, backupKeys, hasLocalKeys, restoreKeys } from '../../lib/m
 import { notifyError, notifySuccess } from '../../lib/notify'
 import { ResponsiveModal } from '../ResponsiveModal'
 
-const MIN_PASSPHRASE = 8
+// The sealed backup is stored on a server we do not trust, so a stolen database
+// lets an attacker guess this passphrase offline without limit. Argon2id makes each
+// guess expensive; a length floor is what stops the guess count from being small.
+// Twelve is the shortest that is defensible for a passphrase protecting a whole
+// chat history — shorter belongs to a rate-limited login, not to this.
+const MIN_PASSPHRASE = 12
 
 interface KeyBackupModalProps {
   opened: boolean
@@ -83,6 +88,7 @@ export function KeyBackupModal({ opened, onClose }: KeyBackupModalProps) {
  */
 export function KeyRestoreGate() {
   const { t } = useTranslation()
+  const { userId } = useAuth()
   const [needed, setNeeded] = useState(false)
   const [passphrase, setPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
@@ -101,10 +107,10 @@ export function KeyRestoreGate() {
   }, [])
 
   async function restore() {
-    if (busy || passphrase.length === 0) return
+    if (busy || passphrase.length === 0 || !userId) return
     setBusy(true)
     try {
-      const ok = await restoreKeys(passphrase)
+      const ok = await restoreKeys(userId, passphrase)
       if (!ok) {
         setNeeded(false) // backup vanished; nothing to restore
         return

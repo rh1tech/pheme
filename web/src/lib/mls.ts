@@ -11,11 +11,16 @@
 import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/pheme_mls.js'
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { api } from './api'
-import { idbGet, idbSet } from './idb'
+import { idbClear, idbGet, idbSet } from './idb'
+import { clearPreviews } from './chatCache'
 import { loadWebDeviceId, saveWebDeviceId } from './device'
 import type { Conversation } from './types'
 
 const STATE_KEY = 'client-state'
+// Which user the stored state belongs to. Without this, state left behind by a
+// previous account on a shared device would be silently adopted by the next one —
+// who would then encrypt under the wrong identity and publish the wrong KeyPackages.
+const OWNER_KEY = 'client-owner'
 // Keep at least this many unclaimed KeyPackages published, so a peer can always
 // start a chat; replenish up to the target when it runs low.
 const MIN_KEY_PACKAGES = 5
@@ -26,6 +31,7 @@ export const MLS_APPLICATION = 'application/mls'
 export const MLS_WELCOME = 'application/mls-welcome'
 
 let ready: Promise<Session> | null = null
+let readyUserId = ''
 let wasmReady: Promise<void> | null = null
 
 /** Loads the WASM module once. Backup/restore need it before any Session exists. */
@@ -46,13 +52,20 @@ class Session {
 
   static async load(userId: string): Promise<Session> {
     await ensureWasm()
-    const deviceId = ensureDeviceId()
     const identity = new TextEncoder().encode(userId)
 
+    // State left by a different account (a shared device where the previous user
+    // did not log out cleanly) must never be adopted: encrypting under someone
+    // else's MLS identity would send their key material out under our name. Wipe it
+    // and start fresh instead.
+    if ((await storedOwner()) !== userId) await wipeLocalKeys()
+
+    const deviceId = ensureDeviceId()
     const saved = await idbGet(STATE_KEY)
     const client = saved ? MlsClient.fromState(saved) : new MlsClient(identity)
     const session = new Session(client, deviceId)
     if (!saved) await session.persist()
+    await idbSet(OWNER_KEY, new TextEncoder().encode(userId))
     await session.replenishKeyPackages()
     return session
   }
@@ -137,10 +150,40 @@ class Session {
   }
 }
 
-/** Resolves the singleton session, loading the WASM module on first use. */
+/**
+ * Resolves the session for `userId`, loading the WASM module on first use.
+ *
+ * The session is cached per user, not globally: if a different account signs in
+ * without a reload, the cached one is discarded rather than reused. Reusing it
+ * would encrypt the new user's messages under the previous user's MLS identity.
+ */
 export function mlsSession(userId: string): Promise<Session> {
-  if (!ready) ready = Session.load(userId)
+  if (!ready || readyUserId !== userId) {
+    readyUserId = userId
+    ready = Session.load(userId)
+  }
   return ready
+}
+
+/** The account the locally stored MLS state belongs to, if any. */
+async function storedOwner(): Promise<string> {
+  const bytes = await idbGet(OWNER_KEY)
+  return bytes ? new TextDecoder().decode(bytes) : ''
+}
+
+/**
+ * Erases this device's MLS keys and every decrypted message cached from them.
+ *
+ * Called on logout: the key state and the plaintext cache are exactly what the
+ * encryption exists to protect, and leaving them readable on a shared device after
+ * signing out would defeat it. There is no way to re-derive them afterwards except
+ * from the passphrase-protected backup — which is the point of that backup.
+ */
+export async function wipeLocalKeys(): Promise<void> {
+  ready = null
+  readyUserId = ''
+  await idbClear()
+  clearPreviews()
 }
 
 /**
@@ -206,7 +249,7 @@ export async function backupKeys(userId: string, passphrase: string): Promise<vo
  * fresh identity is not created in place of the recovered one; it resets the
  * session singleton to be safe.
  */
-export async function restoreKeys(passphrase: string): Promise<boolean> {
+export async function restoreKeys(userId: string, passphrase: string): Promise<boolean> {
   await ensureWasm()
   const backup = await api.getKeyBackup(true)
   if (!backup) return false
@@ -219,7 +262,11 @@ export async function restoreKeys(passphrase: string): Promise<boolean> {
   // Validate the recovered blob really is a client state before committing it.
   MlsClient.fromState(state)
   await idbSet(STATE_KEY, state)
+  // Claim the restored state for this account, or the owner check in Session.load
+  // would treat it as another user's leftovers and wipe what we just recovered.
+  await idbSet(OWNER_KEY, new TextEncoder().encode(userId))
   ready = null // force the next session to load the restored state
+  readyUserId = ''
   return true
 }
 

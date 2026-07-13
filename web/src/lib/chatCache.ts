@@ -69,3 +69,13 @@ export function getPreview(conversationId: string): string {
     return ''
   }
 }
+
+/** Drops every cached preview. Called on logout with the rest of the plaintext. */
+export function clearPreviews(): void {
+  try {
+    const stale = Object.keys(localStorage).filter((k) => k.startsWith('pheme.chatPreview.'))
+    for (const key of stale) localStorage.removeItem(key)
+  } catch {
+    // Storage unavailable: nothing cached to clear.
+  }
+}

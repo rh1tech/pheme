@@ -132,6 +132,13 @@ impl Client {
     }
 
     /// Joins a group from a Welcome relayed by the server.
+    ///
+    /// Refuses to join a group we are already in. The Delivery Service is untrusted
+    /// and nothing stops it replaying an old Welcome; joining again would hand our
+    /// live group state to `into_group`, which stores unconditionally by group id and
+    /// would roll the ratchet back to the stale epoch the Welcome carries —
+    /// resurrecting secrets that should be forward-secret and desyncing us from the
+    /// group. The caller guards this too, but the crypto core must not depend on it.
     pub fn join_from_welcome(&self, welcome: &[u8]) -> Result<(), String> {
         let msg = MlsMessageIn::tls_deserialize(&mut &*welcome).map_err(err("parse welcome"))?;
         let welcome = match msg.extract() {
@@ -141,6 +148,9 @@ impl Client {
         let staged =
             StagedWelcome::new_from_welcome(&self.provider, &MlsGroupJoinConfig::default(), welcome, None)
                 .map_err(err("stage welcome"))?;
+        if self.has_group(staged.group_context().group_id().as_slice()) {
+            return Err("already a member of this group".into());
+        }
         staged.into_group(&self.provider).map_err(err("join group"))?;
         Ok(())
     }
@@ -341,6 +351,31 @@ mod tests {
         let ct2 = bob.encrypt(group_id, b"from bob").unwrap();
         assert_eq!(owner.decrypt(group_id, &ct2).unwrap().as_deref(), Some(&b"from bob"[..]));
         assert_eq!(carol.decrypt(group_id, &ct2).unwrap().as_deref(), Some(&b"from bob"[..]));
+    }
+
+    // The untrusted Delivery Service can replay an old Welcome. Re-joining would
+    // roll our ratchet back to the Welcome's stale epoch, so it must be refused —
+    // and the live group state must survive the attempt intact.
+    #[test]
+    fn replayed_welcome_is_refused_and_state_survives() {
+        let alice = Client::new(b"alice").unwrap();
+        let bob = Client::new(b"bob").unwrap();
+        let group_id = b"conversation-1";
+
+        alice.create_group(group_id).unwrap();
+        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
+        bob.join_from_welcome(&add.welcome).unwrap();
+
+        // Bob is in the group and exchanging messages.
+        let ct = alice.encrypt(group_id, b"before the replay").unwrap();
+        assert_eq!(bob.decrypt(group_id, &ct).unwrap().as_deref(), Some(&b"before the replay"[..]));
+
+        // The server replays the original Welcome. Bob must refuse it.
+        assert!(bob.join_from_welcome(&add.welcome).is_err());
+
+        // And his group state is untouched: he still decrypts the next message.
+        let ct2 = alice.encrypt(group_id, b"after the replay").unwrap();
+        assert_eq!(bob.decrypt(group_id, &ct2).unwrap().as_deref(), Some(&b"after the replay"[..]));
     }
 
     // A third client not in the group cannot decrypt — the whole point.

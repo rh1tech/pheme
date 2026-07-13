@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, setOnAuthFailure } from '../lib/api'
 import { clearTokens, loadTokens, saveTokens } from '../lib/tokens'
+import { wipeLocalKeys } from '../lib/mls'
 import { decodeRole, decodeUserId } from '../lib/jwt'
 import { AuthContext, type AuthState } from './context'
 
@@ -18,9 +19,15 @@ function identityFromTokens(): Identity {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [identity, setIdentity] = useState<Identity>(() => identityFromTokens())
 
+  // Signing out must take the encryption keys and the decrypted message cache with
+  // it. They are precisely what E2EE protects, and leaving them in IndexedDB on a
+  // shared device would let the next person read this account's chats — and let a
+  // stale in-memory MLS session encrypt their messages under this identity. The
+  // reload guarantees no module-level state survives into the next session.
   const logout = useCallback(() => {
     clearTokens()
     setIdentity({ userId: null, role: null })
+    void wipeLocalKeys().finally(() => window.location.replace('/login'))
   }, [])
 
   // When the API client detects an unrecoverable auth failure, drop session state.

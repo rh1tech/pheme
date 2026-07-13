@@ -40,3 +40,12 @@ export function idbSet(key: string, value: Uint8Array): Promise<void> {
 export function idbDelete(key: string): Promise<void> {
   return tx('readwrite', (s) => s.delete(key)).then(() => undefined)
 }
+
+/**
+ * Wipes the whole store: the MLS key state and every cached decrypted message.
+ * Used on logout — leaving private keys and plaintext behind on a shared device
+ * would defeat the encryption entirely.
+ */
+export function idbClear(): Promise<void> {
+  return tx('readwrite', (s) => s.clear()).then(() => undefined)
+}

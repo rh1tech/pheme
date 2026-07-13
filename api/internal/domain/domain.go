@@ -349,6 +349,14 @@ type MLSKeyPackage struct {
 	DeviceID   string    `bson:"deviceId" json:"deviceId"`
 	KeyPackage []byte    `bson:"keyPackage" json:"keyPackage"`
 	CreatedAt  time.Time `bson:"createdAt" json:"createdAt"`
+	// LastResort marks the one KeyPackage per device that is handed out but never
+	// consumed. KeyPackages are otherwise single-use, which means anyone could
+	// simply claim a user's entire stock in a loop and leave them unreachable —
+	// nobody could start an encrypted chat with them until their device happened to
+	// republish. RFC 9420 anticipates this with last-resort KeyPackages: reusing one
+	// costs a little forward secrecy on that single join, which is a far better
+	// trade than being un-messageable on demand by any stranger.
+	LastResort bool `bson:"lastResort,omitempty" json:"lastResort,omitempty"`
 }
 
 // MLSKeyBackup is the encrypted backup of a device's MLS client state, sealed

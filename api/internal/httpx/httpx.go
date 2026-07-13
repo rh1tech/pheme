@@ -3,6 +3,7 @@ package httpx
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -29,6 +30,25 @@ func Error(w http.ResponseWriter, status int, msg string) {
 // on failure.
 func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		Error(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	return true
+}
+
+// DecodeLimited is Decode with a hard ceiling on the request body.
+//
+// Any size check made after decoding is too late: the decoder has already
+// buffered the whole body into memory, so an oversized request costs the server
+// the allocation before it is rejected. This caps the read itself.
+func DecodeLimited(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			Error(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return false
+		}
 		Error(w, http.StatusBadRequest, "invalid JSON body")
 		return false
 	}
