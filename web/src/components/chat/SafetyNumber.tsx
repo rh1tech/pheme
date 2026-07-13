@@ -35,7 +35,7 @@ export function SafetyNumberModal({ conversationId, opened, onClose }: SafetyNum
     const run = async () => {
       try {
         const session = await mlsSession(userId)
-        const current = session.safetyNumber(conversationId)
+        const current = await session.safetyNumber(conversationId)
         if (active) setState(checkSafetyNumber(conversationId, current))
       } catch {
         // No group yet (encryption still being set up), so there is nothing to show.

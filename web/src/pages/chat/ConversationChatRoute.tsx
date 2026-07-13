@@ -164,8 +164,16 @@ export function ConversationChatRoute() {
             }
           }
         } catch {
-          // Not yet decryptable (e.g. our own message, or we have not joined).
-          // Leave it as a placeholder rather than looping on it.
+          // Decryption can legitimately fail here: it is our own message (a sender
+          // can never decrypt their own), we have not joined the group yet, or
+          // another tab decrypted it first — MLS lets exactly one of them succeed.
+          // In the last case the other tab cached the plaintext, so read that rather
+          // than leaving a placeholder. Never retry the decrypt itself.
+          const cached = await loadCachedBodies(id)
+          if (cached[m.id]) {
+            next[m.id] = cached[m.id]
+            changed = true
+          }
         }
       }
       if (active && changed) {
@@ -251,8 +259,8 @@ export function ConversationChatRoute() {
     try {
       const session = await mlsSession(userId)
       // Make sure we hold the group before encrypting (creator sets it up lazily).
-      if (!session.hasGroup(id) && conversation) await provisionGroup(conversation, userId)
-      if (!session.hasGroup(id)) throw new Error(t('chat.notJoined'))
+      if (!(await session.hasGroup(id)) && conversation) await provisionGroup(conversation, userId)
+      if (!(await session.hasGroup(id))) throw new Error(t('chat.notJoined'))
 
       const ciphertext = await session.encrypt(id, serializeContent({ body }))
       const msg = await api.sendChatMessage(id, ciphertext, MLS_APPLICATION)

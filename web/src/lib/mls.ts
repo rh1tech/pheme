@@ -22,6 +22,11 @@ const STATE_KEY = 'client-state'
 // previous account on a shared device would be silently adopted by the next one —
 // who would then encrypt under the wrong identity and publish the wrong KeyPackages.
 const OWNER_KEY = 'client-owner'
+// Bumped on every persist, so a tab can tell in one cheap read whether another tab
+// has advanced the shared state since it last looked.
+const VERSION_KEY = 'client-version'
+// The cross-tab lock guarding all MLS state mutation for this origin.
+const MLS_LOCK = 'pheme-mls-state'
 // Keep at least this many unclaimed KeyPackages published, so a peer can always
 // start a chat; replenish up to the target when it runs low.
 const MIN_KEY_PACKAGES = 5
@@ -41,14 +46,31 @@ function ensureWasm(): Promise<void> {
   return wasmReady
 }
 
-/** One device's MLS session. There is a single instance per tab. */
+/**
+ * One device's MLS session.
+ *
+ * The MLS state is per-device, but a browser gives each TAB its own copy of this
+ * object. Two tabs of the same account are ordinary, and left alone they would each
+ * hold an independent in-memory client loaded from the same stored state: both could
+ * decrypt the same message (each still holding its own unconsumed copy of the
+ * message key), breaking the decrypt-once invariant everything here rests on, and
+ * whichever persisted last would silently overwrite the other's advanced ratchet —
+ * leaving messages permanently unreadable.
+ *
+ * So every state-mutating operation runs under a cross-tab lock, and re-reads the
+ * stored state first if another tab has moved it on. The version counter is what
+ * makes "has it moved on?" cheap: without it every operation would have to
+ * deserialize the whole key store just to find out that nothing changed.
+ */
 class Session {
-  private readonly client: MlsClient
+  private client: MlsClient
+  private version: number
   readonly deviceId: string
 
-  private constructor(client: MlsClient, deviceId: string) {
+  private constructor(client: MlsClient, deviceId: string, version: number) {
     this.client = client
     this.deviceId = deviceId
+    this.version = version
   }
 
   static async load(userId: string): Promise<Session> {
@@ -64,7 +86,7 @@ class Session {
     const deviceId = ensureDeviceId()
     const saved = await idbGet(STATE_KEY)
     const client = saved ? MlsClient.fromState(saved) : new MlsClient(identity)
-    const session = new Session(client, deviceId)
+    const session = new Session(client, deviceId, await storedVersion())
     if (!saved) await session.persist()
     await idbSet(OWNER_KEY, new TextEncoder().encode(userId))
     await session.replenishKeyPackages()
@@ -72,7 +94,36 @@ class Session {
   }
 
   private async persist(): Promise<void> {
+    this.version++
     await idbSet(STATE_KEY, this.client.exportState())
+    await idbSet(VERSION_KEY, encodeVersion(this.version))
+  }
+
+  /** Adopts another tab's newer state before we mutate on top of a stale copy. */
+  private async refreshIfStale(): Promise<void> {
+    const stored = await storedVersion()
+    if (stored === this.version) return
+    const state = await idbGet(STATE_KEY)
+    if (!state) return
+    this.client = MlsClient.fromState(state)
+    this.version = stored
+  }
+
+  /**
+   * Runs an operation with exclusive access to the MLS state across every tab.
+   *
+   * Must not be called from inside another `exclusive` — the same lock name would
+   * deadlock. Public methods take the lock; the private ones they call do not.
+   */
+  private exclusive<T>(op: () => Promise<T>): Promise<T> {
+    const guarded = async () => {
+      await this.refreshIfStale()
+      return op()
+    }
+    // Web Locks is unavailable in a few older engines; there we fall back to the
+    // staleness check alone, which still stops a stale overwrite in the common case.
+    if (!navigator.locks) return guarded()
+    return navigator.locks.request(MLS_LOCK, guarded)
   }
 
   /** Publishes fresh KeyPackages when the server's stock runs low. */
@@ -84,11 +135,15 @@ class Session {
       return // best effort; a peer starting a chat will just have to retry
     }
     if (count >= MIN_KEY_PACKAGES) return
-    const fresh: string[] = []
-    for (let i = count; i < TARGET_KEY_PACKAGES; i++) {
-      fresh.push(bytesToBase64(this.client.keyPackage()))
-    }
-    await this.persist() // keyPackage() consumes randomness the state must keep
+
+    const fresh = await this.exclusive(async () => {
+      const packages: string[] = []
+      for (let i = count; i < TARGET_KEY_PACKAGES; i++) {
+        packages.push(bytesToBase64(this.client.keyPackage()))
+      }
+      await this.persist() // keyPackage() consumes randomness the state must keep
+      return packages
+    })
     await api.publishKeyPackages(this.deviceId, fresh)
   }
 
@@ -98,40 +153,51 @@ class Session {
    * conversation server-side first; groupId is the conversation id.
    */
   async startGroup(conversationId: string, memberUserIds: string[]): Promise<string[]> {
-    const groupId = new TextEncoder().encode(conversationId)
-    this.client.createGroup(groupId)
-    // All initial members must be added in a single Commit, or earlier joiners end
-    // up an epoch behind and cannot decrypt. Claim every KeyPackage, then add them
-    // at once — the one Welcome is addressed to all of them.
+    // Claim the KeyPackages before taking the lock — this is network I/O, and the
+    // lock blocks every other tab for as long as it is held.
     const keyPackages: Uint8Array[] = []
     for (const userId of memberUserIds) {
       keyPackages.push(base64ToBytes(await api.claimKeyPackage(userId)))
     }
-    const welcomes: string[] = []
-    if (keyPackages.length > 0) {
-      const added = this.client.addMembers(groupId, keyPackages)
-      welcomes.push(bytesToBase64(added.welcome))
-    }
-    await this.persist()
-    return welcomes
+
+    return this.exclusive(async () => {
+      const groupId = new TextEncoder().encode(conversationId)
+      this.client.createGroup(groupId)
+      // All initial members must be added in a single Commit, or earlier joiners
+      // end up an epoch behind and cannot decrypt. The one Welcome covers them all.
+      const welcomes: string[] = []
+      if (keyPackages.length > 0) {
+        const added = this.client.addMembers(groupId, keyPackages)
+        welcomes.push(bytesToBase64(added.welcome))
+      }
+      await this.persist()
+      return welcomes
+    })
   }
 
   /** Joins a group from a relayed Welcome. Ignores a Welcome not meant for us. */
   async tryJoin(conversationId: string, welcomeBase64: string): Promise<boolean> {
-    if (this.hasGroup(conversationId)) return true
-    try {
-      this.client.joinFromWelcome(base64ToBytes(welcomeBase64))
-      await this.persist()
-      return true
-    } catch {
-      // Not addressed to this device (e.g. we are the group's creator, who sent
-      // it), or already joined. Either way, nothing to do.
-      return false
-    }
+    return this.exclusive(async () => {
+      if (this.holdsGroup(conversationId)) return true
+      try {
+        this.client.joinFromWelcome(base64ToBytes(welcomeBase64))
+        await this.persist()
+        return true
+      } catch {
+        // Not addressed to this device (e.g. we are the group's creator, who sent
+        // it), or already joined. Either way, nothing to do.
+        return false
+      }
+    })
   }
 
   /** True when this client already holds the group — encrypt/decrypt will work. */
-  hasGroup(conversationId: string): boolean {
+  async hasGroup(conversationId: string): Promise<boolean> {
+    return this.exclusive(async () => this.holdsGroup(conversationId))
+  }
+
+  /** The unlocked check, for use by methods that already hold the lock. */
+  private holdsGroup(conversationId: string): boolean {
     return this.client.hasGroup(new TextEncoder().encode(conversationId))
   }
 
@@ -140,23 +206,29 @@ class Session {
    * band, to prove no one is in the middle. Computed from the group's own ratchet
    * tree, so a KeyPackage the server swapped in shows up as a different number.
    */
-  safetyNumber(conversationId: string): string {
-    return this.client.safetyNumber(new TextEncoder().encode(conversationId))
+  async safetyNumber(conversationId: string): Promise<string> {
+    return this.exclusive(async () =>
+      this.client.safetyNumber(new TextEncoder().encode(conversationId)),
+    )
   }
 
   async encrypt(conversationId: string, plaintext: Uint8Array): Promise<string> {
-    const groupId = new TextEncoder().encode(conversationId)
-    const ciphertext = this.client.encrypt(groupId, plaintext)
-    await this.persist()
-    return bytesToBase64(ciphertext)
+    return this.exclusive(async () => {
+      const groupId = new TextEncoder().encode(conversationId)
+      const ciphertext = this.client.encrypt(groupId, plaintext)
+      await this.persist()
+      return bytesToBase64(ciphertext)
+    })
   }
 
   /** Decrypts an application message, or returns null for a control message. */
   async decrypt(conversationId: string, ciphertextBase64: string): Promise<Uint8Array | null> {
-    const groupId = new TextEncoder().encode(conversationId)
-    const out = this.client.decrypt(groupId, base64ToBytes(ciphertextBase64))
-    await this.persist()
-    return out ?? null
+    return this.exclusive(async () => {
+      const groupId = new TextEncoder().encode(conversationId)
+      const out = this.client.decrypt(groupId, base64ToBytes(ciphertextBase64))
+      await this.persist()
+      return out ?? null
+    })
   }
 }
 
@@ -179,6 +251,19 @@ export function mlsSession(userId: string): Promise<Session> {
 async function storedOwner(): Promise<string> {
   const bytes = await idbGet(OWNER_KEY)
   return bytes ? new TextDecoder().decode(bytes) : ''
+}
+
+/** The version of the stored state — how a tab notices another tab moved it on. */
+async function storedVersion(): Promise<number> {
+  const bytes = await idbGet(VERSION_KEY)
+  if (!bytes || bytes.byteLength < 4) return 0
+  return new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0)
+}
+
+function encodeVersion(version: number): Uint8Array {
+  const bytes = new Uint8Array(4)
+  new DataView(bytes.buffer).setUint32(0, version >>> 0)
+  return bytes
 }
 
 /**
@@ -210,7 +295,7 @@ export async function wipeLocalKeys(): Promise<void> {
 export async function provisionGroup(conversation: Conversation, myUserId: string): Promise<void> {
   if (conversation.createdBy !== myUserId) return
   const session = await mlsSession(myUserId)
-  if (session.hasGroup(conversation.id)) return
+  if (await session.hasGroup(conversation.id)) return
   const others = conversation.members.map((m) => m.userId).filter((uid) => uid !== myUserId)
   const welcomes = await session.startGroup(conversation.id, others)
   for (const welcome of welcomes) {
