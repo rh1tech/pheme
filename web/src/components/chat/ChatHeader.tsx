@@ -16,6 +16,9 @@ import type { Channel } from '../../lib/types'
 interface ChatHeaderProps {
   channel: Channel | null
   channelId: string
+  /** Name and avatar to show before the channel fetch lands (from the list). */
+  hintName?: string
+  hintAvatarId?: string
   /** The header swaps into a search field, as Telegram's does. */
   searching: boolean
   search: string
@@ -34,6 +37,8 @@ interface ChatHeaderProps {
 export function ChatHeader({
   channel,
   channelId,
+  hintName,
+  hintAvatarId,
   searching,
   search,
   onSearchChange,
@@ -54,7 +59,7 @@ export function ChatHeader({
     if (searching) searchRef.current?.focus()
   }, [searching])
 
-  const name = channel?.name ?? t('channel.fallbackName')
+  const name = channel?.name ?? hintName ?? t('channel.fallbackName')
 
   return (
     <header className="pheme-chat-header" data-testid="chat-header">
@@ -86,7 +91,7 @@ export function ChatHeader({
           />
         ) : (
           <>
-            <ChannelAvatar id={channelId} name={name} avatarId={channel?.avatarId} size={38} />
+            <ChannelAvatar id={channelId} name={name} avatarId={channel?.avatarId ?? hintAvatarId} size={38} />
             <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
               <Text fw={600} size="sm" truncate>
                 {name}

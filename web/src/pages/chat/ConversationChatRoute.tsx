@@ -77,8 +77,10 @@ export function ConversationChatRoute() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
-  // The other person has published no keys, so there is no way to encrypt to them yet.
-  const [peerNotReady, setPeerNotReady] = useState(false)
+  // The conversation whose peer has published no keys (so we cannot encrypt to them).
+  // Keyed by id and derived, so switching chats clears the banner without a reset.
+  const [peerNotReadyId, setPeerNotReadyId] = useState('')
+  const peerNotReady = peerNotReadyId === id
   const textRef = useRef<HTMLTextAreaElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
 
@@ -124,7 +126,7 @@ export function ConversationChatRoute() {
         // the user discover it by having a message fail to send.
         if (userId) {
           provisionGroup(c, userId).catch((e: unknown) => {
-            if (active) setPeerNotReady(e instanceof PeerKeysMissingError)
+            if (active) setPeerNotReadyId(e instanceof PeerKeysMissingError ? id : '')
           })
         }
       })
@@ -354,7 +356,16 @@ export function ConversationChatRoute() {
     }
   }
 
-  const meMember = conversation?.members.find((m) => m.userId === userId)
+  // What the header and its controls read: the fetched conversation once it is for
+  // THIS id, else the list's copy. The list already has name, members and avatar, so
+  // opening a chat shows the right header instantly instead of flashing a placeholder.
+  // Derived at render, so it tracks the current id even though the component is reused.
+  const header =
+    conversation?.id === id
+      ? conversation
+      : (conversations.conversations.find((c) => c.id === id)?.conversation ?? null)
+
+  const meMember = header?.members.find((m) => m.userId === userId)
   const iAmAdmin = meMember?.role === 'admin'
 
   const canSend = draft.trim().length > 0
@@ -386,7 +397,7 @@ export function ConversationChatRoute() {
       textRef.current?.focus()
     } catch (e) {
       if (e instanceof PeerKeysMissingError) {
-        setPeerNotReady(true)
+        setPeerNotReadyId(id)
         notifyError(t('chat.peerNotReady'), null)
       } else {
         notifyError(t('channel.sendFailed'), e)
@@ -406,12 +417,12 @@ export function ConversationChatRoute() {
   const controlTypes = new Set([MLS_WELCOME, MLS_REJOIN, MLS_COMMIT])
   const visibleMessages = messages.filter((m) => !controlTypes.has(m.contentType))
 
-  const title = conversation ? conversationTitle(conversation, userId ?? '') : ''
+  const title = header ? conversationTitle(header, userId ?? '') : ''
   const avatarId =
-    conversation?.kind === 'direct' ? otherMember(conversation, userId ?? '')?.avatarId : conversation?.avatarId
+    header?.kind === 'direct' ? otherMember(header, userId ?? '')?.avatarId : header?.avatarId
   // Same seed the sidebar uses, so a chat is the same colour in the list and inside it.
-  const avatarKey = conversation ? conversationAvatarKey(conversation, userId ?? '') : id
-  const isGroup = conversation?.kind === 'group'
+  const avatarKey = header ? conversationAvatarKey(header, userId ?? '') : id
+  const isGroup = header?.kind === 'group'
 
   return (
     <section className="pheme-conversation">
@@ -433,7 +444,7 @@ export function ConversationChatRoute() {
             </Text>
             {isGroup && (
               <Text size="xs" c="dimmed">
-                {t('chat.memberCount', { count: conversation?.members.length ?? 0 })}
+                {t('chat.memberCount', { count: header?.members.length ?? 0 })}
               </Text>
             )}
           </Stack>
@@ -486,9 +497,9 @@ export function ConversationChatRoute() {
         onClose={() => setSafetyOpen(false)}
       />
 
-      {conversation && isGroup && (
+      {header && isGroup && (
         <GroupMembersModal
-          conversation={conversation}
+          conversation={header}
           opened={membersOpen}
           onClose={() => setMembersOpen(false)}
           onChanged={reloadConversation}

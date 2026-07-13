@@ -39,6 +39,10 @@ export function ConversationRoute() {
   const navigate = useNavigate()
 
   const [channel, setChannel] = useState<Channel | null>(null)
+  // The list already knows this channel's name and avatar; use them for the header
+  // until the fetch lands, so it shows the real channel at once instead of the
+  // "Channel" fallback and a placeholder colour.
+  const knownChannel = list.channels.find((c) => c.id === id)
   const [relation, setRelation] = useState<ChannelRelation | null>(null)
   // Oldest-first: the order the feed renders and the reader reads.
   const [messages, setMessages] = useState<Message[]>([])
@@ -340,8 +344,10 @@ export function ConversationRoute() {
     <>
       <section className="pheme-conversation">
         <ChatHeader
-          channel={channel}
+          channel={channel?.id === id ? channel : null}
           channelId={id}
+          hintName={knownChannel?.name}
+          hintAvatarId={knownChannel?.avatarId}
           searching={searching}
           search={search}
           onSearchChange={setSearch}

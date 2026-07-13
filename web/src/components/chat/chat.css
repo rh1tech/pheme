@@ -136,6 +136,13 @@
   background-color: var(--pheme-row-hover);
 }
 
+/* A press dips the row slightly, so a tap feels acknowledged the instant it lands
+   rather than only when the next screen appears. */
+.pheme-chat-row:active {
+  transform: scale(0.985);
+  background-color: var(--pheme-row-hover);
+}
+
 /* A channel row's avatar carries a small broadcast badge at the bottom-right, so
    channels are distinguishable from chats even once both sit in one list. */
 .pheme-avatar-wrap {
@@ -518,6 +525,25 @@
     display: none;
   }
 
+  /* Opening a conversation slides it in from the right over the list, the way a
+     phone messenger pushes to the next screen. It plays when the conversation pane
+     mounts — i.e. coming from the list — and is transform/opacity only, so it stays
+     on the compositor. */
+  .pheme-shell[data-view='chat'] .pheme-conversation {
+    animation: pheme-pane-in 240ms var(--pheme-ease, cubic-bezier(0.22, 1, 0.36, 1));
+  }
+}
+
+@keyframes pheme-pane-in {
+  from {
+    transform: translateX(6%);
+    opacity: 0.4;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+
   .pheme-sidebar,
   .pheme-conversation {
     border-right: 0;
@@ -561,6 +587,12 @@
   .pheme-chat-row,
   .pheme-comment-chip {
     transition: none;
+  }
+  .pheme-chat-row:active {
+    transform: none;
+  }
+  .pheme-shell[data-view='chat'] .pheme-conversation {
+    animation: none;
   }
 }
 
