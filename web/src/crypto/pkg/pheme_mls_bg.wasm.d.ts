@@ -17,6 +17,7 @@ export const mlsclient_addMembers: (a: number, b: number, c: number, d: any) => 
 export const mlsclient_applyCommit: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const mlsclient_createGroup: (a: number, b: number, c: number) => [number, number];
 export const mlsclient_decrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const mlsclient_deleteGroup: (a: number, b: number, c: number) => [number, number];
 export const mlsclient_encrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const mlsclient_exportState: (a: number) => [number, number, number, number];
 export const mlsclient_fromState: (a: number, b: number) => [number, number, number];

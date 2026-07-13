@@ -42,6 +42,10 @@ export class MlsClient {
      * Decrypts an application message; returns undefined for a control message.
      */
     decrypt(group_id: Uint8Array, ciphertext: Uint8Array): Uint8Array | undefined;
+    /**
+     * Discards a group so it can be rebuilt (repairing a member who could never join).
+     */
+    deleteGroup(group_id: Uint8Array): void;
     encrypt(group_id: Uint8Array, plaintext: Uint8Array): Uint8Array;
     /**
      * The full client state to persist (IndexedDB).
@@ -111,6 +115,7 @@ export interface InitOutput {
     readonly mlsclient_applyCommit: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly mlsclient_createGroup: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_decrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly mlsclient_deleteGroup: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_encrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly mlsclient_exportState: (a: number) => [number, number, number, number];
     readonly mlsclient_fromState: (a: number, b: number) => [number, number, number];

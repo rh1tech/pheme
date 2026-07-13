@@ -252,6 +252,11 @@ export const api = {
     request<{ count: number; hasLastResort: boolean }>(
       `/v1/mls/key-packages/count?deviceId=${encodeURIComponent(deviceId)}`,
     ),
+  /** Purges this device's published key packages (used when minting a fresh identity). */
+  deleteKeyPackages: (deviceId: string) =>
+    request<void>(`/v1/mls/key-packages?deviceId=${encodeURIComponent(deviceId)}`, {
+      method: 'DELETE',
+    }),
   claimKeyPackage: (userId: string) =>
     request<{ keyPackage: string }>(`/v1/mls/key-packages/${userId}/claim`).then(
       (r) => r.keyPackage,

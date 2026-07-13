@@ -229,6 +229,18 @@ export class MlsClient {
         return v3;
     }
     /**
+     * Discards a group so it can be rebuilt (repairing a member who could never join).
+     * @param {Uint8Array} group_id
+     */
+    deleteGroup(group_id) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_deleteGroup(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @param {Uint8Array} group_id
      * @param {Uint8Array} plaintext
      * @returns {Uint8Array}

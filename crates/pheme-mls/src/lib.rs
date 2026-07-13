@@ -124,6 +124,24 @@ impl Client {
         Ok(())
     }
 
+    /// Discards a group entirely, so it can be created again from scratch.
+    ///
+    /// Needed to repair a conversation the other member was never able to join: they
+    /// hold a Welcome naming a KeyPackage they no longer have, and from our side the
+    /// group exists, so we would never send another. Creating a group whose id is
+    /// already taken is refused (GroupAlreadyExists), so the old one has to go first.
+    /// Everything encrypted to it stays unreadable — it already was, for them.
+    pub fn delete_group(&self, group_id: &[u8]) -> Result<(), String> {
+        let mut group = match MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
+            .map_err(err("load group"))?
+        {
+            Some(g) => g,
+            None => return Ok(()), // nothing to discard
+        };
+        group.delete(self.provider.storage()).map_err(err("delete group"))?;
+        Ok(())
+    }
+
     fn load_group(&self, group_id: &[u8]) -> Result<MlsGroup, String> {
         MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
             .map_err(err("load group"))?
@@ -667,6 +685,32 @@ mod tests {
             bob.decrypt(b"group-a", &ct).unwrap().as_deref(),
             Some(&b"still reachable"[..]),
         );
+    }
+
+    // Repairing a conversation the other member could never join: discard the group and
+    // build it again, so a fresh Welcome can be sent and they can finally get in.
+    #[test]
+    fn a_group_can_be_discarded_and_rebuilt() {
+        let alice = Client::new(b"alice").unwrap();
+        let bob = Client::new(b"bob").unwrap();
+        let group_id = b"conversation-1";
+
+        alice.create_group(group_id).unwrap();
+        alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
+        // Bob never joins — the Welcome named a KeyPackage he does not hold.
+
+        // Creating over the top is refused, which is why the old group must be discarded.
+        assert!(alice.create_group(group_id).is_err());
+        alice.delete_group(group_id).unwrap();
+        assert!(!alice.has_group(group_id));
+
+        // Rebuilt from scratch, with a fresh KeyPackage. Now Bob can join.
+        alice.create_group(group_id).unwrap();
+        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
+        bob.join_from_welcome(&add.welcome).unwrap();
+
+        let ct = alice.encrypt(group_id, b"second attempt").unwrap();
+        assert_eq!(bob.decrypt(group_id, &ct).unwrap().as_deref(), Some(&b"second attempt"[..]));
     }
 
     // A third client not in the group cannot decrypt — the whole point.

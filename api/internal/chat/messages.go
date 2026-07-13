@@ -187,13 +187,18 @@ func (h *Handler) senderName(ctx context.Context, userID string) string {
 // isControlContent reports whether a content type is MLS protocol traffic rather
 // than a user-visible message.
 func isControlContent(contentType string) bool {
-	return contentType == contentTypeMLSWelcome
+	return contentType == contentTypeMLSWelcome || contentType == contentTypeMLSRejoin
 }
 
-// The content type clients use for a relayed MLS Welcome. Mirrors MLS_WELCOME in
-// web/src/lib/mls.ts. The server does not interpret the bytes — it only needs to
-// know this is protocol traffic, so it does not notify a human about it.
-const contentTypeMLSWelcome = "application/mls-welcome"
+// The content types clients use for MLS protocol traffic: a relayed Welcome, and a
+// request from a locked-out member that the group be built again. They mirror
+// MLS_WELCOME and MLS_REJOIN in web/src/lib/mls.ts. The server does not interpret the
+// bytes — it only needs to know these are not messages a human sent, so it does not
+// notify anyone about them.
+const (
+	contentTypeMLSWelcome = "application/mls-welcome"
+	contentTypeMLSRejoin  = "application/mls-rejoin"
+)
 
 type addMemberRequest struct {
 	UserID string `json:"userId"`

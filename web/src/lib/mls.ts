@@ -11,7 +11,7 @@
 import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/pheme_mls.js'
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { ApiError, api } from './api'
-import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
+import { idbClearExcept, idbDelete, idbGet, idbSet, idbSetMany } from './idb'
 import { clearPreviews } from './chatCache'
 import { clearSafetyPins } from './safety'
 import { loadWebDeviceId, saveWebDeviceId } from './device'
@@ -78,6 +78,16 @@ const TARGET_KEY_PACKAGES = 20
 /** Content types on the wire that this layer produces and consumes. */
 export const MLS_APPLICATION = 'application/mls'
 export const MLS_WELCOME = 'application/mls-welcome'
+/**
+ * "I am a member of this conversation and I cannot join it."
+ *
+ * Sent by someone who has a Welcome they could not use — the KeyPackage it names is not
+ * one they hold, so they are locked out of their own conversation with no way back in:
+ * the creator sees a group and never sends another Welcome. This asks them to build the
+ * group again. It is not a Welcome and carries no key material, so it cannot be used to
+ * destroy anyone's KeyPackages the way a forged Welcome can.
+ */
+export const MLS_REJOIN = 'application/mls-rejoin'
 
 let ready: Promise<Session> | null = null
 let readyUserId = ''
@@ -85,6 +95,12 @@ let wasmReady: Promise<void> | null = null
 // Memoized answer to "must this device restore before it can have an identity?" —
 // null until asked. Reset whenever the answer could change.
 let restoreNeeded: boolean | null = null
+// Provisioning runs in flight, by conversation. Two callers ask for it — opening the
+// chat, and sending into one that has no group yet — and they must not both do it.
+const provisioning = new Map<string, Promise<void>>()
+
+/** A Welcome that was created but not yet accepted by the server. */
+const pendingWelcomeKey = (conversationId: string) => `welcome:${conversationId}`
 
 /** Loads the WASM module once. Backup/restore need it before any Session exists. */
 function ensureWasm(): Promise<void> {
@@ -183,13 +199,19 @@ class Session {
       const s = new Session(client, deviceId, await storedVersion(), await storedEpoch())
       if (!saved) await s.persist()
       await idbSet(OWNER_KEY, new TextEncoder().encode(userId))
-      return s
+      return { s, fresh: !saved }
     })
 
-    // Outside the lock: replenishKeyPackages takes it itself, and taking it twice
-    // would deadlock (Web Locks are not reentrant).
-    await session.replenishKeyPackages()
-    return session
+    // Outside the lock (these take it themselves; taking it twice would deadlock).
+    // A fresh identity's device may still have stale public key packages on the server
+    // from a previous identity on this same device — a wipe, a cleared browser. Their
+    // private halves are gone, so anyone claiming one would build a group this device
+    // could never join. Purge them before publishing new ones.
+    if (session.fresh) {
+      await api.deleteKeyPackages(session.s.deviceId).catch(() => {})
+    }
+    await session.s.replenishKeyPackages()
+    return session.s
   }
 
   /**
@@ -294,7 +316,11 @@ class Session {
    * the other members (as an MLS_WELCOME control message). The caller creates the
    * conversation server-side first; groupId is the conversation id.
    */
-  async startGroup(conversationId: string, memberUserIds: string[]): Promise<string[]> {
+  async startGroup(
+    conversationId: string,
+    memberUserIds: string[],
+    force = false,
+  ): Promise<string[]> {
     // Claim the KeyPackages before taking the lock — this is network I/O, and the
     // lock blocks every other tab for as long as it is held.
     const keyPackages: Uint8Array[] = []
@@ -312,7 +338,21 @@ class Session {
     }
 
     return this.exclusive(async () => {
+      // Re-checked with the lock held. The in-flight map above stops this tab from
+      // provisioning twice; this stops a SECOND TAB from doing it, which would replace
+      // the group another tab just made and leave the other person joined to a group
+      // nobody encrypts to. The KeyPackages claimed above are wasted in that case —
+      // cheap, and far better than a conversation that can never be read.
+      //
+      // `force` is the deliberate exception: rebuilding a group that the other member
+      // could never join. Replacing it is the point.
+      if (!force && this.holdsGroup(conversationId)) return []
+
       const groupId = new TextEncoder().encode(conversationId)
+      // A group id can only be created once — creating over the top is refused — so a
+      // rebuild has to discard the old group first. Everything encrypted to it stays
+      // unreadable, which for the person who could never join it always was.
+      if (force) this.client.deleteGroup(groupId)
       this.client.createGroup(groupId)
       // All initial members must be added in a single Commit, or earlier joiners
       // end up an epoch behind and cannot decrypt. The one Welcome covers them all.
@@ -515,15 +555,64 @@ async function wipeUnlocked(): Promise<void> {
  * Welcome addressed to them. Safe to call repeatedly: a no-op once the group is set
  * up, and for anyone who is not the creator.
  */
-export async function provisionGroup(conversation: Conversation, myUserId: string): Promise<void> {
+export async function provisionGroup(
+  conversation: Conversation,
+  myUserId: string,
+  force = false,
+): Promise<void> {
   if (conversation.createdBy !== myUserId) return
-  const session = await mlsSession(myUserId)
-  if (await session.hasGroup(conversation.id)) return
-  const others = conversation.members.map((m) => m.userId).filter((uid) => uid !== myUserId)
-  const welcomes = await session.startGroup(conversation.id, others)
-  for (const welcome of welcomes) {
-    await api.sendChatMessage(conversation.id, welcome, MLS_WELCOME)
-  }
+
+  // Provisioning a conversation happens exactly once, however many callers ask for it.
+  //
+  // Two do: the route asks when the chat is opened, and sending asks if no group exists
+  // yet. Left to race, both see "no group", both claim a KeyPackage from the other
+  // person, both create a group — and the second createGroup REPLACES the first, since
+  // MLS stores a group by its id. Two Welcomes then go out for two different groups.
+  // The recipient joins from the first and can never decrypt a word, because everything
+  // is encrypted to the second. That is not a rare interleaving; it is what happens when
+  // someone opens a chat and immediately types, which is what people do.
+  const inFlight = provisioning.get(conversation.id)
+  if (inFlight) return inFlight
+
+  const run = (async () => {
+    const session = await mlsSession(myUserId)
+
+    // A Welcome we created but never managed to post: finish that rather than build a
+    // second group. Without this, a failed post leaves the group on this device and the
+    // other person with no way in, forever — every later attempt sees the group and
+    // returns early.
+    const pending = force ? undefined : await idbGet(pendingWelcomeKey(conversation.id))
+    if (pending) {
+      await api.sendChatMessage(conversation.id, bytesToBase64(pending), MLS_WELCOME)
+      await idbDelete(pendingWelcomeKey(conversation.id))
+      return
+    }
+
+    if (!force && (await session.hasGroup(conversation.id))) return
+
+    const others = conversation.members.map((m) => m.userId).filter((uid) => uid !== myUserId)
+    const welcomes = await session.startGroup(conversation.id, others, force)
+    for (const welcome of welcomes) {
+      // Recorded before it is sent, so a failure here is recoverable on the next attempt
+      // instead of stranding the other member.
+      await idbSet(pendingWelcomeKey(conversation.id), base64ToBytes(welcome))
+      await api.sendChatMessage(conversation.id, welcome, MLS_WELCOME)
+      await idbDelete(pendingWelcomeKey(conversation.id))
+    }
+  })().finally(() => provisioning.delete(conversation.id))
+
+  provisioning.set(conversation.id, run)
+  return run
+}
+
+/**
+ * Asks the conversation's creator to build the group again, because we hold a Welcome
+ * we cannot use and are therefore locked out of our own conversation.
+ */
+export async function requestRejoin(conversationId: string): Promise<void> {
+  // One byte: the server rejects an empty body, and there is nothing to say beyond the
+  // fact that this was sent.
+  await api.sendChatMessage(conversationId, bytesToBase64(new Uint8Array([1])), MLS_REJOIN)
 }
 
 // --- encrypted key backup -------------------------------------------------

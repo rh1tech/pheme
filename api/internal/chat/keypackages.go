@@ -184,6 +184,26 @@ func (h *Handler) getKeyBackup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// deleteKeyPackages purges everything this device has published. A device that has
+// lost its private keys (a wipe, a fresh identity) calls this so its stale public
+// packages stop being handed out and stranding whoever claims them.
+func (h *Handler) deleteKeyPackages(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	deviceID := r.URL.Query().Get("deviceId")
+	if deviceID == "" {
+		httpx.Error(w, http.StatusBadRequest, "deviceId is required")
+		return
+	}
+	if err := h.Store.DeleteKeyPackages(r.Context(), uid, deviceID); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not delete key packages")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // keyPackageCount lets a device know when to replenish its published packages.
 // `count` covers only the single-use ones; `hasLastResort` tells the device whether
 // it still needs to publish its one reusable package.

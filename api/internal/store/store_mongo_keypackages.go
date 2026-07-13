@@ -35,6 +35,12 @@ func (m *Mongo) AddKeyPackages(ctx context.Context, packages []domain.MLSKeyPack
 	return err
 }
 
+func (m *Mongo) DeleteKeyPackages(ctx context.Context, userID, deviceID string) error {
+	_, err := m.db.Collection("mlsKeyPackages").
+		DeleteMany(ctx, bson.M{"userId": userID, "deviceId": deviceID})
+	return err
+}
+
 func (m *Mongo) HasLastResortKeyPackage(ctx context.Context, userID, deviceID string) (bool, error) {
 	n, err := m.db.Collection("mlsKeyPackages").CountDocuments(ctx,
 		bson.M{"userId": userID, "deviceId": deviceID, "lastResort": true})

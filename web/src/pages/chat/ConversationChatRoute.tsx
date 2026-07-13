@@ -10,11 +10,13 @@ import { notifyError } from '../../lib/notify'
 import { deserializeContent, serializeContent } from '../../lib/chatContent'
 import {
   MLS_APPLICATION,
+  MLS_REJOIN,
   MLS_WELCOME,
   PeerKeysMissingError,
   base64ToBytes,
   mlsSession,
   provisionGroup,
+  requestRejoin,
 } from '../../lib/mls'
 import { cacheBody, loadCachedBodies, setPreview } from '../../lib/chatCache'
 import { conversationTitle, otherMember } from '../../lib/conversation'
@@ -77,6 +79,8 @@ export function ConversationChatRoute() {
   // have already handled — so the one-shot decrypt never runs twice for a message.
   const bodiesRef = useRef<Record<string, string>>({})
   const processedRef = useRef<Set<string>>(new Set())
+  // Asked the creator to rebuild the group — at most once per mount.
+  const rejoinAskedRef = useRef(false)
 
   const markNewestRead = useCallback(() => {
     const newest = messages[messages.length - 1]
@@ -128,6 +132,7 @@ export function ConversationChatRoute() {
     let active = true
     bodiesRef.current = {}
     processedRef.current = new Set()
+    rejoinAskedRef.current = false
     loadCachedBodies(id).then((cached) => {
       if (!active) return
       bodiesRef.current = cached
@@ -159,11 +164,20 @@ export function ConversationChatRoute() {
       }
       const next = { ...bodiesRef.current }
       let changed = false
+      let sawWelcome = false
       for (const m of messages) {
         if (processedRef.current.has(m.id)) continue
         processedRef.current.add(m.id)
         try {
-          if (m.contentType === MLS_WELCOME) {
+          if (m.contentType === MLS_REJOIN) {
+            // Someone in this conversation is locked out: they hold a Welcome they
+            // cannot use. Only the creator can put that right, by building the group
+            // again. Ignore our own.
+            if (conversation.createdBy === userId && m.senderId !== userId) {
+              await provisionGroup(conversation, userId, true).catch(() => {})
+            }
+          } else if (m.contentType === MLS_WELCOME) {
+            sawWelcome = true
             // Only ever act on a Welcome from the person who created the conversation.
             //
             // Processing a Welcome CONSUMES the KeyPackage it names — OpenMLS deletes
@@ -204,6 +218,21 @@ export function ConversationChatRoute() {
           }
         }
       }
+      // A Welcome went by and we still have no group: the KeyPackage it names is not one
+      // we hold, so we are locked out of our own conversation — and the creator will
+      // never send another, because from where they sit the group exists. Ask them to
+      // build it again. Once per mount, so a failure cannot turn into a loop.
+      if (
+        active &&
+        sawWelcome &&
+        !rejoinAskedRef.current &&
+        conversation.createdBy !== userId &&
+        !(await session.hasGroup(id))
+      ) {
+        rejoinAskedRef.current = true
+        await requestRejoin(id).catch(() => {})
+      }
+
       if (active && changed) {
         bodiesRef.current = next
         setBodies(next)
@@ -324,7 +353,9 @@ export function ConversationChatRoute() {
   }
 
   // Welcome/Commit control messages carry no user-visible text.
-  const visibleMessages = messages.filter((m) => m.contentType !== MLS_WELCOME)
+  const visibleMessages = messages.filter(
+    (m) => m.contentType !== MLS_WELCOME && m.contentType !== MLS_REJOIN,
+  )
 
   const title = conversation ? conversationTitle(conversation, userId ?? '') : ''
   const avatarId =

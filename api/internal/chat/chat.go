@@ -57,6 +57,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// MLS key directory (public KeyPackages) — the E2EE handshake material.
 	mux.HandleFunc("POST /v1/mls/key-packages", h.publishKeyPackages)
 	mux.HandleFunc("GET /v1/mls/key-packages/count", h.keyPackageCount)
+	mux.HandleFunc("DELETE /v1/mls/key-packages", h.deleteKeyPackages)
 	mux.HandleFunc("GET /v1/mls/key-packages/{userId}/claim", h.claimKeyPackage)
 	mux.HandleFunc("PUT /v1/mls/key-backup", h.putKeyBackup)
 	mux.HandleFunc("GET /v1/mls/key-backup", h.getKeyBackup)

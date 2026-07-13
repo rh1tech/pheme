@@ -36,6 +36,17 @@ func (m *Memory) hasLastResortLocked(userID, deviceID string) bool {
 	return false
 }
 
+func (m *Memory) DeleteKeyPackages(_ context.Context, userID, deviceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, kp := range m.keyPackages {
+		if kp.UserID == userID && kp.DeviceID == deviceID {
+			delete(m.keyPackages, id)
+		}
+	}
+	return nil
+}
+
 func (m *Memory) HasLastResortKeyPackage(_ context.Context, userID, deviceID string) (bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

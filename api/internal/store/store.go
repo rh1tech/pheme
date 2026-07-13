@@ -200,6 +200,11 @@ type Store interface {
 	// HasLastResortKeyPackage reports whether a device has published its one reusable
 	// package yet.
 	HasLastResortKeyPackage(ctx context.Context, userID, deviceID string) (bool, error)
+	// DeleteKeyPackages removes every KeyPackage a device has published. A device that
+	// has lost the private halves (a wipe, a fresh identity) must call this, or the
+	// stale public packages stay claimable and anyone added with one lands in a group
+	// the device can never join.
+	DeleteKeyPackages(ctx context.Context, userID, deviceID string) error
 
 	// Encrypted key backup (opaque ciphertext, one per user). PutKeyBackup
 	// upserts; GetKeyBackup returns ErrNotFound when the user has none.

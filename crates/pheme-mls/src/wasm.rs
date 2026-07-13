@@ -49,6 +49,12 @@ impl MlsClient {
         self.inner.create_group(group_id).map_err(js)
     }
 
+    /// Discards a group so it can be rebuilt (repairing a member who could never join).
+    #[wasm_bindgen(js_name = deleteGroup)]
+    pub fn delete_group(&self, group_id: &[u8]) -> Result<(), JsError> {
+        self.inner.delete_group(group_id).map_err(js)
+    }
+
     /// Whether this client is already in the group (non-mutating).
     #[wasm_bindgen(js_name = hasGroup)]
     pub fn has_group(&self, group_id: &[u8]) -> bool {
