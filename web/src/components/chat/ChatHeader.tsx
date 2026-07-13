@@ -1,6 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { ActionIcon, Group, Stack, Text, TextInput, Tooltip } from '@mantine/core'
-import { IconArrowLeft, IconDotsVertical, IconSearch, IconX } from '@tabler/icons-react'
+import {
+  IconArrowLeft,
+  IconChevronDown,
+  IconChevronUp,
+  IconDotsVertical,
+  IconSearch,
+  IconX,
+} from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ChannelAvatar } from './ChannelAvatar'
@@ -16,6 +23,11 @@ interface ChatHeaderProps {
   onSearchSubmit: () => void
   onSearchOpen: () => void
   onSearchClose: () => void
+  /** How many messages the current query matched, and which one is showing. */
+  hitCount: number
+  hitIndex: number
+  onPrevHit: () => void
+  onNextHit: () => void
   onToggleInfo: () => void
 }
 
@@ -28,6 +40,10 @@ export function ChatHeader({
   onSearchSubmit,
   onSearchOpen,
   onSearchClose,
+  hitCount,
+  hitIndex,
+  onPrevHit,
+  onNextHit,
   onToggleInfo,
 }: ChatHeaderProps) {
   const { t } = useTranslation()
@@ -85,6 +101,29 @@ export function ChatHeader({
         )}
 
         <Group gap={4} wrap="nowrap">
+          {searching && hitCount > 0 && (
+            <>
+              <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+                {hitIndex + 1}/{hitCount}
+              </Text>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label={t('channel.olderHit')}
+                onClick={onPrevHit}
+              >
+                <IconChevronDown size={18} />
+              </ActionIcon>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label={t('channel.newerHit')}
+                onClick={onNextHit}
+              >
+                <IconChevronUp size={18} />
+              </ActionIcon>
+            </>
+          )}
           {searching ? (
             <ActionIcon
               variant="subtle"

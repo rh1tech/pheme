@@ -150,6 +150,8 @@ const ru: Resources = {
     closeInfo: 'Закрыть',
     searchMessages: 'Поиск сообщений',
     closeSearch: 'Закрыть поиск',
+    olderHit: 'Предыдущее совпадение',
+    newerHit: 'Следующее совпадение',
     composerPlaceholder: 'Напишите сообщение…',
     attachImages: 'Прикрепить изображения',
     dropImages: 'Отпустите изображения, чтобы прикрепить',

@@ -148,6 +148,8 @@ const en = {
     closeInfo: 'Close',
     searchMessages: 'Search messages',
     closeSearch: 'Close search',
+    olderHit: 'Older match',
+    newerHit: 'Newer match',
     composerPlaceholder: 'Write a message…',
     attachImages: 'Attach images',
     dropImages: 'Drop images to attach',

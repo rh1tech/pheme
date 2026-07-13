@@ -317,6 +317,13 @@ export const api = {
       quiet,
     }).then((page) => ({ messages: page.messages ?? [], nextCursor: page.nextCursor ?? '' }))
   },
+  /** A window of messages centred on one — how a search hit is shown in context. */
+  messagesAround: (channelId: string, messageId: string, limit = 50) => {
+    const q = new URLSearchParams({ around: messageId, limit: String(limit) })
+    return request<MessagesPage>(`/v1/channels/${channelId}/messages?${q.toString()}`).then(
+      (page) => ({ messages: page.messages ?? [], nextCursor: page.nextCursor ?? '' }),
+    )
+  },
 
   deleteMessage: (channelId: string, messageId: string) =>
     request<void>(`/v1/channels/${channelId}/messages/${messageId}`, { method: 'DELETE' }),

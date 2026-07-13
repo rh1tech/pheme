@@ -10,6 +10,8 @@ interface MessageBubbleProps {
   message: Message
   /** True when this message's discussion pane is open. */
   active: boolean
+  /** True when the feed jumped here from a search hit. */
+  highlighted?: boolean
   onOpenDiscussion: (messageId: string) => void
   /** Opens the fullscreen viewer on one of this message's images. */
   onOpenMedia: (images: MessageImage[], index: number) => void
@@ -20,6 +22,7 @@ interface MessageBubbleProps {
 export function MessageBubble({
   message,
   active,
+  highlighted = false,
   onOpenDiscussion,
   onOpenMedia,
   onOpenMenu,
@@ -33,6 +36,7 @@ export function MessageBubble({
     <article
       className="pheme-bubble"
       data-active={active}
+      data-highlighted={highlighted}
       data-testid="message-bubble"
       data-message-id={message.id}
       {...press}

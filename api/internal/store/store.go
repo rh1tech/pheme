@@ -125,6 +125,10 @@ type Store interface {
 	CreateMessage(ctx context.Context, m domain.Message) (domain.Message, error)
 	MessagesByChannel(ctx context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error)
 	MessageByID(ctx context.Context, id string) (domain.Message, error)
+	// MessagesAround returns a window of messages centred on messageID, newest
+	// first — roughly half the limit newer than it and half older, so a search hit
+	// can be shown in its surrounding conversation rather than on its own.
+	MessagesAround(ctx context.Context, channelID, messageID string, limit int) ([]domain.Message, error)
 	// DeleteMessage removes a message together with everything that hangs off it:
 	// its image blobs, its comments and its delivery records.
 	DeleteMessage(ctx context.Context, id string) error

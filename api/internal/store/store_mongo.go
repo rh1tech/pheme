@@ -801,6 +801,54 @@ func (m *Mongo) MessagesByChannel(ctx context.Context, channelID, cursor, query 
 	return out, cur.All(ctx, &out)
 }
 
+// MessagesAround reads outwards from the centre message in both directions. Both
+// halves are served by the existing (channelId, createdAt) index.
+func (m *Mongo) MessagesAround(ctx context.Context, channelID, messageID string, limit int) ([]domain.Message, error) {
+	centre, err := m.MessageByID(ctx, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if centre.ChannelID != channelID {
+		return nil, ErrNotFound
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	half := int64(limit / 2)
+
+	// Newer than the centre, read ascending then flipped, so the window stays
+	// newest-first like every other message list.
+	newer, err := m.messageWindow(ctx, channelID, bson.M{"$gt": centre.CreatedAt}, 1, half)
+	if err != nil {
+		return nil, err
+	}
+	older, err := m.messageWindow(ctx, channelID, bson.M{"$lt": centre.CreatedAt}, -1, half)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]domain.Message, 0, len(newer)+1+len(older))
+	for i := len(newer) - 1; i >= 0; i-- {
+		out = append(out, newer[i])
+	}
+	out = append(out, centre)
+	out = append(out, older...)
+	return out, nil
+}
+
+func (m *Mongo) messageWindow(ctx context.Context, channelID string, createdAt bson.M, order int, limit int64) ([]domain.Message, error) {
+	opts := options.Find().
+		SetSort(bson.D{{Key: "createdAt", Value: order}}).
+		SetLimit(limit)
+	cur, err := m.db.Collection("messages").
+		Find(ctx, bson.M{"channelId": channelID, "createdAt": createdAt}, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.Message
+	return out, cur.All(ctx, &out)
+}
+
 // LastMessagesByChannels groups by channel and keeps the newest message of each.
 // The sort is served by the messages (channelId, createdAt desc) index.
 func (m *Mongo) LastMessagesByChannels(ctx context.Context, channelIDs []string) (map[string]domain.Message, error) {

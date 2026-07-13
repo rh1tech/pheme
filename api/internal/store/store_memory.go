@@ -821,6 +821,37 @@ func (m *Memory) MessagesByChannel(_ context.Context, channelID, cursor, query s
 	return out, nil
 }
 
+func (m *Memory) MessagesAround(_ context.Context, channelID, messageID string, limit int) ([]domain.Message, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var all []domain.Message
+	for _, msg := range m.messages {
+		if msg.ChannelID == channelID {
+			all = append(all, msg)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].CreatedAt.After(all[j].CreatedAt) })
+
+	centre := -1
+	for i, msg := range all {
+		if msg.ID == messageID {
+			centre = i
+			break
+		}
+	}
+	if centre == -1 {
+		return nil, ErrNotFound
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	half := limit / 2
+	start := max(0, centre-half)
+	end := min(len(all), centre+half+1)
+	return all[start:end], nil
+}
+
 func (m *Memory) LastMessagesByChannels(_ context.Context, channelIDs []string) (map[string]domain.Message, error) {
 	out := make(map[string]domain.Message, len(channelIDs))
 	if len(channelIDs) == 0 {

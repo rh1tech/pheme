@@ -58,6 +58,12 @@ export function ConversationRoute() {
   const [searching, setSearching] = useState(false)
   const [search, setSearch] = useState('')
   const [query, setQuery] = useState('')
+  // Search finds messages; it does not replace the feed with them. The hits are a
+  // list to step through, and stepping jumps the live feed to that message in its
+  // own surroundings — the point of finding it is usually to read what was around it.
+  const [hits, setHits] = useState<Message[]>([])
+  const [hitIndex, setHitIndex] = useState(0)
+  const [highlightId, setHighlightId] = useState<string | undefined>(undefined)
 
   // Opening another channel resets the view. Adjusting state during render is the
   // sanctioned alternative to a setState inside an effect, which would paint the
@@ -70,6 +76,9 @@ export function ConversationRoute() {
     setQuery('')
     setUnseen(0)
     setFirstUnreadId(undefined)
+    setHits([])
+    setHitIndex(0)
+    setHighlightId(undefined)
   }
 
   // The reach-bottom callback needs the newest message, but must not re-subscribe
@@ -192,7 +201,7 @@ export function ConversationRoute() {
     setLoadingOlder(true)
     captureAnchor()
     try {
-      const page = await api.listMessages(id, cursor, query, PAGE_SIZE, true)
+      const page = await api.listMessages(id, cursor, '', PAGE_SIZE, true)
       setMessages((prev) => [...page.messages.slice().reverse(), ...prev])
       setCursor(page.nextCursor)
     } catch (e) {
@@ -204,9 +213,6 @@ export function ConversationRoute() {
 
   useEventStream((e) => {
     if (e.channelId !== id) return
-    // Search results are a snapshot of a query, not the live tail: appending to
-    // them would show a message that does not match what was searched for.
-    if (query) return
     setMessages((prev) =>
       prev.some((m) => m.id === e.message.id) ? prev : [...prev, e.message],
     )
@@ -239,19 +245,54 @@ export function ConversationRoute() {
     }
   }
 
-  function runSearch() {
+  /** Loads the conversation around a message and lights it up. */
+  const jumpTo = useCallback(
+    async (message: Message) => {
+      try {
+        const page = await api.messagesAround(id, message.id, PAGE_SIZE)
+        setMessages(page.messages.slice().reverse())
+        setCursor(page.nextCursor)
+        setHighlightId(message.id)
+        pendingAnchor.current = message.id
+      } catch (e) {
+        notifyError(t('dashboard.loadFailed'), e)
+      }
+    },
+    [id, t],
+  )
+
+  async function runSearch() {
     const q = search.trim()
+    if (!q) return
     setQuery(q)
-    void loadPage(q)
+    try {
+      const page = await api.listMessages(id, '', q, PAGE_SIZE)
+      // The API answers newest-first; step through hits newest to oldest.
+      setHits(page.messages)
+      setHitIndex(0)
+      if (page.messages.length > 0) await jumpTo(page.messages[0])
+    } catch (e) {
+      notifyError(t('channel.searchFailed'), e)
+    }
+  }
+
+  function stepHit(delta: number) {
+    if (hits.length === 0) return
+    const next = (hitIndex + delta + hits.length) % hits.length
+    setHitIndex(next)
+    void jumpTo(hits[next])
   }
 
   function closeSearch() {
     setSearching(false)
     setSearch('')
-    if (query) {
-      setQuery('')
-      void loadPage('')
-    }
+    setQuery('')
+    setHits([])
+    setHitIndex(0)
+    setHighlightId(undefined)
+    // Back to the live tail the reader was on before they went looking.
+    void loadPage('')
+    scrollToBottom()
   }
 
   // The two right-hand panes compete for the same column, so opening the info
@@ -275,7 +316,9 @@ export function ConversationRoute() {
   // sender staring at a feed that looks like it dropped their message.
   function onSent() {
     window.setTimeout(() => {
-      if (query) return
+      // Only reconcile the tail for a reader who is looking at it. Someone who has
+      // jumped to a search hit must not be dragged back to the newest message.
+      if (!atBottom) return
       void api
         .listMessages(id, '', '', PAGE_SIZE, true)
         .then((page) => {
@@ -304,6 +347,10 @@ export function ConversationRoute() {
           onSearchSubmit={runSearch}
           onSearchOpen={() => setSearching(true)}
           onSearchClose={closeSearch}
+          hitCount={hits.length}
+          hitIndex={hitIndex}
+          onPrevHit={() => stepHit(1)}
+          onNextHit={() => stepHit(-1)}
           onToggleInfo={toggleInfo}
         />
 
@@ -312,6 +359,7 @@ export function ConversationRoute() {
           loading={loading}
           loadingOlder={loadingOlder}
           hasOlder={Boolean(cursor)}
+          olderCursor={cursor}
           onLoadOlder={loadOlder}
           scrollerRef={scrollerRef}
           contentRef={contentRef}
@@ -320,10 +368,11 @@ export function ConversationRoute() {
           unseenCount={unseen}
           activeMessageId={messageId}
           firstUnreadId={firstUnreadId}
+          highlightId={highlightId}
           onOpenDiscussion={openDiscussion}
           onOpenMedia={(images: MessageImage[], index: number) => setMedia({ images, index })}
           onOpenMenu={(message, x, y) => setMenu({ message, x, y })}
-          searching={Boolean(query)}
+          searching={Boolean(query) && hits.length === 0}
         />
 
         {canModerate ? (

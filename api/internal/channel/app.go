@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -518,11 +519,31 @@ func (h *AppHandler) listMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	cursor := r.URL.Query().Get("cursor")
 	query := r.URL.Query().Get("q")
-	msgs, err := h.Store.MessagesByChannel(r.Context(), channelID, cursor, query, limit)
+
+	// `around` centres the window on one message, so a search hit can be read in
+	// the conversation it came from instead of on its own. It replaces the cursor
+	// (there is nothing to page from) and the query (the window is context, not
+	// more matches).
+	var (
+		msgs []domain.Message
+		err  error
+	)
+	if around := r.URL.Query().Get("around"); around != "" {
+		msgs, err = h.Store.MessagesAround(r.Context(), channelID, around, limit)
+		if errors.Is(err, store.ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, "message not found")
+			return
+		}
+	} else {
+		msgs, err = h.Store.MessagesByChannel(r.Context(), channelID, cursor, query, limit)
+	}
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not load messages")
 		return
 	}
+
+	// The cursor always walks backwards in time, so it is the oldest message of
+	// the window — which is exactly what "load older" needs, `around` or not.
 	var next string
 	if len(msgs) == limit {
 		next = msgs[len(msgs)-1].ID

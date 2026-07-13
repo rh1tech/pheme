@@ -21,6 +21,8 @@ interface MessageFeedProps {
   loadingOlder: boolean
   /** True while older pages remain; drives the top sentinel. */
   hasOlder: boolean
+  /** The cursor for the next older page. Changes each time one lands. */
+  olderCursor: string
   onLoadOlder: () => void
   scrollerRef: RefObject<HTMLDivElement | null>
   contentRef: RefObject<HTMLDivElement | null>
@@ -31,6 +33,8 @@ interface MessageFeedProps {
   activeMessageId?: string
   /** The message the unread divider sits above; undefined when nothing is unread. */
   firstUnreadId?: string
+  /** The search hit the feed has jumped to. */
+  highlightId?: string
   onOpenDiscussion: (messageId: string) => void
   onOpenMedia: (images: MessageImage[], index: number) => void
   onOpenMenu: (message: Message, x: number, y: number) => void
@@ -43,6 +47,7 @@ export function MessageFeed({
   loading,
   loadingOlder,
   hasOlder,
+  olderCursor,
   onLoadOlder,
   scrollerRef,
   contentRef,
@@ -51,6 +56,7 @@ export function MessageFeed({
   unseenCount,
   activeMessageId,
   firstUnreadId,
+  highlightId,
   onOpenDiscussion,
   onOpenMedia,
   onOpenMenu,
@@ -67,6 +73,12 @@ export function MessageFeed({
   // Older pages load when the top of the list comes into view. An
   // IntersectionObserver keeps this off the scroll event path, so a fast flick
   // upward does not queue a burst of handlers.
+  //
+  // Rebuilt on every cursor change, which is not incidental: an observer only
+  // reports a *transition* into view. After a page is prepended the sentinel is
+  // often still on screen, so it never re-enters, never fires again, and paging
+  // deadlocks with a backlog still unread. A fresh observer re-reports the
+  // current state, so a sentinel that is still visible pulls the next page in.
   useEffect(() => {
     const el = sentinelRef.current
     const root = scrollerRef.current
@@ -79,7 +91,7 @@ export function MessageFeed({
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [hasOlder, scrollerRef])
+  }, [hasOlder, olderCursor, scrollerRef])
 
   return (
     <div className="pheme-feed-wrap">
@@ -117,6 +129,7 @@ export function MessageFeed({
                   <MessageBubble
                     message={m}
                     active={m.id === activeMessageId}
+                    highlighted={m.id === highlightId}
                     onOpenDiscussion={onOpenDiscussion}
                     onOpenMedia={onOpenMedia}
                     onOpenMenu={onOpenMenu}
