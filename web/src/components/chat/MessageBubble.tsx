@@ -2,18 +2,30 @@ import { Group, Text } from '@mantine/core'
 import { IconMessageCircle } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { ImageCarousel } from '../ImageCarousel'
+import { useLongPress } from '../../hooks/useLongPress'
 import { messageTime } from '../../lib/time'
-import type { Message } from '../../lib/types'
+import type { Message, MessageImage } from '../../lib/types'
 
 interface MessageBubbleProps {
   message: Message
   /** True when this message's discussion pane is open. */
   active: boolean
   onOpenDiscussion: (messageId: string) => void
+  /** Opens the fullscreen viewer on one of this message's images. */
+  onOpenMedia: (images: MessageImage[], index: number) => void
+  /** Opens the message's own menu at the point that was pressed. */
+  onOpenMenu: (message: Message, x: number, y: number) => void
 }
 
-export function MessageBubble({ message, active, onOpenDiscussion }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  active,
+  onOpenDiscussion,
+  onOpenMedia,
+  onOpenMenu,
+}: MessageBubbleProps) {
   const { t, i18n } = useTranslation()
+  const press = useLongPress((x, y) => onOpenMenu(message, x, y))
   const count = message.commentCount ?? 0
   const hasImages = (message.images?.length ?? 0) > 0
 
@@ -23,10 +35,14 @@ export function MessageBubble({ message, active, onOpenDiscussion }: MessageBubb
       data-active={active}
       data-testid="message-bubble"
       data-message-id={message.id}
+      {...press}
     >
       {hasImages && (
         <div className="pheme-bubble-media">
-          <ImageCarousel images={message.images ?? []} />
+          <ImageCarousel
+            images={message.images ?? []}
+            onOpen={(i) => onOpenMedia(message.images ?? [], i)}
+          />
         </div>
       )}
 

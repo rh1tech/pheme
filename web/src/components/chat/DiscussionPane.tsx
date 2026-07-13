@@ -8,6 +8,7 @@ import { notifyError } from '../../lib/notify'
 import { CommentsPanel } from '../CommentsPanel'
 import { ImageCarousel } from '../ImageCarousel'
 import { CardListSkeleton } from '../Skeletons'
+import { MediaViewer, type MediaViewerTarget } from './MediaViewer'
 import type { ChannelRelation, Message } from '../../lib/types'
 
 /**
@@ -24,6 +25,7 @@ export function DiscussionPane() {
   const navigate = useNavigate()
   // The loaded message is stamped with the id it belongs to, so "loading" is
   // derived rather than a second state that an effect has to keep in step.
+  const [media, setMedia] = useState<MediaViewerTarget | null>(null)
   const [loaded, setLoaded] = useState<{ messageId: string; message: Message | null } | null>(null)
   const loading = loaded?.messageId !== messageId
   const message = loaded?.messageId === messageId ? loaded.message : null
@@ -75,7 +77,10 @@ export function DiscussionPane() {
           <Stack gap="sm">
             <Stack gap="xs">
               {message.images && message.images.length > 0 && (
-                <ImageCarousel images={message.images} />
+                <ImageCarousel
+                  images={message.images}
+                  onOpen={(i) => setMedia({ images: message.images ?? [], index: i })}
+                />
               )}
               {message.title && <Text fw={600}>{message.title}</Text>}
               {message.body && (
@@ -98,6 +103,8 @@ export function DiscussionPane() {
           </Stack>
         )}
       </div>
+
+      {media && <MediaViewer target={media} onClose={() => setMedia(null)} />}
     </aside>
   )
 }

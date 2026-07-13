@@ -6,6 +6,8 @@ import type { MessageImage } from '../lib/types'
 
 interface ImageCarouselProps {
   images: MessageImage[]
+  /** Opens the fullscreen viewer at the given image. Omit to leave images inert. */
+  onOpen?: (index: number) => void
 }
 
 /**
@@ -13,7 +15,7 @@ interface ImageCarouselProps {
  * indicators. Scrolling is native (compositor-friendly); the active dot is
  * tracked with an IntersectionObserver to avoid scroll-handler churn.
  */
-export function ImageCarousel({ images }: ImageCarouselProps) {
+export function ImageCarousel({ images, onOpen }: ImageCarouselProps) {
   const { t } = useTranslation()
   const trackRef = useRef<HTMLDivElement>(null)
   const [active, setActive] = useState(0)
@@ -59,6 +61,21 @@ export function ImageCarousel({ images }: ImageCarouselProps) {
               loading="lazy"
               decoding="async"
               alt={t('channel.imageAlt', { index: i + 1, total: images.length })}
+              style={onOpen ? { cursor: 'zoom-in' } : undefined}
+              role={onOpen ? 'button' : undefined}
+              tabIndex={onOpen ? 0 : undefined}
+              aria-label={onOpen ? t('channel.openImage') : undefined}
+              onClick={onOpen ? () => onOpen(i) : undefined}
+              onKeyDown={
+                onOpen
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        onOpen(i)
+                      }
+                    }
+                  : undefined
+              }
             />
           </div>
         ))}

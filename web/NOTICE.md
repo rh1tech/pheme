@@ -26,6 +26,7 @@ treated as such:
 | `src/hooks/useChatScroll.ts` — distance-from-bottom anchoring across a prepend, and the "scrolled to end" tolerance | `src/helpers/scrollSaver.ts` (`ScrollSaver`) |
 | `src/hooks/useChatScroll.ts` / `src/pages/chat/ConversationRoute.tsx` — opening a channel at the first unread message rather than at the newest, including the "exactly one unread → go to the bottom instead" rule | `src/components/chat/bubbles.ts` (`performHistoryResult`, around the `readMaxId` / `followingUnread` branch) |
 | `src/components/chat/UnreadDivider.tsx` — the unread separator, shown above the first unread message and only when it is not the newest one | `src/components/chat/bubbles.ts` (`is-first-unread` / `attachedUnreadBubble`) |
+| `src/components/chat/MediaViewer.tsx` — the fullscreen photo viewer's interaction model: Escape to close, ArrowLeft/ArrowRight through the set, swipe to navigate, drag-down to dismiss, zoom | `src/components/appMediaViewerBase.ts` |
 
 ## What is not derived
 

@@ -125,6 +125,9 @@ type Store interface {
 	CreateMessage(ctx context.Context, m domain.Message) (domain.Message, error)
 	MessagesByChannel(ctx context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error)
 	MessageByID(ctx context.Context, id string) (domain.Message, error)
+	// DeleteMessage removes a message together with everything that hangs off it:
+	// its image blobs, its comments and its delivery records.
+	DeleteMessage(ctx context.Context, id string) error
 	// LastMessagesByChannels returns the newest message of each channel, keyed by
 	// channel ID. It backs the chat list's message preview; channels without a
 	// message are absent from the map.

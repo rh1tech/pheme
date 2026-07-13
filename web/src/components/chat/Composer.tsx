@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { KeyboardEvent } from 'react'
+import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react'
 import { ActionIcon, Group, Menu, Stack, Switch, Textarea, Tooltip } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import { IconPaperclip, IconSend, IconSettings } from '@tabler/icons-react'
@@ -34,6 +34,11 @@ export function Composer({ channelId, focusSignal, onSent }: ComposerProps) {
   const [sending, setSending] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const textRef = useRef<HTMLTextAreaElement>(null)
+  const [dropping, setDropping] = useState(false)
+  // Drag events fire for every child element the pointer crosses, so a plain
+  // boolean flickers. Counting enter/leave pairs is the only stable way to know
+  // whether the pointer is still anywhere inside the composer.
+  const dragDepth = useRef(0)
 
   const canSend = text.trim().length > 0 || images.length > 0
 
@@ -66,6 +71,44 @@ export function Composer({ channelId, focusSignal, onSent }: ComposerProps) {
 
   function removeImage(index: number) {
     setImages((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  /** Only images: a dragged .zip or a copied block of text is not an attachment. */
+  function imagesFrom(items: DataTransferItemList): File[] {
+    const files: File[] = []
+    for (const item of Array.from(items)) {
+      if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+      const file = item.getAsFile()
+      if (file) files.push(file)
+    }
+    return files
+  }
+
+  // Pasting a screenshot straight into the message box is how most images get
+  // shared; making people save the file first and pick it from a dialog is busywork.
+  function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    const pasted = imagesFrom(e.clipboardData.items)
+    if (pasted.length === 0) return // plain text: let it paste normally
+    e.preventDefault()
+    addImages(pasted)
+  }
+
+  function onDragEnter(e: DragEvent) {
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return
+    dragDepth.current += 1
+    setDropping(true)
+  }
+
+  function onDragLeave() {
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDropping(false)
+  }
+
+  function onDrop(e: DragEvent) {
+    e.preventDefault()
+    dragDepth.current = 0
+    setDropping(false)
+    addImages(imagesFrom(e.dataTransfer.items))
   }
 
   async function send() {
@@ -102,7 +145,20 @@ export function Composer({ channelId, focusSignal, onSent }: ComposerProps) {
   }
 
   return (
-    <div className="pheme-composer" data-testid="composer">
+    <div
+      className="pheme-composer"
+      data-testid="composer"
+      data-dropping={dropping}
+      onDragEnter={onDragEnter}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dropping && (
+        <div className="pheme-composer-drop" aria-hidden>
+          {t('channel.dropImages')}
+        </div>
+      )}
       <Stack gap="xs">
         <ComposerAttachments files={images} onRemove={removeImage} />
 
@@ -169,6 +225,7 @@ export function Composer({ channelId, focusSignal, onSent }: ComposerProps) {
             value={text}
             onChange={(e) => setText(e.currentTarget.value)}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             style={{ flex: 1 }}
           />
 

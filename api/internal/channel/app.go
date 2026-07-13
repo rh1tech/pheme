@@ -56,6 +56,7 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("GET /v1/channels/{id}", h.getChannel)
 	protected.HandleFunc("PATCH /v1/channels/{id}", h.updateChannel)
 	protected.HandleFunc("DELETE /v1/channels/{id}", h.deleteChannel)
+	protected.HandleFunc("DELETE /v1/channels/{id}/messages/{messageId}", h.deleteMessage)
 	protected.HandleFunc("POST /v1/channels/{id}/avatar", h.uploadChannelAvatar)
 	protected.HandleFunc("DELETE /v1/channels/{id}/avatar", h.deleteChannelAvatar)
 	protected.HandleFunc("POST /v1/channels/{id}/keys", h.createKey)

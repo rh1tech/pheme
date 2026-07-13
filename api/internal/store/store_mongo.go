@@ -906,6 +906,32 @@ func (m *Mongo) CommentCountsByMessages(ctx context.Context, messageIDs []string
 	return out, nil
 }
 
+func (m *Mongo) DeleteMessage(ctx context.Context, id string) error {
+	msg, err := m.MessageByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	imageIDs := make([]string, 0, len(msg.Images))
+	for _, img := range msg.Images {
+		imageIDs = append(imageIDs, img.ID)
+	}
+	if _, err := m.db.Collection("comments").DeleteMany(ctx, bson.M{"messageId": id}); err != nil {
+		return err
+	}
+	if _, err := m.db.Collection("deliveries").DeleteMany(ctx, bson.M{"messageId": id}); err != nil {
+		return err
+	}
+	res, err := m.db.Collection("messages").DeleteOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return ErrNotFound
+	}
+	deleteBlobs(ctx, m.blobs, imageIDs)
+	return nil
+}
+
 func (m *Mongo) DeleteComment(ctx context.Context, id string) error {
 	res, err := m.db.Collection("comments").DeleteOne(ctx, bson.M{"_id": id})
 	if err != nil {

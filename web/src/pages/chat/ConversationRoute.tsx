@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Text } from '@mantine/core'
+import { useMediaQuery } from '@mantine/hooks'
 import { Outlet, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../lib/api'
@@ -6,13 +8,18 @@ import { notifyError } from '../../lib/notify'
 import { loadLastSeen } from '../../lib/lastSeen'
 import { useEventStream } from '../../hooks/useEventStream'
 import { useChatScroll } from '../../hooks/useChatScroll'
+import { useEdgeSwipeBack } from '../../hooks/useEdgeSwipeBack'
 import type { ChatOutletContext } from '../../components/chat/context'
 import { ChatHeader } from '../../components/chat/ChatHeader'
 import { MessageFeed } from '../../components/chat/MessageFeed'
 import { Composer } from '../../components/chat/Composer'
 import { ReadOnlyNotice } from '../../components/chat/ReadOnlyNotice'
 import { ChannelInfoPanel } from '../../components/chat/ChannelInfoPanel'
-import type { Channel, ChannelRelation, Message } from '../../lib/types'
+import { MediaViewer, type MediaViewerTarget } from '../../components/chat/MediaViewer'
+import { MessageMenu, type MenuTarget } from '../../components/chat/MessageMenu'
+import { ConfirmModal } from '../../components/ConfirmModal'
+import { notifySuccess } from '../../lib/notify'
+import type { Channel, ChannelRelation, Message, MessageImage } from '../../lib/types'
 
 const PAGE_SIZE = 50
 // A send is answered 202: the dispatcher writes the message, which reaches us
@@ -43,6 +50,10 @@ export function ConversationRoute() {
   // The message the unread divider sits above, and the anchor the feed opens on.
   const [firstUnreadId, setFirstUnreadId] = useState<string | undefined>(undefined)
   const pendingAnchor = useRef<string | null>(null)
+  const [media, setMedia] = useState<MediaViewerTarget | null>(null)
+  const [menu, setMenu] = useState<MenuTarget | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<Message | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const [searching, setSearching] = useState(false)
   const [search, setSearch] = useState('')
@@ -80,6 +91,12 @@ export function ConversationRoute() {
 
   const { scrollerRef, contentRef, atBottom, scrollToBottom, scrollToMessage, captureAnchor } =
     useChatScroll(id, onReachBottom)
+
+  // On a phone the conversation covers the whole screen, and an installed PWA has
+  // no browser back button — so the edge swipe is the way out of a channel.
+  const isMobile = useMediaQuery('(max-width: 48em)')
+  const backToList = useCallback(() => navigate('/'), [navigate])
+  useEdgeSwipeBack(Boolean(isMobile) && !messageId && !infoOpen, backToList)
 
   useEffect(() => {
     let active = true
@@ -202,6 +219,26 @@ export function ConversationRoute() {
     }
   })
 
+  async function confirmDelete() {
+    const doomed = pendingDelete
+    if (!doomed) return
+    setDeleting(true)
+    try {
+      await api.deleteMessage(id, doomed.id)
+      setMessages((prev) => prev.filter((m) => m.id !== doomed.id))
+      setPendingDelete(null)
+      notifySuccess(t('channel.messageDeleted'))
+      // The sidebar's preview may have been this message.
+      void list.refresh()
+      // Its discussion pane, if open, now points at nothing.
+      if (messageId === doomed.id) navigate(`/channels/${id}`)
+    } catch (e) {
+      notifyError(t('channel.deleteFailed'), e)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   function runSearch() {
     const q = search.trim()
     setQuery(q)
@@ -284,6 +321,8 @@ export function ConversationRoute() {
           activeMessageId={messageId}
           firstUnreadId={firstUnreadId}
           onOpenDiscussion={openDiscussion}
+          onOpenMedia={(images: MessageImage[], index: number) => setMedia({ images, index })}
+          onOpenMenu={(message, x, y) => setMenu({ message, x, y })}
           searching={Boolean(query)}
         />
 
@@ -298,6 +337,30 @@ export function ConversationRoute() {
           conversation (which would drop the feed and its scroll position). It
           renders nothing when no message is selected. */}
       <Outlet context={relation} />
+
+      {media && <MediaViewer target={media} onClose={() => setMedia(null)} />}
+
+      {menu && (
+        <MessageMenu
+          target={menu}
+          channelId={id}
+          canModerate={canModerate}
+          onClose={() => setMenu(null)}
+          onOpenDiscussion={openDiscussion}
+          onDelete={setPendingDelete}
+        />
+      )}
+
+      <ConfirmModal
+        opened={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={confirmDelete}
+        title={t('channel.deleteMessage')}
+        confirmLabel={t('common.delete')}
+        loading={deleting}
+      >
+        <Text size="sm">{t('channel.deleteMessageConfirm')}</Text>
+      </ConfirmModal>
 
       {!messageId && infoOpen && channel && (
         <ChannelInfoPanel

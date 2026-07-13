@@ -7,7 +7,7 @@ import { UnreadDivider } from './UnreadDivider'
 import { JumpToBottom } from './JumpToBottom'
 import { ChatSkeleton } from './ChatSkeleton'
 import { isSameDay } from '../../lib/time'
-import type { Message } from '../../lib/types'
+import type { Message, MessageImage } from '../../lib/types'
 import type { RefObject } from 'react'
 
 // The scroll refs are taken apart from the reactive scroll state rather than
@@ -32,6 +32,8 @@ interface MessageFeedProps {
   /** The message the unread divider sits above; undefined when nothing is unread. */
   firstUnreadId?: string
   onOpenDiscussion: (messageId: string) => void
+  onOpenMedia: (images: MessageImage[], index: number) => void
+  onOpenMenu: (message: Message, x: number, y: number) => void
   /** Shown instead of the generic empty text when a search returned nothing. */
   searching: boolean
 }
@@ -50,6 +52,8 @@ export function MessageFeed({
   activeMessageId,
   firstUnreadId,
   onOpenDiscussion,
+  onOpenMedia,
+  onOpenMenu,
   searching,
 }: MessageFeedProps) {
   const { t } = useTranslation()
@@ -114,6 +118,8 @@ export function MessageFeed({
                     message={m}
                     active={m.id === activeMessageId}
                     onOpenDiscussion={onOpenDiscussion}
+                    onOpenMedia={onOpenMedia}
+                    onOpenMenu={onOpenMenu}
                   />
                 </div>
               )

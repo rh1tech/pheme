@@ -931,6 +931,35 @@ func (m *Memory) CommentCountsByMessages(_ context.Context, messageIDs []string)
 	return out, nil
 }
 
+func (m *Memory) DeleteMessage(ctx context.Context, id string) error {
+	m.mu.Lock()
+	msg, ok := m.messages[id]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNotFound
+	}
+	delete(m.messages, id)
+
+	imageIDs := make([]string, 0, len(msg.Images))
+	for _, img := range msg.Images {
+		imageIDs = append(imageIDs, img.ID)
+	}
+	for cid, c := range m.comments {
+		if c.MessageID == id {
+			delete(m.comments, cid)
+		}
+	}
+	for did, d := range m.deliveries {
+		if d.MessageID == id {
+			delete(m.deliveries, did)
+		}
+	}
+	m.mu.Unlock()
+	// Outside the lock: the blob store may do I/O.
+	deleteBlobs(ctx, m.blobs, imageIDs)
+	return nil
+}
+
 func (m *Memory) DeleteComment(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

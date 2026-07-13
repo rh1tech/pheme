@@ -318,6 +318,9 @@ export const api = {
     }).then((page) => ({ messages: page.messages ?? [], nextCursor: page.nextCursor ?? '' }))
   },
 
+  deleteMessage: (channelId: string, messageId: string) =>
+    request<void>(`/v1/channels/${channelId}/messages/${messageId}`, { method: 'DELETE' }),
+
   // Comments on a message
   listComments: (channelId: string, messageId: string, cursor = '', limit = 50) => {
     const q = new URLSearchParams()
