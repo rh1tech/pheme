@@ -486,6 +486,15 @@ func (h *AppHandler) subscriptionStatus(w http.ResponseWriter, r *http.Request) 
 	httpx.JSON(w, http.StatusOK, map[string]any{"status": sub.Status})
 }
 
+func contains(ids []string, id string) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
 // canReadChannel reports whether uid may read a channel's content: the owner, or
 // a member whose membership is active. Pending, blocked, and non-members are
 // denied, as is a missing channel. It is evaluated against live store state on
@@ -622,7 +631,13 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 			// by live membership; a channel event by channel read access. Either
 			// check re-runs per event, so a removal silences an open stream at once.
 			if e.ConversationID != "" {
-				if _, err := h.Store.ConversationMembership(r.Context(), e.ConversationID, uid); err != nil {
+				// A deletion authorises against the captured member list: the
+				// membership rows the usual check needs are already gone.
+				if len(e.Recipients) > 0 {
+					if !contains(e.Recipients, uid) {
+						continue
+					}
+				} else if _, err := h.Store.ConversationMembership(r.Context(), e.ConversationID, uid); err != nil {
 					continue // not a member of this conversation
 				}
 			} else if !h.canReadChannel(r.Context(), uid, e.ChannelID) {

@@ -53,7 +53,13 @@ export function ChatSidebar({ list, conversations, activeId, onSelectChannel }: 
     const merged = [...channelRows, ...convRows]
     const q = query.trim().toLowerCase()
     const filtered = q ? merged.filter((r) => r.text.toLowerCase().includes(q)) : merged
-    return filtered.sort((a, b) => b.activity.localeCompare(a.activity))
+    // Channels first, then chats; within each, most recent activity on top. The two
+    // are different kinds of thing — a broadcast you follow versus a conversation you
+    // are in — so they read better grouped than interleaved by time.
+    return filtered.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'channel' ? -1 : 1
+      return b.activity.localeCompare(a.activity)
+    })
   }, [list.channels, conversations.conversations, query, userId])
 
   const loading = list.loading || conversations.loading

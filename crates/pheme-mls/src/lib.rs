@@ -191,6 +191,24 @@ impl Client {
         })
     }
 
+    /// Removes a member (by their identity bytes — Pheme's user id) and returns the
+    /// Commit to relay to the remaining members. The removed member cannot decrypt
+    /// anything from the new epoch onward (forward secrecy for the removal). The caller
+    /// merges the commit here; remaining members apply it with `apply_commit`.
+    pub fn remove_member(&self, group_id: &[u8], identity: &[u8]) -> Result<Vec<u8>, String> {
+        let mut group = self.load_group(group_id)?;
+        let leaf = group
+            .members()
+            .find(|m| m.credential.serialized_content() == identity)
+            .map(|m| m.index)
+            .ok_or_else(|| "member not in group".to_string())?;
+        let (commit, _welcome, _group_info) = group
+            .remove_members(&self.provider, &self.signer, &[leaf])
+            .map_err(err("remove members"))?;
+        group.merge_pending_commit(&self.provider).map_err(err("merge commit"))?;
+        commit.tls_serialize_detached().map_err(err("serialize commit"))
+    }
+
     /// Joins a group from a Welcome relayed by the server.
     ///
     /// DANGER — processing a Welcome CONSUMES the KeyPackage it is addressed to, even
@@ -711,6 +729,60 @@ mod tests {
 
         let ct = alice.encrypt(group_id, b"second attempt").unwrap();
         assert_eq!(bob.decrypt(group_id, &ct).unwrap().as_deref(), Some(&b"second attempt"[..]));
+    }
+
+    // Adding a member to an EXISTING group: the adder relays a Welcome to the newcomer
+    // and a Commit to the existing members, who apply it to reach the new epoch. If the
+    // existing member does not apply the commit, they fall an epoch behind and can no
+    // longer decrypt — which is why the commit must be relayed, not just the welcome.
+    #[test]
+    fn add_member_to_existing_group_relays_commit() {
+        let owner = Client::new(b"owner").unwrap();
+        let bob = Client::new(b"bob").unwrap();
+        let carol = Client::new(b"carol").unwrap();
+        let gid = b"group-1";
+
+        owner.create_group(gid).unwrap();
+        let add_bob = owner.add_member(gid, &bob.key_package().unwrap()).unwrap();
+        bob.join_from_welcome(&add_bob.welcome).unwrap();
+
+        // Owner adds Carol to the now-established group.
+        let add_carol = owner.add_member(gid, &carol.key_package().unwrap()).unwrap();
+        carol.join_from_welcome(&add_carol.welcome).unwrap();
+        // Bob (an existing member) applies the Commit to catch up to the new epoch.
+        bob.apply_commit(gid, &add_carol.commit).unwrap();
+
+        // All three now share the epoch and can talk in every direction.
+        let ct = owner.encrypt(gid, b"welcome carol").unwrap();
+        assert_eq!(bob.decrypt(gid, &ct).unwrap().as_deref(), Some(&b"welcome carol"[..]));
+        assert_eq!(carol.decrypt(gid, &ct).unwrap().as_deref(), Some(&b"welcome carol"[..]));
+        let ct2 = carol.encrypt(gid, b"thanks all").unwrap();
+        assert_eq!(owner.decrypt(gid, &ct2).unwrap().as_deref(), Some(&b"thanks all"[..]));
+        assert_eq!(bob.decrypt(gid, &ct2).unwrap().as_deref(), Some(&b"thanks all"[..]));
+    }
+
+    // Removing a member: the remaining members apply the Commit; the removed member is
+    // cut off from the new epoch and can no longer read.
+    #[test]
+    fn remove_member_cuts_them_off() {
+        let owner = Client::new(b"owner").unwrap();
+        let bob = Client::new(b"bob").unwrap();
+        let carol = Client::new(b"carol").unwrap();
+        let gid = b"group-1";
+
+        owner.create_group(gid).unwrap();
+        let ab = owner.add_members(gid, &[bob.key_package().unwrap(), carol.key_package().unwrap()]).unwrap();
+        bob.join_from_welcome(&ab.welcome).unwrap();
+        carol.join_from_welcome(&ab.welcome).unwrap();
+
+        // Owner removes Bob; Carol applies the removal Commit.
+        let commit = owner.remove_member(gid, b"bob").unwrap();
+        carol.apply_commit(gid, &commit).unwrap();
+
+        // Carol still reads the owner; Bob, removed, cannot.
+        let ct = owner.encrypt(gid, b"bob is gone").unwrap();
+        assert_eq!(carol.decrypt(gid, &ct).unwrap().as_deref(), Some(&b"bob is gone"[..]));
+        assert!(bob.decrypt(gid, &ct).is_err());
     }
 
     // A third client not in the group cannot decrypt — the whole point.

@@ -1,4 +1,5 @@
 import { Group, Stack, Text } from '@mantine/core'
+import { IconBroadcast } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { ChannelAvatar } from './ChannelAvatar'
 import { chatListTime } from '../../lib/time'
@@ -36,7 +37,14 @@ export function ChatListItem({ channel, active, onSelect }: ChatListItemProps) {
       data-testid="chat-row"
       onClick={() => onSelect(channel.id)}
     >
-      <ChannelAvatar id={channel.id} name={channel.name} avatarId={channel.avatarId} />
+      {/* The badge marks this row as a broadcast channel, telling it apart at a
+          glance from the direct and group chats it now sits above. */}
+      <span className="pheme-avatar-wrap">
+        <ChannelAvatar id={channel.id} name={channel.name} avatarId={channel.avatarId} />
+        <span className="pheme-channel-badge" aria-hidden>
+          <IconBroadcast size={11} stroke={2.5} />
+        </span>
+      </span>
       <Stack gap={2} style={{ minWidth: 0 }}>
         <Group gap="xs" wrap="nowrap" justify="space-between">
           <Text fw={600} size="sm" truncate>

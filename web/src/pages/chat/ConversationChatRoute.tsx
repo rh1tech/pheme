@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActionIcon, Alert, Group, Stack, Text, Textarea } from '@mantine/core'
-import { IconArrowLeft, IconLock, IconSend, IconShieldLock } from '@tabler/icons-react'
+import { ActionIcon, Alert, Group, Menu, Stack, Text, Textarea } from '@mantine/core'
+import { IconArrowLeft, IconDots, IconLock, IconLogout, IconSend, IconShieldLock, IconTrash, IconUsers } from '@tabler/icons-react'
 import type { KeyboardEvent } from 'react'
 import { useMediaQuery } from '@mantine/hooks'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
@@ -10,16 +10,18 @@ import { notifyError } from '../../lib/notify'
 import { deserializeContent, serializeContent } from '../../lib/chatContent'
 import {
   MLS_APPLICATION,
+  MLS_COMMIT,
   MLS_REJOIN,
   MLS_WELCOME,
   PeerKeysMissingError,
   base64ToBytes,
   mlsSession,
   provisionGroup,
+  removeGroupMember,
   requestRejoin,
 } from '../../lib/mls'
 import { cacheBody, loadCachedBodies, setPreview } from '../../lib/chatCache'
-import { conversationTitle, otherMember } from '../../lib/conversation'
+import { conversationAvatarKey, conversationTitle, otherMember } from '../../lib/conversation'
 import { messageTime } from '../../lib/time'
 import { useAuth } from '../../auth/context'
 import { useEventStream } from '../../hooks/useEventStream'
@@ -30,6 +32,8 @@ import { DateSeparator } from '../../components/chat/DateSeparator'
 import { JumpToBottom } from '../../components/chat/JumpToBottom'
 import { ChatSkeleton } from '../../components/chat/ChatSkeleton'
 import { SafetyNumberModal } from '../../components/chat/SafetyNumber'
+import { GroupMembersModal } from '../../components/chat/GroupMembersModal'
+import { ConfirmModal } from '../../components/ConfirmModal'
 import { isSameDay } from '../../lib/time'
 import type { ChatOutletContext } from '../../components/chat/context'
 import type { ChatMessage, Conversation } from '../../lib/types'
@@ -69,6 +73,10 @@ export function ConversationChatRoute() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [safetyOpen, setSafetyOpen] = useState(false)
+  const [membersOpen, setMembersOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmLeave, setConfirmLeave] = useState(false)
+  const [actionBusy, setActionBusy] = useState(false)
   // The other person has published no keys, so there is no way to encrypt to them yet.
   const [peerNotReady, setPeerNotReady] = useState(false)
   const textRef = useRef<HTMLTextAreaElement>(null)
@@ -176,6 +184,11 @@ export function ConversationChatRoute() {
             if (conversation.createdBy === userId && m.senderId !== userId) {
               await provisionGroup(conversation, userId, true).catch(() => {})
             }
+          } else if (m.contentType === MLS_COMMIT) {
+            // A membership change: apply it to advance to the new epoch. Skipping it
+            // would leave us a Commit behind and unable to decrypt anything after. Our
+            // own commit is a no-op (already merged when we produced it).
+            if (m.senderId !== userId) await session.applyCommit(id, m.ciphertext)
           } else if (m.contentType === MLS_WELCOME) {
             sawWelcome = true
             // Only ever act on a Welcome from the person who created the conversation.
@@ -297,7 +310,13 @@ export function ConversationChatRoute() {
   }, [cursor, scrollerRef])
 
   useEventStream((e) => {
-    if (e.conversationId !== id || !e.chatMessage) return
+    if (e.conversationId !== id) return
+    // Deleted out from under us (the other party, or a group admin): leave.
+    if (e.conversationDeleted) {
+      navigate('/')
+      return
+    }
+    if (!e.chatMessage) return
     const msg = e.chatMessage
     setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
     if (atBottomRef.current) {
@@ -306,6 +325,37 @@ export function ConversationChatRoute() {
       setUnseen((n) => n + 1)
     }
   })
+
+  async function reloadConversation() {
+    const c = await api.getConversation(id)
+    setConversation(c)
+  }
+
+  async function deleteChat() {
+    setActionBusy(true)
+    try {
+      await api.deleteConversation(id)
+      navigate('/')
+    } catch (e) {
+      notifyError(t('group.actionFailed'), e)
+      setActionBusy(false)
+    }
+  }
+
+  async function leaveGroup() {
+    if (!userId) return
+    setActionBusy(true)
+    try {
+      await removeGroupMember(id, userId, userId)
+      navigate('/')
+    } catch (e) {
+      notifyError(t('group.actionFailed'), e)
+      setActionBusy(false)
+    }
+  }
+
+  const meMember = conversation?.members.find((m) => m.userId === userId)
+  const iAmAdmin = meMember?.role === 'admin'
 
   const canSend = draft.trim().length > 0
 
@@ -353,13 +403,14 @@ export function ConversationChatRoute() {
   }
 
   // Welcome/Commit control messages carry no user-visible text.
-  const visibleMessages = messages.filter(
-    (m) => m.contentType !== MLS_WELCOME && m.contentType !== MLS_REJOIN,
-  )
+  const controlTypes = new Set([MLS_WELCOME, MLS_REJOIN, MLS_COMMIT])
+  const visibleMessages = messages.filter((m) => !controlTypes.has(m.contentType))
 
   const title = conversation ? conversationTitle(conversation, userId ?? '') : ''
   const avatarId =
     conversation?.kind === 'direct' ? otherMember(conversation, userId ?? '')?.avatarId : conversation?.avatarId
+  // Same seed the sidebar uses, so a chat is the same colour in the list and inside it.
+  const avatarKey = conversation ? conversationAvatarKey(conversation, userId ?? '') : id
   const isGroup = conversation?.kind === 'group'
 
   return (
@@ -375,7 +426,7 @@ export function ConversationChatRoute() {
           >
             <IconArrowLeft size={20} />
           </ActionIcon>
-          <ChannelAvatar id={conversation?.id ?? id} name={title || '·'} avatarId={avatarId} size={38} />
+          <ChannelAvatar id={avatarKey} name={title || '·'} avatarId={avatarId} size={38} />
           <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
             <Text fw={600} size="sm" truncate>
               {title}
@@ -394,6 +445,38 @@ export function ConversationChatRoute() {
           >
             <IconShieldLock size={20} />
           </ActionIcon>
+          <Menu position="bottom-end" withinPortal>
+            <Menu.Target>
+              <ActionIcon variant="subtle" color="gray" aria-label={t('chat.conversationMenu')}>
+                <IconDots size={20} />
+              </ActionIcon>
+            </Menu.Target>
+            <Menu.Dropdown>
+              {isGroup && (
+                <Menu.Item leftSection={<IconUsers size={18} />} onClick={() => setMembersOpen(true)}>
+                  {t('group.membersTitle')}
+                </Menu.Item>
+              )}
+              {isGroup && (
+                <Menu.Item
+                  leftSection={<IconLogout size={18} />}
+                  onClick={() => setConfirmLeave(true)}
+                >
+                  {t('group.leave')}
+                </Menu.Item>
+              )}
+              {/* A direct chat can be deleted by either party; a group only by an admin. */}
+              {(!isGroup || iAmAdmin) && (
+                <Menu.Item
+                  color="red"
+                  leftSection={<IconTrash size={18} />}
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  {isGroup ? t('group.deleteGroup') : t('chat.deleteChat')}
+                </Menu.Item>
+              )}
+            </Menu.Dropdown>
+          </Menu>
         </Group>
       </header>
 
@@ -402,6 +485,35 @@ export function ConversationChatRoute() {
         opened={safetyOpen}
         onClose={() => setSafetyOpen(false)}
       />
+
+      {conversation && isGroup && (
+        <GroupMembersModal
+          conversation={conversation}
+          opened={membersOpen}
+          onClose={() => setMembersOpen(false)}
+          onChanged={reloadConversation}
+        />
+      )}
+
+      <ConfirmModal
+        opened={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={deleteChat}
+        loading={actionBusy}
+        title={isGroup ? t('group.deleteGroup') : t('chat.deleteChat')}
+      >
+        <Text size="sm">{isGroup ? t('group.deleteGroupConfirm') : t('chat.deleteChatConfirm')}</Text>
+      </ConfirmModal>
+
+      <ConfirmModal
+        opened={confirmLeave}
+        onClose={() => setConfirmLeave(false)}
+        onConfirm={leaveGroup}
+        loading={actionBusy}
+        title={t('group.leave')}
+      >
+        <Text size="sm">{t('group.leaveConfirm')}</Text>
+      </ConfirmModal>
 
       <div className="pheme-feed-wrap">
         <div className="pheme-feed" ref={scrollerRef} data-testid="chat-feed">

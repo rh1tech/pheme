@@ -137,6 +137,36 @@ func (m *Memory) RemoveConversationMember(_ context.Context, conversationID, use
 	return ErrNotFound
 }
 
+func (m *Memory) SetConversationMemberRole(_ context.Context, conversationID, userID string, role domain.Role) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, mem := range m.convMembers {
+		if mem.ConversationID == conversationID && mem.UserID == userID {
+			mem.Role = role
+			m.convMembers[id] = mem
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) DeleteConversation(_ context.Context, conversationID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.conversations, conversationID)
+	for id, mem := range m.convMembers {
+		if mem.ConversationID == conversationID {
+			delete(m.convMembers, id)
+		}
+	}
+	for id, msg := range m.chatMessages {
+		if msg.ConversationID == conversationID {
+			delete(m.chatMessages, id)
+		}
+	}
+	return nil
+}
+
 func (m *Memory) AppendChatMessage(_ context.Context, msg domain.ChatMessage) (domain.ChatMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

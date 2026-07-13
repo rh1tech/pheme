@@ -360,6 +360,25 @@ export class MlsClient {
         return this;
     }
     /**
+     * Removes a member by their identity bytes; returns the Commit to relay.
+     * @param {Uint8Array} group_id
+     * @param {Uint8Array} identity
+     * @returns {Uint8Array}
+     */
+    removeMember(group_id, identity) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(identity, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_removeMember(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v3;
+    }
+    /**
      * The safety number for a group: the digits two people compare, out of band, to
      * prove the server did not substitute a key and put itself in the middle.
      * Derived from the group's own ratchet tree, not from anything the server says.

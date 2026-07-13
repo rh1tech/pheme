@@ -88,6 +88,12 @@ export const MLS_WELCOME = 'application/mls-welcome'
  * destroy anyone's KeyPackages the way a forged Welcome can.
  */
 export const MLS_REJOIN = 'application/mls-rejoin'
+/**
+ * A membership-change Commit — sent when a member is added to or removed from an
+ * existing group. Every current member applies it to advance to the new epoch;
+ * without it they fall behind and can no longer decrypt.
+ */
+export const MLS_COMMIT = 'application/mls-commit'
 
 let ready: Promise<Session> | null = null
 let readyUserId = ''
@@ -421,6 +427,41 @@ class Session {
       return out ?? null
     })
   }
+
+  /**
+   * Adds members to an EXISTING group and returns the Welcome (for the newcomers) and
+   * the Commit (for the members already in it) to relay. Distinct from startGroup,
+   * which builds the group from nothing.
+   */
+  async addMembers(
+    conversationId: string,
+    keyPackages: Uint8Array[],
+  ): Promise<{ welcome: string; commit: string }> {
+    return this.exclusive(async () => {
+      const groupId = new TextEncoder().encode(conversationId)
+      const added = this.client.addMembers(groupId, keyPackages)
+      await this.persist()
+      return { welcome: bytesToBase64(added.welcome), commit: bytesToBase64(added.commit) }
+    })
+  }
+
+  /** Removes a member (by their user id) and returns the Commit to relay. */
+  async removeMember(conversationId: string, memberUserId: string): Promise<string> {
+    return this.exclusive(async () => {
+      const groupId = new TextEncoder().encode(conversationId)
+      const commit = this.client.removeMember(groupId, new TextEncoder().encode(memberUserId))
+      await this.persist()
+      return bytesToBase64(commit)
+    })
+  }
+
+  /** Applies a membership-change Commit another member produced. Own commits are a no-op. */
+  async applyCommit(conversationId: string, commitBase64: string): Promise<void> {
+    return this.exclusive(async () => {
+      this.client.applyCommit(new TextEncoder().encode(conversationId), base64ToBytes(commitBase64))
+      await this.persist()
+    })
+  }
 }
 
 /**
@@ -613,6 +654,51 @@ export async function requestRejoin(conversationId: string): Promise<void> {
   // One byte: the server rejects an empty body, and there is nothing to say beyond the
   // fact that this was sent.
   await api.sendChatMessage(conversationId, bytesToBase64(new Uint8Array([1])), MLS_REJOIN)
+}
+
+/**
+ * Adds a user to an existing group conversation.
+ *
+ * Order matters: the newcomer is added to server-side membership first (so they are
+ * authorised to read the Welcome relayed to them), then the MLS group is extended and
+ * the Welcome + Commit are posted. The Commit carries the epoch every current member
+ * must advance to; the Welcome lets the newcomer join. Throws PeerKeysMissingError if
+ * the target has published no KeyPackages.
+ */
+export async function addGroupMember(
+  conversationId: string,
+  myUserId: string,
+  newUserId: string,
+): Promise<void> {
+  const session = await mlsSession(myUserId)
+  await api.addConversationMember(conversationId, newUserId)
+
+  let keyPackage: Uint8Array
+  try {
+    keyPackage = base64ToBytes(await api.claimKeyPackage(newUserId))
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) throw new PeerKeysMissingError()
+    throw e
+  }
+  const { welcome, commit } = await session.addMembers(conversationId, [keyPackage])
+  await api.sendChatMessage(conversationId, welcome, MLS_WELCOME)
+  await api.sendChatMessage(conversationId, commit, MLS_COMMIT)
+}
+
+/**
+ * Removes a user from a group conversation. The MLS Commit is produced and relayed
+ * first — that is what cuts the removed member off from future messages — then their
+ * server-side membership is dropped.
+ */
+export async function removeGroupMember(
+  conversationId: string,
+  myUserId: string,
+  memberUserId: string,
+): Promise<void> {
+  const session = await mlsSession(myUserId)
+  const commit = await session.removeMember(conversationId, memberUserId)
+  await api.sendChatMessage(conversationId, commit, MLS_COMMIT)
+  await api.removeConversationMember(conversationId, memberUserId)
 }
 
 // --- encrypted key backup -------------------------------------------------

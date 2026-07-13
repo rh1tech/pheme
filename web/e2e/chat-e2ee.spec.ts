@@ -240,3 +240,124 @@ async function send(page: Page, text: string): Promise<void> {
   await composer.getByTestId('composer-body').fill(text)
   await composer.getByRole('button', { name: 'Send' }).click()
 }
+
+/** Sets a display name so the user is findable in the people search. */
+function setDisplayName(page: Page, name: string): Promise<void> {
+  return page.evaluate(
+    async ([apiBase, displayName]) => {
+      await fetch(`${apiBase}/v1/me`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}`,
+        },
+        body: JSON.stringify({ displayName }),
+      })
+    },
+    [API_URL, name] as const,
+  )
+}
+
+function createGroup(page: Page, title: string, memberIds: string[]): Promise<string> {
+  return page.evaluate(
+    async ([apiBase, groupTitle, ids]) => {
+      const res = await fetch(`${apiBase}/v1/conversations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}`,
+        },
+        body: JSON.stringify({ kind: 'group', title: groupTitle, memberIds: ids }),
+      })
+      return ((await res.json()) as { id: string }).id
+    },
+    [API_URL, title, memberIds] as const,
+  )
+}
+
+/**
+ * An admin adds a third person to a running group, and they can read what is said
+ * next; then the admin removes them, and they are cut off.
+ *
+ * This is the whole point of the MLS Commit relay: adding or removing a member of an
+ * existing group advances everyone's epoch, and the existing members have to apply the
+ * relayed Commit or they fall behind and stop being able to decrypt. It is driven
+ * through the real member-management UI.
+ */
+test('an admin adds and removes a group member, and encryption follows', async ({ browser }) => {
+  const ownerEmail = uniqueEmail('owner-grp')
+  const bobEmail = uniqueEmail('bob-grp')
+  const carolEmail = uniqueEmail('carol-grp')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, ownerEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await createUserViaAdmin(admin, carolEmail, PASSWORD)
+  await setup.close()
+
+  const ownerCtx = await browser.newContext()
+  const bobCtx = await browser.newContext()
+  const carolCtx = await browser.newContext()
+  const owner = await ownerCtx.newPage()
+  const bob = await bobCtx.newPage()
+  const carol = await carolCtx.newPage()
+
+  // Everyone signs in so their key packages are published.
+  await login(bob, bobEmail, PASSWORD)
+  const bobId = await userId(bob)
+  await login(carol, carolEmail, PASSWORD)
+  await userId(carol) // ensure carol's session is up before publishing keys
+  await setDisplayName(carol, 'Carol Findme')
+  await expect.poll(() => keyPackageCount(bob), { timeout: 20_000 }).toBeGreaterThan(0)
+  await expect.poll(() => keyPackageCount(carol), { timeout: 20_000 }).toBeGreaterThan(0)
+
+  // Owner creates a group with Bob and gets it going.
+  await login(owner, ownerEmail, PASSWORD)
+  const groupId = await createGroup(owner, 'The Group', [bobId])
+  await owner.goto(`/chats/${groupId}`)
+  await send(owner, 'kickoff')
+  await bob.goto(`/chats/${groupId}`)
+  await expect(bob.getByTestId('chat-message')).toContainText('kickoff', { timeout: 20_000 })
+
+  // Owner adds Carol through the member-management UI.
+  await owner.getByRole('button', { name: 'Conversation menu' }).click()
+  await owner.getByRole('menuitem', { name: 'Members' }).click()
+  await owner.getByPlaceholder('Search people by name or @username').fill('Carol Findme')
+  await owner.getByText('Carol Findme').click()
+  await expect(owner.getByText('Member added')).toBeVisible({ timeout: 20_000 })
+  await owner.keyboard.press('Escape')
+
+  // Carol opens the group and can read what is said AFTER she joined.
+  await carol.goto(`/chats/${groupId}`)
+  await send(owner, 'welcome carol')
+  await expect(carol.getByTestId('chat-message').last()).toContainText('welcome carol', {
+    timeout: 20_000,
+  })
+  // Bob, an existing member, applied the add Commit and still reads too.
+  await expect(bob.getByTestId('chat-message').last()).toContainText('welcome carol', {
+    timeout: 20_000,
+  })
+
+  // Owner removes Carol. Bob applies the removal Commit and can still read; Carol,
+  // cut off, can no longer decrypt what is said next.
+  await owner.getByRole('button', { name: 'Conversation menu' }).click()
+  await owner.getByRole('menuitem', { name: 'Members' }).click()
+  await owner.getByRole('button', { name: 'Member actions: Carol Findme' }).click()
+  await owner.getByRole('menuitem', { name: 'Remove from group' }).click()
+  await expect(owner.getByText('Member removed')).toBeVisible({ timeout: 20_000 })
+  await owner.keyboard.press('Escape')
+
+  await send(owner, 'after carol left')
+  await expect(bob.getByTestId('chat-message').last()).toContainText('after carol left', {
+    timeout: 20_000,
+  })
+  // Carol must NOT see it — give the stream a moment, then assert absence.
+  await carol.waitForTimeout(3000)
+  await expect(carol.getByTestId('chat-message').last()).not.toContainText('after carol left')
+
+  await ownerCtx.close()
+  await bobCtx.close()
+  await carolCtx.close()
+})

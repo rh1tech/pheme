@@ -136,6 +136,30 @@
   background-color: var(--pheme-row-hover);
 }
 
+/* A channel row's avatar carries a small broadcast badge at the bottom-right, so
+   channels are distinguishable from chats even once both sit in one list. */
+.pheme-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.pheme-channel-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  color: #fff;
+  background-color: var(--mantine-color-iris-6, #7740ee);
+  /* A ring in the pane colour, so the badge reads as sitting on top of the avatar. */
+  box-shadow: 0 0 0 2px var(--pheme-pane-bg);
+}
+
 .pheme-chat-row[data-active='true'] {
   background-image: linear-gradient(
     135deg,

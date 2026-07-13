@@ -149,6 +149,33 @@ func (m *Mongo) RemoveConversationMember(ctx context.Context, conversationID, us
 	return nil
 }
 
+func (m *Mongo) SetConversationMemberRole(ctx context.Context, conversationID, userID string, role domain.Role) error {
+	res, err := m.db.Collection("conversationMembers").UpdateOne(ctx,
+		bson.M{"conversationId": conversationID, "userId": userID},
+		bson.M{"$set": bson.M{"role": role}},
+	)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *Mongo) DeleteConversation(ctx context.Context, conversationID string) error {
+	if _, err := m.db.Collection("chatMessages").
+		DeleteMany(ctx, bson.M{"conversationId": conversationID}); err != nil {
+		return err
+	}
+	if _, err := m.db.Collection("conversationMembers").
+		DeleteMany(ctx, bson.M{"conversationId": conversationID}); err != nil {
+		return err
+	}
+	_, err := m.db.Collection("conversations").DeleteOne(ctx, bson.M{"_id": conversationID})
+	return err
+}
+
 func (m *Mongo) AppendChatMessage(ctx context.Context, msg domain.ChatMessage) (domain.ChatMessage, error) {
 	if msg.ID == "" {
 		msg.ID = mongoID()

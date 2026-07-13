@@ -78,6 +78,10 @@ export class MlsClient {
      */
     constructor(identity: Uint8Array);
     /**
+     * Removes a member by their identity bytes; returns the Commit to relay.
+     */
+    removeMember(group_id: Uint8Array, identity: Uint8Array): Uint8Array;
+    /**
      * The safety number for a group: the digits two people compare, out of band, to
      * prove the server did not substitute a key and put itself in the middle.
      * Derived from the group's own ratchet tree, not from anything the server says.
@@ -125,6 +129,7 @@ export interface InitOutput {
     readonly mlsclient_keyPackage: (a: number) => [number, number, number, number];
     readonly mlsclient_lastResortKeyPackage: (a: number) => [number, number, number, number];
     readonly mlsclient_new: (a: number, b: number) => [number, number, number];
+    readonly mlsclient_removeMember: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly mlsclient_safetyNumber: (a: number, b: number, c: number) => [number, number, number, number];
     readonly __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;
     readonly __wbg_set_backupblob_salt: (a: number, b: number, c: number) => void;

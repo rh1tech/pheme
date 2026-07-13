@@ -90,6 +90,12 @@ impl MlsClient {
         })
     }
 
+    /// Removes a member by their identity bytes; returns the Commit to relay.
+    #[wasm_bindgen(js_name = removeMember)]
+    pub fn remove_member(&self, group_id: &[u8], identity: &[u8]) -> Result<Vec<u8>, JsError> {
+        self.inner.remove_member(group_id, identity).map_err(js)
+    }
+
     #[wasm_bindgen(js_name = joinFromWelcome)]
     pub fn join_from_welcome(&self, welcome: &[u8]) -> Result<(), JsError> {
         self.inner.join_from_welcome(welcome).map_err(js)

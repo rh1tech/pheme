@@ -21,6 +21,13 @@ type Event struct {
 
 	ConversationID string              `json:"conversationId,omitempty"`
 	ChatMessage    *domain.ChatMessage `json:"chatMessage,omitempty"`
+	// ConversationDeleted marks a conversation that has been removed, so members drop
+	// it from their list without a refetch. Carries ConversationID.
+	ConversationDeleted bool `json:"conversationDeleted,omitempty"`
+	// Recipients authorises delivery of an event whose usual membership check no
+	// longer holds — a deletion, whose membership rows are already gone. Never
+	// serialised to clients; used only by the stream's per-recipient filter.
+	Recipients []string `json:"-"`
 }
 
 // Bus distributes live events to subscribers.

@@ -387,6 +387,13 @@ export const api = {
     }),
   removeConversationMember: (conversationId: string, userId: string) =>
     request<void>(`/v1/conversations/${conversationId}/members/${userId}`, { method: 'DELETE' }),
+  setConversationMemberRole: (conversationId: string, userId: string, role: 'admin' | 'user') =>
+    request<void>(`/v1/conversations/${conversationId}/members/${userId}`, {
+      method: 'PATCH',
+      body: { role },
+    }),
+  deleteConversation: (conversationId: string) =>
+    request<void>(`/v1/conversations/${conversationId}`, { method: 'DELETE' }),
 
   // Messages
   getMessage: (channelId: string, messageId: string) =>

@@ -88,6 +88,10 @@ export function useConversationList(): ConversationListApi {
   // message for a conversation not yet in the list (just created elsewhere) is
   // ignored; refresh() picks it up.
   useEventStream((e) => {
+    if (e.conversationId && e.conversationDeleted) {
+      setConversations((prev) => prev.filter((c) => c.id !== e.conversationId))
+      return
+    }
     if (!e.conversationId || !e.chatMessage) return
     const msg = e.chatMessage
     setConversations((prev) =>

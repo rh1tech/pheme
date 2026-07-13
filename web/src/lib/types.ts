@@ -221,6 +221,8 @@ export interface LiveEvent {
   message?: Message
   conversationId?: string
   chatMessage?: ChatMessage
+  /** The conversation was deleted; drop it from the list and leave it if open. */
+  conversationDeleted?: boolean
 }
 
 // --- Admin types ---

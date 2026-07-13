@@ -45,10 +45,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/conversations", h.createConversation)
 	mux.HandleFunc("GET /v1/conversations", h.listConversations)
 	mux.HandleFunc("GET /v1/conversations/{id}", h.getConversation)
+	mux.HandleFunc("DELETE /v1/conversations/{id}", h.deleteConversation)
 	mux.HandleFunc("GET /v1/conversations/{id}/messages", h.listMessages)
 	mux.HandleFunc("POST /v1/conversations/{id}/messages", h.postMessage)
 	mux.HandleFunc("GET /v1/conversations/{id}/members", h.listMembers)
 	mux.HandleFunc("POST /v1/conversations/{id}/members", h.addMember)
+	mux.HandleFunc("PATCH /v1/conversations/{id}/members/{userId}", h.setMemberRole)
 	mux.HandleFunc("DELETE /v1/conversations/{id}/members/{userId}", h.removeMember)
 	// User search for the "start a chat with…" picker. Returns public profiles
 	// only — never email — and requires a minimum query length to limit

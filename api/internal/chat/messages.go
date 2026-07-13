@@ -262,3 +262,82 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+type setRoleRequest struct {
+	Role domain.Role `json:"role"`
+}
+
+// setMemberRole promotes or demotes a group member. Admins only, groups only.
+func (h *Handler) setMemberRole(w http.ResponseWriter, r *http.Request) {
+	_, convID, member, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	if member.Role != domain.RoleAdmin {
+		httpx.Error(w, http.StatusForbidden, "only a group admin can change roles")
+		return
+	}
+	conv, err := h.Store.ConversationByID(r.Context(), convID)
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "conversation not found")
+		return
+	}
+	if conv.Kind != domain.ConversationGroup {
+		httpx.Error(w, http.StatusBadRequest, "a direct chat has no roles")
+		return
+	}
+	var req setRoleRequest
+	if !httpx.DecodeLimited(w, r, &req, maxSmallBodyBytes) {
+		return
+	}
+	if req.Role != domain.RoleAdmin && req.Role != domain.RoleUser {
+		httpx.Error(w, http.StatusBadRequest, "role must be 'admin' or 'user'")
+		return
+	}
+	target := r.PathValue("userId")
+	if err := h.Store.SetConversationMemberRole(r.Context(), convID, target, req.Role); err != nil {
+		httpx.Error(w, http.StatusNotFound, "member not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteConversation removes a conversation for everyone in it. Either party may
+// delete a direct chat; only an admin may delete a group. Membership is captured
+// before the delete so the live event can still reach the (now ex-) members.
+func (h *Handler) deleteConversation(w http.ResponseWriter, r *http.Request) {
+	_, convID, member, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	conv, err := h.Store.ConversationByID(r.Context(), convID)
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "conversation not found")
+		return
+	}
+	if conv.Kind == domain.ConversationGroup && member.Role != domain.RoleAdmin {
+		httpx.Error(w, http.StatusForbidden, "only a group admin can delete the group")
+		return
+	}
+
+	members, err := h.Store.ConversationMembers(r.Context(), convID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not delete conversation")
+		return
+	}
+	recipients := make([]string, 0, len(members))
+	for _, m := range members {
+		recipients = append(recipients, m.UserID)
+	}
+
+	if err := h.Store.DeleteConversation(r.Context(), convID); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not delete conversation")
+		return
+	}
+	h.Live.Publish(live.Event{
+		ConversationID:      convID,
+		ConversationDeleted: true,
+		Recipients:          recipients,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}

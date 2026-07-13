@@ -177,6 +177,12 @@ type Store interface {
 	ConversationMembership(ctx context.Context, conversationID, userID string) (domain.ConversationMember, error)
 	AddConversationMember(ctx context.Context, m domain.ConversationMember) (domain.ConversationMember, error)
 	RemoveConversationMember(ctx context.Context, conversationID, userID string) error
+	// SetConversationMemberRole changes a member's role (admin/user). ErrNotFound if
+	// the user is not a member.
+	SetConversationMemberRole(ctx context.Context, conversationID, userID string, role domain.Role) error
+	// DeleteConversation removes a conversation and everything belonging to it —
+	// membership rows and the message log. The content was opaque; none of it is read.
+	DeleteConversation(ctx context.Context, conversationID string) error
 	// AppendChatMessage stores one message in a conversation's ordered log.
 	AppendChatMessage(ctx context.Context, m domain.ChatMessage) (domain.ChatMessage, error)
 	// ChatMessagesByConversation returns messages newest-first with cursor
