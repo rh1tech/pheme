@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Outlet, useMatch } from 'react-router-dom'
+import { useMediaQuery } from '@mantine/hooks'
 import { ChatSidebar } from './ChatSidebar'
 import { KeyRestoreGate } from './KeyBackup'
 import { mlsSession } from '../../lib/mls'
 import { useAuth } from '../../auth/context'
 import { useChannelList } from '../../hooks/useChannelList'
 import { useConversationList } from '../../hooks/useConversationList'
+import { useColdLaunchToList } from '../../hooks/useColdLaunchToList'
 import { useVisualViewportHeight } from '../../hooks/useVisualViewport'
 import type { ChatOutletContext } from './context'
 import './chat.css'
@@ -27,6 +29,14 @@ export function ChatShell() {
   const chatMatch = useMatch({ path: '/chats/:id', end: false })
   const activeId = channelMatch?.params.id ?? chatMatch?.params.id
   const viewportHeight = useVisualViewportHeight()
+  // Read synchronously on the first render (not deferred to an effect): the cold-launch
+  // redirect below decides once, at mount, and a first-render "false" that only flips to
+  // true afterwards would make it miss the very launch it exists to catch.
+  const isMobile = useMediaQuery('(max-width: 48em)', undefined, { getInitialValueInEffect: false })
+
+  // On a phone, a cold launch lands on the list, not whatever channel the last
+  // session was left viewing (which iOS restores). A notification tap is exempt.
+  useColdLaunchToList(Boolean(isMobile))
 
   // Picking a channel should put the cursor in its message box. Counted rather
   // than derived from the channel id, so re-picking the channel already open —
