@@ -64,10 +64,27 @@ export function idbDelete(key: string): Promise<void> {
 }
 
 /**
- * Wipes the whole store: the MLS key state and every cached decrypted message.
- * Used on logout — leaving private keys and plaintext behind on a shared device
- * would defeat the encryption entirely.
+ * Wipes the whole store — the MLS key state and every cached decrypted message —
+ * and writes `keep` back, all in ONE transaction.
+ *
+ * The two halves cannot be separated. The wipe is what destroys the keys; the entry
+ * written back is the epoch that tells any session still running in another tab that
+ * its keys are gone. Done as two transactions, an interruption between them leaves no
+ * epoch at all — it reads back as zero, which is exactly what a stale session is
+ * carrying, so that session would conclude it was still live and write the destroyed
+ * keys back to disk.
  */
-export function idbClear(): Promise<void> {
-  return tx('readwrite', (s) => s.clear()).then(() => undefined)
+export function idbClearExcept(keep: Array<[string, Uint8Array]>): Promise<void> {
+  return open().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction(STORE, 'readwrite')
+        const store = transaction.objectStore(STORE)
+        store.clear()
+        for (const [key, value] of keep) store.put(value, key)
+        transaction.oncomplete = () => resolve()
+        transaction.onerror = () => reject(transaction.error)
+        transaction.onabort = () => reject(transaction.error)
+      }),
+  )
 }

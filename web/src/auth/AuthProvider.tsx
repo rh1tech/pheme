@@ -27,10 +27,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // stale in-memory MLS session encrypt their messages under this identity. The
   // reload guarantees no module-level state survives into the next session.
   //
-  // A wipe can genuinely fail (blocked IndexedDB, quota, private browsing). Reporting
-  // a clean logout anyway would be the worst outcome: the user walks away from a shared
-  // machine believing their keys are gone while they are still on disk. So the failure
-  // is surfaced, and only a successful wipe navigates away.
+  // A wipe can genuinely fail (blocked IndexedDB, quota, private browsing). Saying
+  // nothing would be the worst outcome: the user walks away from a shared machine
+  // believing their keys are gone while they are still on disk. So a failure is
+  // surfaced — the toast lives above the routes, so it survives the redirect the auth
+  // guard performs the moment the identity is cleared, and the user reads it on the
+  // login page. Clearing the identity is what navigates; the wipe cannot prevent that.
   const logout = useCallback(() => {
     clearTokens()
     setIdentity({ userId: null, role: null })

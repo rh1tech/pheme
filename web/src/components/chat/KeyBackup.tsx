@@ -3,7 +3,14 @@ import { Alert, Button, PasswordInput, Stack, Text } from '@mantine/core'
 import { IconShieldLock } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
-import { acceptFreshIdentity, backupExists, backupKeys, hasLocalKeys, restoreKeys } from '../../lib/mls'
+import {
+  IdentityAlreadySetUpError,
+  acceptFreshIdentity,
+  backupExists,
+  backupKeys,
+  hasLocalKeys,
+  restoreKeys,
+} from '../../lib/mls'
 import { notifyError, notifySuccess } from '../../lib/notify'
 import { ResponsiveModal } from '../ResponsiveModal'
 
@@ -117,11 +124,18 @@ export function KeyRestoreGate() {
     try {
       const ok = await restoreKeys(userId, passphrase)
       if (!ok) {
-        setNeeded(false) // backup vanished; nothing to restore
+        setNeeded(false) // the backup is gone from the server; nothing to restore
         return
       }
       window.location.reload()
-    } catch {
+    } catch (e) {
+      if (e instanceof IdentityAlreadySetUpError) {
+        // Another session set encryption up on this device while this prompt sat open.
+        // Silently closing here would look like the restore worked when it did not.
+        notifyError(t('backup.alreadySetUp'), null)
+        window.location.reload()
+        return
+      }
       // Wrong passphrase (the GCM tag failed) — let them try again.
       notifyError(t('backup.wrongPassphrase'), null)
     } finally {

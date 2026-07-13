@@ -156,6 +156,7 @@ const en = {
     restore: 'Restore',
     skip: 'Start fresh on this device',
     wrongPassphrase: 'Wrong passphrase — try again',
+    alreadySetUp: 'Encryption was already set up on this device in another window. Reloading.',
   },
   chat: {
     searchChannels: 'Search',

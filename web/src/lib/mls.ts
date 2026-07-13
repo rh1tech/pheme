@@ -11,7 +11,7 @@
 import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/pheme_mls.js'
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { api } from './api'
-import { idbClear, idbGet, idbSet, idbSetMany } from './idb'
+import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
 import { clearPreviews } from './chatCache'
 import { clearSafetyPins } from './safety'
 import { loadWebDeviceId, saveWebDeviceId } from './device'
@@ -40,6 +40,14 @@ export class SessionInvalidatedError extends Error {
   constructor() {
     super('this device\'s encryption keys were replaced or destroyed')
     this.name = 'SessionInvalidatedError'
+  }
+}
+
+/** Thrown when another session already set up an identity on this device. */
+export class IdentityAlreadySetUpError extends Error {
+  constructor() {
+    super('this device already has encryption set up')
+    this.name = 'IdentityAlreadySetUpError'
   }
 }
 
@@ -466,10 +474,12 @@ export async function wipeLocalKeys(): Promise<void> {
 async function wipeUnlocked(): Promise<void> {
   const next = (await storedEpoch()) + 1
   restoreNeeded = null
-  await idbClear()
-  // Written after the clear, which removes everything including the epoch itself. Any
-  // session in any tab still holding the old epoch is now refused the right to write.
-  await idbSet(EPOCH_KEY, encodeVersion(next))
+  // Clearing the store and advancing the epoch are one transaction, not two. The clear
+  // removes the epoch along with everything else; if the write back were separate and
+  // anything interrupted between them, the epoch would read as zero — which is what a
+  // stale session in another tab is still carrying, so it would pass the liveness check
+  // and put the destroyed keys straight back.
+  await idbClearExcept([[EPOCH_KEY, encodeVersion(next)]])
   clearPreviews()
   clearSafetyPins()
 }
@@ -547,11 +557,12 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
   MlsClient.fromState(state)
 
   return withMlsLock(async () => {
-    // Another tab may have created a real identity while this prompt sat open (the user
-    // chose "start fresh" there). Restoring would silently replace it with an older
-    // snapshot and strand whatever was said in between. Re-check under the lock.
+    // Another tab may have set up an identity while this prompt sat open (the user chose
+    // "start fresh" there, or simply signed in elsewhere). Restoring would replace it
+    // with an older snapshot and strand whatever was said in between. Refuse — and say
+    // so, rather than closing the prompt as though the restore had happened.
     if ((await idbGet(STATE_KEY)) && (await storedOwner()) === userId) {
-      return false
+      throw new IdentityAlreadySetUpError()
     }
 
     // The state and its owner must land together, in one transaction. Written
