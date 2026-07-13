@@ -187,7 +187,7 @@ func (h *AppHandler) membership(w http.ResponseWriter, r *http.Request) {
 // member status is exposed as "memberStatus" so it does not collide with the
 // channel's own "status" (active|disabled) field.
 type joinedChannel struct {
-	domain.Channel
+	channelView
 	Role         domain.Role         `json:"role"`
 	MemberStatus domain.MemberStatus `json:"memberStatus"`
 }
@@ -203,10 +203,11 @@ func (h *AppHandler) listJoinedChannels(w http.ResponseWriter, r *http.Request) 
 		httpx.Error(w, http.StatusInternalServerError, "could not list channels")
 		return
 	}
-	out := make([]joinedChannel, 0, len(channels))
+	// Owned channels surface under "your channels"; a self-join must not also list
+	// them here, or they appear twice on the client.
+	joined := make([]domain.Channel, 0, len(channels))
+	members := make(map[string]domain.ChannelMember, len(channels))
 	for _, c := range channels {
-		// Owned channels surface under "your channels"; a self-join must not also
-		// list them here, or they appear twice on the client.
 		if c.OwnerID == uid {
 			continue
 		}
@@ -214,7 +215,14 @@ func (h *AppHandler) listJoinedChannels(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			continue
 		}
-		out = append(out, joinedChannel{Channel: c, Role: mem.Role, MemberStatus: mem.Status})
+		joined = append(joined, c)
+		members[c.ID] = mem
+	}
+	views := h.withLastMessages(r.Context(), joined)
+	out := make([]joinedChannel, 0, len(views))
+	for _, v := range views {
+		mem := members[v.ID]
+		out = append(out, joinedChannel{channelView: v, Role: mem.Role, MemberStatus: mem.Status})
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"channels": out})
 }

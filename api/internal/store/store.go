@@ -71,6 +71,9 @@ type Store interface {
 	// SetUserAvatar sets (or clears, when avatarID is "") a user's avatar blob id,
 	// deleting any previously referenced blob.
 	SetUserAvatar(ctx context.Context, userID, avatarID string) (domain.User, error)
+	// SetChannelAvatar sets (or clears, when avatarID is "") a channel's avatar
+	// blob id, removing the blob it replaces.
+	SetChannelAvatar(ctx context.Context, channelID, avatarID string) (domain.Channel, error)
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	AdminListUsers(ctx context.Context, query string, offset, limit int) ([]domain.User, int64, error)
 	DeleteUser(ctx context.Context, userID string) error
@@ -122,6 +125,10 @@ type Store interface {
 	CreateMessage(ctx context.Context, m domain.Message) (domain.Message, error)
 	MessagesByChannel(ctx context.Context, channelID, cursor, query string, limit int) ([]domain.Message, error)
 	MessageByID(ctx context.Context, id string) (domain.Message, error)
+	// LastMessagesByChannels returns the newest message of each channel, keyed by
+	// channel ID. It backs the chat list's message preview; channels without a
+	// message are absent from the map.
+	LastMessagesByChannels(ctx context.Context, channelIDs []string) (map[string]domain.Message, error)
 	CreateDelivery(ctx context.Context, d domain.Delivery) (domain.Delivery, error)
 
 	// Comments (members comment on a message; posted instantly).
@@ -130,6 +137,9 @@ type Store interface {
 	// CommentsByMessage returns a message's comments newest-first with cursor
 	// pagination (cursor is an exclusive anchor comment id).
 	CommentsByMessage(ctx context.Context, messageID, cursor string, limit int) ([]domain.Comment, error)
+	// CommentCountsByMessages returns the number of comments on each message,
+	// keyed by message ID. Messages without comments are absent from the map.
+	CommentCountsByMessages(ctx context.Context, messageIDs []string) (map[string]int64, error)
 	DeleteComment(ctx context.Context, id string) error
 	// AdminListComments returns comments newest-first with the total count; a
 	// non-empty query matches the comment body (case-insensitive substring).

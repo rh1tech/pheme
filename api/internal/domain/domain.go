@@ -128,8 +128,12 @@ type Channel struct {
 	// Alias is the human-facing, shareable handle ("phetag"), e.g. "skg_news".
 	// Empty when unset. AliasLower is the lowercased form persisted alongside it
 	// so uniqueness can be enforced case-insensitively (mirrors Device.WebPushEndpoint).
-	Alias            string           `bson:"alias,omitempty" json:"alias,omitempty"`
-	AliasLower       string           `bson:"aliasLower,omitempty" json:"-"`
+	Alias      string `bson:"alias,omitempty" json:"alias,omitempty"`
+	AliasLower string `bson:"aliasLower,omitempty" json:"-"`
+	// AvatarID references a processed image blob, served from /v1/images/{id}.
+	// Empty when the channel has no picture, in which case clients fall back to a
+	// generated colour and initials.
+	AvatarID         string           `bson:"avatarId,omitempty" json:"avatarId,omitempty"`
 	SubscriptionMode SubscriptionMode `bson:"subscriptionMode" json:"subscriptionMode"`
 	Status           ChannelStatus    `bson:"status" json:"status"`
 	CreatedAt        time.Time        `bson:"createdAt" json:"createdAt"`

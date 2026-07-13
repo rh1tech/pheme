@@ -150,6 +150,23 @@ func (m *Memory) SetUserAvatar(ctx context.Context, userID, avatarID string) (do
 	return u, nil
 }
 
+func (m *Memory) SetChannelAvatar(ctx context.Context, channelID, avatarID string) (domain.Channel, error) {
+	m.mu.Lock()
+	ch, ok := m.channels[channelID]
+	if !ok {
+		m.mu.Unlock()
+		return domain.Channel{}, ErrNotFound
+	}
+	old := ch.AvatarID
+	ch.AvatarID = avatarID
+	m.channels[channelID] = ch
+	m.mu.Unlock()
+	if old != "" && old != avatarID {
+		deleteBlobs(ctx, m.blobs, []string{old})
+	}
+	return ch, nil
+}
+
 func (m *Memory) UpdateUserRole(_ context.Context, userID string, role domain.Role) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -375,7 +392,8 @@ func (m *Memory) UpdateChannelStatus(_ context.Context, id string, status domain
 
 func (m *Memory) DeleteChannel(ctx context.Context, id string) error {
 	m.mu.Lock()
-	if _, ok := m.channels[id]; !ok {
+	ch, ok := m.channels[id]
+	if !ok {
 		m.mu.Unlock()
 		return ErrNotFound
 	}
@@ -397,6 +415,11 @@ func (m *Memory) DeleteChannel(ctx context.Context, id string) error {
 	}
 	msgIDs := map[string]struct{}{}
 	var imageIDs []string
+	// The channel's own avatar is a blob like any message image, and would leak
+	// if it were not swept up with them.
+	if ch.AvatarID != "" {
+		imageIDs = append(imageIDs, ch.AvatarID)
+	}
 	for mid, msg := range m.messages {
 		if msg.ChannelID == id {
 			msgIDs[mid] = struct{}{}
@@ -798,6 +821,29 @@ func (m *Memory) MessagesByChannel(_ context.Context, channelID, cursor, query s
 	return out, nil
 }
 
+func (m *Memory) LastMessagesByChannels(_ context.Context, channelIDs []string) (map[string]domain.Message, error) {
+	out := make(map[string]domain.Message, len(channelIDs))
+	if len(channelIDs) == 0 {
+		return out, nil
+	}
+	wanted := make(map[string]struct{}, len(channelIDs))
+	for _, id := range channelIDs {
+		wanted[id] = struct{}{}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, msg := range m.messages {
+		if _, ok := wanted[msg.ChannelID]; !ok {
+			continue
+		}
+		if cur, ok := out[msg.ChannelID]; ok && !msg.CreatedAt.After(cur.CreatedAt) {
+			continue
+		}
+		out[msg.ChannelID] = msg
+	}
+	return out, nil
+}
+
 func (m *Memory) CreateDelivery(_ context.Context, d domain.Delivery) (domain.Delivery, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -862,6 +908,25 @@ func (m *Memory) CommentsByMessage(_ context.Context, messageID, cursor string, 
 	}
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (m *Memory) CommentCountsByMessages(_ context.Context, messageIDs []string) (map[string]int64, error) {
+	out := make(map[string]int64, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return out, nil
+	}
+	wanted := make(map[string]struct{}, len(messageIDs))
+	for _, id := range messageIDs {
+		wanted[id] = struct{}{}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.comments {
+		if _, ok := wanted[c.MessageID]; ok {
+			out[c.MessageID]++
+		}
 	}
 	return out, nil
 }

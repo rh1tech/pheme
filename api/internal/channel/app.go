@@ -56,6 +56,8 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("GET /v1/channels/{id}", h.getChannel)
 	protected.HandleFunc("PATCH /v1/channels/{id}", h.updateChannel)
 	protected.HandleFunc("DELETE /v1/channels/{id}", h.deleteChannel)
+	protected.HandleFunc("POST /v1/channels/{id}/avatar", h.uploadChannelAvatar)
+	protected.HandleFunc("DELETE /v1/channels/{id}/avatar", h.deleteChannelAvatar)
 	protected.HandleFunc("POST /v1/channels/{id}/keys", h.createKey)
 	protected.HandleFunc("GET /v1/channels/{id}/keys", h.listKeys)
 	protected.HandleFunc("DELETE /v1/channels/{id}/keys/{keyId}", h.revokeKey)
@@ -157,7 +159,7 @@ func (h *AppHandler) listChannels(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not list channels")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"channels": channels})
+	httpx.JSON(w, http.StatusOK, map[string]any{"channels": h.withLastMessages(r.Context(), channels)})
 }
 
 type updateChannelRequest struct {
@@ -524,7 +526,10 @@ func (h *AppHandler) listMessages(w http.ResponseWriter, r *http.Request) {
 	if len(msgs) == limit {
 		next = msgs[len(msgs)-1].ID
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"messages": msgs, "nextCursor": next})
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"messages":   h.withCommentCounts(r.Context(), msgs),
+		"nextCursor": next,
+	})
 }
 
 // getMessage returns a single message by id (for the message-detail view and
@@ -545,7 +550,7 @@ func (h *AppHandler) getMessage(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "message not found")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, msg)
+	httpx.JSON(w, http.StatusOK, h.withCommentCounts(r.Context(), []domain.Message{msg})[0])
 }
 
 // stream is a Server-Sent Events endpoint delivering live messages. It accepts

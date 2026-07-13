@@ -208,6 +208,26 @@ func (m *Mongo) SetUserAvatar(ctx context.Context, userID, avatarID string) (dom
 	return m.UserByID(ctx, userID)
 }
 
+func (m *Mongo) SetChannelAvatar(ctx context.Context, channelID, avatarID string) (domain.Channel, error) {
+	prev, err := m.ChannelByID(ctx, channelID)
+	if err != nil {
+		return domain.Channel{}, err
+	}
+	var update bson.M
+	if avatarID == "" {
+		update = bson.M{"$unset": bson.M{"avatarId": ""}}
+	} else {
+		update = bson.M{"$set": bson.M{"avatarId": avatarID}}
+	}
+	if _, err := m.db.Collection("channels").UpdateOne(ctx, bson.M{"_id": channelID}, update); err != nil {
+		return domain.Channel{}, err
+	}
+	if prev.AvatarID != "" && prev.AvatarID != avatarID {
+		deleteBlobs(ctx, m.blobs, []string{prev.AvatarID})
+	}
+	return m.ChannelByID(ctx, channelID)
+}
+
 func (m *Mongo) UpdateUserRole(ctx context.Context, userID string, role domain.Role) error {
 	res, err := m.db.Collection("users").UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$set": bson.M{"role": role}})
 	if err != nil {
@@ -433,6 +453,11 @@ func (m *Mongo) DeleteChannel(ctx context.Context, id string) error {
 		return err
 	}
 	var imageIDs []string
+	// The channel's own avatar is a blob like any message image, and would leak
+	// if it were not swept up with them.
+	if prev, err := m.ChannelByID(ctx, id); err == nil && prev.AvatarID != "" {
+		imageIDs = append(imageIDs, prev.AvatarID)
+	}
 	if len(msgs) > 0 {
 		ids := make([]string, 0, len(msgs))
 		for _, msg := range msgs {
@@ -776,6 +801,33 @@ func (m *Mongo) MessagesByChannel(ctx context.Context, channelID, cursor, query 
 	return out, cur.All(ctx, &out)
 }
 
+// LastMessagesByChannels groups by channel and keeps the newest message of each.
+// The sort is served by the messages (channelId, createdAt desc) index.
+func (m *Mongo) LastMessagesByChannels(ctx context.Context, channelIDs []string) (map[string]domain.Message, error) {
+	out := make(map[string]domain.Message, len(channelIDs))
+	if len(channelIDs) == 0 {
+		return out, nil
+	}
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"channelId": bson.M{"$in": channelIDs}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "channelId", Value: 1}, {Key: "createdAt", Value: -1}}}},
+		{{Key: "$group", Value: bson.M{"_id": "$channelId", "doc": bson.M{"$first": "$$ROOT"}}}},
+		{{Key: "$replaceRoot", Value: bson.M{"newRoot": "$doc"}}},
+	}
+	cur, err := m.db.Collection("messages").Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	var msgs []domain.Message
+	if err := cur.All(ctx, &msgs); err != nil {
+		return nil, err
+	}
+	for _, msg := range msgs {
+		out[msg.ChannelID] = msg
+	}
+	return out, nil
+}
+
 func (m *Mongo) CreateDelivery(ctx context.Context, d domain.Delivery) (domain.Delivery, error) {
 	if d.ID == "" {
 		d.ID = mongoID()
@@ -824,6 +876,34 @@ func (m *Mongo) CommentsByMessage(ctx context.Context, messageID, cursor string,
 	}
 	var out []domain.Comment
 	return out, cur.All(ctx, &out)
+}
+
+// CommentCountsByMessages tallies comments per message. The $match is served by
+// the comments (messageId, createdAt desc) index prefix.
+func (m *Mongo) CommentCountsByMessages(ctx context.Context, messageIDs []string) (map[string]int64, error) {
+	out := make(map[string]int64, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return out, nil
+	}
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"messageId": bson.M{"$in": messageIDs}}}},
+		{{Key: "$group", Value: bson.M{"_id": "$messageId", "count": bson.M{"$sum": 1}}}},
+	}
+	cur, err := m.db.Collection("comments").Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		ID    string `bson:"_id"`
+		Count int64  `bson:"count"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.ID] = r.Count
+	}
+	return out, nil
 }
 
 func (m *Mongo) DeleteComment(ctx context.Context, id string) error {
