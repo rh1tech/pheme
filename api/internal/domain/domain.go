@@ -351,6 +351,21 @@ type MLSKeyPackage struct {
 	CreatedAt  time.Time `bson:"createdAt" json:"createdAt"`
 }
 
+// MLSKeyBackup is the encrypted backup of a device's MLS client state, sealed
+// client-side under a key derived from the user's recovery passphrase. The server
+// stores only this opaque ciphertext (plus the public salt/nonce needed to derive
+// and open it); it never sees the passphrase, the derived key, or the plaintext
+// state. One backup per user — the latest upload replaces the previous.
+type MLSKeyBackup struct {
+	ID         string    `bson:"_id,omitempty" json:"id"`
+	UserID     string    `bson:"userId" json:"userId"`
+	DeviceID   string    `bson:"deviceId" json:"deviceId"`
+	Salt       []byte    `bson:"salt" json:"salt"`
+	Nonce      []byte    `bson:"nonce" json:"nonce"`
+	Ciphertext []byte    `bson:"ciphertext" json:"ciphertext"`
+	UpdatedAt  time.Time `bson:"updatedAt" json:"updatedAt"`
+}
+
 // DirectKey builds the unique deduplication key for a direct chat between two
 // users: their ids sorted and joined, so {a,b} and {b,a} collide to one row.
 func DirectKey(userA, userB string) string {

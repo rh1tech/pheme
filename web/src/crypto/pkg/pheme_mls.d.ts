@@ -12,6 +12,18 @@ export class AddOutput {
     welcome: Uint8Array;
 }
 
+/**
+ * A sealed key backup: salt, nonce and ciphertext, all stored server-side.
+ */
+export class BackupBlob {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    ciphertext: Uint8Array;
+    nonce: Uint8Array;
+    salt: Uint8Array;
+}
+
 export class MlsClient {
     free(): void;
     [Symbol.dispose](): void;
@@ -54,16 +66,31 @@ export class MlsClient {
     constructor(identity: Uint8Array);
 }
 
+/**
+ * Recovers client state from a sealed backup. Errors on a wrong passphrase.
+ */
+export function decryptBackup(passphrase: Uint8Array, salt: Uint8Array, nonce: Uint8Array, ciphertext: Uint8Array): Uint8Array;
+
+/**
+ * Seals exported client state under a recovery passphrase (Argon2id + AES-256-GCM).
+ */
+export function encryptBackup(passphrase: Uint8Array, plaintext: Uint8Array): BackupBlob;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_addoutput_free: (a: number, b: number) => void;
+    readonly __wbg_backupblob_free: (a: number, b: number) => void;
     readonly __wbg_get_addoutput_commit: (a: number) => [number, number];
     readonly __wbg_get_addoutput_welcome: (a: number) => [number, number];
+    readonly __wbg_get_backupblob_ciphertext: (a: number) => [number, number];
     readonly __wbg_mlsclient_free: (a: number, b: number) => void;
     readonly __wbg_set_addoutput_commit: (a: number, b: number, c: number) => void;
     readonly __wbg_set_addoutput_welcome: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_backupblob_ciphertext: (a: number, b: number, c: number) => void;
+    readonly decryptBackup: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly encryptBackup: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly mlsclient_addMember: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly mlsclient_addMembers: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly mlsclient_applyCommit: (a: number, b: number, c: number, d: number, e: number) => [number, number];
@@ -76,12 +103,16 @@ export interface InitOutput {
     readonly mlsclient_joinFromWelcome: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_keyPackage: (a: number) => [number, number, number, number];
     readonly mlsclient_new: (a: number, b: number) => [number, number, number];
+    readonly __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_backupblob_salt: (a: number, b: number, c: number) => void;
+    readonly __wbg_get_backupblob_nonce: (a: number) => [number, number];
+    readonly __wbg_get_backupblob_salt: (a: number) => [number, number];
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

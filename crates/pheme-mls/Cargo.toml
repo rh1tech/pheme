@@ -17,6 +17,11 @@ openmls_basic_credential = "0.5"
 openmls_traits = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Encrypted key backup: a passphrase-derived key (Argon2id) sealing the exported
+# client state (AES-256-GCM), so IndexedDB eviction or a new device is recoverable.
+argon2 = "0.5"
+aes-gcm = "0.10"
+getrandom = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

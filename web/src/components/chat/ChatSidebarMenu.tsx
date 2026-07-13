@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ActionIcon, Menu, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import {
   IconCheck,
@@ -6,6 +7,7 @@ import {
   IconMenu2,
   IconMoon,
   IconShieldCog,
+  IconShieldLock,
   IconSun,
   IconUserCircle,
 } from '@tabler/icons-react'
@@ -13,6 +15,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
 import { SUPPORTED_LANGUAGES, type Language } from '../../i18n'
+import { KeyBackupModal } from './KeyBackup'
 
 /**
  * The burger in the chat-list header. Everything the old left nav held that is
@@ -30,6 +33,7 @@ export function ChatSidebarMenu() {
   const scheme = useComputedColorScheme('light', { getInitialValueInEffect: true })
   const isDark = scheme === 'dark'
   const language = (i18n.resolvedLanguage ?? 'en') as Language
+  const [backupOpen, setBackupOpen] = useState(false)
 
   function handleLogout() {
     logout()
@@ -37,6 +41,7 @@ export function ChatSidebarMenu() {
   }
 
   return (
+    <>
     <Menu position="bottom-start" width={240} shadow="md">
       <Menu.Target>
         <ActionIcon variant="subtle" color="gray" size="lg" aria-label={t('chat.menu')}>
@@ -53,6 +58,9 @@ export function ChatSidebarMenu() {
             {t('admin.nav')}
           </Menu.Item>
         )}
+        <Menu.Item leftSection={<IconShieldLock size={18} />} onClick={() => setBackupOpen(true)}>
+          {t('backup.menuItem')}
+        </Menu.Item>
 
         <Menu.Divider />
 
@@ -91,5 +99,7 @@ export function ChatSidebarMenu() {
         </Menu.Item>
       </Menu.Dropdown>
     </Menu>
+    <KeyBackupModal opened={backupOpen} onClose={() => setBackupOpen(false)} />
+    </>
   )
 }

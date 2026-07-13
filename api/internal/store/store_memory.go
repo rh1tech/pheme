@@ -30,6 +30,7 @@ type Memory struct {
 	convMembers   map[string]domain.ConversationMember
 	chatMessages  map[string]domain.ChatMessage
 	keyPackages   map[string]domain.MLSKeyPackage
+	keyBackups    map[string]domain.MLSKeyBackup // by userId (one per user)
 	blobs         blob.Store
 }
 
@@ -50,6 +51,7 @@ func NewMemory(blobs blob.Store) *Memory {
 		convMembers:   map[string]domain.ConversationMember{},
 		chatMessages:  map[string]domain.ChatMessage{},
 		keyPackages:   map[string]domain.MLSKeyPackage{},
+		keyBackups:    map[string]domain.MLSKeyBackup{},
 		blobs:         blobs,
 	}
 }

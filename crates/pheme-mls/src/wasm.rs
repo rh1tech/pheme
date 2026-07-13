@@ -110,6 +110,36 @@ pub struct AddOutput {
     pub commit: Vec<u8>,
 }
 
+/// A sealed key backup: salt, nonce and ciphertext, all stored server-side.
+#[wasm_bindgen(getter_with_clone)]
+pub struct BackupBlob {
+    pub salt: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub ciphertext: Vec<u8>,
+}
+
+/// Seals exported client state under a recovery passphrase (Argon2id + AES-256-GCM).
+#[wasm_bindgen(js_name = encryptBackup)]
+pub fn encrypt_backup(passphrase: &[u8], plaintext: &[u8]) -> Result<BackupBlob, JsError> {
+    let b = crate::backup::encrypt(passphrase, plaintext).map_err(js)?;
+    Ok(BackupBlob {
+        salt: b.salt,
+        nonce: b.nonce,
+        ciphertext: b.ciphertext,
+    })
+}
+
+/// Recovers client state from a sealed backup. Errors on a wrong passphrase.
+#[wasm_bindgen(js_name = decryptBackup)]
+pub fn decrypt_backup(
+    passphrase: &[u8],
+    salt: &[u8],
+    nonce: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, JsError> {
+    crate::backup::decrypt(passphrase, salt, nonce, ciphertext).map_err(js)
+}
+
 fn js(e: String) -> JsError {
     JsError::new(&e)
 }

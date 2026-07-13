@@ -57,6 +57,80 @@ export class AddOutput {
 }
 if (Symbol.dispose) AddOutput.prototype[Symbol.dispose] = AddOutput.prototype.free;
 
+/**
+ * A sealed key backup: salt, nonce and ciphertext, all stored server-side.
+ */
+export class BackupBlob {
+    static __wrap(ptr) {
+        const obj = Object.create(BackupBlob.prototype);
+        obj.__wbg_ptr = ptr;
+        BackupBlobFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        BackupBlobFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_backupblob_free(ptr, 0);
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    get ciphertext() {
+        const ret = wasm.__wbg_get_backupblob_ciphertext(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    get nonce() {
+        const ret = wasm.__wbg_get_backupblob_nonce(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    get salt() {
+        const ret = wasm.__wbg_get_backupblob_salt(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * @param {Uint8Array} arg0
+     */
+    set ciphertext(arg0) {
+        const ptr0 = passArray8ToWasm0(arg0, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.__wbg_set_backupblob_ciphertext(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {Uint8Array} arg0
+     */
+    set nonce(arg0) {
+        const ptr0 = passArray8ToWasm0(arg0, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.__wbg_set_backupblob_nonce(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {Uint8Array} arg0
+     */
+    set salt(arg0) {
+        const ptr0 = passArray8ToWasm0(arg0, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.__wbg_set_backupblob_salt(this.__wbg_ptr, ptr0, len0);
+    }
+}
+if (Symbol.dispose) BackupBlob.prototype[Symbol.dispose] = BackupBlob.prototype.free;
+
 export class MlsClient {
     static __wrap(ptr) {
         const obj = Object.create(MlsClient.prototype);
@@ -251,6 +325,50 @@ export class MlsClient {
     }
 }
 if (Symbol.dispose) MlsClient.prototype[Symbol.dispose] = MlsClient.prototype.free;
+
+/**
+ * Recovers client state from a sealed backup. Errors on a wrong passphrase.
+ * @param {Uint8Array} passphrase
+ * @param {Uint8Array} salt
+ * @param {Uint8Array} nonce
+ * @param {Uint8Array} ciphertext
+ * @returns {Uint8Array}
+ */
+export function decryptBackup(passphrase, salt, nonce, ciphertext) {
+    const ptr0 = passArray8ToWasm0(passphrase, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(salt, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(nonce, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray8ToWasm0(ciphertext, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.decryptBackup(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v5;
+}
+
+/**
+ * Seals exported client state under a recovery passphrase (Argon2id + AES-256-GCM).
+ * @param {Uint8Array} passphrase
+ * @param {Uint8Array} plaintext
+ * @returns {BackupBlob}
+ */
+export function encryptBackup(passphrase, plaintext) {
+    const ptr0 = passArray8ToWasm0(passphrase, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(plaintext, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.encryptBackup(ptr0, len0, ptr1, len1);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return BackupBlob.__wrap(ret[0]);
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -388,6 +506,9 @@ function __wbg_get_imports() {
 const AddOutputFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_addoutput_free(ptr, 1));
+const BackupBlobFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_backupblob_free(ptr, 1));
 const MlsClientFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_mlsclient_free(ptr, 1));

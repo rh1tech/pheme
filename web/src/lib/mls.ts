@@ -8,7 +8,7 @@
 // The server is the untrusted Delivery Service throughout: it only ever sees the
 // opaque bytes these functions hand it.
 
-import init, { MlsClient } from '../crypto/pkg/pheme_mls.js'
+import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/pheme_mls.js'
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { api } from './api'
 import { idbGet, idbSet } from './idb'
@@ -26,6 +26,13 @@ export const MLS_APPLICATION = 'application/mls'
 export const MLS_WELCOME = 'application/mls-welcome'
 
 let ready: Promise<Session> | null = null
+let wasmReady: Promise<void> | null = null
+
+/** Loads the WASM module once. Backup/restore need it before any Session exists. */
+function ensureWasm(): Promise<void> {
+  if (!wasmReady) wasmReady = init(wasmUrl).then(() => undefined)
+  return wasmReady
+}
 
 /** One device's MLS session. There is a single instance per tab. */
 class Session {
@@ -38,7 +45,7 @@ class Session {
   }
 
   static async load(userId: string): Promise<Session> {
-    await init(wasmUrl)
+    await ensureWasm()
     const deviceId = ensureDeviceId()
     const identity = new TextEncoder().encode(userId)
 
@@ -155,6 +162,65 @@ export async function provisionGroup(conversation: Conversation, myUserId: strin
   for (const welcome of welcomes) {
     await api.sendChatMessage(conversation.id, welcome, MLS_WELCOME)
   }
+}
+
+// --- encrypted key backup -------------------------------------------------
+//
+// The device's whole MLS state is sealed under a recovery passphrase and stored
+// server-side, so IndexedDB eviction (iOS Safari's ~7-day rule) or a new device is
+// recoverable. A backup is a point-in-time snapshot: re-run it after active use to
+// keep recovery current.
+
+/** Whether this device already holds MLS keys locally (IndexedDB). */
+export async function hasLocalKeys(): Promise<boolean> {
+  return (await idbGet(STATE_KEY)) != null
+}
+
+/** Whether the server holds a key backup for the signed-in user. */
+export async function backupExists(): Promise<boolean> {
+  try {
+    return (await api.getKeyBackup(true)) != null
+  } catch {
+    return false
+  }
+}
+
+/** Seals the current device state under `passphrase` and uploads it. */
+export async function backupKeys(userId: string, passphrase: string): Promise<void> {
+  const session = await mlsSession(userId)
+  const state = await idbGet(STATE_KEY)
+  if (!state) throw new Error('no local key state to back up')
+  const blob = encryptBackup(new TextEncoder().encode(passphrase), state)
+  await api.putKeyBackup(
+    session.deviceId,
+    bytesToBase64(blob.salt),
+    bytesToBase64(blob.nonce),
+    bytesToBase64(blob.ciphertext),
+  )
+}
+
+/**
+ * Recovers device state from the server backup using `passphrase`, writing it to
+ * local storage. Returns false when there is no backup; throws on a wrong
+ * passphrase (the GCM tag fails). Must run before the first mlsSession() call, so a
+ * fresh identity is not created in place of the recovered one; it resets the
+ * session singleton to be safe.
+ */
+export async function restoreKeys(passphrase: string): Promise<boolean> {
+  await ensureWasm()
+  const backup = await api.getKeyBackup(true)
+  if (!backup) return false
+  const state = decryptBackup(
+    new TextEncoder().encode(passphrase),
+    base64ToBytes(backup.salt),
+    base64ToBytes(backup.nonce),
+    base64ToBytes(backup.ciphertext),
+  )
+  // Validate the recovered blob really is a client state before committing it.
+  MlsClient.fromState(state)
+  await idbSet(STATE_KEY, state)
+  ready = null // force the next session to load the restored state
+  return true
 }
 
 function ensureDeviceId(): string {

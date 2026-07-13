@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Outlet, useMatch } from 'react-router-dom'
 import { ChatSidebar } from './ChatSidebar'
+import { KeyRestoreGate } from './KeyBackup'
 import { useChannelList } from '../../hooks/useChannelList'
 import { useConversationList } from '../../hooks/useConversationList'
 import { useVisualViewportHeight } from '../../hooks/useVisualViewport'
@@ -63,6 +64,7 @@ export function ChatShell() {
       <div className="pheme-main">
         <Outlet context={context} />
       </div>
+      <KeyRestoreGate />
     </div>
   )
 }

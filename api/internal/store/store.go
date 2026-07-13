@@ -192,6 +192,11 @@ type Store interface {
 	// before running out.
 	CountKeyPackages(ctx context.Context, userID, deviceID string) (int64, error)
 
+	// Encrypted key backup (opaque ciphertext, one per user). PutKeyBackup
+	// upserts; GetKeyBackup returns ErrNotFound when the user has none.
+	PutKeyBackup(ctx context.Context, backup domain.MLSKeyBackup) error
+	GetKeyBackup(ctx context.Context, userID string) (domain.MLSKeyBackup, error)
+
 	// Admin
 	AdminStats(ctx context.Context, topN, recentN int) (domain.AdminStats, error)
 

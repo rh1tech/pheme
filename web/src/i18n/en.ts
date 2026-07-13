@@ -122,6 +122,27 @@ const en = {
     pending: 'pending',
     blocked: 'blocked',
   },
+  backup: {
+    menuItem: 'Chat backup',
+    title: 'Back up your chats',
+    description:
+      'Set a recovery passphrase to back up your encrypted chats. You can restore them on a new device or if this one loses its keys.',
+    warning:
+      'The passphrase never leaves your device — we cannot reset it. If you forget it, your backed-up history cannot be recovered.',
+    passphrase: 'Recovery passphrase',
+    confirm: 'Confirm passphrase',
+    tooShort: 'Use at least {{min}} characters',
+    mismatch: 'Passphrases do not match',
+    save: 'Back up now',
+    saved: 'Chats backed up',
+    saveFailed: 'Could not back up your chats',
+    restoreTitle: 'Restore your chats',
+    restoreDescription:
+      'This device has no chat keys, but a backup was found. Enter your recovery passphrase to restore your encrypted chats.',
+    restore: 'Restore',
+    skip: 'Start fresh on this device',
+    wrongPassphrase: 'Wrong passphrase — try again',
+  },
   chat: {
     searchChannels: 'Search',
     noChannels: 'No channels yet',

@@ -42,3 +42,23 @@ func (m *Memory) CountKeyPackages(_ context.Context, userID, deviceID string) (i
 	}
 	return n, nil
 }
+
+func (m *Memory) PutKeyBackup(_ context.Context, backup domain.MLSKeyBackup) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if backup.ID == "" {
+		backup.ID = newID()
+	}
+	m.keyBackups[backup.UserID] = backup // one per user; the latest wins
+	return nil
+}
+
+func (m *Memory) GetKeyBackup(_ context.Context, userID string) (domain.MLSKeyBackup, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	b, ok := m.keyBackups[userID]
+	if !ok {
+		return domain.MLSKeyBackup{}, ErrNotFound
+	}
+	return b, nil
+}

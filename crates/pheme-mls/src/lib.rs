@@ -251,6 +251,9 @@ fn err<E: std::fmt::Debug>(context: &'static str) -> impl Fn(E) -> String {
     move |e| format!("{context}: {e:?}")
 }
 
+/// Encrypted key backup (passphrase-derived, server-stored ciphertext).
+pub mod backup;
+
 // --- WASM surface -----------------------------------------------------------
 
 #[cfg(target_arch = "wasm32")]

@@ -89,6 +89,7 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 		"conversationMembers": {{Keys: bson.D{{Key: "conversationId", Value: 1}, {Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "userId", Value: 1}}}},
 		"chatMessages":        {{Keys: bson.D{{Key: "conversationId", Value: 1}, {Key: "createdAt", Value: -1}}}},
 		"mlsKeyPackages":      {{Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}, {Key: "deviceId", Value: 1}}}},
+		"mlsKeyBackups":       {{Keys: bson.D{{Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}},
 	}
 	for coll, models := range specs {
 		if _, err := m.db.Collection(coll).Indexes().CreateMany(ctx, models); err != nil {

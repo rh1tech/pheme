@@ -76,6 +76,9 @@ interface RequestOptions {
    * otherwise flash the bar on every page.
    */
   quiet?: boolean
+  /** When true, a 404 resolves to null instead of throwing — for "maybe absent"
+   *  resources the caller wants to probe (e.g. an optional key backup). */
+  allow404?: boolean
 }
 
 async function rawFetch<T>(path: string, opts: RequestOptions, token?: string): Promise<T> {
@@ -94,6 +97,7 @@ async function rawFetch<T>(path: string, opts: RequestOptions, token?: string): 
   })
 
   if (res.status === 204) return undefined as T
+  if (res.status === 404 && opts.allow404) return null as T
   const text = await res.text()
   const data = text ? JSON.parse(text) : undefined
   if (!res.ok) {
@@ -250,6 +254,19 @@ export const api = {
   claimKeyPackage: (userId: string) =>
     request<{ keyPackage: string }>(`/v1/mls/key-packages/${userId}/claim`).then(
       (r) => r.keyPackage,
+    ),
+
+  // Encrypted key backup. All fields are base64 of opaque bytes; the server never
+  // sees the passphrase or the plaintext state.
+  putKeyBackup: (deviceId: string, salt: string, nonce: string, ciphertext: string) =>
+    request<void>('/v1/mls/key-backup', {
+      method: 'PUT',
+      body: { deviceId, salt, nonce, ciphertext },
+    }),
+  getKeyBackup: (quiet = false) =>
+    request<{ salt: string; nonce: string; ciphertext: string; updatedAt: string } | null>(
+      '/v1/mls/key-backup',
+      { quiet, allow404: true },
     ),
 
   // User search for starting a chat (public profiles only, never email).
