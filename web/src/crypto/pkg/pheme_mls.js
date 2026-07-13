@@ -285,6 +285,16 @@ export class MlsClient {
         return ret !== 0;
     }
     /**
+     * This client's own long-term signature public key.
+     * @returns {Uint8Array}
+     */
+    identityKey() {
+        const ret = wasm.mlsclient_identityKey(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
      * @param {Uint8Array} welcome
      */
     joinFromWelcome(welcome) {
@@ -322,6 +332,33 @@ export class MlsClient {
         this.__wbg_ptr = ret[0];
         MlsClientFinalization.register(this, this.__wbg_ptr, this);
         return this;
+    }
+    /**
+     * The safety number for a group: the digits two people compare, out of band, to
+     * prove the server did not substitute a key and put itself in the middle.
+     * Derived from the group's own ratchet tree, not from anything the server says.
+     * @param {Uint8Array} group_id
+     * @returns {string}
+     */
+    safetyNumber(group_id) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.mlsclient_safetyNumber(this.__wbg_ptr, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
     }
 }
 if (Symbol.dispose) MlsClient.prototype[Symbol.dispose] = MlsClient.prototype.free;

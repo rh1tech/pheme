@@ -122,6 +122,18 @@ const en = {
     pending: 'pending',
     blocked: 'blocked',
   },
+  safety: {
+    verify: 'Verify encryption',
+    title: 'Verify encryption',
+    description:
+      'These numbers come from the encryption keys in this chat. If they match on both devices, no one else can read your messages.',
+    howTo:
+      'Compare them with the other person in a call or in person — not through this chat. If the numbers differ, someone may be intercepting your messages.',
+    changed:
+      'The safety number changed. That is expected if the other person reinstalled the app or got a new device — but it can also mean someone is intercepting. Verify it again before you carry on.',
+    accept: 'I verified it — trust this number',
+    notReady: 'Encryption is still being set up for this chat. Try again in a moment.',
+  },
   backup: {
     menuItem: 'Chat backup',
     title: 'Back up your chats',

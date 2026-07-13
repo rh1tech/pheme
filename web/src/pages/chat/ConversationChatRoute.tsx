@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActionIcon, Group, Stack, Text, Textarea } from '@mantine/core'
-import { IconArrowLeft, IconSend } from '@tabler/icons-react'
+import { IconArrowLeft, IconSend, IconShieldLock } from '@tabler/icons-react'
 import type { KeyboardEvent } from 'react'
 import { useMediaQuery } from '@mantine/hooks'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
@@ -26,6 +26,7 @@ import { ChannelAvatar } from '../../components/chat/ChannelAvatar'
 import { DateSeparator } from '../../components/chat/DateSeparator'
 import { JumpToBottom } from '../../components/chat/JumpToBottom'
 import { ChatSkeleton } from '../../components/chat/ChatSkeleton'
+import { SafetyNumberModal } from '../../components/chat/SafetyNumber'
 import { isSameDay } from '../../lib/time'
 import type { ChatOutletContext } from '../../components/chat/context'
 import type { ChatMessage, Conversation } from '../../lib/types'
@@ -64,6 +65,7 @@ export function ConversationChatRoute() {
   const [unseen, setUnseen] = useState(0)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const [safetyOpen, setSafetyOpen] = useState(false)
   const textRef = useRef<HTMLTextAreaElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
 
@@ -312,8 +314,22 @@ export function ConversationChatRoute() {
               </Text>
             )}
           </Stack>
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            aria-label={t('safety.verify')}
+            onClick={() => setSafetyOpen(true)}
+          >
+            <IconShieldLock size={20} />
+          </ActionIcon>
         </Group>
       </header>
+
+      <SafetyNumberModal
+        conversationId={id}
+        opened={safetyOpen}
+        onClose={() => setSafetyOpen(false)}
+      />
 
       <div className="pheme-feed-wrap">
         <div className="pheme-feed" ref={scrollerRef} data-testid="chat-feed">

@@ -101,6 +101,21 @@ impl MlsClient {
     pub fn export_state(&self) -> Result<Vec<u8>, JsError> {
         self.inner.export_state().map_err(js)
     }
+
+    /// The safety number for a group: the digits two people compare, out of band, to
+    /// prove the server did not substitute a key and put itself in the middle.
+    /// Derived from the group's own ratchet tree, not from anything the server says.
+    #[wasm_bindgen(js_name = safetyNumber)]
+    pub fn safety_number(&self, group_id: &[u8]) -> Result<String, JsError> {
+        let keys = self.inner.member_keys(group_id).map_err(js)?;
+        Ok(crate::safety_number(&keys))
+    }
+
+    /// This client's own long-term signature public key.
+    #[wasm_bindgen(js_name = identityKey)]
+    pub fn identity_key(&self) -> Vec<u8> {
+        self.inner.identity_key()
+    }
 }
 
 /// The Welcome + Commit produced by adding a member, returned to JS as an object.

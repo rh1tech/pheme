@@ -13,6 +13,7 @@ import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { api } from './api'
 import { idbClear, idbGet, idbSet } from './idb'
 import { clearPreviews } from './chatCache'
+import { clearSafetyPins } from './safety'
 import { loadWebDeviceId, saveWebDeviceId } from './device'
 import type { Conversation } from './types'
 
@@ -134,6 +135,15 @@ class Session {
     return this.client.hasGroup(new TextEncoder().encode(conversationId))
   }
 
+  /**
+   * The safety number for a conversation: the digits two people compare, out of
+   * band, to prove no one is in the middle. Computed from the group's own ratchet
+   * tree, so a KeyPackage the server swapped in shows up as a different number.
+   */
+  safetyNumber(conversationId: string): string {
+    return this.client.safetyNumber(new TextEncoder().encode(conversationId))
+  }
+
   async encrypt(conversationId: string, plaintext: Uint8Array): Promise<string> {
     const groupId = new TextEncoder().encode(conversationId)
     const ciphertext = this.client.encrypt(groupId, plaintext)
@@ -184,6 +194,7 @@ export async function wipeLocalKeys(): Promise<void> {
   readyUserId = ''
   await idbClear()
   clearPreviews()
+  clearSafetyPins()
 }
 
 /**

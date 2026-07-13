@@ -21,9 +21,11 @@ export const mlsclient_encrypt: (a: number, b: number, c: number, d: number, e: 
 export const mlsclient_exportState: (a: number) => [number, number, number, number];
 export const mlsclient_fromState: (a: number, b: number) => [number, number, number];
 export const mlsclient_hasGroup: (a: number, b: number, c: number) => number;
+export const mlsclient_identityKey: (a: number) => [number, number];
 export const mlsclient_joinFromWelcome: (a: number, b: number, c: number) => [number, number];
 export const mlsclient_keyPackage: (a: number) => [number, number, number, number];
 export const mlsclient_new: (a: number, b: number) => [number, number, number];
+export const mlsclient_safetyNumber: (a: number, b: number, c: number) => [number, number, number, number];
 export const __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;
 export const __wbg_set_backupblob_salt: (a: number, b: number, c: number) => void;
 export const __wbg_get_backupblob_nonce: (a: number) => [number, number];

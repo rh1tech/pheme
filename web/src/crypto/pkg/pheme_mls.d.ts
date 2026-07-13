@@ -55,6 +55,10 @@ export class MlsClient {
      * Whether this client is already in the group (non-mutating).
      */
     hasGroup(group_id: Uint8Array): boolean;
+    /**
+     * This client's own long-term signature public key.
+     */
+    identityKey(): Uint8Array;
     joinFromWelcome(welcome: Uint8Array): void;
     /**
      * A single-use public KeyPackage to publish to the server.
@@ -64,6 +68,12 @@ export class MlsClient {
      * Creates a fresh identity. `identity` is the user/device id bytes.
      */
     constructor(identity: Uint8Array);
+    /**
+     * The safety number for a group: the digits two people compare, out of band, to
+     * prove the server did not substitute a key and put itself in the middle.
+     * Derived from the group's own ratchet tree, not from anything the server says.
+     */
+    safetyNumber(group_id: Uint8Array): string;
 }
 
 /**
@@ -100,9 +110,11 @@ export interface InitOutput {
     readonly mlsclient_exportState: (a: number) => [number, number, number, number];
     readonly mlsclient_fromState: (a: number, b: number) => [number, number, number];
     readonly mlsclient_hasGroup: (a: number, b: number, c: number) => number;
+    readonly mlsclient_identityKey: (a: number) => [number, number];
     readonly mlsclient_joinFromWelcome: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_keyPackage: (a: number) => [number, number, number, number];
     readonly mlsclient_new: (a: number, b: number) => [number, number, number];
+    readonly mlsclient_safetyNumber: (a: number, b: number, c: number) => [number, number, number, number];
     readonly __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;
     readonly __wbg_set_backupblob_salt: (a: number, b: number, c: number) => void;
     readonly __wbg_get_backupblob_nonce: (a: number) => [number, number];

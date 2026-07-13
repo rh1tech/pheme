@@ -14,6 +14,7 @@ use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
+use sha2::{Digest, Sha256};
 
 const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
@@ -175,6 +176,29 @@ impl Client {
         Ok(())
     }
 
+    /// The signature public keys of every member of a group, sorted.
+    ///
+    /// These come from the group's own ratchet tree — the state MLS itself
+    /// authenticates — not from whatever the server most recently claimed. That is
+    /// what makes them usable as the basis of a safety number: if the Delivery
+    /// Service substituted its own KeyPackage for a peer's when the group was
+    /// formed, the key here is the impostor's, and the safety number the two humans
+    /// compare will not match.
+    pub fn member_keys(&self, group_id: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+        let group = self.load_group(group_id)?;
+        let mut keys: Vec<Vec<u8>> = group
+            .members()
+            .map(|m| m.signature_key.as_slice().to_vec())
+            .collect();
+        keys.sort();
+        Ok(keys)
+    }
+
+    /// This client's own signature public key — its long-term MLS identity.
+    pub fn identity_key(&self) -> Vec<u8> {
+        self.signer.public().to_vec()
+    }
+
     /// Encrypts an application message for a group.
     pub fn encrypt(&self, group_id: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
         let mut group = self.load_group(group_id)?;
@@ -263,6 +287,50 @@ fn err<E: std::fmt::Debug>(context: &'static str) -> impl Fn(E) -> String {
 
 /// Encrypted key backup (passphrase-derived, server-stored ciphertext).
 pub mod backup;
+
+/// Turns a group's member signature keys into a safety number: the digits two
+/// people read to each other to prove no one is in the middle.
+///
+/// The server is untrusted, and it is the server that hands out the KeyPackages a
+/// group is built from. Nothing in the protocol stops it handing out its own key
+/// under a victim's name and quietly joining every new conversation. The only thing
+/// that catches that is the two humans comparing something derived from the keys
+/// actually in the group — out of band, where the server cannot reach. If the
+/// numbers differ, someone is in the middle.
+///
+/// Derived by hashing the sorted keys, then rendering the digest as decimal groups
+/// (the Signal convention: digits are easy to read aloud and to compare over a
+/// phone call, and carry no encoding traps the way hex or base64 do).
+pub fn safety_number(member_keys: &[Vec<u8>]) -> String {
+    let mut sorted = member_keys.to_vec();
+    sorted.sort(); // order must not depend on who is asking
+    let mut hasher = Sha256::new();
+    // Length-prefix each key so two different key sets cannot hash to the same
+    // input by running into each other at the boundary.
+    for key in &sorted {
+        hasher.update((key.len() as u32).to_be_bytes());
+        hasher.update(key);
+    }
+    let first = hasher.finalize();
+
+    // 12 groups of 5 digits needs 60 bytes of digest; one SHA-256 gives 32. Extend
+    // with a second round so every group is derived from a full 5 bytes — a short
+    // final group would carry visibly less entropy than the rest.
+    let second = Sha256::digest(first);
+    let mut material = Vec::with_capacity(64);
+    material.extend_from_slice(&first);
+    material.extend_from_slice(&second);
+
+    material
+        .chunks_exact(5)
+        .take(12)
+        .map(|chunk| {
+            let n = chunk.iter().fold(0u64, |acc, &b| (acc << 8) | u64::from(b));
+            format!("{:05}", n % 100_000)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 // --- WASM surface -----------------------------------------------------------
 
@@ -376,6 +444,48 @@ mod tests {
         // And his group state is untouched: he still decrypts the next message.
         let ct2 = alice.encrypt(group_id, b"after the replay").unwrap();
         assert_eq!(bob.decrypt(group_id, &ct2).unwrap().as_deref(), Some(&b"after the replay"[..]));
+    }
+
+    // The safety number is what catches a malicious Delivery Service.
+    //
+    // Both honest members derive it from the group's own ratchet tree, so they agree.
+    // If the server had substituted its own KeyPackage for Bob's, the group would
+    // contain the impostor's key instead — and the number Alice reads out would not
+    // match the one Bob sees, which is exactly the signal the two humans need.
+    #[test]
+    fn safety_number_agrees_between_members_and_changes_under_substitution() {
+        let alice = Client::new(b"alice").unwrap();
+        let bob = Client::new(b"bob").unwrap();
+        let group_id = b"conversation-1";
+
+        alice.create_group(group_id).unwrap();
+        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
+        bob.join_from_welcome(&add.welcome).unwrap();
+
+        // Both members compute the same number from their own view of the group.
+        let from_alice = safety_number(&alice.member_keys(group_id).unwrap());
+        let from_bob = safety_number(&bob.member_keys(group_id).unwrap());
+        assert_eq!(from_alice, from_bob);
+
+        // 12 groups of 5 digits — every group carries a full 5 bytes of digest.
+        let groups: Vec<&str> = from_alice.split(' ').collect();
+        assert_eq!(groups.len(), 12);
+        assert!(groups.iter().all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
+
+        // Now the same conversation, but the server hands Alice an impostor's
+        // KeyPackage in place of Bob's. Alice's group holds the impostor's key, so her
+        // safety number differs from the one she and Bob would have shared.
+        let mallory = Client::new(b"bob").unwrap(); // claims to be Bob
+        let alice2 = Client::new(b"alice").unwrap();
+        let group2 = b"conversation-2";
+        alice2.create_group(group2).unwrap();
+        alice2.add_member(group2, &mallory.key_package().unwrap()).unwrap();
+        let under_mitm = safety_number(&alice2.member_keys(group2).unwrap());
+
+        assert_ne!(
+            under_mitm, from_alice,
+            "a substituted KeyPackage must change the safety number, or it detects nothing",
+        );
     }
 
     // A third client not in the group cannot decrypt — the whole point.
