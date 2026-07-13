@@ -52,13 +52,89 @@ test('logging out destroys the local encryption keys', async ({ page }) => {
 
   // Logout navigates to /login and, on the way, wipes the key store.
   await expect(page).toHaveURL(/\/login/)
+
+  // Every trace of the identity and of any decrypted message must be gone. The one
+  // thing that legitimately survives is `client-epoch`: it is a counter, not key
+  // material, and clearing it would be a bug — a session still open in another tab
+  // would see the epoch back at its own value, believe it was still live, and write
+  // the keys we just destroyed straight back to disk.
   await expect
-    .poll(async () => (await localCryptoState(page)).keys.length, {
-      message: 'no MLS key material may survive a logout',
-      timeout: 15_000,
-    })
-    .toBe(0)
+    .poll(
+      async () =>
+        (await localCryptoState(page)).keys.filter((k) => k !== 'client-epoch'),
+      { message: 'no MLS key material may survive a logout', timeout: 15_000 },
+    )
+    .toEqual([])
 
   const after = await localCryptoState(page)
   expect(after.previews, 'no decrypted message previews may survive a logout').toBe(0)
+})
+
+/**
+ * Logging out in one tab must destroy the keys for EVERY tab.
+ *
+ * A second tab left open is ordinary — a forgotten background tab, a shared machine.
+ * That tab still holds a live MLS client in memory with the private keys intact, and
+ * it does not learn about the logout. If it is allowed to go on encrypting and
+ * persisting, it writes the destroyed identity straight back to disk and the logout
+ * was theatre. This is exactly the bug a review found in the first version of the
+ * cross-tab guard, which used an in-memory counter that no other tab could see.
+ */
+test('logging out in one tab destroys the keys for another tab too', async ({ browser }) => {
+  const email = uniqueEmail('e2ee-tabs')
+  const context = await browser.newContext()
+  const admin = await context.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, email, PASSWORD)
+  await admin.close()
+
+  // Two tabs of the same account, sharing one origin — so one IndexedDB, one lock.
+  const tabA = await context.newPage()
+  await login(tabA, email, PASSWORD)
+  const tabB = await context.newPage()
+  await tabB.goto('/')
+  await expect(tabB.getByTestId('chat-sidebar')).toBeVisible()
+
+  await expect
+    .poll(async () => (await localCryptoState(tabB)).keys, { timeout: 15_000 })
+    .toContain('client-state')
+
+  // Tab A logs out. Tab B is never told.
+  await tabA.getByRole('button', { name: 'Menu' }).click()
+  await tabA.getByRole('menuitem', { name: 'Log out' }).click()
+  await expect(tabA).toHaveURL(/\/login/)
+
+  // Tab B's keys are gone from disk...
+  await expect
+    .poll(
+      async () => (await localCryptoState(tabB)).keys.filter((k) => k !== 'client-epoch'),
+      { message: 'the wipe must reach every tab, not just the one that logged out', timeout: 15_000 },
+    )
+    .toEqual([])
+
+  // ...and the epoch was bumped, which is what refuses tab B's stale in-memory session
+  // the right to write those keys back. The refusal itself (Session.assertLive) is not
+  // reachable from here — driving a stale tab into an encrypt would need a live
+  // conversation — so this pins the mechanism rather than the outcome. That gap is
+  // deliberate and known.
+  const epoch = await tabB.evaluate(async () => {
+    return new Promise<number>((resolve) => {
+      const req = indexedDB.open('pheme', 1)
+      req.onsuccess = () => {
+        const get = req.result
+          .transaction('mls', 'readonly')
+          .objectStore('mls')
+          .get('client-epoch')
+        get.onsuccess = () => {
+          const v = get.result as Uint8Array | undefined
+          resolve(v ? new DataView(v.buffer, v.byteOffset, 4).getUint32(0) : 0)
+        }
+        get.onerror = () => resolve(0)
+      }
+      req.onerror = () => resolve(0)
+    })
+  })
+  expect(epoch, 'the wipe must advance the shared epoch that invalidates other tabs').toBeGreaterThan(0)
+
+  await context.close()
 })

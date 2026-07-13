@@ -96,9 +96,14 @@ export function KeyRestoreGate() {
   useEffect(() => {
     let active = true
     const run = async () => {
-      if (await hasLocalKeys()) return
-      const exists = await backupExists()
-      if (exists && active) setNeeded(true)
+      try {
+        if (await hasLocalKeys()) return
+        const exists = await backupExists()
+        if (exists && active) setNeeded(true)
+      } catch {
+        // Could not reach the server to find out. Say nothing rather than guess: the
+        // session bootstrap refuses to mint an identity in this state anyway.
+      }
     }
     void run()
     return () => {

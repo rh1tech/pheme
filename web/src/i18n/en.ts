@@ -4,6 +4,8 @@ const en = {
     appName: 'Pheme',
     tagline: 'notification relay',
     logout: 'Log out',
+    logoutWipeFailed:
+      'Could not remove this device’s encryption keys. You are signed out, but your chats may still be readable here — clear this site’s browser data.',
     cancel: 'Cancel',
     copy: 'Copy',
     copied: 'Copied',

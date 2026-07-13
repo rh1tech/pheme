@@ -30,6 +30,18 @@ const MLS_LOCK = 'pheme-mls-state'
 // Set when the user has explicitly chosen to start fresh on this device rather than
 // restore from their backup. Without it we would refuse to create an identity forever.
 const FRESH_KEY = 'fresh-accepted'
+// The key-material epoch, bumped on every wipe and restore. It lives in IndexedDB and
+// not in a variable because the tab whose keys were destroyed is usually NOT the tab
+// that destroyed them — a per-tab counter cannot see another tab's logout.
+const EPOCH_KEY = 'client-epoch'
+
+/** Thrown when this session's keys were destroyed or replaced (logout, restore). */
+export class SessionInvalidatedError extends Error {
+  constructor() {
+    super('this device\'s encryption keys were replaced or destroyed')
+    this.name = 'SessionInvalidatedError'
+  }
+}
 
 /** Thrown when this device has no keys but a backup exists and must be restored first. */
 export class NeedsRestoreError extends Error {
@@ -50,11 +62,6 @@ export const MLS_WELCOME = 'application/mls-welcome'
 let ready: Promise<Session> | null = null
 let readyUserId = ''
 let wasmReady: Promise<void> | null = null
-// Bumped whenever the local keys are destroyed. A Session created before the wipe
-// belongs to an older generation, and is refused the right to write — otherwise an
-// operation already in flight when the user logged out would persist the keys again
-// after the wipe had "finished".
-let generation = 0
 // Memoized answer to "must this device restore before it can have an identity?" —
 // null until asked. Reset whenever the answer could change.
 let restoreNeeded: boolean | null = null
@@ -100,15 +107,15 @@ function withMlsLock<T>(fn: () => Promise<T>): Promise<T> {
 class Session {
   private client: MlsClient
   private version: number
-  /** The wipe generation this session belongs to. See `persist`. */
-  private readonly generation: number
+  /** The key-material epoch this session belongs to. See `assertLive`. */
+  private readonly epoch: number
   readonly deviceId: string
 
-  private constructor(client: MlsClient, deviceId: string, version: number, generation: number) {
+  private constructor(client: MlsClient, deviceId: string, version: number, epoch: number) {
     this.client = client
     this.deviceId = deviceId
     this.version = version
-    this.generation = generation
+    this.epoch = epoch
   }
 
   /**
@@ -123,7 +130,6 @@ class Session {
    */
   static async load(userId: string): Promise<Session> {
     await ensureWasm()
-    const deviceId = ensureDeviceId()
 
     // Would we have to mint a brand-new identity? Answered BEFORE taking the lock,
     // because answering it may need the network (does a backup exist?), and a network
@@ -132,6 +138,11 @@ class Session {
     const mustRestore = await needsRestore(userId)
 
     const session = await withMlsLock(async () => {
+      // Under the lock: two tabs opening at once would otherwise each read no device id,
+      // each mint one, and each keep its own — publishing KeyPackages under a device id
+      // the other tab will never look up again.
+      const deviceId = ensureDeviceId()
+
       // State left by a different account (a shared device where the previous user
       // did not log out cleanly) must never be adopted: encrypting under someone
       // else's MLS identity would send their key material out under our name.
@@ -149,7 +160,7 @@ class Session {
       const client = saved
         ? MlsClient.fromState(saved)
         : new MlsClient(new TextEncoder().encode(userId))
-      const s = new Session(client, deviceId, await storedVersion(), generation)
+      const s = new Session(client, deviceId, await storedVersion(), await storedEpoch())
       if (!saved) await s.persist()
       await idbSet(OWNER_KEY, new TextEncoder().encode(userId))
       return s
@@ -161,12 +172,24 @@ class Session {
     return session
   }
 
-  private async persist(): Promise<void> {
-    // The keys were wiped (a logout) while this operation was in flight. Writing now
-    // would put the very material the user asked us to destroy back onto the disk.
-    if (this.generation !== generation) {
-      throw new Error('mls session invalidated')
+  /**
+   * Refuses to go on if this session's key material has been destroyed or replaced —
+   * by a logout or a restore, in THIS tab or any other. Callers hold the lock.
+   *
+   * The epoch lives in IndexedDB rather than in a variable, because a variable is
+   * per-tab and the thing we are defending against is another tab. A logout in one tab
+   * leaves a second tab holding a live in-memory client whose private keys are still
+   * intact; without a shared epoch, that tab happily encrypts with them and writes
+   * them back to the disk the user just asked us to clear.
+   */
+  private async assertLive(): Promise<void> {
+    if ((await storedEpoch()) !== this.epoch) {
+      throw new SessionInvalidatedError()
     }
+  }
+
+  private async persist(): Promise<void> {
+    await this.assertLive()
     this.version++
     // One transaction: if the state advanced but the version did not, another tab
     // would conclude nothing had changed and mutate on top of consumed key material.
@@ -181,7 +204,10 @@ class Session {
     const stored = await storedVersion()
     if (stored === this.version) return
     const state = await idbGet(STATE_KEY)
-    if (!state) return
+    // State gone while the version moved: someone wiped it. assertLive has already
+    // rejected this session, so there is nothing to adopt — do not quietly carry on
+    // with the in-memory keys, which is precisely how a wiped identity stays alive.
+    if (!state) throw new SessionInvalidatedError()
     this.client = MlsClient.fromState(state)
     this.version = stored
   }
@@ -194,6 +220,10 @@ class Session {
    */
   private exclusive<T>(op: () => Promise<T>): Promise<T> {
     return withMlsLock(async () => {
+      // Checked before the operation, not just before the write: an encrypt on a
+      // destroyed identity still consumes ratchet state, and there is no reason to run
+      // it at all once the session is dead.
+      await this.assertLive()
       await this.refreshIfStale()
       return op()
     })
@@ -373,6 +403,9 @@ async function needsRestore(userId: string): Promise<boolean> {
     restoreNeeded = false
     return false
   }
+  // A check that FAILS is not a check that says "no backup". Treating a flaky network
+  // as "safe to mint an identity" is how a real backup gets orphaned by a throwaway one
+  // — and publishing KeyPackages cannot be undone. Fail closed: refuse to decide.
   restoreNeeded = await backupExists()
   return restoreNeeded
 }
@@ -381,6 +414,13 @@ async function needsRestore(userId: string): Promise<boolean> {
 async function storedOwner(): Promise<string> {
   const bytes = await idbGet(OWNER_KEY)
   return bytes ? new TextDecoder().decode(bytes) : ''
+}
+
+/** The current key-material epoch. Zero when nothing has ever been wiped. */
+async function storedEpoch(): Promise<number> {
+  const bytes = await idbGet(EPOCH_KEY)
+  if (!bytes || bytes.byteLength < 4) return 0
+  return new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0)
 }
 
 /** The version of the stored state — how a tab notices another tab moved it on. */
@@ -405,7 +445,7 @@ function encodeVersion(version: number): Uint8Array {
  * from the passphrase-protected backup — which is the point of that backup.
  */
 export async function wipeLocalKeys(): Promise<void> {
-  await withMlsLock(async () => {
+  return withMlsLock(async () => {
     await wipeUnlocked()
     ready = null
     readyUserId = ''
@@ -415,18 +455,21 @@ export async function wipeLocalKeys(): Promise<void> {
 /**
  * The wipe itself. Callers must already hold the lock.
  *
- * Bumping the generation is what makes the wipe stick: an encrypt or decrypt that was
- * already in flight will finish, try to persist, find itself a generation behind, and
- * refuse — instead of writing the keys straight back to the disk we just cleared.
+ * Bumping the persisted epoch is what makes the wipe stick: any session still holding
+ * the old epoch — in this tab or another — is refused the right to encrypt or write,
+ * instead of quietly putting the keys back on the disk we just cleared.
  *
  * It deliberately does not touch the cached session promise. Session.load calls this
  * while building that very promise; clearing it there would send the next caller off
  * to start a second, redundant load.
  */
 async function wipeUnlocked(): Promise<void> {
-  generation++
+  const next = (await storedEpoch()) + 1
   restoreNeeded = null
   await idbClear()
+  // Written after the clear, which removes everything including the epoch itself. Any
+  // session in any tab still holding the old epoch is now refused the right to write.
+  await idbSet(EPOCH_KEY, encodeVersion(next))
   clearPreviews()
   clearSafetyPins()
 }
@@ -466,11 +509,7 @@ export async function hasLocalKeys(): Promise<boolean> {
 
 /** Whether the server holds a key backup for the signed-in user. */
 export async function backupExists(): Promise<boolean> {
-  try {
-    return (await api.getKeyBackup(true)) != null
-  } catch {
-    return false
-  }
+  return (await api.getKeyBackup(true)) != null
 }
 
 /** Seals the current device state under `passphrase` and uploads it. */
@@ -507,24 +546,33 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
   // Validate the recovered blob really is a client state before committing it.
   MlsClient.fromState(state)
 
-  await withMlsLock(async () => {
+  return withMlsLock(async () => {
+    // Another tab may have created a real identity while this prompt sat open (the user
+    // chose "start fresh" there). Restoring would silently replace it with an older
+    // snapshot and strand whatever was said in between. Re-check under the lock.
+    if ((await idbGet(STATE_KEY)) && (await storedOwner()) === userId) {
+      return false
+    }
+
     // The state and its owner must land together, in one transaction. Written
     // separately, a Session.load racing in between would see state whose owner is not
     // yet claimed, take it for another account's leftovers, and wipe the backup we
     // just recovered — while restore went on to report success.
     const nextVersion = (await storedVersion()) + 1
+    const nextEpoch = (await storedEpoch()) + 1
     await idbSetMany([
       [STATE_KEY, state],
       [OWNER_KEY, new TextEncoder().encode(userId)],
       [VERSION_KEY, encodeVersion(nextVersion)],
+      // A new epoch: any session built on the identity this replaces — in this tab or
+      // another — must not write over what we just recovered.
+      [EPOCH_KEY, encodeVersion(nextEpoch)],
     ])
-    // Any session built on the pre-restore identity must not write over this.
-    generation++
     restoreNeeded = false
     ready = null
     readyUserId = ''
+    return true
   })
-  return true
 }
 
 function ensureDeviceId(): string {
