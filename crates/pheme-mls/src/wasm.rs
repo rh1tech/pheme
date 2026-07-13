@@ -37,6 +37,13 @@ impl MlsClient {
         self.inner.key_package().map_err(js)
     }
 
+    /// A reusable last-resort KeyPackage, so the user can always be added to a group
+    /// even after their single-use stock has been claimed.
+    #[wasm_bindgen(js_name = lastResortKeyPackage)]
+    pub fn last_resort_key_package(&self) -> Result<Vec<u8>, JsError> {
+        self.inner.last_resort_key_package().map_err(js)
+    }
+
     #[wasm_bindgen(js_name = createGroup)]
     pub fn create_group(&self, group_id: &[u8]) -> Result<(), JsError> {
         self.inner.create_group(group_id).map_err(js)

@@ -19,6 +19,14 @@ type publishKeyPackagesRequest struct {
 	DeviceID string `json:"deviceId"`
 	// Each entry is base64 of an opaque public KeyPackage.
 	KeyPackages [][]byte `json:"keyPackages"`
+	// The device's reusable last-resort KeyPackage, if it is publishing one.
+	//
+	// Which KeyPackage is last-resort is decided ON THE CLIENT, not here: it is a
+	// property of the bytes (an RFC 9420 extension the client sets when building it),
+	// and it is what makes the client keep the private key instead of deleting it
+	// after first use. A flag invented server-side would be pure bookkeeping — the
+	// package would still be single-use, and the user could still be drained.
+	LastResortKeyPackage []byte `json:"lastResortKeyPackage,omitempty"`
 }
 
 // publishKeyPackages stores a batch of the caller's public KeyPackages so others
@@ -38,11 +46,41 @@ func (h *Handler) publishKeyPackages(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "deviceId is required")
 		return
 	}
-	if len(req.KeyPackages) == 0 || len(req.KeyPackages) > maxKeyPackageBatch {
-		httpx.Error(w, http.StatusBadRequest, "between 1 and 100 key packages")
+	if len(req.KeyPackages) > maxKeyPackageBatch {
+		httpx.Error(w, http.StatusBadRequest, "too many key packages")
 		return
 	}
-	packages := make([]domain.MLSKeyPackage, 0, len(req.KeyPackages))
+	if len(req.KeyPackages) == 0 && len(req.LastResortKeyPackage) == 0 {
+		httpx.Error(w, http.StatusBadRequest, "nothing to publish")
+		return
+	}
+
+	now := time.Now().UTC()
+	packages := make([]domain.MLSKeyPackage, 0, len(req.KeyPackages)+1)
+
+	if len(req.LastResortKeyPackage) > 0 {
+		if len(req.LastResortKeyPackage) > maxKeyPackageBytes {
+			httpx.Error(w, http.StatusBadRequest, "invalid key package size")
+			return
+		}
+		// One per device. A second would be stored but never handed out, so refuse it
+		// rather than let the directory accumulate packages nobody can reach.
+		has, err := h.Store.HasLastResortKeyPackage(r.Context(), uid, req.DeviceID)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "could not store key packages")
+			return
+		}
+		if !has {
+			packages = append(packages, domain.MLSKeyPackage{
+				UserID:     uid,
+				DeviceID:   req.DeviceID,
+				KeyPackage: req.LastResortKeyPackage,
+				LastResort: true,
+				CreatedAt:  now,
+			})
+		}
+	}
+
 	for _, kp := range req.KeyPackages {
 		if len(kp) == 0 || len(kp) > maxKeyPackageBytes {
 			httpx.Error(w, http.StatusBadRequest, "invalid key package size")
@@ -52,9 +90,10 @@ func (h *Handler) publishKeyPackages(w http.ResponseWriter, r *http.Request) {
 			UserID:     uid,
 			DeviceID:   req.DeviceID,
 			KeyPackage: kp,
-			CreatedAt:  time.Now().UTC(),
+			CreatedAt:  now,
 		})
 	}
+
 	if err := h.Store.AddKeyPackages(r.Context(), packages); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not store key packages")
 		return
@@ -146,6 +185,8 @@ func (h *Handler) getKeyBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 // keyPackageCount lets a device know when to replenish its published packages.
+// `count` covers only the single-use ones; `hasLastResort` tells the device whether
+// it still needs to publish its one reusable package.
 func (h *Handler) keyPackageCount(w http.ResponseWriter, r *http.Request) {
 	uid, ok := h.requireUser(w, r)
 	if !ok {
@@ -161,5 +202,10 @@ func (h *Handler) keyPackageCount(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "count failed")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"count": n})
+	hasLastResort, err := h.Store.HasLastResortKeyPackage(r.Context(), uid, deviceID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "count failed")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"count": n, "hasLastResort": hasLastResort})
 }

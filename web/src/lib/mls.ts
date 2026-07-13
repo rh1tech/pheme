@@ -11,7 +11,7 @@
 import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/pheme_mls.js'
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { api } from './api'
-import { idbClear, idbGet, idbSet } from './idb'
+import { idbClear, idbGet, idbSet, idbSetMany } from './idb'
 import { clearPreviews } from './chatCache'
 import { clearSafetyPins } from './safety'
 import { loadWebDeviceId, saveWebDeviceId } from './device'
@@ -27,6 +27,17 @@ const OWNER_KEY = 'client-owner'
 const VERSION_KEY = 'client-version'
 // The cross-tab lock guarding all MLS state mutation for this origin.
 const MLS_LOCK = 'pheme-mls-state'
+// Set when the user has explicitly chosen to start fresh on this device rather than
+// restore from their backup. Without it we would refuse to create an identity forever.
+const FRESH_KEY = 'fresh-accepted'
+
+/** Thrown when this device has no keys but a backup exists and must be restored first. */
+export class NeedsRestoreError extends Error {
+  constructor() {
+    super('encrypted chats need to be restored on this device')
+    this.name = 'NeedsRestoreError'
+  }
+}
 // Keep at least this many unclaimed KeyPackages published, so a peer can always
 // start a chat; replenish up to the target when it runs low.
 const MIN_KEY_PACKAGES = 5
@@ -39,11 +50,32 @@ export const MLS_WELCOME = 'application/mls-welcome'
 let ready: Promise<Session> | null = null
 let readyUserId = ''
 let wasmReady: Promise<void> | null = null
+// Bumped whenever the local keys are destroyed. A Session created before the wipe
+// belongs to an older generation, and is refused the right to write — otherwise an
+// operation already in flight when the user logged out would persist the keys again
+// after the wipe had "finished".
+let generation = 0
 
 /** Loads the WASM module once. Backup/restore need it before any Session exists. */
 function ensureWasm(): Promise<void> {
   if (!wasmReady) wasmReady = init(wasmUrl).then(() => undefined)
   return wasmReady
+}
+
+/**
+ * Runs `fn` with exclusive access to this origin's MLS state.
+ *
+ * Everything that reads-decides-writes the stored state goes through here — not just
+ * steady-state encrypt/decrypt, but session bootstrap, key restore and the logout
+ * wipe. Those three are the operations most likely to race in practice (a login, a
+ * restore and a logout each kick off several async flows at once), and leaving them
+ * outside the lock is what makes a lock a decoration.
+ */
+function withMlsLock<T>(fn: () => Promise<T>): Promise<T> {
+  // Web Locks is unavailable in a few older engines; there we fall back to running
+  // unserialized, which is the pre-existing behaviour rather than a new hazard.
+  if (!navigator.locks) return fn()
+  return navigator.locks.request(MLS_LOCK, fn)
 }
 
 /**
@@ -65,38 +97,76 @@ function ensureWasm(): Promise<void> {
 class Session {
   private client: MlsClient
   private version: number
+  /** The wipe generation this session belongs to. See `persist`. */
+  private readonly generation: number
   readonly deviceId: string
 
-  private constructor(client: MlsClient, deviceId: string, version: number) {
+  private constructor(client: MlsClient, deviceId: string, version: number, generation: number) {
     this.client = client
     this.deviceId = deviceId
     this.version = version
+    this.generation = generation
   }
 
+  /**
+   * Loads (or creates) this device's session.
+   *
+   * The whole bootstrap runs under the same lock as every other mutation. It reads
+   * the owner, may wipe, reads the state, may create an identity, and writes — a
+   * read-decide-write over exactly the keys the lock exists to protect. Unlocked, two
+   * tabs opening at once would each see "no state", each mint a DIFFERENT identity,
+   * and each persist it; the loser would then be encrypting under an identity nobody
+   * else knows about, with the version counter none the wiser.
+   */
   static async load(userId: string): Promise<Session> {
     await ensureWasm()
-    const identity = new TextEncoder().encode(userId)
-
-    // State left by a different account (a shared device where the previous user
-    // did not log out cleanly) must never be adopted: encrypting under someone
-    // else's MLS identity would send their key material out under our name. Wipe it
-    // and start fresh instead.
-    if ((await storedOwner()) !== userId) await wipeLocalKeys()
-
     const deviceId = ensureDeviceId()
-    const saved = await idbGet(STATE_KEY)
-    const client = saved ? MlsClient.fromState(saved) : new MlsClient(identity)
-    const session = new Session(client, deviceId, await storedVersion())
-    if (!saved) await session.persist()
-    await idbSet(OWNER_KEY, new TextEncoder().encode(userId))
+
+    const session = await withMlsLock(async () => {
+      // State left by a different account (a shared device where the previous user
+      // did not log out cleanly) must never be adopted: encrypting under someone
+      // else's MLS identity would send their key material out under our name.
+      if ((await storedOwner()) !== userId) await wipeUnlocked()
+
+      const saved = await idbGet(STATE_KEY)
+
+      // No local keys, but a backup exists and the user has not chosen to start over:
+      // do NOT mint an identity. Doing so would publish KeyPackages for a client that
+      // is about to be thrown away by the restore — and those are irrevocable. Peers
+      // claiming one would send a Welcome the restored client has no key for, a
+      // message stuck forever. Refuse, and let the restore prompt resolve it.
+      if (!saved && !(await idbGet(FRESH_KEY)) && (await backupExists())) {
+        throw new NeedsRestoreError()
+      }
+
+      const client = saved
+        ? MlsClient.fromState(saved)
+        : new MlsClient(new TextEncoder().encode(userId))
+      const s = new Session(client, deviceId, await storedVersion(), generation)
+      if (!saved) await s.persist()
+      await idbSet(OWNER_KEY, new TextEncoder().encode(userId))
+      return s
+    })
+
+    // Outside the lock: replenishKeyPackages takes it itself, and taking it twice
+    // would deadlock.
     await session.replenishKeyPackages()
     return session
   }
 
   private async persist(): Promise<void> {
+    // The keys were wiped (a logout) while this operation was in flight. Writing now
+    // would put the very material the user asked us to destroy back onto the disk.
+    if (this.generation !== generation) {
+      throw new Error('mls session invalidated')
+    }
     this.version++
-    await idbSet(STATE_KEY, this.client.exportState())
-    await idbSet(VERSION_KEY, encodeVersion(this.version))
+    // One transaction: if the state advanced but the version did not, another tab
+    // would conclude nothing had changed and mutate on top of consumed key material.
+    await idbSetMany([
+      [STATE_KEY, this.client.exportState()],
+      [VERSION_KEY, encodeVersion(this.version)],
+    ])
   }
 
   /** Adopts another tab's newer state before we mutate on top of a stale copy. */
@@ -116,35 +186,50 @@ class Session {
    * deadlock. Public methods take the lock; the private ones they call do not.
    */
   private exclusive<T>(op: () => Promise<T>): Promise<T> {
-    const guarded = async () => {
+    return withMlsLock(async () => {
       await this.refreshIfStale()
       return op()
-    }
-    // Web Locks is unavailable in a few older engines; there we fall back to the
-    // staleness check alone, which still stops a stale overwrite in the common case.
-    if (!navigator.locks) return guarded()
-    return navigator.locks.request(MLS_LOCK, guarded)
+    })
   }
 
-  /** Publishes fresh KeyPackages when the server's stock runs low. */
+  /**
+   * Publishes fresh KeyPackages when the server's stock runs low, and makes sure the
+   * device has published its one reusable last-resort package.
+   *
+   * Single-use packages can be claimed by anyone, so a stranger can drain them. The
+   * last-resort package is what guarantees the user stays reachable: it carries an
+   * RFC 9420 extension that makes this client KEEP the private key instead of
+   * deleting it after first use, so it can be handed out again and again. The
+   * extension has to be set here, when the package is built — a flag on the server
+   * would change nothing.
+   */
   async replenishKeyPackages(): Promise<void> {
-    let count: number
+    let status: { count: number; hasLastResort: boolean }
     try {
-      count = await api.keyPackageCount(this.deviceId)
+      status = await api.keyPackageCount(this.deviceId)
     } catch {
       return // best effort; a peer starting a chat will just have to retry
     }
-    if (count >= MIN_KEY_PACKAGES) return
+    const needStock = status.count < MIN_KEY_PACKAGES
+    const needLastResort = !status.hasLastResort
+    if (!needStock && !needLastResort) return
 
-    const fresh = await this.exclusive(async () => {
-      const packages: string[] = []
-      for (let i = count; i < TARGET_KEY_PACKAGES; i++) {
-        packages.push(bytesToBase64(this.client.keyPackage()))
+    const { packages, lastResort } = await this.exclusive(async () => {
+      const fresh: string[] = []
+      if (needStock) {
+        for (let i = status.count; i < TARGET_KEY_PACKAGES; i++) {
+          fresh.push(bytesToBase64(this.client.keyPackage()))
+        }
       }
-      await this.persist() // keyPackage() consumes randomness the state must keep
-      return packages
+      const reusable = needLastResort
+        ? bytesToBase64(this.client.lastResortKeyPackage())
+        : undefined
+      // Building a KeyPackage stores its private key; that state must be kept, or the
+      // published package would be one we can no longer be added with.
+      await this.persist()
+      return { packages: fresh, lastResort: reusable }
     })
-    await api.publishKeyPackages(this.deviceId, fresh)
+    await api.publishKeyPackages(this.deviceId, packages, lastResort)
   }
 
   /**
@@ -242,9 +327,24 @@ class Session {
 export function mlsSession(userId: string): Promise<Session> {
   if (!ready || readyUserId !== userId) {
     readyUserId = userId
-    ready = Session.load(userId)
+    // A failed load must not be cached: it would leave the app permanently unable to
+    // build a session (e.g. after the user restores from their backup and retries).
+    ready = Session.load(userId).catch((e: unknown) => {
+      ready = null
+      readyUserId = ''
+      throw e
+    })
   }
   return ready
+}
+
+/**
+ * Records that the user chose to start over on this device rather than restore their
+ * backup. Their existing encrypted history stays unreadable here until they restore;
+ * new conversations work from a fresh identity.
+ */
+export async function acceptFreshIdentity(): Promise<void> {
+  await idbSet(FRESH_KEY, new Uint8Array([1]))
 }
 
 /** The account the locally stored MLS state belongs to, if any. */
@@ -275,8 +375,26 @@ function encodeVersion(version: number): Uint8Array {
  * from the passphrase-protected backup — which is the point of that backup.
  */
 export async function wipeLocalKeys(): Promise<void> {
-  ready = null
-  readyUserId = ''
+  await withMlsLock(async () => {
+    await wipeUnlocked()
+    ready = null
+    readyUserId = ''
+  })
+}
+
+/**
+ * The wipe itself. Callers must already hold the lock.
+ *
+ * Bumping the generation is what makes the wipe stick: an encrypt or decrypt that was
+ * already in flight will finish, try to persist, find itself a generation behind, and
+ * refuse — instead of writing the keys straight back to the disk we just cleared.
+ *
+ * It deliberately does not touch the cached session promise. Session.load calls this
+ * while building that very promise; clearing it there would send the next caller off
+ * to start a second, redundant load.
+ */
+async function wipeUnlocked(): Promise<void> {
+  generation++
   await idbClear()
   clearPreviews()
   clearSafetyPins()
@@ -357,12 +475,23 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
   )
   // Validate the recovered blob really is a client state before committing it.
   MlsClient.fromState(state)
-  await idbSet(STATE_KEY, state)
-  // Claim the restored state for this account, or the owner check in Session.load
-  // would treat it as another user's leftovers and wipe what we just recovered.
-  await idbSet(OWNER_KEY, new TextEncoder().encode(userId))
-  ready = null // force the next session to load the restored state
-  readyUserId = ''
+
+  await withMlsLock(async () => {
+    // The state and its owner must land together, in one transaction. Written
+    // separately, a Session.load racing in between would see state whose owner is not
+    // yet claimed, take it for another account's leftovers, and wipe the backup we
+    // just recovered — while restore went on to report success.
+    const nextVersion = (await storedVersion()) + 1
+    await idbSetMany([
+      [STATE_KEY, state],
+      [OWNER_KEY, new TextEncoder().encode(userId)],
+      [VERSION_KEY, encodeVersion(nextVersion)],
+    ])
+    // Any session built on the pre-restore identity must not write over this.
+    generation++
+    ready = null
+    readyUserId = ''
+  })
   return true
 }
 

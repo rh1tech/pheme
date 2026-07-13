@@ -37,6 +37,28 @@ export function idbSet(key: string, value: Uint8Array): Promise<void> {
   return tx('readwrite', (s) => s.put(value, key)).then(() => undefined)
 }
 
+/**
+ * Writes several entries in ONE transaction, so they can never be observed apart.
+ *
+ * The MLS state and its version must move together: if a tab dies between two
+ * separate writes, the state advances while the version does not, and another tab
+ * then concludes nothing changed and mutates on top of state it thinks is current —
+ * silently reusing key material that has already been consumed.
+ */
+export function idbSetMany(entries: Array<[string, Uint8Array]>): Promise<void> {
+  return open().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const transaction = db.transaction(STORE, 'readwrite')
+        const store = transaction.objectStore(STORE)
+        for (const [key, value] of entries) store.put(value, key)
+        transaction.oncomplete = () => resolve()
+        transaction.onerror = () => reject(transaction.error)
+        transaction.onabort = () => reject(transaction.error)
+      }),
+  )
+}
+
 export function idbDelete(key: string): Promise<void> {
   return tx('readwrite', (s) => s.delete(key)).then(() => undefined)
 }

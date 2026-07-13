@@ -319,6 +319,20 @@ export class MlsClient {
         return v1;
     }
     /**
+     * A reusable last-resort KeyPackage, so the user can always be added to a group
+     * even after their single-use stock has been claimed.
+     * @returns {Uint8Array}
+     */
+    lastResortKeyPackage() {
+        const ret = wasm.mlsclient_lastResortKeyPackage(this.__wbg_ptr);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
      * Creates a fresh identity. `identity` is the user/device id bytes.
      * @param {Uint8Array} identity
      */

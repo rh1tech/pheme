@@ -36,7 +36,7 @@ export function SafetyNumberModal({ conversationId, opened, onClose }: SafetyNum
       try {
         const session = await mlsSession(userId)
         const current = await session.safetyNumber(conversationId)
-        if (active) setState(checkSafetyNumber(conversationId, current))
+        if (active) setState(checkSafetyNumber(userId, conversationId, current))
       } catch {
         // No group yet (encryption still being set up), so there is nothing to show.
         if (active) setFailed(true)
@@ -92,7 +92,8 @@ export function SafetyNumberModal({ conversationId, opened, onClose }: SafetyNum
                 variant="light"
                 color="orange"
                 onClick={() => {
-                  acceptSafetyNumber(conversationId, state.number)
+                  if (!userId) return
+                  acceptSafetyNumber(userId, conversationId, state.number)
                   onClose()
                 }}
               >

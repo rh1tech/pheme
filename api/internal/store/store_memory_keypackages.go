@@ -6,17 +6,21 @@ import (
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
 
+// AddKeyPackages stores exactly what it is given. Whether a package is last-resort
+// is decided by the client that built it (an RFC 9420 extension in the bytes) — the
+// server only records the fact, it cannot confer it.
 func (m *Memory) AddKeyPackages(_ context.Context, packages []domain.MLSKeyPackage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, kp := range packages {
+		// One last-resort package per device, enforced here rather than trusting the
+		// handler's check-then-insert — two concurrent publishes can both pass that.
+		// Mirrors the partial unique index the Mongo store relies on.
+		if kp.LastResort && m.hasLastResortLocked(kp.UserID, kp.DeviceID) {
+			continue
+		}
 		if kp.ID == "" {
 			kp.ID = newID()
-		}
-		// The first KeyPackage a device ever publishes becomes its last resort, so
-		// the device can never be drained to zero by repeated claims.
-		if !m.hasLastResortLocked(kp.UserID, kp.DeviceID) {
-			kp.LastResort = true
 		}
 		m.keyPackages[kp.ID] = kp
 	}
@@ -30,6 +34,17 @@ func (m *Memory) hasLastResortLocked(userID, deviceID string) bool {
 		}
 	}
 	return false
+}
+
+func (m *Memory) HasLastResortKeyPackage(_ context.Context, userID, deviceID string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, kp := range m.keyPackages {
+		if kp.UserID == userID && kp.DeviceID == deviceID && kp.LastResort {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ClaimKeyPackage hands out one of a user's KeyPackages. A single-use package is

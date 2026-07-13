@@ -3,7 +3,7 @@ import { Alert, Button, PasswordInput, Stack, Text } from '@mantine/core'
 import { IconShieldLock } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
-import { backupExists, backupKeys, hasLocalKeys, restoreKeys } from '../../lib/mls'
+import { acceptFreshIdentity, backupExists, backupKeys, hasLocalKeys, restoreKeys } from '../../lib/mls'
 import { notifyError, notifySuccess } from '../../lib/notify'
 import { ResponsiveModal } from '../ResponsiveModal'
 
@@ -124,10 +124,21 @@ export function KeyRestoreGate() {
     }
   }
 
-  // "Skip" starts fresh on this device: a new identity, losing the backed-up
-  // history here until they restore. Deliberate, so it is a distinct action.
+  // Starting fresh is a real choice with a real cost: a new identity on this device,
+  // and the backed-up history stays unreadable here until they restore. It has to be
+  // recorded, because until it is, the app refuses to mint an identity at all — that
+  // refusal is what stops a throwaway identity publishing KeyPackages that the restore
+  // would then orphan.
+  async function startFresh() {
+    await acceptFreshIdentity()
+    window.location.reload()
+  }
+
+  // Deliberately not dismissible. Until the user picks one of the two options, the app
+  // will not create an MLS identity at all, so dismissing this would leave chats
+  // silently broken with no way back to the prompt.
   return (
-    <ResponsiveModal opened={needed} onClose={() => setNeeded(false)} title={t('backup.restoreTitle')}>
+    <ResponsiveModal opened={needed} onClose={() => {}} title={t('backup.restoreTitle')}>
       <Stack gap="sm">
         <Text size="sm" c="dimmed">
           {t('backup.restoreDescription')}
@@ -142,7 +153,7 @@ export function KeyRestoreGate() {
         <Button onClick={restore} loading={busy} disabled={passphrase.length === 0}>
           {t('backup.restore')}
         </Button>
-        <Button variant="subtle" color="gray" onClick={() => setNeeded(false)}>
+        <Button variant="subtle" color="gray" onClick={startFresh}>
           {t('backup.skip')}
         </Button>
       </Stack>

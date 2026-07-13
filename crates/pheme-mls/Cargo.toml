@@ -19,8 +19,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Encrypted key backup: a passphrase-derived key (Argon2id) sealing the exported
 # client state (AES-256-GCM), so IndexedDB eviction or a new device is recoverable.
-argon2 = "0.5"
-aes-gcm = "0.10"
+argon2 = { version = "0.5", features = ["zeroize"] }
+aes-gcm = { version = "0.10", features = ["zeroize"] }
 getrandom = "0.2"
 zeroize = "1"
 sha2 = "0.10"

@@ -95,6 +95,18 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 // request, so it needs its own bound.
 const pushTimeout = 15 * time.Second
 
+// How many chat pushes may be in flight at once, process-wide.
+//
+// Each one holds a connection to the push provider for up to pushTimeout. Without a
+// ceiling, sending a message — which used to be O(1) work — would fan out into an
+// unbounded number of goroutines, so anyone able to post quickly could exhaust file
+// descriptors here and hammer the provider. Past the ceiling a push is dropped rather
+// than queued: a notification is a courtesy, and a stale one is worth less than a
+// responsive server. The message itself is already stored and on the live stream.
+const maxConcurrentPushes = 64
+
+var pushSlots = make(chan struct{}, maxConcurrentPushes)
+
 // notifyMembers pushes a generic notification to the other members' devices.
 //
 // The notification says who sent a message, never what it said — the server holds
@@ -108,7 +120,16 @@ func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage)
 	if h.Push == nil || isControlContent(msg.ContentType) {
 		return
 	}
+	// Take a slot, or drop the notification. Never block the caller: this runs on the
+	// request path, and a saturated push provider must not slow down sending messages.
+	select {
+	case pushSlots <- struct{}{}:
+	default:
+		h.logger().Warn("chat push: at capacity, notification dropped", "conversation", convID)
+		return
+	}
 	go func() {
+		defer func() { <-pushSlots }()
 		ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
 		defer cancel()
 		log := h.logger()

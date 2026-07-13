@@ -134,10 +134,20 @@ export function ConversationChatRoute() {
   // Decrypt/join any message not yet handled, in order. Runs whenever the message
   // list grows (initial load, pagination, live arrival) once the cache is loaded.
   useEffect(() => {
-    if (readyId !== id || !userId || messages.length === 0) return
+    // Wait for the conversation: deciding whether a Welcome is legitimate needs to
+    // know who created it, and a message marked processed is never revisited.
+    if (readyId !== id || !userId || !conversation || messages.length === 0) return
     let active = true
     const run = async () => {
-      const session = await mlsSession(userId)
+      let session: Awaited<ReturnType<typeof mlsSession>>
+      try {
+        session = await mlsSession(userId)
+      } catch {
+        // This device has no keys yet and a backup is waiting to be restored (or the
+        // WASM failed to load). Either way there is nothing to decrypt with; the
+        // restore prompt is what resolves it.
+        return
+      }
       const next = { ...bodiesRef.current }
       let changed = false
       for (const m of messages) {
@@ -145,7 +155,16 @@ export function ConversationChatRoute() {
         processedRef.current.add(m.id)
         try {
           if (m.contentType === MLS_WELCOME) {
-            await session.tryJoin(id, m.ciphertext)
+            // Only ever act on a Welcome from the person who created the conversation.
+            //
+            // Processing a Welcome CONSUMES the KeyPackage it names — OpenMLS deletes
+            // the private key as soon as it matches, before it has checked whether the
+            // Welcome is even valid. So a Welcome from anyone else is a way to destroy
+            // our published KeyPackages and make us unreachable, and it costs the
+            // sender nothing. Nobody but the creator has any reason to send one.
+            if (conversation && m.senderId === conversation.createdBy) {
+              await session.tryJoin(id, m.ciphertext)
+            }
           } else if (m.contentType === MLS_APPLICATION) {
             const bytes = await session.decrypt(id, m.ciphertext)
             const content = bytes && deserializeContent(bytes)
@@ -185,7 +204,7 @@ export function ConversationChatRoute() {
     return () => {
       active = false
     }
-  }, [messages, readyId, userId, id])
+  }, [messages, readyId, userId, id, conversation])
 
   useEffect(() => {
     let active = true

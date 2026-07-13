@@ -242,15 +242,16 @@ export const api = {
     request<Channel>(`/v1/channels/${id}/avatar`, { method: 'DELETE' }),
 
   // MLS key directory. KeyPackages cross as base64 (Go []byte).
-  publishKeyPackages: (deviceId: string, keyPackages: string[]) =>
+  publishKeyPackages: (deviceId: string, keyPackages: string[], lastResortKeyPackage?: string) =>
     request<void>('/v1/mls/key-packages', {
       method: 'POST',
-      body: { deviceId, keyPackages },
+      body: { deviceId, keyPackages, lastResortKeyPackage },
     }),
+  /** `count` is the single-use stock; the last-resort package is never consumed. */
   keyPackageCount: (deviceId: string) =>
-    request<{ count: number }>(
+    request<{ count: number; hasLastResort: boolean }>(
       `/v1/mls/key-packages/count?deviceId=${encodeURIComponent(deviceId)}`,
-    ).then((r) => r.count),
+    ),
   claimKeyPackage: (userId: string) =>
     request<{ keyPackage: string }>(`/v1/mls/key-packages/${userId}/claim`).then(
       (r) => r.keyPackage,

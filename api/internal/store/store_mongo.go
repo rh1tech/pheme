@@ -88,8 +88,19 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 		"conversations":       {{Keys: bson.D{{Key: "directKey", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"directKey": bson.M{"$exists": true}})}},
 		"conversationMembers": {{Keys: bson.D{{Key: "conversationId", Value: 1}, {Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "userId", Value: 1}}}},
 		"chatMessages":        {{Keys: bson.D{{Key: "conversationId", Value: 1}, {Key: "createdAt", Value: -1}}}},
-		"mlsKeyPackages":      {{Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}, {Key: "deviceId", Value: 1}}}},
-		"mlsKeyBackups":       {{Keys: bson.D{{Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}},
+		// The partial unique index is what actually enforces one last-resort package per
+		// device: the handler's check-then-insert would otherwise let two concurrent
+		// publishes (two tabs replenishing at once) both slip through.
+		"mlsKeyPackages": {
+			{Keys: bson.D{{Key: "userId", Value: 1}}},
+			{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "deviceId", Value: 1}}},
+			{
+				Keys: bson.D{{Key: "userId", Value: 1}, {Key: "deviceId", Value: 1}, {Key: "lastResort", Value: 1}},
+				Options: options.Index().SetUnique(true).
+					SetPartialFilterExpression(bson.M{"lastResort": true}),
+			},
+		},
+		"mlsKeyBackups": {{Keys: bson.D{{Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}},
 	}
 	for coll, models := range specs {
 		if _, err := m.db.Collection(coll).Indexes().CreateMany(ctx, models); err != nil {

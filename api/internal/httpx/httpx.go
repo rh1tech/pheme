@@ -26,14 +26,20 @@ func Error(w http.ResponseWriter, status int, msg string) {
 	JSON(w, status, map[string]any{"error": map[string]string{"message": msg}})
 }
 
+// DefaultMaxBodyBytes bounds any JSON request body decoded through Decode.
+//
+// It is deliberately the DEFAULT rather than an opt-in: an unbounded decode is a
+// memory-exhaustion vector, and the endpoints most exposed to it are the
+// unauthenticated ones (register, login, password reset), which are exactly the ones
+// nobody remembers to opt in. Handlers that legitimately carry more — a batch of MLS
+// KeyPackages, say — call DecodeLimited with their own ceiling. A megabyte is orders
+// of magnitude beyond what any JSON body here needs.
+const DefaultMaxBodyBytes = 1 << 20
+
 // Decode reads a JSON request body into v, returning false (and writing a 400)
-// on failure.
+// on failure. The body is capped at DefaultMaxBodyBytes.
 func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		Error(w, http.StatusBadRequest, "invalid JSON body")
-		return false
-	}
-	return true
+	return DecodeLimited(w, r, v, DefaultMaxBodyBytes)
 }
 
 // DecodeLimited is Decode with a hard ceiling on the request body.

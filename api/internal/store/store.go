@@ -192,9 +192,14 @@ type Store interface {
 	// ClaimKeyPackage returns and removes one of a user's KeyPackages (they are
 	// single-use). ErrNotFound when the user has none left to claim.
 	ClaimKeyPackage(ctx context.Context, userID string) (domain.MLSKeyPackage, error)
-	// CountKeyPackages reports how many a device has left, so a client replenishes
-	// before running out.
+	// CountKeyPackages reports how many SINGLE-USE packages a device has left, so a
+	// client replenishes before running out. The last-resort package is excluded: it
+	// is never consumed, so counting it would tell the client it has stock it does
+	// not have.
 	CountKeyPackages(ctx context.Context, userID, deviceID string) (int64, error)
+	// HasLastResortKeyPackage reports whether a device has published its one reusable
+	// package yet.
+	HasLastResortKeyPackage(ctx context.Context, userID, deviceID string) (bool, error)
 
 	// Encrypted key backup (opaque ciphertext, one per user). PutKeyBackup
 	// upserts; GetKeyBackup returns ErrNotFound when the user has none.

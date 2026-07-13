@@ -59,7 +59,48 @@ impl Client {
     /// A public KeyPackage to publish to the server, for others to add this client
     /// to a group. Each is single-use; publish several.
     pub fn key_package(&self) -> Result<Vec<u8>, String> {
-        let bundle = KeyPackage::builder()
+        self.build_key_package(false)
+    }
+
+    /// A *last-resort* KeyPackage: one the client may be added with more than once.
+    ///
+    /// Ordinary KeyPackages are single-use — OpenMLS deletes the private init key the
+    /// first time one is used to join, so a second Welcome built from the same
+    /// KeyPackage fails with NoMatchingKeyPackage. That makes a user's published stock
+    /// exhaustible, and anyone can exhaust it: claim them all in a loop and the user
+    /// can no longer be added to any group. The last-resort extension is RFC 9420's
+    /// answer — OpenMLS keeps the private key when it is set, so this KeyPackage can be
+    /// handed out indefinitely and the user can always be reached.
+    ///
+    /// The cost is real but small and bounded: joins that fall back to this one reuse
+    /// an init key, weakening forward secrecy for those joins only. Being unreachable
+    /// on a stranger's whim is the worse failure.
+    ///
+    /// The extension must be set HERE, when the KeyPackage is built. A server-side flag
+    /// alone does nothing: the deletion happens on the client, and it keys off this
+    /// extension.
+    pub fn last_resort_key_package(&self) -> Result<Vec<u8>, String> {
+        self.build_key_package(true)
+    }
+
+    fn build_key_package(&self, last_resort: bool) -> Result<Vec<u8>, String> {
+        let mut builder = KeyPackage::builder();
+        if last_resort {
+            builder = builder
+                .mark_as_last_resort()
+                // A KeyPackage must declare that it supports every extension it
+                // carries, or the member adding it rejects it as UnsupportedExtension.
+                // Setting the extension without also advertising it produces a
+                // KeyPackage nobody can use.
+                .leaf_node_capabilities(Capabilities::new(
+                    None,
+                    None,
+                    Some(&[ExtensionType::LastResort]),
+                    None,
+                    None,
+                ));
+        }
+        let bundle = builder
             .build(CIPHERSUITE, &self.provider, &self.signer, self.credential_with_key.clone())
             .map_err(err("key package"))?;
         bundle.key_package().tls_serialize_detached().map_err(err("serialize kp"))
@@ -134,12 +175,24 @@ impl Client {
 
     /// Joins a group from a Welcome relayed by the server.
     ///
-    /// Refuses to join a group we are already in. The Delivery Service is untrusted
-    /// and nothing stops it replaying an old Welcome; joining again would hand our
-    /// live group state to `into_group`, which stores unconditionally by group id and
-    /// would roll the ratchet back to the stale epoch the Welcome carries —
-    /// resurrecting secrets that should be forward-secret and desyncing us from the
-    /// group. The caller guards this too, but the crypto core must not depend on it.
+    /// DANGER — processing a Welcome CONSUMES the KeyPackage it is addressed to, even
+    /// when the Welcome turns out to be invalid. OpenMLS looks the private init key up
+    /// by the Welcome's hash_ref and deletes it *before* it has verified anything about
+    /// the Welcome (see `keys_for_welcome` upstream, and the
+    /// `forged_welcome_burns_an_ordinary_key_package` test below, which pins this
+    /// behaviour). The Delivery Service knows every hash_ref it hands out, so anyone
+    /// able to inject a message can burn a victim's published KeyPackages by sending
+    /// garbage Welcomes addressed to them.
+    ///
+    /// Two things contain that. A last-resort KeyPackage is never deleted, so the user
+    /// always keeps one they can be added with (see `last_resort_key_package`). And the
+    /// CALLER must not feed arbitrary Welcomes in — only ones from the party that
+    /// legitimately created the conversation.
+    ///
+    /// Re-joining a group we already hold is refused. OpenMLS already rejects it during
+    /// staging (`WelcomeError::GroupAlreadyExists`), so this check is belt-and-braces
+    /// rather than the thing doing the work — kept because relying on an upstream
+    /// internal to protect our ratchet state is not something to leave implicit.
     pub fn join_from_welcome(&self, welcome: &[u8]) -> Result<(), String> {
         let msg = MlsMessageIn::tls_deserialize(&mut &*welcome).map_err(err("parse welcome"))?;
         let welcome = match msg.extract() {
@@ -485,6 +538,134 @@ mod tests {
         assert_ne!(
             under_mitm, from_alice,
             "a substituted KeyPackage must change the safety number, or it detects nothing",
+        );
+    }
+
+    // An ORDINARY KeyPackage is single-use: OpenMLS deletes the private init key on
+    // the first join. This is why a user's published stock is exhaustible, and why
+    // marking one "last resort" server-side alone would achieve nothing.
+    #[test]
+    fn ordinary_key_package_is_single_use() {
+        let bob = Client::new(b"bob").unwrap();
+        let kp = bob.key_package().unwrap();
+
+        let alice = Client::new(b"alice").unwrap();
+        alice.create_group(b"group-a").unwrap();
+        let add_a = alice.add_member(b"group-a", &kp).unwrap();
+        bob.join_from_welcome(&add_a.welcome).unwrap();
+
+        let carol = Client::new(b"carol").unwrap();
+        carol.create_group(b"group-c").unwrap();
+        let add_c = carol.add_member(b"group-c", &kp).unwrap();
+        // Bob's private init key for this KeyPackage is gone: he cannot join again.
+        assert!(bob.join_from_welcome(&add_c.welcome).is_err());
+    }
+
+    // A LAST-RESORT KeyPackage carries the RFC 9420 extension, so OpenMLS keeps the
+    // private key and the same KeyPackage can be handed out again and again. This is
+    // what actually stops a stranger draining a user's stock and making them
+    // unreachable — the server-side flag is only bookkeeping on top of this.
+    #[test]
+    fn last_resort_key_package_can_be_used_repeatedly() {
+        let bob = Client::new(b"bob").unwrap();
+        let kp = bob.last_resort_key_package().unwrap(); // ONE package, handed out twice
+
+        let alice = Client::new(b"alice").unwrap();
+        alice.create_group(b"group-a").unwrap();
+        let add_a = alice.add_member(b"group-a", &kp).unwrap();
+        bob.join_from_welcome(&add_a.welcome).unwrap();
+
+        let carol = Client::new(b"carol").unwrap();
+        carol.create_group(b"group-c").unwrap();
+        let add_c = carol.add_member(b"group-c", &kp).unwrap();
+        bob.join_from_welcome(&add_c.welcome)
+            .expect("a last-resort KeyPackage must still work after being used once");
+
+        // Both groups work, in both directions.
+        let ct = carol.encrypt(b"group-c", b"second group works").unwrap();
+        assert_eq!(
+            bob.decrypt(b"group-c", &ct).unwrap().as_deref(),
+            Some(&b"second group works"[..]),
+        );
+        let ct2 = alice.encrypt(b"group-a", b"first group still works").unwrap();
+        assert_eq!(
+            bob.decrypt(b"group-a", &ct2).unwrap().as_deref(),
+            Some(&b"first group still works"[..]),
+        );
+    }
+
+    // A forged Welcome must not be able to destroy our KeyPackage's private key.
+    //
+    // OpenMLS looks up (and deletes) the private key as soon as it matches the
+    // Welcome's hash_ref — BEFORE it has verified anything about the Welcome. The
+    // untrusted server knows every hash_ref it hands out, so if that deletion happens
+    // on a Welcome that then fails to decrypt, anyone able to inject a message can
+    // silently burn a victim's published KeyPackages and make them unreachable.
+    #[test]
+    fn forged_welcome_burns_an_ordinary_key_package() {
+        let bob = Client::new(b"bob").unwrap();
+        let kp = bob.key_package().unwrap();
+
+        let alice = Client::new(b"alice").unwrap();
+        alice.create_group(b"group-a").unwrap();
+        let valid = alice.add_member(b"group-a", &kp).unwrap().welcome;
+
+        // Corrupt the tail (the encrypted group secrets / group info), leaving the
+        // structure and the hash_ref that selects Bob's KeyPackage intact.
+        let mut forged = valid.clone();
+        let n = forged.len();
+        for b in forged[n - 24..].iter_mut() {
+            *b ^= 0xff;
+        }
+
+        // Bob processes the forged Welcome (his client does this automatically).
+        let forged_result = bob.join_from_welcome(&forged);
+        println!("forged join -> {:?}", forged_result);
+
+        assert!(forged_result.is_err());
+
+        // The legitimate Welcome now FAILS: OpenMLS deleted the private key the moment
+        // it matched the hash_ref, before it had validated anything. This is why the
+        // last-resort package matters — see the test below. It is also why the client
+        // must not process a Welcome from just anyone.
+        assert!(
+            bob.join_from_welcome(&valid).is_err(),
+            "OpenMLS is expected to have burned the key package here; if this now passes, \
+             upstream changed and the mitigations below can be revisited",
+        );
+    }
+
+    // The last-resort package is immune to the burn: OpenMLS only deletes the private
+    // key when the last_resort extension is absent. So however many forged Welcomes an
+    // attacker injects, the victim keeps ONE package they can always be added with, and
+    // stays reachable. This is what turns a permanent denial of service into a
+    // temporary loss of the single-use stock.
+    #[test]
+    fn forged_welcome_cannot_burn_the_last_resort_key_package() {
+        let bob = Client::new(b"bob").unwrap();
+        let kp = bob.last_resort_key_package().unwrap();
+
+        let alice = Client::new(b"alice").unwrap();
+        alice.create_group(b"group-a").unwrap();
+        let valid = alice.add_member(b"group-a", &kp).unwrap().welcome;
+
+        let mut forged = valid.clone();
+        let n = forged.len();
+        for b in forged[n - 24..].iter_mut() {
+            *b ^= 0xff;
+        }
+
+        // Bob processes a forged Welcome aimed at his last-resort package. It fails...
+        assert!(bob.join_from_welcome(&forged).is_err());
+
+        // ...but the package survives, so the real Welcome still works.
+        bob.join_from_welcome(&valid)
+            .expect("a forged Welcome must not burn the last-resort key package");
+
+        let ct = alice.encrypt(b"group-a", b"still reachable").unwrap();
+        assert_eq!(
+            bob.decrypt(b"group-a", &ct).unwrap().as_deref(),
+            Some(&b"still reachable"[..]),
         );
     }
 

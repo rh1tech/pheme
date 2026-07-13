@@ -3,46 +3,42 @@ package store
 import (
 	"context"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// AddKeyPackages stores exactly what it is given. Whether a package is last-resort
+// is decided by the client that built it (an RFC 9420 extension in the bytes) — the
+// server only records the fact, it cannot confer it.
 func (m *Mongo) AddKeyPackages(ctx context.Context, packages []domain.MLSKeyPackage) error {
 	if len(packages) == 0 {
 		return nil
 	}
-	col := m.db.Collection("mlsKeyPackages")
 	docs := make([]any, 0, len(packages))
 	for _, kp := range packages {
 		if kp.ID == "" {
 			kp.ID = mongoID()
 		}
-		// The first KeyPackage a device ever publishes becomes its last resort, so
-		// the device can never be drained to zero by repeated claims.
-		if !kp.LastResort {
-			n, err := col.CountDocuments(ctx,
-				bson.M{"userId": kp.UserID, "deviceId": kp.DeviceID, "lastResort": true})
-			if err != nil {
-				return err
-			}
-			kp.LastResort = n == 0
-		}
 		docs = append(docs, kp)
-		if kp.LastResort {
-			// Insert it now so the next package in this batch sees it and does not
-			// also claim the role.
-			if _, err := col.InsertOne(ctx, kp); err != nil {
-				return err
-			}
-			docs = docs[:len(docs)-1]
-		}
 	}
-	if len(docs) == 0 {
+	// Unordered, so a rejected duplicate does not abandon the rest of the batch. The
+	// only duplicate possible is a second last-resort package, which the partial
+	// unique index refuses — two tabs replenishing at once is a race we expect, and
+	// losing it simply means the package we already have stands.
+	_, err := m.db.Collection("mlsKeyPackages").
+		InsertMany(ctx, docs, options.InsertMany().SetOrdered(false))
+	if mongo.IsDuplicateKeyError(err) {
 		return nil
 	}
-	_, err := col.InsertMany(ctx, docs)
 	return err
+}
+
+func (m *Mongo) HasLastResortKeyPackage(ctx context.Context, userID, deviceID string) (bool, error) {
+	n, err := m.db.Collection("mlsKeyPackages").CountDocuments(ctx,
+		bson.M{"userId": userID, "deviceId": deviceID, "lastResort": true})
+	return n > 0, err
 }
 
 // ClaimKeyPackage hands out one of a user's KeyPackages. A single-use package is

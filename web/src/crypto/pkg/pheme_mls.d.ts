@@ -65,6 +65,11 @@ export class MlsClient {
      */
     keyPackage(): Uint8Array;
     /**
+     * A reusable last-resort KeyPackage, so the user can always be added to a group
+     * even after their single-use stock has been claimed.
+     */
+    lastResortKeyPackage(): Uint8Array;
+    /**
      * Creates a fresh identity. `identity` is the user/device id bytes.
      */
     constructor(identity: Uint8Array);
@@ -113,6 +118,7 @@ export interface InitOutput {
     readonly mlsclient_identityKey: (a: number) => [number, number];
     readonly mlsclient_joinFromWelcome: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_keyPackage: (a: number) => [number, number, number, number];
+    readonly mlsclient_lastResortKeyPackage: (a: number) => [number, number, number, number];
     readonly mlsclient_new: (a: number, b: number) => [number, number, number];
     readonly mlsclient_safetyNumber: (a: number, b: number, c: number) => [number, number, number, number];
     readonly __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;

@@ -11,7 +11,11 @@
 // reinstalls and gets new keys. So a change is a prompt to re-verify, not proof of
 // an attack — the UI says exactly that.
 
-const pinKey = (conversationId: string) => `pheme.safety.${conversationId}`
+// Scoped by user as well as conversation. Conversation ids are unique in practice,
+// but relying on that would make id-uniqueness an unstated security boundary — one
+// account's pin must never be able to stand in for another's.
+const pinKey = (userId: string, conversationId: string) =>
+  `pheme.safety.${userId}.${conversationId}`
 
 export type SafetyState =
   | { status: 'first-seen'; number: string }
@@ -23,10 +27,14 @@ export type SafetyState =
  * it if this is the first sight. Does not auto-accept a change: the caller decides
  * what to show, and `accept` records the new number once the user has re-verified.
  */
-export function checkSafetyNumber(conversationId: string, current: string): SafetyState {
-  const previous = read(conversationId)
+export function checkSafetyNumber(
+  userId: string,
+  conversationId: string,
+  current: string,
+): SafetyState {
+  const previous = read(userId, conversationId)
   if (!previous) {
-    write(conversationId, current)
+    write(userId, conversationId, current)
     return { status: 'first-seen', number: current }
   }
   if (previous === current) return { status: 'unchanged', number: current }
@@ -34,21 +42,21 @@ export function checkSafetyNumber(conversationId: string, current: string): Safe
 }
 
 /** Pins the current number, after the user has re-verified a change. */
-export function acceptSafetyNumber(conversationId: string, current: string): void {
-  write(conversationId, current)
+export function acceptSafetyNumber(userId: string, conversationId: string, current: string): void {
+  write(userId, conversationId, current)
 }
 
-function read(conversationId: string): string {
+function read(userId: string, conversationId: string): string {
   try {
-    return localStorage.getItem(pinKey(conversationId)) ?? ''
+    return localStorage.getItem(pinKey(userId, conversationId)) ?? ''
   } catch {
     return ''
   }
 }
 
-function write(conversationId: string, value: string): void {
+function write(userId: string, conversationId: string, value: string): void {
   try {
-    localStorage.setItem(pinKey(conversationId), value)
+    localStorage.setItem(pinKey(userId, conversationId), value)
   } catch {
     // Storage blocked: we simply cannot pin. The out-of-band check still works.
   }
