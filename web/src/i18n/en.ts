@@ -160,9 +160,9 @@ const en = {
   },
   chat: {
     searchChannels: 'Search',
-    noChannels: 'No channels yet',
+    noChannels: 'No chats or channels yet',
     noResults: 'Nothing found',
-    pickChannel: 'Select a channel to start reading',
+    pickChannel: 'Select a chat or channel to start reading',
     pickChannelHint: 'Your messages appear here.',
     readOnly: 'Only admins can post in this channel',
     photo: 'Photo',
