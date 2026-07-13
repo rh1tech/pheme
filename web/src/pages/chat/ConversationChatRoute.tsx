@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActionIcon, Group, Stack, Text, Textarea } from '@mantine/core'
-import { IconArrowLeft, IconSend, IconShieldLock } from '@tabler/icons-react'
+import { ActionIcon, Alert, Group, Stack, Text, Textarea } from '@mantine/core'
+import { IconArrowLeft, IconLock, IconSend, IconShieldLock } from '@tabler/icons-react'
 import type { KeyboardEvent } from 'react'
 import { useMediaQuery } from '@mantine/hooks'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
@@ -11,6 +11,7 @@ import { deserializeContent, serializeContent } from '../../lib/chatContent'
 import {
   MLS_APPLICATION,
   MLS_WELCOME,
+  PeerKeysMissingError,
   base64ToBytes,
   mlsSession,
   provisionGroup,
@@ -66,6 +67,8 @@ export function ConversationChatRoute() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [safetyOpen, setSafetyOpen] = useState(false)
+  // The other person has published no keys, so there is no way to encrypt to them yet.
+  const [peerNotReady, setPeerNotReady] = useState(false)
   const textRef = useRef<HTMLTextAreaElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
 
@@ -104,8 +107,14 @@ export function ConversationChatRoute() {
       .then((c) => {
         if (!active) return
         setConversation(c)
-        // The creator sets up the group and relays Welcomes so members can join.
-        if (userId) provisionGroup(c, userId).catch(() => {})
+        // The creator sets up the group and relays Welcomes so members can join. If the
+        // other person has not published keys yet, say so plainly rather than letting
+        // the user discover it by having a message fail to send.
+        if (userId) {
+          provisionGroup(c, userId).catch((e: unknown) => {
+            if (active) setPeerNotReady(e instanceof PeerKeysMissingError)
+          })
+        }
       })
       .catch(() => active && setConversation(null))
     return () => {
@@ -297,7 +306,12 @@ export function ConversationChatRoute() {
       requestAnimationFrame(() => scrollToBottom('smooth'))
       textRef.current?.focus()
     } catch (e) {
-      notifyError(t('channel.sendFailed'), e)
+      if (e instanceof PeerKeysMissingError) {
+        setPeerNotReady(true)
+        notifyError(t('chat.peerNotReady'), null)
+      } else {
+        notifyError(t('channel.sendFailed'), e)
+      }
     } finally {
       setSending(false)
     }
@@ -408,6 +422,20 @@ export function ConversationChatRoute() {
       </div>
 
       <div className="pheme-composer" data-testid="composer">
+        {/* Nothing can be encrypted to someone who has published no keys. Say that here,
+            where the user is about to type, rather than after their message fails. */}
+        {peerNotReady && (
+          <Alert
+            variant="light"
+            color="yellow"
+            icon={<IconLock size={16} />}
+            p="xs"
+            mb="xs"
+            data-testid="peer-not-ready"
+          >
+            <Text size="xs">{t('chat.peerNotReady')}</Text>
+          </Alert>
+        )}
         <Group gap="xs" align="flex-end" wrap="nowrap">
           <Textarea
             ref={textRef}

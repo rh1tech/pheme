@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { API_URL } from './constants'
 import { createUserViaAdmin, login, loginAsAdmin, uniqueEmail } from './helpers'
 
 const PASSWORD = 'Sup3rSecret!'
@@ -43,6 +44,45 @@ function readCryptoState(page: Page): Promise<{ keys: string[]; previews: number
     return { keys, previews }
   })
 }
+
+/**
+ * Signing in must publish this device's KeyPackages.
+ *
+ * They are what someone else claims in order to add you to an encrypted group. With
+ * none published, anyone trying to start a chat with you gets "no key package
+ * available for that user" and simply cannot reach you. This has to happen on sign-in,
+ * not when you first open a conversation — otherwise a new user is unreachable until
+ * they happen to open one, which is backwards.
+ */
+test('signing in publishes key packages so others can start a chat with you', async ({ page }) => {
+  const email = uniqueEmail('e2ee-keys')
+  await loginAsAdmin(page)
+  await createUserViaAdmin(page, email, PASSWORD)
+  await login(page, email, PASSWORD)
+
+  const stock = async () =>
+    page.evaluate(async (apiBase: string) => {
+      const accessToken = localStorage.getItem('pheme.accessToken') ?? ''
+      const deviceId = localStorage.getItem('pheme.webDeviceId') ?? ''
+      const res = await fetch(
+        `${apiBase}/v1/mls/key-packages/count?deviceId=${encodeURIComponent(deviceId)}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      )
+      if (!res.ok) return { count: -1, hasLastResort: false }
+      return (await res.json()) as { count: number; hasLastResort: boolean }
+    }, API_URL)
+
+  await expect
+    .poll(async () => (await stock()).count, {
+      message: 'signing in must publish single-use key packages',
+      timeout: 20_000,
+    })
+    .toBeGreaterThan(0)
+
+  // And the reusable one, without which a stranger could claim the stock in a loop and
+  // leave this user permanently unreachable.
+  expect((await stock()).hasLastResort, 'a last-resort key package must be published').toBe(true)
+})
 
 /**
  * Logging out must destroy this device's MLS private keys and every decrypted

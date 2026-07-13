@@ -11,6 +11,44 @@ import { useEffect, useState } from 'react'
  * is used instead of `100dvh` plus a separate inset: combining the two would
  * subtract the toolbar twice.
  */
+/** The visible viewport's height and where it starts, relative to the layout viewport. */
+export interface ViewportRect {
+  height: number
+  offsetTop: number
+}
+
+/**
+ * The rectangle iOS is actually showing, or null where the browser has no
+ * visualViewport.
+ *
+ * A `position: fixed` element is placed against the LAYOUT viewport, which iOS does
+ * not shrink when the keyboard opens — only the visual viewport shrinks. So anything
+ * pinned to the bottom of the screen (a dialog presented as a bottom sheet, say) ends
+ * up underneath the keyboard, taking its text field with it. Positioning against this
+ * rectangle instead keeps it above the keyboard, where it can be typed into.
+ */
+export function useVisualViewportRect(): ViewportRect | null {
+  const [rect, setRect] = useState<ViewportRect | null>(() =>
+    window.visualViewport
+      ? { height: window.visualViewport.height, offsetTop: window.visualViewport.offsetTop }
+      : null,
+  )
+
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => setRect({ height: vv.height, offsetTop: vv.offsetTop })
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
+  }, [])
+
+  return rect
+}
+
 export function useVisualViewportHeight(): number | null {
   const [height, setHeight] = useState<number | null>(
     () => window.visualViewport?.height ?? null,

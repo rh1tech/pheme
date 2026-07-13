@@ -5,7 +5,6 @@ import {
   Button,
   Group,
   Menu,
-  Modal,
   PasswordInput,
   Select,
   Stack,
@@ -22,6 +21,7 @@ import { useAuth } from '../../auth/context'
 import type { AdminUser, Paged, Role, UserStatus } from '../../lib/types'
 import { ADMIN_PAGE_LIMIT, AdminPageShell, Pager, SearchBar } from '../../components/admin/AdminUI'
 import { ConfirmModal } from '../../components/ConfirmModal'
+import { ResponsiveModal } from '../../components/ResponsiveModal'
 import { PasswordStrength } from '../../components/PasswordStrength'
 import { RoleBadge, UserStatusBadge } from '../../components/badges'
 import { TableRowsSkeleton } from '../../components/Skeletons'
@@ -156,7 +156,8 @@ export function AdminUsersPage() {
         </Group>
       }
     >
-      <Modal opened={createOpen} onClose={() => setCreateOpen(false)} title={t('admin.addUser')}>
+      {/* A sheet on mobile, anchored above the keyboard — this dialog is all text fields. */}
+      <ResponsiveModal opened={createOpen} onClose={() => setCreateOpen(false)} title={t('admin.addUser')}>
         <Stack gap="sm">
           <TextInput
             label={t('auth.email')}
@@ -192,7 +193,7 @@ export function AdminUsersPage() {
             </Button>
           </Group>
         </Stack>
-      </Modal>
+      </ResponsiveModal>
 
       <ConfirmModal
         opened={deleteId !== null}

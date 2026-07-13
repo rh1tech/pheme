@@ -10,7 +10,7 @@
 
 import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/pheme_mls.js'
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
-import { api } from './api'
+import { ApiError, api } from './api'
 import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
 import { clearPreviews } from './chatCache'
 import { clearSafetyPins } from './safety'
@@ -40,6 +40,18 @@ export class SessionInvalidatedError extends Error {
   constructor() {
     super('this device\'s encryption keys were replaced or destroyed')
     this.name = 'SessionInvalidatedError'
+  }
+}
+
+/**
+ * Thrown when the person we are trying to reach has published no KeyPackages — they
+ * have not opened Pheme on a device that does encrypted chats, so there is nothing to
+ * build a group with. They become reachable the moment they do.
+ */
+export class PeerKeysMissingError extends Error {
+  constructor() {
+    super('that person has not set up encrypted chats yet')
+    this.name = 'PeerKeysMissingError'
   }
 }
 
@@ -287,7 +299,16 @@ class Session {
     // lock blocks every other tab for as long as it is held.
     const keyPackages: Uint8Array[] = []
     for (const userId of memberUserIds) {
-      keyPackages.push(base64ToBytes(await api.claimKeyPackage(userId)))
+      try {
+        keyPackages.push(base64ToBytes(await api.claimKeyPackage(userId)))
+      } catch (e) {
+        // They have published no KeyPackages, so there is no way to add them to an
+        // encrypted group — nobody can reach them until they open Pheme once. That is
+        // a fact about the other person, not a failure of ours, and the UI has to say
+        // so rather than reporting a generic error the user cannot act on.
+        if (e instanceof ApiError && e.status === 404) throw new PeerKeysMissingError()
+        throw e
+      }
     }
 
     return this.exclusive(async () => {

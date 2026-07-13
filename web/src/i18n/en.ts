@@ -188,6 +188,8 @@ const en = {
     noPeople: 'No one found',
     startFailed: 'Could not start the chat',
     notJoined: 'Setting up encryption — try again in a moment',
+    peerNotReady:
+      'This person hasn’t set up encrypted chats yet. They need to open Pheme once — then your messages will go through.',
     encryptedPreview: 'Encrypted message',
     chatsSection: 'Chats',
     channelsSection: 'Channels',
