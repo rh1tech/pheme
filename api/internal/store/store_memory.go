@@ -26,6 +26,9 @@ type Memory struct {
 	messages      map[string]domain.Message
 	deliveries    map[string]domain.Delivery
 	comments      map[string]domain.Comment
+	conversations map[string]domain.Conversation
+	convMembers   map[string]domain.ConversationMember
+	chatMessages  map[string]domain.ChatMessage
 	blobs         blob.Store
 }
 
@@ -42,6 +45,9 @@ func NewMemory(blobs blob.Store) *Memory {
 		messages:      map[string]domain.Message{},
 		deliveries:    map[string]domain.Delivery{},
 		comments:      map[string]domain.Comment{},
+		conversations: map[string]domain.Conversation{},
+		convMembers:   map[string]domain.ConversationMember{},
+		chatMessages:  map[string]domain.ChatMessage{},
 		blobs:         blobs,
 	}
 }

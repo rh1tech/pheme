@@ -9,10 +9,18 @@ import (
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
 
-// Event is a live notification delivered to subscribed web clients.
+// Event is a live event delivered to subscribed clients over the per-user SSE
+// stream. It is one of two shapes, distinguished by which id is set:
+//   - a channel broadcast: ChannelID + Message (authorised by channel read access)
+//   - a conversation message: ConversationID + ChatMessage (authorised by membership)
+//
+// Both ride the same stream; the SSE handler branches on ConversationID.
 type Event struct {
-	ChannelID string         `json:"channelId"`
-	Message   domain.Message `json:"message"`
+	ChannelID string         `json:"channelId,omitempty"`
+	Message   domain.Message `json:"message,omitempty"`
+
+	ConversationID string              `json:"conversationId,omitempty"`
+	ChatMessage    *domain.ChatMessage `json:"chatMessage,omitempty"`
 }
 
 // Bus distributes live events to subscribers.

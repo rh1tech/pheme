@@ -13,6 +13,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/broker"
+	"github.com/rh1tech/pheme/api/internal/chat"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/live"
@@ -28,6 +29,7 @@ type AppHandler struct {
 	Publisher      broker.Publisher
 	Blob           blob.Store
 	Admin          *AdminHandler
+	Chat           *chat.Handler
 	VAPIDPublicKey string
 }
 
@@ -86,6 +88,9 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 
 	if h.Admin != nil {
 		h.Admin.Register(protected)
+	}
+	if h.Chat != nil {
+		h.Chat.Register(protected)
 	}
 
 	mux.Handle("/v1/", h.Tokens.Middleware(protected))
@@ -613,7 +618,14 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			if !h.canReadChannel(r.Context(), uid, e.ChannelID) {
+			// Two event shapes on one stream. A conversation event is authorised
+			// by live membership; a channel event by channel read access. Either
+			// check re-runs per event, so a removal silences an open stream at once.
+			if e.ConversationID != "" {
+				if _, err := h.Store.ConversationMembership(r.Context(), e.ConversationID, uid); err != nil {
+					continue // not a member of this conversation
+				}
+			} else if !h.canReadChannel(r.Context(), uid, e.ChannelID) {
 				continue // not (or no longer) an active member of this channel
 			}
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", mustJSON(e))

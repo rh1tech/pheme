@@ -82,6 +82,12 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 		"messages":       {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "createdAt", Value: -1}}}},
 		"deliveries":     {{Keys: bson.D{{Key: "messageId", Value: 1}}}},
 		"comments":       {{Keys: bson.D{{Key: "messageId", Value: 1}, {Key: "createdAt", Value: -1}}}, {Keys: bson.D{{Key: "channelId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "createdAt", Value: -1}}}},
+		// Conversations: a unique partial index on directKey enforces one direct
+		// chat per user pair; chatMessages sorts by (conversationId, createdAt desc)
+		// like messages does by channel.
+		"conversations":       {{Keys: bson.D{{Key: "directKey", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"directKey": bson.M{"$exists": true}})}},
+		"conversationMembers": {{Keys: bson.D{{Key: "conversationId", Value: 1}, {Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "userId", Value: 1}}}},
+		"chatMessages":        {{Keys: bson.D{{Key: "conversationId", Value: 1}, {Key: "createdAt", Value: -1}}}},
 	}
 	for coll, models := range specs {
 		if _, err := m.db.Collection(coll).Indexes().CreateMany(ctx, models); err != nil {

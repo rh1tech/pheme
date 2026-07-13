@@ -276,6 +276,77 @@ type AdminStats struct {
 	RecentMessages []Message       `json:"recentMessages"`
 }
 
+// --- Conversations (direct + group chats) ------------------------------------
+//
+// Conversations are the private, member-to-member counterpart of channels.
+// Unlike a channel — which is a broadcast target the server can read — a
+// conversation carries opaque message content the server never interprets. The
+// server is an MLS Delivery Service here: it stores membership and relays bytes.
+// Message content is end-to-end encrypted by the clients (see the crypto plan);
+// the store treats it as an opaque blob and never as text.
+
+// ConversationKind distinguishes a two-person direct chat from a named group.
+type ConversationKind string
+
+const (
+	// ConversationDirect is a 1-to-1 chat between exactly two users. There is at
+	// most one direct conversation per unordered pair (enforced by DirectKey).
+	ConversationDirect ConversationKind = "direct"
+	// ConversationGroup is a named, multi-member chat.
+	ConversationGroup ConversationKind = "group"
+)
+
+// Conversation is a private chat. Title and AvatarID apply to groups; a direct
+// chat has neither and is labelled client-side from the other member.
+type Conversation struct {
+	ID        string           `bson:"_id,omitempty" json:"id"`
+	Kind      ConversationKind `bson:"kind" json:"kind"`
+	Title     string           `bson:"title,omitempty" json:"title,omitempty"`
+	AvatarID  string           `bson:"avatarId,omitempty" json:"avatarId,omitempty"`
+	CreatedBy string           `bson:"createdBy" json:"createdBy"`
+	// DirectKey is the deduplication key for direct chats: the two member ids
+	// sorted and joined, so the pair {a,b} maps to one conversation regardless of
+	// who starts it. Empty for groups. Uniquely indexed (partial) in Mongo.
+	DirectKey string    `bson:"directKey,omitempty" json:"-"`
+	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
+}
+
+// ConversationMember is a user's membership in a conversation. Role reuses the
+// Role type: a group creator is 'admin', everyone else 'user'. Direct chats have
+// two 'user' members and no admin.
+type ConversationMember struct {
+	ID             string    `bson:"_id,omitempty" json:"id"`
+	ConversationID string    `bson:"conversationId" json:"conversationId"`
+	UserID         string    `bson:"userId" json:"userId"`
+	Role           Role      `bson:"role" json:"role"`
+	JoinedAt       time.Time `bson:"joinedAt" json:"joinedAt"`
+}
+
+// ChatMessage is one message in a conversation. Unlike the broadcast Message, it
+// has a SenderID (a chat message is authored by a user, not by a channel) and
+// its content is an opaque, client-encrypted Ciphertext the server never reads.
+// ContentType lets clients tell an application message from an MLS control
+// message (Commit/Welcome) that rides the same ordered log.
+type ChatMessage struct {
+	ID             string    `bson:"_id,omitempty" json:"id"`
+	ConversationID string    `bson:"conversationId" json:"conversationId"`
+	SenderID       string    `bson:"senderId" json:"senderId"`
+	// Ciphertext is opaque bytes: MLS ciphertext once E2EE is on, plaintext-JSON
+	// in the interim. The server stores and relays it without interpretation.
+	Ciphertext  []byte    `bson:"ciphertext" json:"ciphertext"`
+	ContentType string    `bson:"contentType" json:"contentType"`
+	CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
+}
+
+// DirectKey builds the unique deduplication key for a direct chat between two
+// users: their ids sorted and joined, so {a,b} and {b,a} collide to one row.
+func DirectKey(userA, userB string) string {
+	if userA > userB {
+		userA, userB = userB, userA
+	}
+	return userA + ":" + userB
+}
+
 // aliasPattern enforces the phetag charset and start-character rule. The length
 // bound (2–24) is implied by the quantifier and re-checked in ValidateAlias for
 // a clearer error message.

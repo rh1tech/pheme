@@ -16,6 +16,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/bootstrap"
 	"github.com/rh1tech/pheme/api/internal/channel"
+	"github.com/rh1tech/pheme/api/internal/chat"
 	"github.com/rh1tech/pheme/api/internal/config"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/store"
@@ -80,6 +81,7 @@ func main() {
 		Publisher:      pub,
 		Blob:           blobs,
 		Admin:          &channel.AdminHandler{Store: db},
+		Chat:           &chat.Handler{Store: db, Live: bus},
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
 	}).Routes(mux)
 

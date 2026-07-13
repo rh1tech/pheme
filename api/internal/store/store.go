@@ -152,6 +152,32 @@ type Store interface {
 	// non-empty query matches the comment body (case-insensitive substring).
 	AdminListComments(ctx context.Context, query string, offset, limit int) ([]domain.Comment, int64, error)
 
+	// Conversations (private direct + group chats). Content is opaque to the
+	// store — a ChatMessage's Ciphertext is never read, only stored and relayed.
+	CreateConversation(ctx context.Context, c domain.Conversation, members []domain.ConversationMember) (domain.Conversation, error)
+	ConversationByID(ctx context.Context, id string) (domain.Conversation, error)
+	// ConversationByDirectKey finds the existing direct chat for a user pair, or
+	// ErrNotFound. Used to dedupe before creating a new direct conversation.
+	ConversationByDirectKey(ctx context.Context, directKey string) (domain.Conversation, error)
+	// ConversationsForUser returns the conversations a user belongs to, newest
+	// activity first (or creation time when a conversation has no messages).
+	ConversationsForUser(ctx context.Context, userID string) ([]domain.Conversation, error)
+	ConversationMembers(ctx context.Context, conversationID string) ([]domain.ConversationMember, error)
+	// ConversationMembership returns a user's membership row, or ErrNotFound if
+	// they are not a member (the authorization check for every conversation op).
+	ConversationMembership(ctx context.Context, conversationID, userID string) (domain.ConversationMember, error)
+	AddConversationMember(ctx context.Context, m domain.ConversationMember) (domain.ConversationMember, error)
+	RemoveConversationMember(ctx context.Context, conversationID, userID string) error
+	// AppendChatMessage stores one message in a conversation's ordered log.
+	AppendChatMessage(ctx context.Context, m domain.ChatMessage) (domain.ChatMessage, error)
+	// ChatMessagesByConversation returns messages newest-first with cursor
+	// pagination (cursor is an exclusive anchor message id), mirroring
+	// MessagesByChannel. There is no query parameter — content is opaque.
+	ChatMessagesByConversation(ctx context.Context, conversationID, cursor string, limit int) ([]domain.ChatMessage, error)
+	// LastChatMessagesByConversations returns the newest message of each given
+	// conversation, keyed by conversation id, for chat-list ordering/preview.
+	LastChatMessagesByConversations(ctx context.Context, conversationIDs []string) (map[string]domain.ChatMessage, error)
+
 	// Admin
 	AdminStats(ctx context.Context, topN, recentN int) (domain.AdminStats, error)
 
