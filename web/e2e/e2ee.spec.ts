@@ -3,8 +3,28 @@ import { createUserViaAdmin, login, loginAsAdmin, uniqueEmail } from './helpers'
 
 const PASSWORD = 'Sup3rSecret!'
 
-/** The keys and cached plaintext this app stores locally, read from the page. */
-async function localCryptoState(page: Page): Promise<{ keys: string[]; previews: number }> {
+// These assert storage semantics (IndexedDB, Web Locks), not rendering. One engine is
+// enough, and WebKit in CI is flaky enough that running them there only adds noise.
+test.skip(({ browserName }) => browserName !== 'chromium', 'storage semantics: chromium only')
+
+/**
+ * The keys and cached plaintext this app stores locally, read from the page.
+ *
+ * Returns null while the page is navigating — logout redirects, and a read that lands
+ * mid-navigation throws rather than telling us anything. Callers poll, so a null is
+ * simply "ask again".
+ */
+async function localCryptoState(
+  page: Page,
+): Promise<{ keys: string[]; previews: number } | null> {
+  try {
+    return await readCryptoState(page)
+  } catch {
+    return null
+  }
+}
+
+function readCryptoState(page: Page): Promise<{ keys: string[]; previews: number }> {
   return page.evaluate(async () => {
     const keys = await new Promise<string[]>((resolve) => {
       const req = indexedDB.open('pheme', 1)
@@ -41,7 +61,7 @@ test('logging out destroys the local encryption keys', async ({ page }) => {
 
   // Opening the chat surface creates this device's MLS identity and stores it.
   await expect
-    .poll(async () => (await localCryptoState(page)).keys, {
+    .poll(async () => (await localCryptoState(page))?.keys ?? [], {
       message: 'the MLS client state should be stored locally after signing in',
       timeout: 15_000,
     })
@@ -60,13 +80,16 @@ test('logging out destroys the local encryption keys', async ({ page }) => {
   // the keys we just destroyed straight back to disk.
   await expect
     .poll(
-      async () =>
-        (await localCryptoState(page)).keys.filter((k) => k !== 'client-epoch'),
+      async () => {
+        const state = await localCryptoState(page)
+        // Null while the redirect is in flight — not yet an answer, so keep asking.
+        return state ? state.keys.filter((k) => k !== 'client-epoch') : ['pending']
+      },
       { message: 'no MLS key material may survive a logout', timeout: 15_000 },
     )
     .toEqual([])
 
-  const after = await localCryptoState(page)
+  const after = await readCryptoState(page)
   expect(after.previews, 'no decrypted message previews may survive a logout').toBe(0)
 })
 
@@ -96,7 +119,7 @@ test('logging out in one tab destroys the keys for another tab too', async ({ br
   await expect(tabB.getByTestId('chat-sidebar')).toBeVisible()
 
   await expect
-    .poll(async () => (await localCryptoState(tabB)).keys, { timeout: 15_000 })
+    .poll(async () => (await localCryptoState(tabB))?.keys ?? [], { timeout: 15_000 })
     .toContain('client-state')
 
   // Tab A logs out. Tab B is never told.
@@ -107,7 +130,10 @@ test('logging out in one tab destroys the keys for another tab too', async ({ br
   // Tab B's keys are gone from disk...
   await expect
     .poll(
-      async () => (await localCryptoState(tabB)).keys.filter((k) => k !== 'client-epoch'),
+      async () => {
+        const state = await localCryptoState(tabB)
+        return state ? state.keys.filter((k) => k !== 'client-epoch') : ['pending']
+      },
       { message: 'the wipe must reach every tab, not just the one that logged out', timeout: 15_000 },
     )
     .toEqual([])
