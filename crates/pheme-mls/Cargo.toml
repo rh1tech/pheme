@@ -1,0 +1,27 @@
+[package]
+name = "pheme-mls"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Pheme MLS spike — OpenMLS wrapper, proving a WASM build round-trips."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+openmls = "0.8"
+# Match the sub-crate versions openmls 0.8.1 itself depends on, or the Signer
+# trait resolves to two different crate versions and won't unify.
+openmls_rust_crypto = "0.5"
+openmls_basic_credential = "0.5"
+openmls_traits = "0.5"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+getrandom = { version = "0.2", features = ["js"] }
+# OpenMLS needs its `js` feature on wasm to reach browser randomness and clock;
+# it refuses to compile otherwise (with a compile_error pointing here).
+openmls = { version = "0.8", features = ["js"] }
+
+[profile.release]
+opt-level = "s"

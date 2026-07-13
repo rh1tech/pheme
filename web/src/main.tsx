@@ -21,7 +21,9 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <MantineProvider theme={theme} defaultColorScheme="auto">
       <NavigationProgress />
-      <Notifications />
+      {/* Top-right, not the default bottom-right: on the chat surface the send
+          button sits in the bottom-right corner, and a toast there covers it. */}
+      <Notifications position="top-right" />
       <ErrorBoundary>
         <App />
       </ErrorBoundary>
