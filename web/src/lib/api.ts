@@ -66,6 +66,12 @@ interface RequestOptions {
   body?: unknown
   /** When true, do not attach the bearer token or attempt a refresh. */
   public?: boolean
+  /**
+   * When true, skip the global top progress bar. Used by background fetches the
+   * reader did not ask for — paginating older messages while scrolling would
+   * otherwise flash the bar on every page.
+   */
+  quiet?: boolean
 }
 
 async function rawFetch<T>(path: string, opts: RequestOptions, token?: string): Promise<T> {
@@ -110,18 +116,48 @@ async function refresh(tokens: Tokens): Promise<string> {
 
 // A top loading bar is shown while any API request is in flight. A counter keeps
 // it visible until the last concurrent request finishes.
+//
+// The bar is delayed rather than shown immediately: most requests here finish in
+// tens of milliseconds, and a bar that appears and vanishes within a frame or two
+// reads as a glitch, not as progress. Nothing is drawn unless the work outlasts
+// this delay — so a fast channel switch is silent, and only a genuinely slow one
+// announces itself.
+const PROGRESS_DELAY_MS = 400
+
 let inflight = 0
+let showTimer: ReturnType<typeof setTimeout> | null = null
+let showing = false
+
 function progressStart(): void {
-  if (inflight === 0) nprogress.start()
   inflight++
+  if (inflight > 1 || showTimer !== null || showing) return
+  showTimer = setTimeout(() => {
+    showTimer = null
+    // Still waiting on something when the delay elapsed — now the bar earns its keep.
+    if (inflight === 0) return
+    nprogress.start()
+    showing = true
+  }, PROGRESS_DELAY_MS)
 }
+
 function progressDone(): void {
   inflight = Math.max(0, inflight - 1)
-  if (inflight === 0) nprogress.complete()
+  if (inflight > 0) return
+
+  if (showTimer !== null) {
+    clearTimeout(showTimer)
+    showTimer = null
+  }
+  // Only complete a bar that was actually started; completing an unstarted
+  // nprogress flashes it to 100% — the very flicker this delay exists to avoid.
+  if (showing) {
+    nprogress.complete()
+    showing = false
+  }
 }
 
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  progressStart()
+  if (!opts.quiet) progressStart()
   try {
     if (opts.public) return await rawFetch<T>(path, opts)
 
@@ -141,7 +177,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
       throw err
     }
   } finally {
-    progressDone()
+    if (!opts.quiet) progressDone()
   }
 }
 
@@ -189,6 +225,13 @@ export const api = {
   updateChannel: (id: string, body: { name?: string; subscriptionMode?: SubscriptionMode; alias?: string }) =>
     request<Channel>(`/v1/channels/${id}`, { method: 'PATCH', body }),
   deleteChannel: (id: string) => request<void>(`/v1/channels/${id}`, { method: 'DELETE' }),
+  uploadChannelAvatar: (id: string, file: File) => {
+    const form = new FormData()
+    form.set('avatar', file)
+    return request<Channel>(`/v1/channels/${id}/avatar`, { method: 'POST', body: form })
+  },
+  deleteChannelAvatar: (id: string) =>
+    request<Channel>(`/v1/channels/${id}/avatar`, { method: 'DELETE' }),
 
   // Membership: join by trigger ID or phetag, the caller's joined channels, and leaving.
   joinChannel: (ref: string, deviceId?: string) =>
@@ -265,14 +308,14 @@ export const api = {
   // Messages
   getMessage: (channelId: string, messageId: string) =>
     request<Message>(`/v1/channels/${channelId}/messages/${messageId}`),
-  listMessages: (channelId: string, cursor = '', query = '', limit = 50) => {
+  listMessages: (channelId: string, cursor = '', query = '', limit = 50, quiet = false) => {
     const q = new URLSearchParams()
     if (cursor) q.set('cursor', cursor)
     if (query) q.set('q', query)
     q.set('limit', String(limit))
-    return request<MessagesPage>(`/v1/channels/${channelId}/messages?${q.toString()}`).then(
-      (page) => ({ messages: page.messages ?? [], nextCursor: page.nextCursor ?? '' }),
-    )
+    return request<MessagesPage>(`/v1/channels/${channelId}/messages?${q.toString()}`, {
+      quiet,
+    }).then((page) => ({ messages: page.messages ?? [], nextCursor: page.nextCursor ?? '' }))
   },
 
   // Comments on a message

@@ -28,3 +28,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Design-review screenshots (e2e/screenshots.spec.ts, SCREENSHOTS=1)
+screenshots/

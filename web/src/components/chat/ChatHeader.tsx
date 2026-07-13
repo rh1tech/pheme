@@ -1,0 +1,123 @@
+import { useEffect, useRef } from 'react'
+import { ActionIcon, Group, Stack, Text, TextInput, Tooltip } from '@mantine/core'
+import { IconArrowLeft, IconDotsVertical, IconSearch, IconX } from '@tabler/icons-react'
+import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
+import { ChannelAvatar } from './ChannelAvatar'
+import type { Channel } from '../../lib/types'
+
+interface ChatHeaderProps {
+  channel: Channel | null
+  channelId: string
+  /** The header swaps into a search field, as Telegram's does. */
+  searching: boolean
+  search: string
+  onSearchChange: (value: string) => void
+  onSearchSubmit: () => void
+  onSearchOpen: () => void
+  onSearchClose: () => void
+  onToggleInfo: () => void
+}
+
+export function ChatHeader({
+  channel,
+  channelId,
+  searching,
+  search,
+  onSearchChange,
+  onSearchSubmit,
+  onSearchOpen,
+  onSearchClose,
+  onToggleInfo,
+}: ChatHeaderProps) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (searching) searchRef.current?.focus()
+  }, [searching])
+
+  const name = channel?.name ?? t('channel.fallbackName')
+
+  return (
+    <header className="pheme-chat-header" data-testid="chat-header">
+      <Group gap="sm" wrap="nowrap">
+        <ActionIcon
+          hiddenFrom="sm"
+          variant="subtle"
+          color="gray"
+          aria-label={t('chat.back')}
+          onClick={() => navigate('/')}
+        >
+          <IconArrowLeft size={20} />
+        </ActionIcon>
+
+        {searching ? (
+          <TextInput
+            ref={searchRef}
+            data-testid="chat-search"
+            aria-label={t('channel.searchMessages')}
+            placeholder={t('channel.searchPlaceholder')}
+            value={search}
+            onChange={(e) => onSearchChange(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onSearchSubmit()
+              if (e.key === 'Escape') onSearchClose()
+            }}
+            leftSection={<IconSearch size={16} stroke={1.8} />}
+            style={{ flex: 1 }}
+          />
+        ) : (
+          <>
+            <ChannelAvatar id={channelId} name={name} avatarId={channel?.avatarId} size={38} />
+            <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
+              <Text fw={600} size="sm" truncate>
+                {name}
+              </Text>
+              {channel?.alias && (
+                <Text size="xs" c="dimmed" truncate>
+                  @{channel.alias}
+                </Text>
+              )}
+            </Stack>
+          </>
+        )}
+
+        <Group gap={4} wrap="nowrap">
+          {searching ? (
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              aria-label={t('channel.closeSearch')}
+              onClick={onSearchClose}
+            >
+              <IconX size={20} />
+            </ActionIcon>
+          ) : (
+            <Tooltip label={t('channel.searchMessages')} withArrow>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label={t('channel.searchMessages')}
+                onClick={onSearchOpen}
+              >
+                <IconSearch size={20} />
+              </ActionIcon>
+            </Tooltip>
+          )}
+          <Tooltip label={t('channel.info')} withArrow>
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              aria-label={t('channel.info')}
+              onClick={onToggleInfo}
+            >
+              <IconDotsVertical size={20} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      </Group>
+    </header>
+  )
+}

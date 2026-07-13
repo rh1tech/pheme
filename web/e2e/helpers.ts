@@ -12,13 +12,13 @@ export async function loginAsAdmin(page: Page): Promise<void> {
   await login(page, ADMIN_EMAIL, ADMIN_PASSWORD)
 }
 
-/** Logs in through the login form and waits for the channels dashboard. */
+/** Logs in through the login form and waits for the chat surface. */
 export async function login(page: Page, email: string, password: string): Promise<void> {
   await page.goto('/login')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('heading', { name: 'Your channels' })).toBeVisible()
+  await expect(page.getByTestId('chat-sidebar')).toBeVisible()
 }
 
 /** Opens the admin "Add user" modal and creates a user with the given role. */
@@ -59,14 +59,31 @@ export async function openRowMenu(page: Page, text: string): Promise<void> {
   await rowFor(page, text).getByRole('button').click()
 }
 
-/** Creates a channel from the dashboard and lands on its page. */
+/** Creates a channel from the chat list's "+" menu and opens its conversation. */
 export async function createChannel(page: Page, name: string): Promise<void> {
   await page.goto('/')
-  await page.getByRole('button', { name: 'New channel' }).click()
+  await page.getByRole('button', { name: 'Create or subscribe to a channel' }).click()
+  await page.getByRole('menuitem', { name: 'New channel' }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByLabel('Channel name').fill(name)
   await dialog.getByRole('button', { name: 'Create channel' }).click()
   // Creating navigates to /channels/:id.
   await expect(page).toHaveURL(/\/channels\//)
-  await expect(page.getByRole('heading', { name })).toBeVisible()
+  await expect(page.getByTestId('chat-header')).toContainText(name)
+}
+
+/** Opens the channel-info panel (the ⋮ in the chat header) — the old Settings tab. */
+export async function openChannelInfo(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Channel info' }).click()
+  await expect(page.getByTestId('channel-info')).toBeVisible()
+}
+
+/**
+ * Sends a message through the chat composer. There is one text box: the message's
+ * title is its first sentence.
+ */
+export async function sendMessage(page: Page, text: string): Promise<void> {
+  const composer = page.getByTestId('composer')
+  await composer.getByTestId('composer-body').fill(text)
+  await composer.getByRole('button', { name: 'Send' }).click()
 }

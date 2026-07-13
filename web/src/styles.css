@@ -34,6 +34,18 @@ body {
   text-size-adjust: 100%;
 }
 
+/* The chat surface is a fixed-height app whose panes scroll internally, not a
+   scrolling document — so on those routes the document itself must not scroll.
+   ChatShell sets data-surface while it is mounted; the container-layout pages
+   (profile, admin) are unaffected and keep scrolling normally. */
+html[data-surface='chat'],
+html[data-surface='chat'] body,
+html[data-surface='chat'] #root {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 [data-mantine-color-scheme='light'] body {
   background-color: #f7f6fb;
   background-image: var(--pheme-bg-light);

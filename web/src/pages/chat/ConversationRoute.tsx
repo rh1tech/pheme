@@ -1,0 +1,286 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Outlet, useNavigate, useOutletContext, useParams } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
+import { api } from '../../lib/api'
+import { notifyError } from '../../lib/notify'
+import { useEventStream } from '../../hooks/useEventStream'
+import { useChatScroll } from '../../hooks/useChatScroll'
+import type { ChatOutletContext } from '../../components/chat/context'
+import { ChatHeader } from '../../components/chat/ChatHeader'
+import { MessageFeed } from '../../components/chat/MessageFeed'
+import { Composer } from '../../components/chat/Composer'
+import { ReadOnlyNotice } from '../../components/chat/ReadOnlyNotice'
+import { ChannelInfoPanel } from '../../components/chat/ChannelInfoPanel'
+import type { Channel, ChannelRelation, Message } from '../../lib/types'
+
+const PAGE_SIZE = 50
+// A send is answered 202: the dispatcher writes the message, which reaches us
+// over the live stream. If the stream is degraded the bubble would never appear,
+// so a refetch backstops it after this long.
+const SEND_SETTLE_MS = 2000
+
+/**
+ * The conversation: a channel's messages, oldest at the top and newest at the
+ * bottom, plus whichever third column is open — a message's discussion (a nested
+ * route) or the channel-info panel.
+ */
+export function ConversationRoute() {
+  const { id = '', messageId } = useParams()
+  const { list, composerFocus } = useOutletContext<ChatOutletContext>()
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+
+  const [channel, setChannel] = useState<Channel | null>(null)
+  const [relation, setRelation] = useState<ChannelRelation | null>(null)
+  // Oldest-first: the order the feed renders and the reader reads.
+  const [messages, setMessages] = useState<Message[]>([])
+  const [loading, setLoading] = useState(true)
+  const [cursor, setCursor] = useState('')
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [infoOpen, setInfoOpen] = useState(false)
+  const [unseen, setUnseen] = useState(0)
+
+  const [searching, setSearching] = useState(false)
+  const [search, setSearch] = useState('')
+  const [query, setQuery] = useState('')
+
+  // Opening another channel resets the view. Adjusting state during render is the
+  // sanctioned alternative to a setState inside an effect, which would paint the
+  // previous channel's search box for a frame before clearing it.
+  const [openId, setOpenId] = useState(id)
+  if (openId !== id) {
+    setOpenId(id)
+    setSearching(false)
+    setSearch('')
+    setQuery('')
+    setUnseen(0)
+  }
+
+  // The reach-bottom callback needs the newest message, but must not re-subscribe
+  // the scroll listener on every new message — hence a ref.
+  const messagesRef = useRef(messages)
+  useEffect(() => {
+    messagesRef.current = messages
+  })
+
+  const markNewestRead = useCallback(() => {
+    const newest = messagesRef.current[messagesRef.current.length - 1]
+    if (newest) list.markRead(id, newest.createdAt)
+  }, [id, list])
+
+  const onReachBottom = useCallback(() => {
+    setUnseen(0)
+    markNewestRead()
+  }, [markNewestRead])
+
+  const { scrollerRef, atBottom, scrollToBottom, captureAnchor } = useChatScroll(
+    id,
+    messages.length,
+    onReachBottom,
+  )
+
+  useEffect(() => {
+    let active = true
+    api
+      .getChannel(id)
+      .then((rel) => {
+        if (!active) return
+        setChannel(rel.channel)
+        setRelation(rel)
+      })
+      .catch(() => {
+        if (!active) return
+        setChannel(null)
+        setRelation(null)
+      })
+    return () => {
+      active = false
+    }
+  }, [id])
+
+  // The server returns messages newest-first; the feed reads oldest-first.
+  const loadPage = useCallback(
+    async (q: string): Promise<void> => {
+      setLoading(true)
+      try {
+        const page = await api.listMessages(id, '', q, PAGE_SIZE)
+        setMessages(page.messages.slice().reverse())
+        setCursor(page.nextCursor)
+      } catch (e) {
+        notifyError(t('dashboard.loadFailed'), e)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [id, t],
+  )
+
+  useEffect(() => {
+    let active = true
+    const run = async () => {
+      setLoading(true)
+      try {
+        const page = await api.listMessages(id, '', '', PAGE_SIZE)
+        if (!active) return
+        setMessages(page.messages.slice().reverse())
+        setCursor(page.nextCursor)
+        const newest = page.messages[0]
+        if (newest) list.markRead(id, newest.createdAt)
+      } catch (e) {
+        if (active) notifyError(t('dashboard.loadFailed'), e)
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+    void run()
+    return () => {
+      active = false
+    }
+    // `list` is stable enough for this purpose and would otherwise reload the
+    // feed every time the sidebar re-sorts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, t])
+
+  // The cursor walks backward in time, so each further page is *older* than what
+  // is on screen and belongs above it.
+  async function loadOlder() {
+    if (!cursor || loadingOlder) return
+    setLoadingOlder(true)
+    captureAnchor()
+    try {
+      const page = await api.listMessages(id, cursor, query, PAGE_SIZE, true)
+      setMessages((prev) => [...page.messages.slice().reverse(), ...prev])
+      setCursor(page.nextCursor)
+    } catch (e) {
+      notifyError(t('dashboard.loadFailed'), e)
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
+
+  useEventStream((e) => {
+    if (e.channelId !== id) return
+    // Search results are a snapshot of a query, not the live tail: appending to
+    // them would show a message that does not match what was searched for.
+    if (query) return
+    setMessages((prev) =>
+      prev.some((m) => m.id === e.message.id) ? prev : [...prev, e.message],
+    )
+    if (atBottom) {
+      list.markRead(id, e.message.createdAt)
+      // Let the new bubble lay out before scrolling to it.
+      requestAnimationFrame(() => scrollToBottom('smooth'))
+    } else {
+      setUnseen((n) => n + 1)
+    }
+  })
+
+  function runSearch() {
+    const q = search.trim()
+    setQuery(q)
+    void loadPage(q)
+  }
+
+  function closeSearch() {
+    setSearching(false)
+    setSearch('')
+    if (query) {
+      setQuery('')
+      void loadPage('')
+    }
+  }
+
+  // The two right-hand panes compete for the same column, so opening the info
+  // panel first leaves the discussion route.
+  function toggleInfo() {
+    if (messageId) {
+      navigate(`/channels/${id}`)
+      setInfoOpen(true)
+      return
+    }
+    setInfoOpen((open) => !open)
+  }
+
+  function openDiscussion(mid: string) {
+    setInfoOpen(false)
+    navigate(`/channels/${id}/messages/${mid}`)
+  }
+
+  // Backstop a stalled live stream: a send is only acknowledged, so if the message
+  // has not streamed in by now, reload the newest page rather than leave the
+  // sender staring at a feed that looks like it dropped their message.
+  function onSent() {
+    window.setTimeout(() => {
+      if (query) return
+      void api
+        .listMessages(id, '', '', PAGE_SIZE, true)
+        .then((page) => {
+          const fresh = page.messages.slice().reverse()
+          const newest = fresh[fresh.length - 1]
+          if (!newest) return
+          setMessages((prev) => (prev.some((m) => m.id === newest.id) ? prev : fresh))
+        })
+        .catch(() => undefined)
+    }, SEND_SETTLE_MS)
+  }
+
+  const canModerate = relation
+    ? (relation.isOwner || relation.role === 'admin') && relation.status === 'active'
+    : false
+
+  return (
+    <>
+      <section className="pheme-conversation">
+        <ChatHeader
+          channel={channel}
+          channelId={id}
+          searching={searching}
+          search={search}
+          onSearchChange={setSearch}
+          onSearchSubmit={runSearch}
+          onSearchOpen={() => setSearching(true)}
+          onSearchClose={closeSearch}
+          onToggleInfo={toggleInfo}
+        />
+
+        <MessageFeed
+          messages={messages}
+          loading={loading}
+          loadingOlder={loadingOlder}
+          hasOlder={Boolean(cursor)}
+          onLoadOlder={loadOlder}
+          scrollerRef={scrollerRef}
+          atBottom={atBottom}
+          onJumpToBottom={() => scrollToBottom('smooth')}
+          unseenCount={unseen}
+          activeMessageId={messageId}
+          onOpenDiscussion={openDiscussion}
+          searching={Boolean(query)}
+        />
+
+        {canModerate ? (
+          <Composer channelId={id} focusSignal={composerFocus} onSent={onSent} />
+        ) : (
+          <ReadOnlyNotice />
+        )}
+      </section>
+
+      {/* The discussion is a nested route, so opening one does not remount the
+          conversation (which would drop the feed and its scroll position). It
+          renders nothing when no message is selected. */}
+      <Outlet context={relation} />
+
+      {!messageId && infoOpen && channel && (
+        <ChannelInfoPanel
+          channelId={id}
+          channel={channel}
+          isOwner={relation?.isOwner ?? false}
+          canModerate={canModerate}
+          onClose={() => setInfoOpen(false)}
+          onChannelChanged={setChannel}
+          onListChanged={list.refresh}
+        />
+      )}
+    </>
+  )
+}

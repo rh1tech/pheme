@@ -1,0 +1,447 @@
+/* The Telegram-style chat surface: channel list | conversation | info.
+   Only transform/opacity are animated; every tunable is a custom property. */
+
+.pheme-shell {
+  /* The horizontal inset every pane's content shares — header, feed and composer
+     all start on the same left edge, so a bubble lines up under the channel name
+     above it. */
+  --pheme-pane-x: 0.75rem;
+  --pheme-sidebar-w: 21rem;
+  --pheme-info-w: 24rem;
+  --pheme-bubble-max: 34rem;
+  --pheme-pane-bg: light-dark(rgba(255, 255, 255, 0.72), rgba(22, 23, 26, 0.72));
+  --pheme-pane-border: light-dark(rgba(20, 16, 40, 0.08), rgba(255, 255, 255, 0.08));
+  --pheme-bubble-bg: light-dark(#fff, #1f2126);
+
+  display: grid;
+  grid-template-columns: var(--pheme-sidebar-w) minmax(0, 1fr);
+  /* The shell is fixed-height, so its panes scroll internally rather than the
+     document. Height comes from visualViewport where available (see
+     useVisualViewportHeight) so the iOS keyboard and dynamic toolbar do not
+     push the composer out of sight; 100dvh is the fallback. */
+  height: var(--pheme-viewport-h, 100dvh);
+  overflow: hidden;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* The conversation and the third column share the shell's second track. The
+   third column belongs to the conversation (it shows that channel's info or a
+   message's discussion), so it is nested here rather than being a shell-level
+   pane whose visibility the shell would have to track. */
+.pheme-main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pheme-conversation {
+  flex: 1 1 auto;
+}
+
+.pheme-info {
+  flex: 0 0 var(--pheme-info-w);
+}
+
+/* --- Panes ------------------------------------------------------------- */
+
+.pheme-sidebar,
+.pheme-conversation,
+.pheme-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background-color: var(--pheme-pane-bg);
+  backdrop-filter: blur(8px);
+}
+
+.pheme-sidebar,
+.pheme-conversation {
+  border-right: 1px solid var(--pheme-pane-border);
+}
+
+.pheme-sidebar-header,
+.pheme-chat-header {
+  flex: 0 0 auto;
+  padding: 0.625rem var(--pheme-pane-x);
+  border-bottom: 1px solid var(--pheme-pane-border);
+}
+
+.pheme-sidebar-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0.375rem;
+}
+
+/* --- Chat list row ------------------------------------------------------ */
+
+.pheme-chat-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.625rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.5rem;
+  border: 0;
+  border-radius: var(--mantine-radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  transition: background-color var(--pheme-fast, 140ms) ease;
+}
+
+.pheme-chat-row:hover {
+  background-color: light-dark(rgba(20, 16, 40, 0.05), rgba(255, 255, 255, 0.06));
+}
+
+.pheme-chat-row[data-active='true'] {
+  background-image: linear-gradient(
+    135deg,
+    var(--mantine-color-iris-6),
+    var(--mantine-color-grape-6)
+  );
+  color: #fff;
+}
+
+/* The preview and time are dimmed here rather than with Mantine's `c="dimmed"`,
+   which sets an inline colour that the active-row rule below could not override. */
+.pheme-chat-preview,
+.pheme-chat-time {
+  color: var(--mantine-color-dimmed);
+}
+
+/* Against the gradient of the active row, dimmed grey is unreadable in both
+   themes; white at reduced opacity keeps the hierarchy without losing legibility. */
+.pheme-chat-row[data-active='true'] .pheme-chat-preview,
+.pheme-chat-row[data-active='true'] .pheme-chat-time {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.pheme-chat-row:focus-visible {
+  outline: 2px solid var(--mantine-color-iris-5);
+  outline-offset: 2px;
+}
+
+.pheme-chat-unread {
+  flex: 0 0 auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background-color: var(--mantine-color-iris-6);
+}
+
+.pheme-chat-row[data-active='true'] .pheme-chat-unread {
+  background-color: #fff;
+}
+
+/* --- Feed --------------------------------------------------------------- */
+
+.pheme-feed {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  /* We restore scroll position by hand after prepending older messages
+     (useChatScroll). Native scroll anchoring would compensate for the same
+     height change a second time, doubling the jump. */
+  overflow-anchor: none;
+  padding: 0.75rem var(--pheme-pane-x);
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+/* A channel with only a few messages shows them at the BOTTOM of the feed, above
+   the composer, as Telegram does — not floating at the top of an empty column.
+   The spacer eats the free space and collapses to nothing once the messages
+   overflow, which `justify-content: flex-end` cannot do without making the
+   overflowing top of the list unreachable. */
+.pheme-feed-spacer {
+  margin-top: auto;
+}
+
+.pheme-day-pill {
+  position: sticky;
+  top: 0.25rem;
+  z-index: 2;
+  align-self: center;
+  padding: 0.125rem 0.625rem;
+  border-radius: 999px;
+  background-color: light-dark(rgba(20, 16, 40, 0.55), rgba(0, 0, 0, 0.55));
+  color: #fff;
+  font-size: var(--mantine-font-size-xs);
+  backdrop-filter: blur(4px);
+}
+
+/* --- Bubble ------------------------------------------------------------- */
+
+.pheme-bubble {
+  align-self: flex-start;
+  max-width: min(100%, var(--pheme-bubble-max));
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--mantine-radius-lg);
+  border-bottom-left-radius: var(--mantine-radius-xs);
+  background-color: var(--pheme-bubble-bg);
+  box-shadow: var(--mantine-shadow-xs);
+}
+
+/* A box-shadow ring, not an outline: an outline traces the border-box with its
+   own corner rounding, so on a bubble whose corners differ (the tail is nearly
+   square) it visibly thickens at the corners. A shadow spread follows the
+   border-radius exactly and stays an even weight all the way round. */
+.pheme-bubble[data-active='true'] {
+  box-shadow:
+    0 0 0 2px var(--mantine-color-iris-5),
+    var(--mantine-shadow-xs);
+}
+
+/* Reserve each image's box from the width/height the API returns, so decoding a
+   photo never reflows the feed under the reader. */
+.pheme-bubble-media {
+  margin: -0.125rem -0.125rem 0.375rem;
+  border-radius: var(--mantine-radius-md);
+  overflow: hidden;
+}
+
+.pheme-bubble-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.pheme-comment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border: 0;
+  border-radius: 999px;
+  background-color: light-dark(rgba(119, 64, 238, 0.08), rgba(168, 136, 245, 0.14));
+  color: var(--mantine-color-iris-6);
+  font-size: var(--mantine-font-size-xs);
+  cursor: pointer;
+  margin-right: auto;
+  transition: background-color 140ms ease;
+}
+
+.pheme-comment-chip:hover {
+  background-color: light-dark(rgba(119, 64, 238, 0.16), rgba(168, 136, 245, 0.24));
+}
+
+/* --- Jump-to-bottom pill ------------------------------------------------ */
+
+.pheme-jump {
+  position: absolute;
+  right: var(--pheme-pane-x);
+  bottom: 0.75rem;
+  z-index: 3;
+  opacity: 0;
+  transform: translateY(0.5rem) scale(0.9);
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.pheme-jump[data-visible='true'] {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* The feed and its pill share a positioning context. */
+.pheme-feed-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* --- Composer ----------------------------------------------------------- */
+
+.pheme-composer {
+  flex: 0 0 auto;
+  padding: 0.5rem var(--pheme-pane-x);
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--pheme-pane-border);
+}
+
+/* Attachments are a footnote to the message being written, so they stay a strip
+   of fixed-size thumbnails — never a grid that grows with the pane and pushes the
+   message box off screen. */
+.pheme-attachments {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.pheme-attachment {
+  position: relative;
+  flex: 0 0 auto;
+  width: 4rem;
+  height: 4rem;
+  border-radius: var(--mantine-radius-md);
+  overflow: hidden;
+}
+
+.pheme-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pheme-attachment .mantine-CloseButton-root {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+}
+
+/* Chat chrome — the message box and the two search fields — is a single surface.
+   Mantine's default is a bordered input PLUS an offset focus ring, which stacks
+   two rounded rectangles with a gap between them: the "double border" look. Here
+   the border itself carries the focus, so there is one shape at rest and one on
+   focus. Scoped to the chrome: the info panel's forms are forms, and keep the
+   ordinary bordered inputs people expect there. */
+.pheme-composer textarea,
+.pheme-sidebar-header input,
+.pheme-chat-header input {
+  background-color: light-dark(rgba(20, 16, 40, 0.04), rgba(255, 255, 255, 0.05));
+  border-color: transparent;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.pheme-composer textarea:focus,
+.pheme-composer textarea:focus-visible,
+.pheme-sidebar-header input:focus,
+.pheme-sidebar-header input:focus-visible,
+.pheme-chat-header input:focus,
+.pheme-chat-header input:focus-visible {
+  /* Replacing the ring, not removing it: the border is the focus indicator. */
+  outline: none;
+  border-color: var(--mantine-color-iris-5);
+  background-color: light-dark(#fff, rgba(255, 255, 255, 0.02));
+}
+
+.pheme-readonly {
+  flex: 0 0 auto;
+  padding: 0.875rem;
+  padding-bottom: max(0.875rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--pheme-pane-border);
+  text-align: center;
+}
+
+/* --- Info / discussion pane --------------------------------------------- */
+
+.pheme-info {
+  border-left: 1px solid var(--pheme-pane-border);
+}
+
+.pheme-info-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem var(--pheme-pane-x);
+  border-bottom: 1px solid var(--pheme-pane-border);
+}
+
+.pheme-info-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0.75rem;
+}
+
+/* --- Channel avatar picker ---------------------------------------------- */
+
+.pheme-avatar-edit {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.pheme-avatar-edit:disabled {
+  cursor: progress;
+}
+
+/* The "change picture" veil is revealed on hover/focus rather than always drawn,
+   so the avatar reads as the channel's picture first and a control second. */
+.pheme-avatar-edit-veil {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.pheme-avatar-edit:hover .pheme-avatar-edit-veil,
+.pheme-avatar-edit:focus-visible .pheme-avatar-edit-veil {
+  opacity: 1;
+}
+
+/* --- Empty state -------------------------------------------------------- */
+
+.pheme-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 100%;
+  text-align: center;
+  padding: 1.5rem;
+}
+
+/* --- Mobile: one pane at a time ----------------------------------------- */
+
+@media (max-width: 48em) {
+  .pheme-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pheme-shell[data-view='chat'] .pheme-sidebar {
+    display: none;
+  }
+
+  .pheme-shell[data-view='list'] .pheme-conversation {
+    display: none;
+  }
+
+  .pheme-sidebar,
+  .pheme-conversation {
+    border-right: 0;
+  }
+
+  /* The third column becomes a sheet over the conversation. */
+  .pheme-info {
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    border-left: 0;
+    background-color: light-dark(#f7f6fb, #141517);
+    transform: translateX(100%);
+    transition: transform 220ms var(--pheme-ease, cubic-bezier(0.16, 1, 0.3, 1));
+  }
+
+  .pheme-info[data-open='true'] {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pheme-info,
+  .pheme-jump,
+  .pheme-chat-row,
+  .pheme-comment-chip {
+    transition: none;
+  }
+}

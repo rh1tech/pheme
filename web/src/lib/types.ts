@@ -45,15 +45,28 @@ export interface CodeSentResponse {
   status: string
 }
 
+// The newest message of a channel, reduced to what the chat list renders. Absent
+// on a channel that has never been notified.
+export interface LastMessage {
+  id: string
+  title: string
+  body: string
+  imageCount: number
+  createdAt: string
+}
+
 export interface Channel {
   id: string
   publicId: string
   ownerId: string
   name: string
   alias?: string
+  /** Processed image blob, served from /v1/images/{id}. Absent → generated avatar. */
+  avatarId?: string
   subscriptionMode: SubscriptionMode
   status: ChannelStatus
   createdAt: string
+  lastMessage?: LastMessage
 }
 
 // A channel the caller has joined, with their per-channel role and member status.
@@ -98,6 +111,9 @@ export interface Message {
   data?: Record<string, string>
   commentsAllowed: boolean
   createdAt: string
+  // Absent on a message delivered over the live stream: it is brand new, so its
+  // count is genuinely zero until the feed refetches.
+  commentCount?: number
 }
 
 // A comment on a message, with its author's public profile.

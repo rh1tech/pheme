@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ActionIcon,
   Avatar,
@@ -27,6 +27,12 @@ interface CommentsPanelProps {
   canComment: boolean
   /** Whether the viewer can delete others' comments (owner / channel-admin). */
   canModerate: boolean
+  /**
+   * Put the cursor in the comment box once it renders. Set by the discussion pane:
+   * the reader got there by clicking "Comment", so writing one is what they came
+   * to do.
+   */
+  autoFocus?: boolean
 }
 
 function authorLabel(c: Comment, fallback: string): string {
@@ -39,6 +45,7 @@ export function CommentsPanel({
   commentsAllowed,
   canComment,
   canModerate,
+  autoFocus = false,
 }: CommentsPanelProps) {
   const { t } = useTranslation()
   const { userId } = useAuth()
@@ -48,6 +55,16 @@ export function CommentsPanel({
   const [posting, setPosting] = useState(false)
   const [removeId, setRemoveId] = useState<string | null>(null)
   const [removing, setRemoving] = useState(false)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  const canPost = commentsAllowed && canComment
+
+  // Re-focus when another message's discussion opens in the same pane, not only
+  // on first mount.
+  useEffect(() => {
+    if (!autoFocus || !canPost) return
+    inputRef.current?.focus()
+  }, [autoFocus, canPost, messageId])
 
   useEffect(() => {
     let active = true
@@ -110,13 +127,15 @@ export function CommentsPanel({
     <Stack gap="md">
       <Title order={5}>{t('channel.comments.title')}</Title>
 
-      {commentsAllowed && canComment && (
+      {canPost && (
         <Group align="flex-end" gap="sm" wrap="nowrap">
           <Textarea
+            ref={inputRef}
             style={{ flex: 1 }}
             autosize
             minRows={1}
             maxRows={4}
+            aria-label={t('channel.comments.placeholder')}
             placeholder={t('channel.comments.placeholder')}
             value={body}
             onChange={(e) => setBody(e.currentTarget.value)}

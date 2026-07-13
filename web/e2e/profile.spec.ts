@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import {
+  createChannel,
   createUserViaAdmin,
   login,
   loginAsAdmin,
@@ -45,23 +46,21 @@ test('a duplicate username is rejected', async ({ page }) => {
   await expect(page.getByText('That username is already taken.')).toBeVisible()
 })
 
-test('the send panel exposes an allow-comments toggle', async ({ page }) => {
+test('the composer exposes an allow-comments toggle', async ({ page }) => {
   await loginAsAdmin(page)
-  await page.goto('/')
-  await page.getByRole('button', { name: 'New channel' }).click()
-  const createDialog = page.getByRole('dialog')
-  await createDialog.getByLabel('Channel name').fill(`Comments ${Date.now()}`)
-  await createDialog.getByRole('button', { name: 'Create channel' }).click()
-  await expect(page).toHaveURL(/\/channels\//)
+  await createChannel(page, `Comments ${Date.now()}`)
 
-  await page.getByRole('button', { name: 'Send' }).click()
-  const dialog = page.getByRole('dialog')
-  const toggle = dialog.getByLabel('Allow comments')
+  const composer = page.getByTestId('composer')
+
+  // Per-message options live behind the composer's settings menu.
+  await composer.getByRole('button', { name: 'Message options' }).click()
+  const toggle = page.getByLabel('Allow comments')
   await expect(toggle).toBeChecked() // default on
   await toggle.click()
   await expect(toggle).not.toBeChecked()
+  await page.keyboard.press('Escape')
 
-  await dialog.getByLabel('Title').fill('No comments here')
-  await dialog.getByRole('button', { name: 'Send' }).click()
+  await composer.getByTestId('composer-body').fill('No comments here.')
+  await composer.getByRole('button', { name: 'Send' }).click()
   await expect(page.getByText('Message sent')).toBeVisible()
 })

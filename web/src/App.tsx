@@ -2,15 +2,16 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { AuthProvider } from './auth/AuthProvider'
 import { Layout } from './components/Layout'
+import { ChatShell } from './components/chat/ChatShell'
+import { DiscussionPane } from './components/chat/DiscussionPane'
 import { RequireAuth } from './components/RequireAuth'
 import { RequireAdmin } from './components/RequireAdmin'
 import { ScrollToTop } from './components/ScrollToTop'
 import { LoginPage } from './pages/LoginPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
-import { DashboardPage } from './pages/DashboardPage'
-import { ChannelPage } from './pages/ChannelPage'
+import { ChatEmptyState } from './pages/chat/ChatEmptyState'
+import { ConversationRoute } from './pages/chat/ConversationRoute'
 import { JoinPage } from './pages/JoinPage'
-import { MessagePage } from './pages/MessagePage'
 import { ProfilePage } from './pages/ProfilePage'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage'
@@ -30,6 +31,25 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+
+          {/* The chat surface: a fixed-height, three-pane app. It owns the
+              channel list and every channel route. */}
+          <Route
+            element={
+              <RequireAuth>
+                <ChatShell />
+              </RequireAuth>
+            }
+          >
+            <Route path="/" element={<ChatEmptyState />} />
+            <Route path="/channels/:id" element={<ConversationRoute />}>
+              {/* Nested, so opening a discussion does not remount the feed. */}
+              <Route path="messages/:messageId" element={<DiscussionPane />} />
+            </Route>
+          </Route>
+
+          {/* Everything else keeps the scrolling container layout: these are
+              documents and tables, not conversations. */}
           <Route
             element={
               <RequireAuth>
@@ -37,17 +57,15 @@ export default function App() {
               </RequireAuth>
             }
           >
-            <Route path="/" element={<DashboardPage />} />
             <Route path="/join" element={<JoinPage />} />
             <Route path="/profile" element={<ProfilePage />} />
-            <Route path="/channels/:id" element={<ChannelPage />} />
-            <Route path="/channels/:id/messages/:messageId" element={<MessagePage />} />
             <Route path="/admin" element={adminRoute(<AdminOverviewPage />)} />
             <Route path="/admin/users" element={adminRoute(<AdminUsersPage />)} />
             <Route path="/admin/channels" element={adminRoute(<AdminChannelsPage />)} />
             <Route path="/admin/comments" element={adminRoute(<AdminCommentsPage />)} />
             <Route path="/admin/channels/:id" element={adminRoute(<AdminChannelPage />)} />
           </Route>
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>
