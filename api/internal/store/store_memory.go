@@ -696,6 +696,25 @@ func (m *Memory) ActiveDevicesForChannel(_ context.Context, channelID string) ([
 	return out, nil
 }
 
+func (m *Memory) DevicesForUsers(_ context.Context, userIDs []string) ([]domain.Device, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+	wanted := make(map[string]struct{}, len(userIDs))
+	for _, id := range userIDs {
+		wanted[id] = struct{}{}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.Device
+	for _, d := range m.devices {
+		if _, ok := wanted[d.UserID]; ok {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
 // --- Channel members ---
 
 func (m *Memory) UpsertMember(_ context.Context, mem domain.ChannelMember) (domain.ChannelMember, error) {

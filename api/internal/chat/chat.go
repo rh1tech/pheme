@@ -9,6 +9,7 @@
 package chat
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/live"
+	"github.com/rh1tech/pheme/api/internal/push"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
@@ -23,6 +25,18 @@ import (
 type Handler struct {
 	Store store.Store
 	Live  live.Bus
+	// Push may be nil (tests, or a deployment with no push configured). Chat
+	// notifications carry only the sender's name — never message content, which the
+	// server cannot read.
+	Push   push.Sender
+	Logger *slog.Logger
+}
+
+func (h *Handler) logger() *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
 }
 
 // Register attaches the conversation routes to an already-authenticated mux (the

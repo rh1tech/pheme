@@ -22,9 +22,28 @@ func NewMultiSender(fcm, webpush Sender) *MultiSender {
 	return &MultiSender{FCM: fcm, WebPush: webpush}
 }
 
-// Send partitions devices by transport, dispatches to each sender, and merges
-// the per-device results.
+// Send partitions devices by transport, dispatches a channel message to each
+// sender, and merges the per-device results.
 func (m *MultiSender) Send(ctx context.Context, msg domain.Message, devices []domain.Device) ([]Result, error) {
+	return m.route(ctx, devices, func(s Sender, d []domain.Device) ([]Result, error) {
+		return s.Send(ctx, msg, d)
+	})
+}
+
+// SendChat does the same for a conversation notification.
+func (m *MultiSender) SendChat(ctx context.Context, n ChatNotification, devices []domain.Device) ([]Result, error) {
+	return m.route(ctx, devices, func(s Sender, d []domain.Device) ([]Result, error) {
+		return s.SendChat(ctx, n, d)
+	})
+}
+
+// route partitions devices by transport and hands each group to `deliver` on the
+// matching sender, so both notification kinds share one routing path.
+func (m *MultiSender) route(
+	_ context.Context,
+	devices []domain.Device,
+	deliver func(Sender, []domain.Device) ([]Result, error),
+) ([]Result, error) {
 	var fcmDevices, webDevices, skipped []domain.Device
 	for _, d := range devices {
 		switch {
@@ -41,20 +60,26 @@ func (m *MultiSender) Send(ctx context.Context, msg domain.Message, devices []do
 	var firstErr error
 
 	results = appendSkipped(results, skipped)
-	results, firstErr = m.dispatch(ctx, m.FCM, msg, fcmDevices, results, firstErr)
-	results, firstErr = m.dispatch(ctx, m.WebPush, msg, webDevices, results, firstErr)
+	results, firstErr = dispatch(m.FCM, fcmDevices, deliver, results, firstErr)
+	results, firstErr = dispatch(m.WebPush, webDevices, deliver, results, firstErr)
 
 	return results, firstErr
 }
 
-func (m *MultiSender) dispatch(ctx context.Context, s Sender, msg domain.Message, devices []domain.Device, acc []Result, firstErr error) ([]Result, error) {
+func dispatch(
+	s Sender,
+	devices []domain.Device,
+	deliver func(Sender, []domain.Device) ([]Result, error),
+	acc []Result,
+	firstErr error,
+) ([]Result, error) {
 	if len(devices) == 0 {
 		return acc, firstErr
 	}
 	if s == nil {
 		return appendSkipped(acc, devices), firstErr
 	}
-	res, err := s.Send(ctx, msg, devices)
+	res, err := deliver(s, devices)
 	acc = append(acc, res...)
 	if err != nil && firstErr == nil {
 		firstErr = err

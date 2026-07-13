@@ -36,10 +36,20 @@ type webPushPayload struct {
 	Data  map[string]string `json:"data,omitempty"`
 }
 
-// Send delivers msg to each device with a Web Push subscription. Devices without
-// one are reported as skipped.
+// Send delivers a channel message to each device with a Web Push subscription.
 func (s *WebPushSender) Send(ctx context.Context, msg domain.Message, devices []domain.Device) ([]Result, error) {
-	payload, err := json.Marshal(webPushPayload{Title: msg.Title, Body: msg.Body, Image: imageURL(s.publicBaseURL, msg), Data: notificationData(msg)})
+	return s.send(ctx, messageNotification(s.publicBaseURL, msg), devices)
+}
+
+// SendChat delivers a conversation notification — who sent it, never what it said.
+func (s *WebPushSender) SendChat(ctx context.Context, n ChatNotification, devices []domain.Device) ([]Result, error) {
+	return s.send(ctx, chatNotificationPayload(n), devices)
+}
+
+// send delivers one notification to each device with a Web Push subscription.
+// Devices without one are reported as skipped.
+func (s *WebPushSender) send(ctx context.Context, n notification, devices []domain.Device) ([]Result, error) {
+	payload, err := json.Marshal(webPushPayload{Title: n.Title, Body: n.Body, Image: n.Image, Data: n.Data})
 	if err != nil {
 		return nil, err
 	}

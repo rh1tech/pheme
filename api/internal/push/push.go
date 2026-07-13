@@ -17,9 +17,62 @@ type Result struct {
 	Error    string
 }
 
-// Sender delivers a message to a set of devices and reports per-device results.
+// ChatNotification is the push for a conversation message.
+//
+// It deliberately has NO field for message content. Chat messages are end-to-end
+// encrypted and the server holds only ciphertext, so a notification can say who
+// sent a message but never what it said. Expressing that as a property of the type
+// means no future change can leak plaintext into a lock screen by accident — there
+// is nowhere to put it. The sender's name comes from conversation membership, not
+// from the message.
+type ChatNotification struct {
+	ConversationID string
+	MessageID      string
+	SenderName     string
+}
+
+// Sender delivers notifications to a set of devices and reports per-device
+// results. Channel messages are server-readable and carry their content; chat
+// messages are encrypted and carry only who sent them.
 type Sender interface {
 	Send(ctx context.Context, msg domain.Message, devices []domain.Device) ([]Result, error)
+	SendChat(ctx context.Context, n ChatNotification, devices []domain.Device) ([]Result, error)
+}
+
+// notification is the transport-neutral payload every Sender actually delivers.
+// Both a channel message and a chat notification are reduced to one of these, so
+// each transport has a single delivery path.
+type notification struct {
+	Title string
+	Body  string
+	Image string
+	Data  map[string]string
+}
+
+func messageNotification(publicBaseURL string, msg domain.Message) notification {
+	return notification{
+		Title: msg.Title,
+		Body:  msg.Body,
+		Image: imageURL(publicBaseURL, msg),
+		Data:  notificationData(msg),
+	}
+}
+
+// chatBody is the only text a chat push ever carries. It is a constant: the server
+// cannot read the message, and must not imply that it can.
+const chatBody = "New message"
+
+func chatNotificationPayload(n ChatNotification) notification {
+	title := n.SenderName
+	if title == "" {
+		title = "Pheme"
+	}
+	return notification{
+		Title: title,
+		Body:  chatBody,
+		// Enough to deep-link on tap; the client decrypts once it opens the chat.
+		Data: map[string]string{"conversationId": n.ConversationID, "messageId": n.MessageID},
+	}
 }
 
 // imageURL returns the absolute URL of a message's first image, or "" when the
@@ -62,3 +115,17 @@ func (s *LogSender) Send(_ context.Context, msg domain.Message, devices []domain
 	}
 	return results, nil
 }
+
+// SendChat logs a chat notification. Only the conversation and sender are logged —
+// there is no content to log, by design.
+func (s *LogSender) SendChat(_ context.Context, n ChatNotification, devices []domain.Device) ([]Result, error) {
+	results := make([]Result, 0, len(devices))
+	for _, d := range devices {
+		slog.Info("chat push (dev no-op)",
+			"conversation", n.ConversationID, "sender", n.SenderName, "device", d.ID, "platform", d.Platform)
+		results = append(results, Result{DeviceID: d.ID, Status: domain.DeliverySkipped})
+	}
+	return results, nil
+}
+
+var _ Sender = (*LogSender)(nil)

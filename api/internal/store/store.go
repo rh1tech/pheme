@@ -125,6 +125,10 @@ type Store interface {
 	// propagates to push delivery (no-op when the user has no device subscriptions).
 	SetSubscriptionStatusForUser(ctx context.Context, channelID, userID string, status domain.SubscriptionStatus) error
 	ActiveDevicesForChannel(ctx context.Context, channelID string) ([]domain.Device, error)
+	// DevicesForUsers returns every device belonging to the given users. Chat push
+	// targets conversation members directly — there is no per-channel subscription
+	// to filter by, since being in the conversation is the subscription.
+	DevicesForUsers(ctx context.Context, userIDs []string) ([]domain.Device, error)
 
 	// Messages & deliveries
 	CreateMessage(ctx context.Context, m domain.Message) (domain.Message, error)

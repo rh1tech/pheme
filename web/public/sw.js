@@ -20,28 +20,35 @@ self.addEventListener('push', (event) => {
   }
 
   const title = payload.title || 'Pheme'
+  const data = payload.data || {}
   const options = {
     body: payload.body || '',
     image: payload.image || undefined,
-    tag: payload.data && payload.data.channelId ? payload.data.channelId : undefined,
+    // One notification per conversation or channel, replaced as newer ones arrive.
+    tag: data.conversationId || data.channelId || undefined,
     renotify: true,
-    data: payload.data || {},
+    data,
   }
 
   event.waitUntil(self.registration.showNotification(title, options))
 })
 
+// Where a notification lands when tapped. A chat notification carries only a
+// conversation id: its body is encrypted, so there is nothing to show until the app
+// opens the chat and decrypts it there.
+function targetPath(data) {
+  if (data.conversationId) return `/chats/${data.conversationId}`
+  if (data.channelId && data.messageId) {
+    return `/channels/${data.channelId}/messages/${data.messageId}`
+  }
+  return '/'
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
 
-  // Deep-link to the specific message when the server provided the ids; else
-  // fall back to the app root.
   const data = event.notification.data || {}
-  const path =
-    data.channelId && data.messageId
-      ? `/channels/${data.channelId}/messages/${data.messageId}`
-      : '/'
-  const target = new URL(path, self.location.origin).href
+  const target = new URL(targetPath(data), self.location.origin).href
 
   event.waitUntil(
     (async () => {

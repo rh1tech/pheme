@@ -676,6 +676,18 @@ func (m *Mongo) ActiveDevicesForChannel(ctx context.Context, channelID string) (
 	return out, cur.All(ctx, &out)
 }
 
+func (m *Mongo) DevicesForUsers(ctx context.Context, userIDs []string) ([]domain.Device, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+	cur, err := m.db.Collection("devices").Find(ctx, bson.M{"userId": bson.M{"$in": userIDs}})
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.Device
+	return out, cur.All(ctx, &out)
+}
+
 // --- Channel members ---
 
 func (m *Mongo) UpsertMember(ctx context.Context, mem domain.ChannelMember) (domain.ChannelMember, error) {

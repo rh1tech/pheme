@@ -20,9 +20,10 @@ import (
 // fixture wires the chat Handler behind the real JWT middleware, so tests
 // exercise the full auth + routing path like the channel suite does.
 type fixture struct {
-	mux    *http.ServeMux
-	tokens *auth.TokenManager
-	store  store.Store
+	mux     *http.ServeMux
+	tokens  *auth.TokenManager
+	store   store.Store
+	handler *Handler
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -34,7 +35,7 @@ func newFixture(t *testing.T) *fixture {
 	h.Register(protected)
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", tokens.Middleware(protected))
-	return &fixture{mux: mux, tokens: tokens, store: db}
+	return &fixture{mux: mux, tokens: tokens, store: db, handler: h}
 }
 
 func (f *fixture) user(t *testing.T, email string) (string, string) {

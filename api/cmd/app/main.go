@@ -57,6 +57,14 @@ func main() {
 		logger.Error("mailer init", "error", err)
 		os.Exit(1)
 	}
+	// Chat messages are pushed straight from this process (unlike channel messages,
+	// which the dispatcher fans out from the broker): a conversation message is a
+	// direct member-to-member send with no ingest queue in front of it.
+	pusher, err := b.Push(ctx)
+	if err != nil {
+		logger.Error("push init", "error", err)
+		os.Exit(1)
+	}
 
 	adminEmails := make(map[string]bool, len(cfg.AdminEmails))
 	for _, e := range cfg.AdminEmails {
@@ -81,7 +89,7 @@ func main() {
 		Publisher:      pub,
 		Blob:           blobs,
 		Admin:          &channel.AdminHandler{Store: db},
-		Chat:           &chat.Handler{Store: db, Live: bus},
+		Chat:           &chat.Handler{Store: db, Live: bus, Push: pusher, Logger: logger},
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
 	}).Routes(mux)
 

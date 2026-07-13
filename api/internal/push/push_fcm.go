@@ -33,14 +33,23 @@ func NewFCMSender(ctx context.Context, credentialsFile, publicBaseURL string) (*
 	return &FCMSender{client: client, publicBaseURL: publicBaseURL}, nil
 }
 
-// Send delivers msg to each device with an FCM token using a single batch
-// request. Devices without an FCM token are reported as skipped.
+// Send delivers a channel message to each device with an FCM token.
 func (s *FCMSender) Send(ctx context.Context, msg domain.Message, devices []domain.Device) ([]Result, error) {
+	return s.send(ctx, messageNotification(s.publicBaseURL, msg), devices)
+}
+
+// SendChat delivers a conversation notification — who sent it, never what it said.
+func (s *FCMSender) SendChat(ctx context.Context, n ChatNotification, devices []domain.Device) ([]Result, error) {
+	return s.send(ctx, chatNotificationPayload(n), devices)
+}
+
+// send delivers one notification to every device with an FCM token, using a single
+// batch request. Devices without a token are reported as skipped.
+func (s *FCMSender) send(ctx context.Context, n notification, devices []domain.Device) ([]Result, error) {
 	results := make([]Result, 0, len(devices))
 	var batch []*messaging.Message
 	var batched []string // device IDs aligned with batch order
 
-	img := imageURL(s.publicBaseURL, msg)
 	for _, d := range devices {
 		if d.FCMToken == "" {
 			results = append(results, Result{DeviceID: d.ID, Status: domain.DeliverySkipped})
@@ -48,8 +57,8 @@ func (s *FCMSender) Send(ctx context.Context, msg domain.Message, devices []doma
 		}
 		batch = append(batch, &messaging.Message{
 			Token:        d.FCMToken,
-			Notification: &messaging.Notification{Title: msg.Title, Body: msg.Body, ImageURL: img},
-			Data:         notificationData(msg),
+			Notification: &messaging.Notification{Title: n.Title, Body: n.Body, ImageURL: n.Image},
+			Data:         n.Data,
 		})
 		batched = append(batched, d.ID)
 	}
