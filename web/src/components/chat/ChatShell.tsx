@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Outlet, useMatch } from 'react-router-dom'
 import { ChatSidebar } from './ChatSidebar'
 import { KeyRestoreGate } from './KeyBackup'
+import { mlsSession } from '../../lib/mls'
+import { useAuth } from '../../auth/context'
 import { useChannelList } from '../../hooks/useChannelList'
 import { useConversationList } from '../../hooks/useConversationList'
 import { useVisualViewportHeight } from '../../hooks/useVisualViewport'
@@ -18,6 +20,7 @@ import './chat.css'
  * from the same stream event.
  */
 export function ChatShell() {
+  const { userId } = useAuth()
   const list = useChannelList()
   const conversations = useConversationList()
   const channelMatch = useMatch({ path: '/channels/:id', end: false })
@@ -44,6 +47,20 @@ export function ChatShell() {
       delete document.documentElement.dataset.surface
     }
   }, [])
+
+  // Bring up this device's encryption identity as soon as the user reaches the chat
+  // surface, rather than waiting until they open a conversation.
+  //
+  // Creating the session is what publishes this device's KeyPackages, and a user with
+  // none published cannot be added to a group — so anyone trying to start a chat with
+  // them fails. Deferring it to the first conversation they open means a brand-new
+  // user is unreachable until they happen to open one, which is exactly backwards.
+  useEffect(() => {
+    if (!userId) return
+    mlsSession(userId).catch(() => {
+      // No keys yet and a backup is waiting: KeyRestoreGate below prompts for it.
+    })
+  }, [userId])
 
   return (
     <div

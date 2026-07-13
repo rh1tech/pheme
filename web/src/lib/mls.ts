@@ -55,6 +55,9 @@ let wasmReady: Promise<void> | null = null
 // operation already in flight when the user logged out would persist the keys again
 // after the wipe had "finished".
 let generation = 0
+// Memoized answer to "must this device restore before it can have an identity?" —
+// null until asked. Reset whenever the answer could change.
+let restoreNeeded: boolean | null = null
 
 /** Loads the WASM module once. Backup/restore need it before any Session exists. */
 function ensureWasm(): Promise<void> {
@@ -122,6 +125,12 @@ class Session {
     await ensureWasm()
     const deviceId = ensureDeviceId()
 
+    // Would we have to mint a brand-new identity? Answered BEFORE taking the lock,
+    // because answering it may need the network (does a backup exist?), and a network
+    // call made while holding the lock would freeze every other tab for as long as it
+    // hangs. The result is re-checked under the lock, where it is cheap.
+    const mustRestore = await needsRestore(userId)
+
     const session = await withMlsLock(async () => {
       // State left by a different account (a shared device where the previous user
       // did not log out cleanly) must never be adopted: encrypting under someone
@@ -130,14 +139,12 @@ class Session {
 
       const saved = await idbGet(STATE_KEY)
 
-      // No local keys, but a backup exists and the user has not chosen to start over:
-      // do NOT mint an identity. Doing so would publish KeyPackages for a client that
-      // is about to be thrown away by the restore — and those are irrevocable. Peers
-      // claiming one would send a Welcome the restored client has no key for, a
-      // message stuck forever. Refuse, and let the restore prompt resolve it.
-      if (!saved && !(await idbGet(FRESH_KEY)) && (await backupExists())) {
-        throw new NeedsRestoreError()
-      }
+      // No local keys, but a backup is waiting: do NOT mint an identity. Doing so
+      // would publish KeyPackages for a client the restore is about to throw away —
+      // and publishing is irrevocable. A peer claiming one would send a Welcome the
+      // restored client has no key for: a message stuck forever. Refuse, and let the
+      // restore prompt resolve it.
+      if (!saved && mustRestore) throw new NeedsRestoreError()
 
       const client = saved
         ? MlsClient.fromState(saved)
@@ -149,7 +156,7 @@ class Session {
     })
 
     // Outside the lock: replenishKeyPackages takes it itself, and taking it twice
-    // would deadlock.
+    // would deadlock (Web Locks are not reentrant).
     await session.replenishKeyPackages()
     return session
   }
@@ -345,6 +352,29 @@ export function mlsSession(userId: string): Promise<Session> {
  */
 export async function acceptFreshIdentity(): Promise<void> {
   await idbSet(FRESH_KEY, new Uint8Array([1]))
+  restoreNeeded = false
+}
+
+/**
+ * Whether this device must restore from a backup before it can have an identity:
+ * it holds no usable keys, the user has not chosen to start over, and the server has
+ * a backup waiting.
+ *
+ * Memoized. Without it, every retry of a refused session would repeat the network
+ * call, and the chat route retries whenever its messages change. Cleared whenever the
+ * answer could have changed — a wipe, a restore, or the user choosing to start fresh.
+ */
+async function needsRestore(userId: string): Promise<boolean> {
+  if (restoreNeeded !== null) return restoreNeeded
+
+  // State belonging to someone else is about to be wiped, so it does not count.
+  const owned = (await storedOwner()) === userId && (await idbGet(STATE_KEY)) != null
+  if (owned || (await idbGet(FRESH_KEY))) {
+    restoreNeeded = false
+    return false
+  }
+  restoreNeeded = await backupExists()
+  return restoreNeeded
 }
 
 /** The account the locally stored MLS state belongs to, if any. */
@@ -395,6 +425,7 @@ export async function wipeLocalKeys(): Promise<void> {
  */
 async function wipeUnlocked(): Promise<void> {
   generation++
+  restoreNeeded = null
   await idbClear()
   clearPreviews()
   clearSafetyPins()
@@ -489,6 +520,7 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
     ])
     // Any session built on the pre-restore identity must not write over this.
     generation++
+    restoreNeeded = false
     ready = null
     readyUserId = ''
   })
