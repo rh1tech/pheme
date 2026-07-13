@@ -325,7 +325,7 @@ test('an admin adds and removes a group member, and encryption follows', async (
   await owner.getByRole('button', { name: 'Conversation menu' }).click()
   await owner.getByRole('menuitem', { name: 'Members' }).click()
   await owner.getByPlaceholder('Search people by name or @username').fill('Carol Findme')
-  await owner.getByText('Carol Findme').click()
+  await owner.getByRole('button', { name: /Carol Findme/ }).click()
   await expect(owner.getByText('Member added')).toBeVisible({ timeout: 20_000 })
   await owner.keyboard.press('Escape')
 

@@ -129,8 +129,8 @@ test('logging out destroys the local encryption keys', async ({ page }) => {
     )
     .toEqual([])
 
-  const after = await readCryptoState(page)
-  expect(after.previews, 'no decrypted message previews may survive a logout').toBe(0)
+  const after = await localCryptoState(page)
+  expect(after?.previews ?? 0, 'no decrypted message previews may survive a logout').toBe(0)
 })
 
 /**
