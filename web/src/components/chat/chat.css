@@ -1,6 +1,38 @@
 /* The Telegram-style chat surface: channel list | conversation | info.
    Only transform/opacity are animated; every tunable is a custom property. */
 
+/* Colours are declared per scheme rather than with light-dark().
+   light-dark() needs Safari 17.5+, and where it is unsupported the whole
+   declaration is invalid — a background silently computes to transparent, which
+   is how the mobile info sheet ended up showing the chat through it and the date
+   pill's white text ended up on a white background. styles.css already carries a
+   note that the production minifier mangles light-dark() for borders. Attribute
+   selectors work everywhere and cost nothing. */
+:root {
+  --pheme-pane-bg: rgba(255, 255, 255, 0.72);
+  --pheme-pane-border: rgba(20, 16, 40, 0.08);
+  --pheme-bubble-bg: #fff;
+  --pheme-row-hover: rgba(20, 16, 40, 0.05);
+  --pheme-chip-bg: rgba(119, 64, 238, 0.08);
+  --pheme-chip-bg-hover: rgba(119, 64, 238, 0.16);
+  --pheme-field-bg: rgba(20, 16, 40, 0.04);
+  --pheme-field-bg-focus: #fff;
+  /* Opaque: the mobile sheet covers the conversation, and must not let it through. */
+  --pheme-sheet-bg: #f7f6fb;
+}
+
+[data-mantine-color-scheme='dark'] {
+  --pheme-pane-bg: rgba(22, 23, 26, 0.72);
+  --pheme-pane-border: rgba(255, 255, 255, 0.08);
+  --pheme-bubble-bg: #1f2126;
+  --pheme-row-hover: rgba(255, 255, 255, 0.06);
+  --pheme-chip-bg: rgba(168, 136, 245, 0.14);
+  --pheme-chip-bg-hover: rgba(168, 136, 245, 0.24);
+  --pheme-field-bg: rgba(255, 255, 255, 0.05);
+  --pheme-field-bg-focus: rgba(255, 255, 255, 0.02);
+  --pheme-sheet-bg: #141517;
+}
+
 .pheme-shell {
   /* The horizontal inset every pane's content shares — header, feed and composer
      all start on the same left edge, so a bubble lines up under the channel name
@@ -9,9 +41,6 @@
   --pheme-sidebar-w: 21rem;
   --pheme-info-w: 24rem;
   --pheme-bubble-max: 34rem;
-  --pheme-pane-bg: light-dark(rgba(255, 255, 255, 0.72), rgba(22, 23, 26, 0.72));
-  --pheme-pane-border: light-dark(rgba(20, 16, 40, 0.08), rgba(255, 255, 255, 0.08));
-  --pheme-bubble-bg: light-dark(#fff, #1f2126);
 
   display: grid;
   grid-template-columns: var(--pheme-sidebar-w) minmax(0, 1fr);
@@ -93,7 +122,7 @@
 }
 
 .pheme-chat-row:hover {
-  background-color: light-dark(rgba(20, 16, 40, 0.05), rgba(255, 255, 255, 0.06));
+  background-color: var(--pheme-row-hover);
 }
 
 .pheme-chat-row[data-active='true'] {
@@ -145,19 +174,25 @@
      (useChatScroll). Native scroll anchoring would compensate for the same
      height change a second time, doubling the jump. */
   overflow-anchor: none;
-  padding: 0.75rem var(--pheme-pane-x);
   display: flex;
   flex-direction: column;
-  gap: 0.375rem;
 }
 
-/* A channel with only a few messages shows them at the BOTTOM of the feed, above
-   the composer, as Telegram does — not floating at the top of an empty column.
-   The spacer eats the free space and collapses to nothing once the messages
-   overflow, which `justify-content: flex-end` cannot do without making the
-   overflowing top of the list unreachable. */
-.pheme-feed-spacer {
-  margin-top: auto;
+/* The messages live here, not directly in the scroller, so their height can be
+   observed (useChatScroll keeps the feed glued to the newest message as pages
+   land and images decode).
+
+   flex: 1 0 auto makes this at least as tall as the scroller, so justify-content
+   can bottom-align a conversation that is shorter than the viewport — messages
+   sit above the composer, as Telegram does, rather than floating at the top of an
+   empty column. Once the messages overflow, the extra height simply scrolls. */
+.pheme-feed-content {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.375rem;
+  padding: 0.75rem var(--pheme-pane-x);
 }
 
 .pheme-day-pill {
@@ -167,9 +202,14 @@
   align-self: center;
   padding: 0.125rem 0.625rem;
   border-radius: 999px;
-  background-color: light-dark(rgba(20, 16, 40, 0.55), rgba(0, 0, 0, 0.55));
+  /* Solid enough to read on any backdrop it floats over: a light page, a dark
+     bubble, or a photo. A translucent pill plus white text is unreadable the
+     moment it crosses something pale, so the contrast cannot depend on what is
+     behind it. */
+  background-color: rgba(0, 0, 0, 0.65);
   color: #fff;
   font-size: var(--mantine-font-size-xs);
+  font-weight: 500;
   backdrop-filter: blur(4px);
 }
 
@@ -218,7 +258,7 @@
   padding: 0.125rem 0.5rem;
   border: 0;
   border-radius: 999px;
-  background-color: light-dark(rgba(119, 64, 238, 0.08), rgba(168, 136, 245, 0.14));
+  background-color: var(--pheme-chip-bg);
   color: var(--mantine-color-iris-6);
   font-size: var(--mantine-font-size-xs);
   cursor: pointer;
@@ -227,7 +267,7 @@
 }
 
 .pheme-comment-chip:hover {
-  background-color: light-dark(rgba(119, 64, 238, 0.16), rgba(168, 136, 245, 0.24));
+  background-color: var(--pheme-chip-bg-hover);
 }
 
 /* --- Jump-to-bottom pill ------------------------------------------------ */
@@ -309,7 +349,7 @@
 .pheme-composer textarea,
 .pheme-sidebar-header input,
 .pheme-chat-header input {
-  background-color: light-dark(rgba(20, 16, 40, 0.04), rgba(255, 255, 255, 0.05));
+  background-color: var(--pheme-field-bg);
   border-color: transparent;
   transition:
     border-color 140ms ease,
@@ -325,7 +365,7 @@
   /* Replacing the ring, not removing it: the border is the focus indicator. */
   outline: none;
   border-color: var(--mantine-color-iris-5);
-  background-color: light-dark(#fff, rgba(255, 255, 255, 0.02));
+  background-color: var(--pheme-field-bg-focus);
 }
 
 .pheme-readonly {
@@ -421,13 +461,20 @@
     border-right: 0;
   }
 
-  /* The third column becomes a sheet over the conversation. */
+  /* The third column becomes a sheet over the conversation.
+
+     z-index sits BELOW Mantine's overlay layers, not above them. Mantine stacks
+     modal 200 < popover/select 300, and a select inside a modal relies on that
+     order. Pushing this sheet to 300 (or raising modals above it) put confirm
+     dialogs behind the sheet — tapping "Delete channel" on a phone looked like it
+     did nothing. 150 is above the conversation, which has no stacking of its own,
+     and below every dialog and dropdown. */
   .pheme-info {
     position: fixed;
     inset: 0;
-    z-index: 300;
+    z-index: 150;
     border-left: 0;
-    background-color: light-dark(#f7f6fb, #141517);
+    background-color: var(--pheme-sheet-bg);
     transform: translateX(100%);
     transition: transform 220ms var(--pheme-ease, cubic-bezier(0.16, 1, 0.3, 1));
   }

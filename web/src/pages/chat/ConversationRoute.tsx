@@ -73,9 +73,8 @@ export function ConversationRoute() {
     markNewestRead()
   }, [markNewestRead])
 
-  const { scrollerRef, atBottom, scrollToBottom, captureAnchor } = useChatScroll(
+  const { scrollerRef, contentRef, atBottom, scrollToBottom, captureAnchor } = useChatScroll(
     id,
-    messages.length,
     onReachBottom,
   )
 
@@ -166,10 +165,10 @@ export function ConversationRoute() {
     setMessages((prev) =>
       prev.some((m) => m.id === e.message.id) ? prev : [...prev, e.message],
     )
+    // No manual scroll here: while the reader is at the bottom the feed is glued
+    // there, so the new bubble pulls it down as soon as it lays out.
     if (atBottom) {
       list.markRead(id, e.message.createdAt)
-      // Let the new bubble lay out before scrolling to it.
-      requestAnimationFrame(() => scrollToBottom('smooth'))
     } else {
       setUnseen((n) => n + 1)
     }
@@ -250,6 +249,7 @@ export function ConversationRoute() {
           hasOlder={Boolean(cursor)}
           onLoadOlder={loadOlder}
           scrollerRef={scrollerRef}
+          contentRef={contentRef}
           atBottom={atBottom}
           onJumpToBottom={() => scrollToBottom('smooth')}
           unseenCount={unseen}

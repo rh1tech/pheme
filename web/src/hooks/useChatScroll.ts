@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 
-// Within this many pixels of the bottom, the feed counts as "at the bottom" and
-// a newly arrived message scrolls into view instead of raising the jump pill.
+// Within this many pixels of the bottom, the feed counts as "at the bottom": a
+// newly arrived message scrolls into view instead of raising the jump pill, and
+// the feed stays stuck to the bottom as content grows.
 const BOTTOM_EPSILON = 80
 
 export interface ChatScrollApi {
+  /** The scrolling element. */
   scrollerRef: RefObject<HTMLDivElement | null>
+  /** The element wrapping the messages. Its height changes drive the stick. */
+  contentRef: RefObject<HTMLDivElement | null>
   /** True when the reader is at (or very near) the newest message. */
   atBottom: boolean
   scrollToBottom: (behavior?: ScrollBehavior) => void
@@ -22,44 +26,43 @@ export interface ChatScrollApi {
  * Owns the scroll position of the message feed.
  *
  * The feed is a normal top-to-bottom list (not `flex-direction: column-reverse`)
- * so that DOM order matches reading order — which keeps find-in-page, text
- * selection and screen readers working, and lets date separators be plain sticky
- * elements. The cost is that bottom-pinning and the scroll restoration on prepend
- * have to be done by hand, which is what this hook is.
+ * so DOM order matches reading order — find-in-page, text selection, screen
+ * readers and sticky date separators all keep working. The cost is that staying
+ * at the bottom has to be done by hand, which is what this hook is.
  *
- * @param resetKey changing it (i.e. opening another channel) re-pins to the bottom
- * @param itemCount number of rendered messages; a change triggers the restore
+ * The central idea is "stick": the feed is glued to the bottom until the reader
+ * scrolls away from it, and re-glues when they come back. Pinning once, when the
+ * channel opens, is not enough — at that moment the messages have not been
+ * fetched, the bubbles have no height, and images have not decoded. Each of those
+ * grows the content afterwards, which is why a one-shot pin leaves the reader
+ * stranded in the middle of the backlog. A ResizeObserver on the content re-pins
+ * on every one of those growths, so "open a channel, see the newest message"
+ * holds regardless of what lands late.
+ *
+ * @param resetKey changing it (opening another channel) re-sticks to the bottom
  * @param onReachBottom fired when the reader arrives at the newest message
  */
-export function useChatScroll(
-  resetKey: string,
-  itemCount: number,
-  onReachBottom?: () => void,
-): ChatScrollApi {
+export function useChatScroll(resetKey: string, onReachBottom?: () => void): ChatScrollApi {
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
-  // Distance from the bottom, captured just before a prepend. Null when none is pending.
+
+  // Glued to the bottom? Starts true for every channel and is released the moment
+  // the reader scrolls up. A ref, not state: the observers below must read the
+  // live value without being torn down and rebuilt on each change.
+  const stick = useRef(true)
+  // Distance from the bottom captured just before a prepend; null when none pending.
   const anchor = useRef<number | null>(null)
-  // Until the first pin lands, scroll events are our own doing, not the reader's.
-  const pinned = useRef(false)
 
   const reachedBottom = useRef(onReachBottom)
   useEffect(() => {
     reachedBottom.current = onReachBottom
   })
 
-  // Resetting on a new channel is a state adjustment during render — the React-
-  // sanctioned alternative to a setState inside an effect, which would render
-  // the old channel's scroll state once before correcting it.
-  const [seenKey, setSeenKey] = useState(resetKey)
-  if (seenKey !== resetKey) {
-    setSeenKey(resetKey)
-    setAtBottom(true)
-  }
-
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const el = scrollerRef.current
     if (!el) return
+    stick.current = true
     el.scrollTo({ top: el.scrollHeight, behavior })
   }, [])
 
@@ -69,33 +72,55 @@ export function useChatScroll(
     anchor.current = el.scrollHeight - el.scrollTop
   }, [])
 
-  // Opening a channel starts at the newest message. A layout effect, so the jump
-  // happens before paint and the reader never glimpses the top of the list.
+  // Opening another channel starts glued to the bottom again. Adjusting state
+  // during render is the sanctioned alternative to a setState inside an effect,
+  // which would paint the previous channel's scroll state for a frame.
+  const [seenKey, setSeenKey] = useState(resetKey)
+  if (seenKey !== resetKey) {
+    setSeenKey(resetKey)
+    setAtBottom(true)
+  }
+
+  // Re-glue and jump to the bottom for the new channel. The ref is set here, not
+  // in the render-phase reset above: writing a ref during render is a bug the
+  // compiler rejects, and this layout effect runs before paint anyway.
   useLayoutEffect(() => {
-    pinned.current = false
+    stick.current = true
     const el = scrollerRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-    pinned.current = true
+    if (el) el.scrollTop = el.scrollHeight
   }, [resetKey])
 
-  // After older messages are prepended, put the viewport back where it was.
-  // Distance-from-bottom is the invariant to restore: it survives the list
-  // growing by an arbitrary, unknown height above the reader.
-  useLayoutEffect(() => {
+  // The content's height changes when the first page lands, when older pages are
+  // prepended, when a new message arrives, and when an image finally decodes.
+  // Every one of those is handled here.
+  useEffect(() => {
     const el = scrollerRef.current
-    if (!el || anchor.current === null) return
-    el.scrollTop = el.scrollHeight - anchor.current
-    anchor.current = null
-  }, [itemCount])
+    const content = contentRef.current
+    if (!el || !content) return
+
+    const observer = new ResizeObserver(() => {
+      // A prepend: put the viewport back where it was. Distance-from-bottom is the
+      // invariant to restore — it survives the list growing by an unknown height
+      // above the reader.
+      if (anchor.current !== null) {
+        el.scrollTop = el.scrollHeight - anchor.current
+        anchor.current = null
+        return
+      }
+      if (stick.current) el.scrollTop = el.scrollHeight
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
     const onScroll = () => {
-      if (!pinned.current) return
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight
       const bottom = distance <= BOTTOM_EPSILON
+      // Scrolling up releases the glue; scrolling back down restores it.
+      stick.current = bottom
       setAtBottom(bottom)
       if (bottom) reachedBottom.current?.()
     }
@@ -103,5 +128,5 @@ export function useChatScroll(
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
-  return { scrollerRef, atBottom, scrollToBottom, captureAnchor }
+  return { scrollerRef, contentRef, atBottom, scrollToBottom, captureAnchor }
 }

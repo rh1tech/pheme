@@ -9,9 +9,9 @@ import { isSameDay } from '../../lib/time'
 import type { Message } from '../../lib/types'
 import type { RefObject } from 'react'
 
-// The scroll ref is taken apart from the reactive scroll state rather than passed
-// as one object: bundling a ref with values that drive rendering makes the whole
-// object read as a ref, and reading it during render is a bug the compiler
+// The scroll refs are taken apart from the reactive scroll state rather than
+// passed as one object: bundling a ref with values that drive rendering makes the
+// whole object read as a ref, and reading it during render is a bug the compiler
 // (rightly) rejects.
 interface MessageFeedProps {
   /** Oldest-first — the order they are rendered and read in. */
@@ -22,6 +22,7 @@ interface MessageFeedProps {
   hasOlder: boolean
   onLoadOlder: () => void
   scrollerRef: RefObject<HTMLDivElement | null>
+  contentRef: RefObject<HTMLDivElement | null>
   atBottom: boolean
   onJumpToBottom: () => void
   /** Messages that arrived while the reader was scrolled up. */
@@ -39,6 +40,7 @@ export function MessageFeed({
   hasOlder,
   onLoadOlder,
   scrollerRef,
+  contentRef,
   atBottom,
   onJumpToBottom,
   unseenCount,
@@ -65,7 +67,7 @@ export function MessageFeed({
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) loadOlder.current()
       },
-      { root, rootMargin: '200px 0px 0px 0px' },
+      { root, rootMargin: '300px 0px 0px 0px' },
     )
     observer.observe(el)
     return () => observer.disconnect()
@@ -74,43 +76,44 @@ export function MessageFeed({
   return (
     <div className="pheme-feed-wrap">
       <div className="pheme-feed" ref={scrollerRef} data-testid="chat-feed">
-        {hasOlder && <div ref={sentinelRef} aria-hidden />}
+        {/* The messages live in their own element so its height can be observed:
+            that is what keeps the feed glued to the newest message as pages land
+            and images decode. See useChatScroll. */}
+        <div className="pheme-feed-content" ref={contentRef}>
+          {hasOlder && <div ref={sentinelRef} aria-hidden />}
 
-        {loadingOlder && (
-          <Center py="xs">
-            <Loader size="xs" aria-label={t('channel.loadingOlder')} />
-          </Center>
-        )}
+          {loadingOlder && (
+            <Center py="xs">
+              <Loader size="xs" aria-label={t('channel.loadingOlder')} />
+            </Center>
+          )}
 
-        {/* Pins a short conversation to the bottom of the column; collapses once
-            the messages overflow. See .pheme-feed-spacer. */}
-        <div className="pheme-feed-spacer" aria-hidden />
+          {loading && <ChatSkeleton />}
 
-        {loading && <ChatSkeleton />}
+          {!loading && messages.length === 0 && (
+            <Center py="xl">
+              <Text c="dimmed" size="sm">
+                {searching ? t('channel.noMessagesSearch') : t('channel.noMessages')}
+              </Text>
+            </Center>
+          )}
 
-        {!loading && messages.length === 0 && (
-          <Center py="xl">
-            <Text c="dimmed" size="sm">
-              {searching ? t('channel.noMessagesSearch') : t('channel.noMessages')}
-            </Text>
-          </Center>
-        )}
-
-        {!loading &&
-          messages.map((m, i) => {
-            const previous = messages[i - 1]
-            const startsDay = !previous || !isSameDay(previous.createdAt, m.createdAt)
-            return (
-              <div key={m.id} style={{ display: 'contents' }}>
-                {startsDay && <DateSeparator iso={m.createdAt} />}
-                <MessageBubble
-                  message={m}
-                  active={m.id === activeMessageId}
-                  onOpenDiscussion={onOpenDiscussion}
-                />
-              </div>
-            )
-          })}
+          {!loading &&
+            messages.map((m, i) => {
+              const previous = messages[i - 1]
+              const startsDay = !previous || !isSameDay(previous.createdAt, m.createdAt)
+              return (
+                <div key={m.id} style={{ display: 'contents' }}>
+                  {startsDay && <DateSeparator iso={m.createdAt} />}
+                  <MessageBubble
+                    message={m}
+                    active={m.id === activeMessageId}
+                    onOpenDiscussion={onOpenDiscussion}
+                  />
+                </div>
+              )
+            })}
+        </div>
       </div>
 
       <JumpToBottom visible={!atBottom} count={unseenCount} onClick={onJumpToBottom} />

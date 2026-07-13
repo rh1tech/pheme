@@ -72,8 +72,8 @@ export function ChannelPushSection({ channelId }: ChannelPushSectionProps) {
 
   return (
     <Card withBorder padding="md">
-      <Group justify="space-between" wrap="nowrap">
-        <Stack gap={2}>
+      <Group justify="space-between" wrap="wrap" gap="sm">
+        <Stack gap={2} style={{ flex: '1 1 12rem', minWidth: 0 }}>
           <Group gap="xs">
             <Text fw={600}>{t('channel.subscribeTitle')}</Text>
             {supported && status === 'active' && (
@@ -94,11 +94,17 @@ export function ChannelPushSection({ channelId }: ChannelPushSectionProps) {
 
         {supported &&
           (status === 'none' ? (
-            <Button variant="outline" loading={busy} onClick={subscribe}>
+            <Button variant="outline" style={{ flexShrink: 0 }} loading={busy} onClick={subscribe}>
               {t('channel.subscribeBrowser')}
             </Button>
           ) : (
-            <Button variant="subtle" color="red" loading={busy} onClick={unsubscribe}>
+            <Button
+              variant="subtle"
+              color="red"
+              style={{ flexShrink: 0 }}
+              loading={busy}
+              onClick={unsubscribe}
+            >
               {t('channel.unsubscribe')}
             </Button>
           ))}

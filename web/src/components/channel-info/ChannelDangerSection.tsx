@@ -68,8 +68,10 @@ export function ChannelDangerSection({
       </ConfirmModal>
 
       <Card withBorder padding="md" style={{ borderColor: 'var(--mantine-color-red-4)' }}>
-        <Group justify="space-between" wrap="nowrap">
-          <Stack gap={2}>
+        {/* Wraps rather than squeezing: on a narrow phone the description text
+            was compressing the button until its label was cut off ("Delet"). */}
+        <Group justify="space-between" wrap="wrap" gap="sm">
+          <Stack gap={2} style={{ flex: '1 1 12rem', minWidth: 0 }}>
             <Text fw={600}>{isOwner ? t('channel.dangerTitle') : t('channel.leaveTitle')}</Text>
             <Text size="sm" c="dimmed">
               {isOwner ? t('channel.dangerDescription') : t('channel.leaveDescription')}
@@ -78,6 +80,7 @@ export function ChannelDangerSection({
           <Button
             color="red"
             variant="outline"
+            style={{ flexShrink: 0 }}
             leftSection={isOwner ? undefined : <IconLogout size={16} />}
             onClick={() => setConfirming(true)}
           >
