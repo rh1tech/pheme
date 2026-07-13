@@ -46,6 +46,19 @@ html[data-surface='chat'] #root {
   overflow: hidden;
 }
 
+/* The shell is pinned to visualViewport.height, which excludes iOS Safari's
+   retractable toolbar; body fills the taller layout viewport. The strip of body
+   below the shell would otherwise show the grey page background (#f7f6fb) — the
+   grey band at the bottom on mobile. Paint it the panes' composited colour (the
+   translucent white pane over #f7f6fb ≈ #fcfcfe) and drop the fixed gradient, so
+   the gap is indistinguishable from the panes above it. */
+html[data-surface='chat'] body {
+  background: #fcfcfe;
+}
+html[data-surface='chat'][data-mantine-color-scheme='dark'] body {
+  background: #17181b;
+}
+
 [data-mantine-color-scheme='light'] body {
   background-color: #f7f6fb;
   background-image: var(--pheme-bg-light);
