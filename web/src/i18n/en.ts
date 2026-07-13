@@ -137,6 +137,7 @@ const en = {
     back: 'Back to channels',
     menu: 'Menu',
     unreadChannel: 'Unread messages',
+    unreadMessages: 'Unread messages',
     addMenu: 'Create or subscribe to a channel',
   },
   channel: {

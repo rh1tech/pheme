@@ -1,23 +1,42 @@
+/*
+ * Parts of this file are derived from Telegram Web K (GPL v3):
+ *   https://github.com/morethanwords/tweb — src/helpers/scrollSaver.ts
+ * Specifically: anchoring by distance-from-bottom across a prepend, and the
+ * one-pixel tolerance for "scrolled to the end". See web/NOTICE.md.
+ */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 
-// Within this many pixels of the bottom, the feed counts as "at the bottom": a
-// newly arrived message scrolls into view instead of raising the jump pill, and
-// the feed stays stuck to the bottom as content grows.
+// Telegram treats the feed as "at the end" within a pixel of the bottom
+// (scrollSaver.ts: `scrollHeight - Math.ceil(scrollTop + clientHeight) <= 1`).
+// A little more slack here, because the jump pill should not flicker into view
+// when a fractional layout leaves the feed a few pixels short.
 const BOTTOM_EPSILON = 80
 
+// Height of the sticky date pill plus its offset (.pheme-day-pill), which always
+// floats at the top of the feed.
+const DAY_PILL_CLEARANCE = 40
+
+/** Where the feed holds itself as content grows underneath it. */
+type Mode =
+  | { kind: 'bottom' }
+  /** Keeping a specific message pinned to the top — how a channel opens on its first unread. */
+  | { kind: 'message'; messageId: string }
+  /** The reader is somewhere in the backlog; leave them alone. */
+  | { kind: 'free' }
+
 export interface ChatScrollApi {
-  /** The scrolling element. */
   scrollerRef: RefObject<HTMLDivElement | null>
-  /** The element wrapping the messages. Its height changes drive the stick. */
   contentRef: RefObject<HTMLDivElement | null>
   /** True when the reader is at (or very near) the newest message. */
   atBottom: boolean
   scrollToBottom: (behavior?: ScrollBehavior) => void
+  /** Pin a message to the top of the viewport and hold it there as content settles. */
+  scrollToMessage: (messageId: string) => void
   /**
    * Call immediately before committing a prepend of older messages. It records
-   * where the viewport sits relative to the bottom; the restore happens on the
-   * next layout, before the browser paints.
+   * where the viewport sits relative to the bottom; the restore happens before
+   * the browser paints.
    */
   captureAnchor: () => void
 }
@@ -27,19 +46,16 @@ export interface ChatScrollApi {
  *
  * The feed is a normal top-to-bottom list (not `flex-direction: column-reverse`)
  * so DOM order matches reading order — find-in-page, text selection, screen
- * readers and sticky date separators all keep working. The cost is that staying
- * at the bottom has to be done by hand, which is what this hook is.
+ * readers and sticky date separators all keep working.
  *
- * The central idea is "stick": the feed is glued to the bottom until the reader
- * scrolls away from it, and re-glues when they come back. Pinning once, when the
- * channel opens, is not enough — at that moment the messages have not been
- * fetched, the bubbles have no height, and images have not decoded. Each of those
- * grows the content afterwards, which is why a one-shot pin leaves the reader
- * stranded in the middle of the backlog. A ResizeObserver on the content re-pins
- * on every one of those growths, so "open a channel, see the newest message"
- * holds regardless of what lands late.
+ * The central idea is that the feed *holds a position* while its content settles
+ * around it. Setting the scroll once, when the channel opens, is not enough: at
+ * that moment the messages have not arrived, the bubbles have no height, and no
+ * image has decoded. Every one of those grows the content afterwards, which is
+ * how a one-shot pin leaves the reader stranded mid-backlog. A ResizeObserver
+ * re-applies the position on each growth instead.
  *
- * @param resetKey changing it (opening another channel) re-sticks to the bottom
+ * @param resetKey changing it (opening another channel) restores the default position
  * @param onReachBottom fired when the reader arrives at the newest message
  */
 export function useChatScroll(resetKey: string, onReachBottom?: () => void): ChatScrollApi {
@@ -47,71 +63,128 @@ export function useChatScroll(resetKey: string, onReachBottom?: () => void): Cha
   const contentRef = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
 
-  // Glued to the bottom? Starts true for every channel and is released the moment
-  // the reader scrolls up. A ref, not state: the observers below must read the
-  // live value without being torn down and rebuilt on each change.
-  const stick = useRef(true)
+  // A ref, not state: the observers below must read the live value without being
+  // torn down and rebuilt every time it changes.
+  const mode = useRef<Mode>({ kind: 'bottom' })
   // Distance from the bottom captured just before a prepend; null when none pending.
   const anchor = useRef<number | null>(null)
+  // Set while the feed moves itself. Writing scrollTop fires a scroll event just
+  // like a finger does, and without this the feed's own correction would read as
+  // the reader scrolling away — instantly releasing the position it just took.
+  const programmatic = useRef(false)
 
   const reachedBottom = useRef(onReachBottom)
   useEffect(() => {
     reachedBottom.current = onReachBottom
   })
 
+  const setScrollTop = useCallback((top: number) => {
+    const el = scrollerRef.current
+    if (!el) return
+    programmatic.current = true
+    el.scrollTop = top
+    requestAnimationFrame(() => {
+      programmatic.current = false
+    })
+  }, [])
+
+  /** Puts the message's top edge just below the top of the viewport. */
+  const alignMessage = useCallback(
+    (messageId: string) => {
+      const el = scrollerRef.current
+      const content = contentRef.current
+      if (!el || !content) return false
+      const target = content.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(messageId)}"]`,
+      )
+      if (!target) return false
+
+      // Anchor on the unread divider when the message has one, not on the bubble:
+      // the divider is rendered *above* its message, so aiming at the bubble
+      // scrolls the very line the reader needs to see off the top of the feed.
+      const divider = target.parentElement?.querySelector<HTMLElement>('.pheme-unread-divider')
+      const anchorEl = divider ?? target
+
+      // Clear the sticky date pill, which permanently occupies the top of the
+      // feed — anchoring flush with the top would park the divider behind it.
+      const clearance = divider ? DAY_PILL_CLEARANCE : 8
+
+      const top = anchorEl.getBoundingClientRect().top - content.getBoundingClientRect().top
+      setScrollTop(Math.max(0, top - clearance))
+      return true
+    },
+    [setScrollTop],
+  )
+
+  const applyMode = useCallback(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    const current = mode.current
+    if (current.kind === 'bottom') {
+      setScrollTop(el.scrollHeight)
+      return
+    }
+    if (current.kind === 'message') alignMessage(current.messageId)
+  }, [alignMessage, setScrollTop])
+
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const el = scrollerRef.current
     if (!el) return
-    stick.current = true
+    mode.current = { kind: 'bottom' }
     el.scrollTo({ top: el.scrollHeight, behavior })
   }, [])
+
+  const scrollToMessage = useCallback(
+    (messageId: string) => {
+      mode.current = { kind: 'message', messageId }
+      alignMessage(messageId)
+    },
+    [alignMessage],
+  )
 
   const captureAnchor = useCallback(() => {
     const el = scrollerRef.current
     if (!el) return
+    // Telegram's ScrollSaver keeps `scrollHeight - scrollTop` for a reversed list:
+    // the distance from the bottom survives the list growing by an unknown height
+    // above the reader, which a saved scrollTop does not.
     anchor.current = el.scrollHeight - el.scrollTop
   }, [])
 
-  // Opening another channel starts glued to the bottom again. Adjusting state
-  // during render is the sanctioned alternative to a setState inside an effect,
-  // which would paint the previous channel's scroll state for a frame.
   const [seenKey, setSeenKey] = useState(resetKey)
   if (seenKey !== resetKey) {
     setSeenKey(resetKey)
     setAtBottom(true)
   }
 
-  // Re-glue and jump to the bottom for the new channel. The ref is set here, not
-  // in the render-phase reset above: writing a ref during render is a bug the
-  // compiler rejects, and this layout effect runs before paint anyway.
+  // Opening a channel starts at the bottom. The route may then re-aim at the
+  // first unread message once the first page has landed.
   useLayoutEffect(() => {
-    stick.current = true
+    mode.current = { kind: 'bottom' }
+    anchor.current = null
     const el = scrollerRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [resetKey])
+    if (el) setScrollTop(el.scrollHeight)
+  }, [resetKey, setScrollTop])
 
   // The content's height changes when the first page lands, when older pages are
-  // prepended, when a new message arrives, and when an image finally decodes.
-  // Every one of those is handled here.
+  // prepended, when a message arrives, and when an image finally decodes. Every
+  // one of those is handled here.
   useEffect(() => {
     const el = scrollerRef.current
     const content = contentRef.current
     if (!el || !content) return
 
     const observer = new ResizeObserver(() => {
-      // A prepend: put the viewport back where it was. Distance-from-bottom is the
-      // invariant to restore — it survives the list growing by an unknown height
-      // above the reader.
       if (anchor.current !== null) {
-        el.scrollTop = el.scrollHeight - anchor.current
+        setScrollTop(el.scrollHeight - anchor.current)
         anchor.current = null
         return
       }
-      if (stick.current) el.scrollTop = el.scrollHeight
+      applyMode()
     })
     observer.observe(content)
     return () => observer.disconnect()
-  }, [])
+  }, [applyMode, setScrollTop])
 
   useEffect(() => {
     const el = scrollerRef.current
@@ -119,14 +192,18 @@ export function useChatScroll(resetKey: string, onReachBottom?: () => void): Cha
     const onScroll = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight
       const bottom = distance <= BOTTOM_EPSILON
-      // Scrolling up releases the glue; scrolling back down restores it.
-      stick.current = bottom
       setAtBottom(bottom)
+      // The reader's own scrolling always wins: reaching the bottom re-sticks,
+      // moving away from it releases whatever the feed was holding. The feed's own
+      // corrections must not count as the reader moving.
+      if (!programmatic.current) {
+        mode.current = bottom ? { kind: 'bottom' } : { kind: 'free' }
+      }
       if (bottom) reachedBottom.current?.()
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
-  return { scrollerRef, contentRef, atBottom, scrollToBottom, captureAnchor }
+  return { scrollerRef, contentRef, atBottom, scrollToBottom, scrollToMessage, captureAnchor }
 }

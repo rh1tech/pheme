@@ -3,6 +3,7 @@ import { Outlet, useNavigate, useOutletContext, useParams } from 'react-router-d
 import { useTranslation } from 'react-i18next'
 import { api } from '../../lib/api'
 import { notifyError } from '../../lib/notify'
+import { loadLastSeen } from '../../lib/lastSeen'
 import { useEventStream } from '../../hooks/useEventStream'
 import { useChatScroll } from '../../hooks/useChatScroll'
 import type { ChatOutletContext } from '../../components/chat/context'
@@ -39,6 +40,9 @@ export function ConversationRoute() {
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
   const [unseen, setUnseen] = useState(0)
+  // The message the unread divider sits above, and the anchor the feed opens on.
+  const [firstUnreadId, setFirstUnreadId] = useState<string | undefined>(undefined)
+  const pendingAnchor = useRef<string | null>(null)
 
   const [searching, setSearching] = useState(false)
   const [search, setSearch] = useState('')
@@ -54,6 +58,7 @@ export function ConversationRoute() {
     setSearch('')
     setQuery('')
     setUnseen(0)
+    setFirstUnreadId(undefined)
   }
 
   // The reach-bottom callback needs the newest message, but must not re-subscribe
@@ -73,10 +78,8 @@ export function ConversationRoute() {
     markNewestRead()
   }, [markNewestRead])
 
-  const { scrollerRef, contentRef, atBottom, scrollToBottom, captureAnchor } = useChatScroll(
-    id,
-    onReachBottom,
-  )
+  const { scrollerRef, contentRef, atBottom, scrollToBottom, scrollToMessage, captureAnchor } =
+    useChatScroll(id, onReachBottom)
 
   useEffect(() => {
     let active = true
@@ -114,17 +117,34 @@ export function ConversationRoute() {
     [id, t],
   )
 
+  // Where a channel opens, following Telegram (bubbles.ts, the readMaxId branch of
+  // performHistoryResult): at the first unread message, not at the newest one —
+  // otherwise a reader with a backlog is dropped at the end of it with no way back
+  // to where they stopped. Telegram makes one exception, which is kept here: with
+  // exactly one unread message there is nothing to come back to, so it just goes
+  // to the bottom.
   useEffect(() => {
     let active = true
     const run = async () => {
       setLoading(true)
+      // Read before anything marks the channel read, or the divider can never appear.
+      const seenAt = loadLastSeen()[id] ?? ''
       try {
         const page = await api.listMessages(id, '', '', PAGE_SIZE)
         if (!active) return
-        setMessages(page.messages.slice().reverse())
+        const ordered = page.messages.slice().reverse()
+        setMessages(ordered)
         setCursor(page.nextCursor)
-        const newest = page.messages[0]
-        if (newest) list.markRead(id, newest.createdAt)
+
+        const unread = ordered.filter((m) => m.createdAt > seenAt)
+        if (unread.length > 1) {
+          setFirstUnreadId(unread[0].id)
+          pendingAnchor.current = unread[0].id
+        } else {
+          setFirstUnreadId(undefined)
+          const newest = ordered[ordered.length - 1]
+          if (newest) list.markRead(id, newest.createdAt)
+        }
       } catch (e) {
         if (active) notifyError(t('dashboard.loadFailed'), e)
       } finally {
@@ -139,6 +159,14 @@ export function ConversationRoute() {
     // feed every time the sidebar re-sorts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, t])
+
+  // The anchor can only be applied once the bubbles exist.
+  useEffect(() => {
+    const target = pendingAnchor.current
+    if (!target || messages.length === 0) return
+    pendingAnchor.current = null
+    scrollToMessage(target)
+  }, [messages, scrollToMessage])
 
   // The cursor walks backward in time, so each further page is *older* than what
   // is on screen and belongs above it.
@@ -254,6 +282,7 @@ export function ConversationRoute() {
           onJumpToBottom={() => scrollToBottom('smooth')}
           unseenCount={unseen}
           activeMessageId={messageId}
+          firstUnreadId={firstUnreadId}
           onOpenDiscussion={openDiscussion}
           searching={Boolean(query)}
         />

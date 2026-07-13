@@ -3,6 +3,7 @@ import { Center, Loader, Text } from '@mantine/core'
 import { useTranslation } from 'react-i18next'
 import { MessageBubble } from './MessageBubble'
 import { DateSeparator } from './DateSeparator'
+import { UnreadDivider } from './UnreadDivider'
 import { JumpToBottom } from './JumpToBottom'
 import { ChatSkeleton } from './ChatSkeleton'
 import { isSameDay } from '../../lib/time'
@@ -28,6 +29,8 @@ interface MessageFeedProps {
   /** Messages that arrived while the reader was scrolled up. */
   unseenCount: number
   activeMessageId?: string
+  /** The message the unread divider sits above; undefined when nothing is unread. */
+  firstUnreadId?: string
   onOpenDiscussion: (messageId: string) => void
   /** Shown instead of the generic empty text when a search returned nothing. */
   searching: boolean
@@ -45,6 +48,7 @@ export function MessageFeed({
   onJumpToBottom,
   unseenCount,
   activeMessageId,
+  firstUnreadId,
   onOpenDiscussion,
   searching,
 }: MessageFeedProps) {
@@ -105,6 +109,7 @@ export function MessageFeed({
               return (
                 <div key={m.id} style={{ display: 'contents' }}>
                   {startsDay && <DateSeparator iso={m.createdAt} />}
+                  {m.id === firstUnreadId && <UnreadDivider />}
                   <MessageBubble
                     message={m}
                     active={m.id === activeMessageId}

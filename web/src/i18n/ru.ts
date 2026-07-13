@@ -139,6 +139,7 @@ const ru: Resources = {
     back: 'Назад к каналам',
     menu: 'Меню',
     unreadChannel: 'Непрочитанные сообщения',
+    unreadMessages: 'Непрочитанные сообщения',
     addMenu: 'Создать канал или подписаться',
   },
   channel: {
