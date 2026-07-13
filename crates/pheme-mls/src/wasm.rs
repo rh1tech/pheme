@@ -42,10 +42,35 @@ impl MlsClient {
         self.inner.create_group(group_id).map_err(js)
     }
 
+    /// Whether this client is already in the group (non-mutating).
+    #[wasm_bindgen(js_name = hasGroup)]
+    pub fn has_group(&self, group_id: &[u8]) -> bool {
+        self.inner.has_group(group_id)
+    }
+
     /// Adds a member; returns their Welcome and the group's Commit.
     #[wasm_bindgen(js_name = addMember)]
     pub fn add_member(&self, group_id: &[u8], key_package: &[u8]) -> Result<AddOutput, JsError> {
         let r = self.inner.add_member(group_id, key_package).map_err(js)?;
+        Ok(AddOutput {
+            welcome: r.welcome,
+            commit: r.commit,
+        })
+    }
+
+    /// Adds several members in one Commit (all newcomers land at the same epoch).
+    /// `key_packages` is a JS array of Uint8Array. Returns a single Welcome for all.
+    #[wasm_bindgen(js_name = addMembers)]
+    pub fn add_members(
+        &self,
+        group_id: &[u8],
+        key_packages: js_sys::Array,
+    ) -> Result<AddOutput, JsError> {
+        let kps: Vec<Vec<u8>> = key_packages
+            .iter()
+            .map(|v| js_sys::Uint8Array::new(&v).to_vec())
+            .collect();
+        let r = self.inner.add_members(group_id, &kps).map_err(js)?;
         Ok(AddOutput {
             welcome: r.welcome,
             commit: r.commit,

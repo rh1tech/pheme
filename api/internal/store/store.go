@@ -183,6 +183,15 @@ type Store interface {
 	// conversation, keyed by conversation id, for chat-list ordering/preview.
 	LastChatMessagesByConversations(ctx context.Context, conversationIDs []string) (map[string]domain.ChatMessage, error)
 
+	// MLS key directory (public KeyPackages). The server only relays these.
+	AddKeyPackages(ctx context.Context, packages []domain.MLSKeyPackage) error
+	// ClaimKeyPackage returns and removes one of a user's KeyPackages (they are
+	// single-use). ErrNotFound when the user has none left to claim.
+	ClaimKeyPackage(ctx context.Context, userID string) (domain.MLSKeyPackage, error)
+	// CountKeyPackages reports how many a device has left, so a client replenishes
+	// before running out.
+	CountKeyPackages(ctx context.Context, userID, deviceID string) (int64, error)
+
 	// Admin
 	AdminStats(ctx context.Context, topN, recentN int) (domain.AdminStats, error)
 

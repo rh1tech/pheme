@@ -153,6 +153,8 @@ const ru: Resources = {
     searchPeople: 'Поиск людей по имени или @username',
     noPeople: 'Никого не найдено',
     startFailed: 'Не удалось начать чат',
+    notJoined: 'Настраиваем шифрование — попробуйте ещё раз через мгновение',
+    encryptedPreview: 'Зашифрованное сообщение',
     chatsSection: 'Чаты',
     channelsSection: 'Каналы',
     addMenu: 'Создать канал или подписаться',

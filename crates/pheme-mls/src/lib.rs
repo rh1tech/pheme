@@ -88,17 +88,40 @@ impl Client {
             .ok_or_else(|| "group not found".to_string())
     }
 
+    /// Whether this client already holds the group — without mutating any ratchet
+    /// state. (Encrypting a probe message would advance the ratchet and desync the
+    /// peer, so callers must use this instead.)
+    pub fn has_group(&self, group_id: &[u8]) -> bool {
+        matches!(
+            MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id)),
+            Ok(Some(_))
+        )
+    }
+
     /// Adds a member (by their published KeyPackage) to a group we belong to.
     pub fn add_member(&self, group_id: &[u8], key_package: &[u8]) -> Result<AddResult, String> {
-        let kp_in =
-            KeyPackageIn::tls_deserialize(&mut &*key_package).map_err(err("parse kp"))?;
-        let kp = kp_in
-            .validate(self.provider.crypto(), ProtocolVersion::Mls10)
-            .map_err(err("validate kp"))?;
+        self.add_members(group_id, std::slice::from_ref(&key_package.to_vec()))
+    }
+
+    /// Adds several members in a SINGLE Commit, so every newcomer joins at the same
+    /// epoch. Adding them one at a time instead advances the epoch per add, leaving
+    /// earlier joiners a Commit behind and unable to decrypt (WrongEpoch) — the
+    /// reason initial group members must be batched here. Returns one Welcome
+    /// addressed to all of them.
+    pub fn add_members(&self, group_id: &[u8], key_packages: &[Vec<u8>]) -> Result<AddResult, String> {
+        let mut validated = Vec::with_capacity(key_packages.len());
+        for kp_bytes in key_packages {
+            let kp_in =
+                KeyPackageIn::tls_deserialize(&mut &**kp_bytes).map_err(err("parse kp"))?;
+            let kp = kp_in
+                .validate(self.provider.crypto(), ProtocolVersion::Mls10)
+                .map_err(err("validate kp"))?;
+            validated.push(kp);
+        }
 
         let mut group = self.load_group(group_id)?;
         let (commit, welcome, _group_info) = group
-            .add_members(&self.provider, &self.signer, &[kp])
+            .add_members(&self.provider, &self.signer, &validated)
             .map_err(err("add members"))?;
         group.merge_pending_commit(&self.provider).map_err(err("merge commit"))?;
 
@@ -288,6 +311,33 @@ mod tests {
             alice.decrypt(group_id, &ct2).unwrap().as_deref(),
             Some(&b"reply from restored bob"[..]),
         );
+    }
+
+    // A group of three: both members added in ONE Commit must land at the same
+    // epoch, so each can decrypt the owner's first message. Adding them one at a
+    // time would leave the earlier joiner an epoch behind (WrongEpoch).
+    #[test]
+    fn group_of_three_batched_add() {
+        let owner = Client::new(b"owner").unwrap();
+        let bob = Client::new(b"bob").unwrap();
+        let carol = Client::new(b"carol").unwrap();
+        let group_id = b"group-1";
+
+        owner.create_group(group_id).unwrap();
+        let add = owner
+            .add_members(group_id, &[bob.key_package().unwrap(), carol.key_package().unwrap()])
+            .unwrap();
+        bob.join_from_welcome(&add.welcome).unwrap();
+        carol.join_from_welcome(&add.welcome).unwrap();
+
+        let ct = owner.encrypt(group_id, b"hi team").unwrap();
+        assert_eq!(bob.decrypt(group_id, &ct).unwrap().as_deref(), Some(&b"hi team"[..]));
+        assert_eq!(carol.decrypt(group_id, &ct).unwrap().as_deref(), Some(&b"hi team"[..]));
+
+        // A member speaks; the owner and the other member both read it.
+        let ct2 = bob.encrypt(group_id, b"from bob").unwrap();
+        assert_eq!(owner.decrypt(group_id, &ct2).unwrap().as_deref(), Some(&b"from bob"[..]));
+        assert_eq!(carol.decrypt(group_id, &ct2).unwrap().as_deref(), Some(&b"from bob"[..]));
     }
 
     // A third client not in the group cannot decrypt — the whole point.

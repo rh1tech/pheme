@@ -338,6 +338,19 @@ type ChatMessage struct {
 	CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
 }
 
+// MLSKeyPackage is a single-use public MLS KeyPackage a user's device has
+// published, for others to add that user to an encrypted group. The server is
+// the MLS Delivery Service's key directory: it stores these public bytes and
+// hands one out (deleting it) when someone starts a group with the user. It never
+// holds any private key material.
+type MLSKeyPackage struct {
+	ID         string    `bson:"_id,omitempty" json:"id"`
+	UserID     string    `bson:"userId" json:"userId"`
+	DeviceID   string    `bson:"deviceId" json:"deviceId"`
+	KeyPackage []byte    `bson:"keyPackage" json:"keyPackage"`
+	CreatedAt  time.Time `bson:"createdAt" json:"createdAt"`
+}
+
 // DirectKey builds the unique deduplication key for a direct chat between two
 // users: their ids sorted and joined, so {a,b} and {b,a} collide to one row.
 func DirectKey(userA, userB string) string {

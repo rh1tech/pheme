@@ -7,7 +7,15 @@ import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../lib/api'
 import { notifyError } from '../../lib/notify'
-import { decodeChatContent, encodeChatContent } from '../../lib/chatContent'
+import { deserializeContent, serializeContent } from '../../lib/chatContent'
+import {
+  MLS_APPLICATION,
+  MLS_WELCOME,
+  base64ToBytes,
+  mlsSession,
+  provisionGroup,
+} from '../../lib/mls'
+import { cacheBody, loadCachedBodies, setPreview } from '../../lib/chatCache'
 import { conversationTitle, otherMember } from '../../lib/conversation'
 import { messageTime } from '../../lib/time'
 import { useAuth } from '../../auth/context'
@@ -27,8 +35,14 @@ const PAGE_SIZE = 50
 /**
  * A private conversation — the encrypted-chat counterpart of ConversationRoute
  * (channels). It reuses the feed's scroll engine and layout, but its own bubble:
- * chat messages are two-sided (own vs others) and their content is decoded
- * through lib/chatContent, the one seam where MLS decryption will slot in.
+ * chat messages are two-sided (own vs others) and their content is E2E encrypted
+ * with MLS (lib/mls).
+ *
+ * Decryption is one-shot: MLS deletes each message key after use (forward
+ * secrecy), and a sender cannot decrypt their own message at all. So every body is
+ * recorded in a local plaintext cache (lib/chatCache) the first time it is seen —
+ * on send for our own messages, on receive for others' — and history renders from
+ * that cache, never by decrypting twice.
  */
 export function ConversationChatRoute() {
   const { id = '' } = useParams()
@@ -40,6 +54,10 @@ export function ConversationChatRoute() {
 
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([]) // oldest-first
+  const [bodies, setBodies] = useState<Record<string, string>>({}) // decrypted, by id
+  // The conversation id whose local body cache has finished loading; message
+  // processing waits for this so cached messages are never re-decrypted.
+  const [readyId, setReadyId] = useState('')
   const [loading, setLoading] = useState(true)
   const [cursor, setCursor] = useState('')
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -50,6 +68,10 @@ export function ConversationChatRoute() {
   const sentinelRef = useRef<HTMLDivElement>(null)
 
   const atBottomRef = useRef(true)
+  // The decrypted-body cache mirrored into a ref, plus the set of message ids we
+  // have already handled — so the one-shot decrypt never runs twice for a message.
+  const bodiesRef = useRef<Record<string, string>>({})
+  const processedRef = useRef<Set<string>>(new Set())
 
   const markNewestRead = useCallback(() => {
     const newest = messages[messages.length - 1]
@@ -77,12 +99,83 @@ export function ConversationChatRoute() {
     let active = true
     api
       .getConversation(id)
-      .then((c) => active && setConversation(c))
+      .then((c) => {
+        if (!active) return
+        setConversation(c)
+        // The creator sets up the group and relays Welcomes so members can join.
+        if (userId) provisionGroup(c, userId).catch(() => {})
+      })
       .catch(() => active && setConversation(null))
     return () => {
       active = false
     }
+  }, [id, userId])
+
+  // Preload this conversation's already-decrypted bodies from the local cache
+  // before any message processing, so cached messages are never re-decrypted.
+  useEffect(() => {
+    let active = true
+    bodiesRef.current = {}
+    processedRef.current = new Set()
+    loadCachedBodies(id).then((cached) => {
+      if (!active) return
+      bodiesRef.current = cached
+      for (const messageId of Object.keys(cached)) processedRef.current.add(messageId)
+      setBodies(cached)
+      setReadyId(id)
+    })
+    return () => {
+      active = false
+    }
   }, [id])
+
+  // Decrypt/join any message not yet handled, in order. Runs whenever the message
+  // list grows (initial load, pagination, live arrival) once the cache is loaded.
+  useEffect(() => {
+    if (readyId !== id || !userId || messages.length === 0) return
+    let active = true
+    const run = async () => {
+      const session = await mlsSession(userId)
+      const next = { ...bodiesRef.current }
+      let changed = false
+      for (const m of messages) {
+        if (processedRef.current.has(m.id)) continue
+        processedRef.current.add(m.id)
+        try {
+          if (m.contentType === MLS_WELCOME) {
+            await session.tryJoin(id, m.ciphertext)
+          } else if (m.contentType === MLS_APPLICATION) {
+            const bytes = await session.decrypt(id, m.ciphertext)
+            const content = bytes && deserializeContent(bytes)
+            if (content) {
+              next[m.id] = content.body
+              changed = true
+              void cacheBody(id, m.id, content.body)
+              setPreview(id, content.body)
+            }
+          } else {
+            // Legacy plaintext (pre-encryption messages on the wire).
+            const content = deserializeContent(base64ToBytes(m.ciphertext))
+            if (content) {
+              next[m.id] = content.body
+              changed = true
+            }
+          }
+        } catch {
+          // Not yet decryptable (e.g. our own message, or we have not joined).
+          // Leave it as a placeholder rather than looping on it.
+        }
+      }
+      if (active && changed) {
+        bodiesRef.current = next
+        setBodies(next)
+      }
+    }
+    void run()
+    return () => {
+      active = false
+    }
+  }, [messages, readyId, userId, id])
 
   useEffect(() => {
     let active = true
@@ -150,14 +243,27 @@ export function ConversationChatRoute() {
   const canSend = draft.trim().length > 0
 
   async function send() {
-    if (!canSend || sending) return
+    if (!canSend || sending || !userId) return
+    const body = draft.trim()
     setSending(true)
     try {
-      // Encode through the crypto seam. Today plaintext; MLS in Phase 3.
-      const { ciphertext, contentType } = encodeChatContent({ body: draft.trim() })
-      const msg = await api.sendChatMessage(id, ciphertext, contentType)
+      const session = await mlsSession(userId)
+      // Make sure we hold the group before encrypting (creator sets it up lazily).
+      if (!session.hasGroup(id) && conversation) await provisionGroup(conversation, userId)
+      if (!session.hasGroup(id)) throw new Error(t('chat.notJoined'))
+
+      const ciphertext = await session.encrypt(id, serializeContent({ body }))
+      const msg = await api.sendChatMessage(id, ciphertext, MLS_APPLICATION)
+
+      // We can never decrypt our own MLS message, so record its plaintext now and
+      // mark it handled so the SSE echo does not try (and fail) to decrypt it.
+      processedRef.current.add(msg.id)
+      bodiesRef.current = { ...bodiesRef.current, [msg.id]: body }
+      setBodies(bodiesRef.current)
+      void cacheBody(id, msg.id, body)
+      setPreview(id, body)
+
       setDraft('')
-      // Optimistic append; the SSE echo is deduped by id.
       setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
       requestAnimationFrame(() => scrollToBottom('smooth'))
       textRef.current?.focus()
@@ -173,6 +279,9 @@ export function ConversationChatRoute() {
     e.preventDefault()
     void send()
   }
+
+  // Welcome/Commit control messages carry no user-visible text.
+  const visibleMessages = messages.filter((m) => m.contentType !== MLS_WELCOME)
 
   const title = conversation ? conversationTitle(conversation, userId ?? '') : ''
   const avatarId =
@@ -211,17 +320,17 @@ export function ConversationChatRoute() {
           <div className="pheme-feed-content" ref={contentRef}>
             {cursor && <div ref={sentinelRef} aria-hidden />}
             {loading && <ChatSkeleton />}
-            {!loading && messages.length === 0 && (
+            {!loading && visibleMessages.length === 0 && (
               <Text c="dimmed" size="sm" ta="center" py="xl">
                 {t('chat.noChatMessages')}
               </Text>
             )}
             {!loading &&
-              messages.map((m, i) => {
-                const prev = messages[i - 1]
+              visibleMessages.map((m, i) => {
+                const prev = visibleMessages[i - 1]
                 const startsDay = !prev || !isSameDay(prev.createdAt, m.createdAt)
                 const own = m.senderId === userId
-                const content = decodeChatContent(m.ciphertext, m.contentType)
+                const body = bodies[m.id]
                 const senderName = isGroup
                   ? conversation?.members.find((mem) => mem.userId === m.senderId)?.user
                   : undefined
@@ -239,7 +348,7 @@ export function ConversationChatRoute() {
                         </Text>
                       )}
                       <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                        {content?.body ?? '…'}
+                        {body ?? '…'}
                       </Text>
                       <div className="pheme-bubble-footer">
                         <Text size="xs" c="dimmed">

@@ -151,6 +151,8 @@ const en = {
     searchPeople: 'Search people by name or @username',
     noPeople: 'No one found',
     startFailed: 'Could not start the chat',
+    notJoined: 'Setting up encryption — try again in a moment',
+    encryptedPreview: 'Encrypted message',
     chatsSection: 'Chats',
     channelsSection: 'Channels',
     addMenu: 'Create or subscribe to a channel',

@@ -1,0 +1,28 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_addoutput_free: (a: number, b: number) => void;
+export const __wbg_get_addoutput_commit: (a: number) => [number, number];
+export const __wbg_get_addoutput_welcome: (a: number) => [number, number];
+export const __wbg_mlsclient_free: (a: number, b: number) => void;
+export const __wbg_set_addoutput_commit: (a: number, b: number, c: number) => void;
+export const __wbg_set_addoutput_welcome: (a: number, b: number, c: number) => void;
+export const mlsclient_addMember: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+export const mlsclient_addMembers: (a: number, b: number, c: number, d: any) => [number, number, number];
+export const mlsclient_applyCommit: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+export const mlsclient_createGroup: (a: number, b: number, c: number) => [number, number];
+export const mlsclient_decrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const mlsclient_encrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const mlsclient_exportState: (a: number) => [number, number, number, number];
+export const mlsclient_fromState: (a: number, b: number) => [number, number, number];
+export const mlsclient_hasGroup: (a: number, b: number, c: number) => number;
+export const mlsclient_joinFromWelcome: (a: number, b: number, c: number) => [number, number];
+export const mlsclient_keyPackage: (a: number) => [number, number, number, number];
+export const mlsclient_new: (a: number, b: number) => [number, number, number];
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_start: () => void;

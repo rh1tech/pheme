@@ -237,6 +237,21 @@ export const api = {
   deleteChannelAvatar: (id: string) =>
     request<Channel>(`/v1/channels/${id}/avatar`, { method: 'DELETE' }),
 
+  // MLS key directory. KeyPackages cross as base64 (Go []byte).
+  publishKeyPackages: (deviceId: string, keyPackages: string[]) =>
+    request<void>('/v1/mls/key-packages', {
+      method: 'POST',
+      body: { deviceId, keyPackages },
+    }),
+  keyPackageCount: (deviceId: string) =>
+    request<{ count: number }>(
+      `/v1/mls/key-packages/count?deviceId=${encodeURIComponent(deviceId)}`,
+    ).then((r) => r.count),
+  claimKeyPackage: (userId: string) =>
+    request<{ keyPackage: string }>(`/v1/mls/key-packages/${userId}/claim`).then(
+      (r) => r.keyPackage,
+    ),
+
   // User search for starting a chat (public profiles only, never email).
   searchUsers: (q: string) =>
     request<{ users: PublicUser[] }>(`/v1/users/search?q=${encodeURIComponent(q)}`).then(

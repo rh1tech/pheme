@@ -40,6 +40,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// only — never email — and requires a minimum query length to limit
 	// enumeration. Any authenticated user may search; membership is not involved.
 	mux.HandleFunc("GET /v1/users/search", h.searchUsers)
+	// MLS key directory (public KeyPackages) — the E2EE handshake material.
+	mux.HandleFunc("POST /v1/mls/key-packages", h.publishKeyPackages)
+	mux.HandleFunc("GET /v1/mls/key-packages/count", h.keyPackageCount)
+	mux.HandleFunc("GET /v1/mls/key-packages/{userId}/claim", h.claimKeyPackage)
 }
 
 const minUserSearchLen = 2
