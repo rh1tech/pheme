@@ -190,6 +190,7 @@ function AddMemberSearch({ exclude, busy, onPick }: AddMemberSearchProps) {
           key={u.id}
           onClick={() => onPick(u)}
           disabled={busy}
+          aria-label={t('group.addName', { name: userLabel(u) })}
           p="xs"
           style={{ borderRadius: 'var(--mantine-radius-md)' }}
           className="pheme-user-pick"

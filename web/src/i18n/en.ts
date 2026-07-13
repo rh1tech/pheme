@@ -140,6 +140,7 @@ const en = {
     membersTitle: 'Members',
     members: 'Members ({{count}})',
     addMember: 'Add someone',
+    addName: 'Add {{name}}',
     admin: 'Admin',
     you: 'you',
     memberActions: 'Member actions',

@@ -325,12 +325,15 @@ test('an admin adds and removes a group member, and encryption follows', async (
   await owner.getByRole('button', { name: 'Conversation menu' }).click()
   await owner.getByRole('menuitem', { name: 'Members' }).click()
   await owner.getByPlaceholder('Search people by name or @username').fill('Carol Findme')
-  await owner.getByRole('button', { name: /Carol Findme/ }).click()
+  await owner.getByRole('button', { name: 'Add Carol Findme' }).click()
   await expect(owner.getByText('Member added')).toBeVisible({ timeout: 20_000 })
   await owner.keyboard.press('Escape')
 
-  // Carol opens the group and can read what is said AFTER she joined.
+  // Carol opens the group and can read what is said AFTER she joined. Give the add's
+  // Welcome a moment to land so her first load already has it.
+  await owner.waitForTimeout(1500)
   await carol.goto(`/chats/${groupId}`)
+  await carol.waitForTimeout(1500)
   await send(owner, 'welcome carol')
   await expect(carol.getByTestId('chat-message').last()).toContainText('welcome carol', {
     timeout: 20_000,

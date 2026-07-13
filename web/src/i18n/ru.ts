@@ -142,6 +142,7 @@ const ru: Resources = {
     membersTitle: 'Участники',
     members: 'Участники ({{count}})',
     addMember: 'Добавить участника',
+    addName: 'Добавить {{name}}',
     admin: 'Админ',
     you: 'вы',
     memberActions: 'Действия с участником',
