@@ -1,165 +1,309 @@
-//! Pheme MLS spike.
+//! Pheme MLS client core (RFC 9420, via OpenMLS).
 //!
-//! Purpose: prove that OpenMLS (RFC 9420) can do a two-party group round-trip —
-//! create group, add a member, exchange an encrypted application message — AND
-//! that the same code compiles to `wasm32-unknown-unknown` for the React client.
-//! This is a feasibility gate for the E2EE plan, not production code.
+//! A stateful client that a browser (WASM) or Flutter app drives to run
+//! end-to-end-encrypted conversations. The server never appears here: in MLS it
+//! is an untrusted Delivery Service that stores public KeyPackages and relays the
+//! opaque bytes these methods produce, in order.
 //!
-//! The server never appears here: in MLS it is an untrusted Delivery Service that
-//! only relays the opaque bytes these functions produce.
+//! The whole client state — the identity keypair and every group's ratchet state
+//! — lives in one serializable provider, so it can be exported to bytes,
+//! persisted (IndexedDB on web, secure storage on mobile), and re-imported on the
+//! next launch. Private keys never leave the device.
 
-use openmls::prelude::tls_codec::Deserialize as _;
+use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 
-const CIPHERSUITE: Ciphersuite =
-    Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
+const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
-/// One member's local cryptographic identity and key store.
-struct Member {
+/// A Pheme MLS client: one identity plus every group it belongs to, all held in a
+/// single serializable provider.
+pub struct Client {
     provider: OpenMlsRustCrypto,
     signer: SignatureKeyPair,
     credential_with_key: CredentialWithKey,
+    /// The identity bytes embedded in the credential, kept so state can be exported.
+    identity: Vec<u8>,
 }
 
-impl Member {
-    fn new(name: &str) -> Self {
+/// The result of adding members to a group: the Welcome for the newcomers and the
+/// Commit the existing members must apply. Both are opaque wire bytes.
+pub struct AddResult {
+    pub welcome: Vec<u8>,
+    pub commit: Vec<u8>,
+}
+
+impl Client {
+    /// Creates a fresh client identity. `identity` is the stable user/device label
+    /// embedded in the MLS credential (Pheme uses the user id).
+    pub fn new(identity: &[u8]) -> Result<Self, String> {
         let provider = OpenMlsRustCrypto::default();
-        let credential = BasicCredential::new(name.as_bytes().to_vec());
-        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
-            .expect("signature keypair");
-        signer.store(provider.storage()).expect("store signer");
+        let signer =
+            SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).map_err(err("signer"))?;
+        signer.store(provider.storage()).map_err(err("store signer"))?;
+        let credential = BasicCredential::new(identity.to_vec());
         let credential_with_key = CredentialWithKey {
             credential: credential.into(),
             signature_key: signer.public().into(),
         };
-        Self {
+        Ok(Self {
             provider,
             signer,
             credential_with_key,
+            identity: identity.to_vec(),
+        })
+    }
+
+    /// A public KeyPackage to publish to the server, for others to add this client
+    /// to a group. Each is single-use; publish several.
+    pub fn key_package(&self) -> Result<Vec<u8>, String> {
+        let bundle = KeyPackage::builder()
+            .build(CIPHERSUITE, &self.provider, &self.signer, self.credential_with_key.clone())
+            .map_err(err("key package"))?;
+        bundle.key_package().tls_serialize_detached().map_err(err("serialize kp"))
+    }
+
+    /// Creates a new group this client owns. `group_id` is the conversation id.
+    pub fn create_group(&self, group_id: &[u8]) -> Result<(), String> {
+        let config = MlsGroupCreateConfig::builder()
+            // Self-contained Welcomes: a joiner needs nothing the server would have
+            // to store beyond the Welcome itself.
+            .use_ratchet_tree_extension(true)
+            .build();
+        MlsGroup::new_with_group_id(
+            &self.provider,
+            &self.signer,
+            &config,
+            GroupId::from_slice(group_id),
+            self.credential_with_key.clone(),
+        )
+        .map_err(err("create group"))?;
+        Ok(())
+    }
+
+    fn load_group(&self, group_id: &[u8]) -> Result<MlsGroup, String> {
+        MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
+            .map_err(err("load group"))?
+            .ok_or_else(|| "group not found".to_string())
+    }
+
+    /// Adds a member (by their published KeyPackage) to a group we belong to.
+    pub fn add_member(&self, group_id: &[u8], key_package: &[u8]) -> Result<AddResult, String> {
+        let kp_in =
+            KeyPackageIn::tls_deserialize(&mut &*key_package).map_err(err("parse kp"))?;
+        let kp = kp_in
+            .validate(self.provider.crypto(), ProtocolVersion::Mls10)
+            .map_err(err("validate kp"))?;
+
+        let mut group = self.load_group(group_id)?;
+        let (commit, welcome, _group_info) = group
+            .add_members(&self.provider, &self.signer, &[kp])
+            .map_err(err("add members"))?;
+        group.merge_pending_commit(&self.provider).map_err(err("merge commit"))?;
+
+        Ok(AddResult {
+            welcome: welcome.tls_serialize_detached().map_err(err("serialize welcome"))?,
+            commit: commit.tls_serialize_detached().map_err(err("serialize commit"))?,
+        })
+    }
+
+    /// Joins a group from a Welcome relayed by the server.
+    pub fn join_from_welcome(&self, welcome: &[u8]) -> Result<(), String> {
+        let msg = MlsMessageIn::tls_deserialize(&mut &*welcome).map_err(err("parse welcome"))?;
+        let welcome = match msg.extract() {
+            MlsMessageBodyIn::Welcome(w) => w,
+            _ => return Err("not a Welcome".into()),
+        };
+        let staged =
+            StagedWelcome::new_from_welcome(&self.provider, &MlsGroupJoinConfig::default(), welcome, None)
+                .map_err(err("stage welcome"))?;
+        staged.into_group(&self.provider).map_err(err("join group"))?;
+        Ok(())
+    }
+
+    /// Applies a Commit (membership change) another member produced. Idempotent
+    /// enough to skip our own already-merged commits.
+    pub fn apply_commit(&self, group_id: &[u8], commit: &[u8]) -> Result<(), String> {
+        let mut group = self.load_group(group_id)?;
+        let msg = MlsMessageIn::tls_deserialize(&mut &*commit).map_err(err("parse commit"))?;
+        let protocol = msg.try_into_protocol_message().map_err(err("not protocol"))?;
+        let processed = match group.process_message(&self.provider, protocol) {
+            Ok(p) => p,
+            // Our own commit, already merged when we produced it — nothing to do.
+            Err(ProcessMessageError::ValidationError(ValidationError::CannotDecryptOwnMessage)) => {
+                return Ok(())
+            }
+            Err(e) => return Err(format!("process commit: {e:?}")),
+        };
+        if let ProcessedMessageContent::StagedCommitMessage(staged) = processed.into_content() {
+            group.merge_staged_commit(&self.provider, *staged).map_err(err("merge staged"))?;
+        }
+        Ok(())
+    }
+
+    /// Encrypts an application message for a group.
+    pub fn encrypt(&self, group_id: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        let mut group = self.load_group(group_id)?;
+        let out = group
+            .create_message(&self.provider, &self.signer, plaintext)
+            .map_err(err("encrypt"))?;
+        out.tls_serialize_detached().map_err(err("serialize msg"))
+    }
+
+    /// Decrypts an application message. Returns None for a control message
+    /// (Commit) — the caller routes those to apply_commit.
+    pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Vec<u8>>, String> {
+        let mut group = self.load_group(group_id)?;
+        let msg = MlsMessageIn::tls_deserialize(&mut &*ciphertext).map_err(err("parse msg"))?;
+        let protocol = msg.try_into_protocol_message().map_err(err("not protocol"))?;
+        let processed = group.process_message(&self.provider, protocol).map_err(err("decrypt"))?;
+        match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(app) => Ok(Some(app.into_bytes())),
+            ProcessedMessageContent::StagedCommitMessage(staged) => {
+                group.merge_staged_commit(&self.provider, *staged).map_err(err("merge staged"))?;
+                Ok(None)
+            }
+            _ => Ok(None),
         }
     }
 
-    /// A public KeyPackage others use to add this member to a group.
-    fn key_package(&self) -> KeyPackageBundle {
-        KeyPackage::builder()
-            .build(
-                CIPHERSUITE,
-                &self.provider,
-                &self.signer,
-                self.credential_with_key.clone(),
-            )
-            .expect("key package")
+    /// Serialises the entire client state — the MLS key store (identity keypair +
+    /// every group's ratchet state) plus the public key needed to reload the
+    /// signer — into one blob for persistence (IndexedDB / secure storage).
+    pub fn export_state(&self) -> Result<Vec<u8>, String> {
+        // The MemoryStorage `serialize` helper is behind a test-utils feature, so
+        // persist its public `values` map directly instead — a flat list of
+        // (key, value) byte pairs, which is exactly what the store is.
+        let values = self.provider.storage().values.read().map_err(err("read store"))?;
+        let store: Vec<(Vec<u8>, Vec<u8>)> = values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let envelope = Envelope {
+            store,
+            public_key: self.signer.public().to_vec(),
+            identity: self.identity.clone(),
+        };
+        serde_json::to_vec(&envelope).map_err(err("encode envelope"))
     }
-}
 
-/// Runs the full round-trip in-process and returns the plaintext Bob decrypted,
-/// which the caller asserts equals what Alice sent. Any protocol error surfaces
-/// as an Err string.
-pub fn roundtrip(plaintext: &[u8]) -> Result<Vec<u8>, String> {
-    let alice = Member::new("alice");
-    let bob = Member::new("bob");
-
-    // Bob publishes a KeyPackage; Alice claims it to add him.
-    let bob_kp = bob.key_package();
-
-    // Alice creates the group. The ratchet-tree extension makes the Welcome
-    // self-contained, so a joiner needs nothing beyond it — the right shape when
-    // the server is an untrusted relay that stores no group state.
-    let config = MlsGroupCreateConfig::builder()
-        .use_ratchet_tree_extension(true)
-        .build();
-    let mut alice_group = MlsGroup::new(
-        &alice.provider,
-        &alice.signer,
-        &config,
-        alice.credential_with_key.clone(),
-    )
-    .map_err(|e| format!("create group: {e:?}"))?;
-
-    // Alice adds Bob → a Commit for the group and a Welcome for Bob.
-    let (_commit, welcome, _group_info) = alice_group
-        .add_members(
-            &alice.provider,
-            &alice.signer,
-            &[bob_kp.key_package().clone()],
+    /// Restores a client from previously exported state.
+    pub fn import_state(state: &[u8]) -> Result<Self, String> {
+        let envelope: Envelope = serde_json::from_slice(state).map_err(err("decode envelope"))?;
+        let provider = OpenMlsRustCrypto::default();
+        {
+            let mut dst = provider.storage().values.write().map_err(err("write store"))?;
+            for (k, v) in envelope.store {
+                dst.insert(k, v);
+            }
+        }
+        let signer = SignatureKeyPair::read(
+            provider.storage(),
+            &envelope.public_key,
+            CIPHERSUITE.signature_algorithm(),
         )
-        .map_err(|e| format!("add member: {e:?}"))?;
-    alice_group
-        .merge_pending_commit(&alice.provider)
-        .map_err(|e| format!("merge commit: {e:?}"))?;
-
-    // Bob joins from the Welcome. It reaches him as opaque wire bytes via the
-    // server, so serialize and re-parse it exactly as he would receive it.
-    let welcome_wire = welcome.to_bytes().map_err(|e| format!("welcome bytes: {e:?}"))?;
-    let welcome_in = MlsMessageIn::tls_deserialize(&mut welcome_wire.as_slice())
-        .map_err(|e| format!("welcome parse: {e:?}"))?;
-    let welcome = match welcome_in.extract() {
-        MlsMessageBodyIn::Welcome(w) => w,
-        _ => return Err("expected a Welcome message".into()),
-    };
-    let staged = StagedWelcome::new_from_welcome(
-        &bob.provider,
-        &MlsGroupJoinConfig::default(),
-        welcome,
-        None,
-    )
-    .map_err(|e| format!("stage welcome: {e:?}"))?;
-    let mut bob_group = staged
-        .into_group(&bob.provider)
-        .map_err(|e| format!("join group: {e:?}"))?;
-
-    // Alice encrypts an application message.
-    let out = alice_group
-        .create_message(&alice.provider, &alice.signer, plaintext)
-        .map_err(|e| format!("encrypt: {e:?}"))?;
-
-    // It travels as opaque bytes through the (untrusted) server.
-    let wire = out
-        .to_bytes()
-        .map_err(|e| format!("serialize: {e:?}"))?;
-    let incoming = MlsMessageIn::tls_deserialize(&mut wire.as_slice())
-        .map_err(|e| format!("deserialize: {e:?}"))?;
-    let protocol = incoming
-        .try_into_protocol_message()
-        .map_err(|e| format!("not a protocol message: {e:?}"))?;
-
-    // Bob decrypts.
-    let processed = bob_group
-        .process_message(&bob.provider, protocol)
-        .map_err(|e| format!("process: {e:?}"))?;
-    match processed.into_content() {
-        ProcessedMessageContent::ApplicationMessage(app) => Ok(app.into_bytes()),
-        other => Err(format!("unexpected content: {other:?}")),
+        .ok_or("signer missing from state")?;
+        let credential = BasicCredential::new(envelope.identity.clone());
+        let credential_with_key = CredentialWithKey {
+            credential: credential.into(),
+            signature_key: signer.public().into(),
+        };
+        Ok(Self {
+            provider,
+            signer,
+            credential_with_key,
+            identity: envelope.identity,
+        })
     }
 }
 
-// --- WASM surface (the shape the React client would call) --------------------
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Envelope {
+    store: Vec<(Vec<u8>, Vec<u8>)>,
+    public_key: Vec<u8>,
+    identity: Vec<u8>,
+}
+
+/// Formats an error with a context prefix. A plain fn (not `impl Fn`) so it can be
+/// passed to `map_err` without nested-impl-Trait.
+fn err<E: std::fmt::Debug>(context: &'static str) -> impl Fn(E) -> String {
+    move |e| format!("{context}: {e:?}")
+}
+
+// --- WASM surface -----------------------------------------------------------
 
 #[cfg(target_arch = "wasm32")]
-mod wasm {
-    use wasm_bindgen::prelude::*;
-
-    /// Proves the crypto works from JS: encrypt→relay→decrypt, returning the
-    /// decrypted text. A real client would split this into keygen / group / send
-    /// / receive, but the spike only needs the round-trip to succeed in a browser.
-    #[wasm_bindgen]
-    pub fn roundtrip(plaintext: &str) -> Result<String, JsError> {
-        let out = super::roundtrip(plaintext.as_bytes())
-            .map_err(|e| JsError::new(&e))?;
-        String::from_utf8(out).map_err(|e| JsError::new(&e.to_string()))
-    }
-}
+mod wasm;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 
     #[test]
-    fn two_party_message_round_trips() {
-        let secret = b"the eagle lands at dawn";
-        let got = roundtrip(secret).expect("round-trip");
-        assert_eq!(got, secret, "Bob must decrypt exactly what Alice sent");
+    fn stateful_two_party_round_trip() {
+        let alice = Client::new(b"alice").unwrap();
+        let bob = Client::new(b"bob").unwrap();
+        let group_id = b"conversation-1";
+
+        let bob_kp = bob.key_package().unwrap();
+        alice.create_group(group_id).unwrap();
+        let add = alice.add_member(group_id, &bob_kp).unwrap();
+        bob.join_from_welcome(&add.welcome).unwrap();
+
+        let ct = alice.encrypt(group_id, b"the eagle lands at dawn").unwrap();
+        let pt = bob.decrypt(group_id, &ct).unwrap();
+        assert_eq!(pt.as_deref(), Some(&b"the eagle lands at dawn"[..]));
+
+        // Reply the other way.
+        let ct2 = bob.encrypt(group_id, b"acknowledged").unwrap();
+        let pt2 = alice.decrypt(group_id, &ct2).unwrap();
+        assert_eq!(pt2.as_deref(), Some(&b"acknowledged"[..]));
+    }
+
+    // The property IndexedDB persistence rests on: a client's whole state survives
+    // export → drop → import, and the restored client can still decrypt.
+    #[test]
+    fn state_survives_persistence_round_trip() {
+        let alice = Client::new(b"alice").unwrap();
+        let bob = Client::new(b"bob").unwrap();
+        let group_id = b"conversation-1";
+
+        alice.create_group(group_id).unwrap();
+        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
+        bob.join_from_welcome(&add.welcome).unwrap();
+
+        // Persist Bob, then rebuild him from the blob (a page reload / new session).
+        let saved = bob.export_state().unwrap();
+        drop(bob);
+        let bob = Client::import_state(&saved).unwrap();
+
+        // Alice sends; the restored Bob decrypts.
+        let ct = alice.encrypt(group_id, b"still works after reload").unwrap();
+        assert_eq!(
+            bob.decrypt(group_id, &ct).unwrap().as_deref(),
+            Some(&b"still works after reload"[..]),
+        );
+
+        // And the restored Bob can still send back (his ratchet state is intact).
+        let ct2 = bob.encrypt(group_id, b"reply from restored bob").unwrap();
+        assert_eq!(
+            alice.decrypt(group_id, &ct2).unwrap().as_deref(),
+            Some(&b"reply from restored bob"[..]),
+        );
+    }
+
+    // A third client not in the group cannot decrypt — the whole point.
+    #[test]
+    fn outsider_cannot_decrypt() {
+        let alice = Client::new(b"alice").unwrap();
+        let bob = Client::new(b"bob").unwrap();
+        let mallory = Client::new(b"mallory").unwrap();
+        let group_id = b"conversation-1";
+
+        alice.create_group(group_id).unwrap();
+        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
+        bob.join_from_welcome(&add.welcome).unwrap();
+
+        let ct = alice.encrypt(group_id, b"secret").unwrap();
+        // Mallory has no such group; decryption must fail, not return plaintext.
+        assert!(mallory.decrypt(group_id, &ct).is_err());
     }
 }
