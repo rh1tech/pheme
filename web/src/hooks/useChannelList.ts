@@ -124,10 +124,10 @@ export function useChannelList(): ChannelListApi {
   // the top of the list. A message for a channel not in the list (just joined in
   // another tab, say) is ignored — refresh() will pick the channel up.
   useEventStream((e) => {
+    if (!e.channelId || !e.message) return // ignore conversation events here
+    const msg = e.message
     setChannels((prev) =>
-      prev.map((c) =>
-        c.id === e.channelId ? { ...c, lastMessage: toLastMessage(e.message) } : c,
-      ),
+      prev.map((c) => (c.id === e.channelId ? { ...c, lastMessage: toLastMessage(msg) } : c)),
     )
   })
 

@@ -45,6 +45,52 @@ export interface CodeSentResponse {
   status: string
 }
 
+// --- Conversations (private direct + group chats) ---
+
+export type ConversationKind = 'direct' | 'group'
+
+export interface ConversationMember {
+  id: string
+  conversationId: string
+  userId: string
+  role: ChannelRole
+  joinedAt: string
+  // Hydrated public profile of the member, for labelling and avatars.
+  user: PublicUser
+}
+
+// A chat message as it comes off the wire. `ciphertext` is base64 of opaque
+// bytes the server never read — plaintext-JSON today, MLS ciphertext once E2EE
+// is on. Decode it with lib/chatContent, never by hand.
+export interface ChatMessage {
+  id: string
+  conversationId: string
+  senderId: string
+  ciphertext: string
+  contentType: string
+  createdAt: string
+}
+
+// A conversation's newest message, for chat-list ordering and preview.
+export interface LastChatMessage {
+  id: string
+  senderId: string
+  ciphertext: string
+  contentType: string
+  createdAt: string
+}
+
+export interface Conversation {
+  id: string
+  kind: ConversationKind
+  title?: string
+  avatarId?: string
+  createdBy: string
+  createdAt: string
+  members: ConversationMember[]
+  lastMessage?: LastChatMessage
+}
+
 // The newest message of a channel, reduced to what the chat list renders. Absent
 // on a channel that has never been notified.
 export interface LastMessage {
@@ -167,10 +213,14 @@ export interface Meta {
   vapidPublicKey: string
 }
 
-// Live event delivered over the SSE stream.
+// Live event delivered over the one per-user SSE stream. Either a channel
+// broadcast (channelId + message) or a conversation message (conversationId +
+// chatMessage) — distinguished by which id is present.
 export interface LiveEvent {
-  channelId: string
-  message: Message
+  channelId?: string
+  message?: Message
+  conversationId?: string
+  chatMessage?: ChatMessage
 }
 
 // --- Admin types ---

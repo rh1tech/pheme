@@ -17,7 +17,10 @@ import type {
   ChannelRelation,
   ChannelRole,
   ChannelStatus,
+  ChatMessage,
   CodeSentResponse,
+  Conversation,
+  ConversationMember,
   Comment,
   CommentsPage,
   CreatedKey,
@@ -29,6 +32,7 @@ import type {
   Meta,
   MessagesPage,
   Platform,
+  PublicUser,
   Role,
   SubscriptionMode,
   TokenResponse,
@@ -233,6 +237,12 @@ export const api = {
   deleteChannelAvatar: (id: string) =>
     request<Channel>(`/v1/channels/${id}/avatar`, { method: 'DELETE' }),
 
+  // User search for starting a chat (public profiles only, never email).
+  searchUsers: (q: string) =>
+    request<{ users: PublicUser[] }>(`/v1/users/search?q=${encodeURIComponent(q)}`).then(
+      (r) => r.users ?? [],
+    ),
+
   // Membership: join by trigger ID or phetag, the caller's joined channels, and leaving.
   joinChannel: (ref: string, deviceId?: string) =>
     request<{ channel: Channel }>('/v1/channels/join', { method: 'POST', body: { ref, deviceId } }),
@@ -304,6 +314,41 @@ export const api = {
     request<{ status: 'active' | 'pending' | 'none' }>(
       `/v1/channels/${channelId}/subscription?deviceId=${encodeURIComponent(deviceId)}`,
     ).then((r) => r.status),
+
+  // Conversations (private chats). Content is opaque; encode/decode via lib/chatContent.
+  listConversations: () =>
+    request<{ conversations: Conversation[] }>('/v1/conversations').then((r) => r.conversations ?? []),
+  getConversation: (id: string) => request<Conversation>(`/v1/conversations/${id}`),
+  createDirectChat: (otherUserId: string) =>
+    request<Conversation>('/v1/conversations', {
+      method: 'POST',
+      body: { kind: 'direct', memberIds: [otherUserId] },
+    }),
+  createGroupChat: (title: string, memberIds: string[]) =>
+    request<Conversation>('/v1/conversations', {
+      method: 'POST',
+      body: { kind: 'group', title, memberIds },
+    }),
+  listChatMessages: (conversationId: string, cursor = '', limit = 50, quiet = false) => {
+    const q = new URLSearchParams({ limit: String(limit) })
+    if (cursor) q.set('cursor', cursor)
+    return request<{ messages: ChatMessage[]; nextCursor: string }>(
+      `/v1/conversations/${conversationId}/messages?${q.toString()}`,
+      { quiet },
+    ).then((r) => ({ messages: r.messages ?? [], nextCursor: r.nextCursor ?? '' }))
+  },
+  sendChatMessage: (conversationId: string, ciphertext: string, contentType: string) =>
+    request<ChatMessage>(`/v1/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: { ciphertext, contentType },
+    }),
+  addConversationMember: (conversationId: string, userId: string) =>
+    request<ConversationMember>(`/v1/conversations/${conversationId}/members`, {
+      method: 'POST',
+      body: { userId },
+    }),
+  removeConversationMember: (conversationId: string, userId: string) =>
+    request<void>(`/v1/conversations/${conversationId}/members/${userId}`, { method: 'DELETE' }),
 
   // Messages
   getMessage: (channelId: string, messageId: string) =>

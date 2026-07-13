@@ -36,6 +36,37 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/conversations/{id}/members", h.listMembers)
 	mux.HandleFunc("POST /v1/conversations/{id}/members", h.addMember)
 	mux.HandleFunc("DELETE /v1/conversations/{id}/members/{userId}", h.removeMember)
+	// User search for the "start a chat with…" picker. Returns public profiles
+	// only — never email — and requires a minimum query length to limit
+	// enumeration. Any authenticated user may search; membership is not involved.
+	mux.HandleFunc("GET /v1/users/search", h.searchUsers)
+}
+
+const minUserSearchLen = 2
+
+func (h *Handler) searchUsers(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	q := r.URL.Query().Get("q")
+	if len([]rune(q)) < minUserSearchLen {
+		httpx.JSON(w, http.StatusOK, map[string]any{"users": []domain.PublicUser{}})
+		return
+	}
+	users, err := h.Store.SearchUsers(r.Context(), q, 20)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "search failed")
+		return
+	}
+	out := make([]domain.PublicUser, 0, len(users))
+	for _, u := range users {
+		if u.ID == uid {
+			continue // no point starting a chat with yourself
+		}
+		out = append(out, u.Public())
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"users": out})
 }
 
 func (h *Handler) requireUser(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -184,7 +215,14 @@ func (h *Handler) getConversation(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "conversation not found")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, conv)
+	// Hydrated the same way the list is, so the header can label a direct chat.
+	view := conversationView{Conversation: conv, Members: h.membersView(r.Context(), convID)}
+	if last, err := h.Store.LastChatMessagesByConversations(r.Context(), []string{convID}); err == nil {
+		if msg, present := last[convID]; present {
+			view.LastMessage = newLastChatMessageView(msg)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, view)
 }
 
 func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
@@ -192,10 +230,5 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	members, err := h.Store.ConversationMembers(r.Context(), convID)
-	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "could not list members")
-		return
-	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"members": members})
+	httpx.JSON(w, http.StatusOK, map[string]any{"members": h.membersView(r.Context(), convID)})
 }

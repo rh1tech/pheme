@@ -285,6 +285,28 @@ func (m *Mongo) AdminListUsers(ctx context.Context, query string, offset, limit 
 	return findPaged[domain.User](ctx, m.db.Collection("users"), filter, offset, limit)
 }
 
+func (m *Mongo) SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+	rx := primitive.Regex{Pattern: regexp.QuoteMeta(q), Options: "i"}
+	filter := bson.M{
+		"status": domain.UserActive,
+		"$or":    bson.A{bson.M{"username": rx}, bson.M{"displayName": rx}},
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "username", Value: 1}})
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
+	cur, err := m.db.Collection("users").Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.User
+	return out, cur.All(ctx, &out)
+}
+
 func (m *Mongo) DeleteUser(ctx context.Context, userID string) error {
 	// Capture the avatar blob id before deletion so it can be reclaimed after.
 	prev, err := m.UserByID(ctx, userID)

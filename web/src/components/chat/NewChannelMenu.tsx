@@ -9,12 +9,13 @@ import {
   Text,
   TextInput,
 } from '@mantine/core'
-import { IconPencilPlus, IconPlus, IconUserPlus } from '@tabler/icons-react'
+import { IconMessagePlus, IconPencilPlus, IconPlus, IconUsersGroup, IconUserPlus } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../lib/api'
 import { notifyError, notifySuccess } from '../../lib/notify'
 import { ResponsiveModal } from '../ResponsiveModal'
+import { NewChatModals } from './NewChatModals'
 import type { SubscriptionMode } from '../../lib/types'
 
 interface NewChannelMenuProps {
@@ -39,6 +40,8 @@ export function NewChannelMenu({ onChanged }: NewChannelMenuProps) {
   const [joinOpen, setJoinOpen] = useState(false)
   const [joinRef, setJoinRef] = useState('')
   const [joining, setJoining] = useState(false)
+  const [directOpen, setDirectOpen] = useState(false)
+  const [groupOpen, setGroupOpen] = useState(false)
   const joinInputRef = useRef<HTMLInputElement>(null)
 
   function openCreate() {
@@ -96,6 +99,15 @@ export function NewChannelMenu({ onChanged }: NewChannelMenuProps) {
           </ActionIcon>
         </Menu.Target>
         <Menu.Dropdown>
+          <Menu.Label>{t('chat.chatsSection')}</Menu.Label>
+          <Menu.Item leftSection={<IconMessagePlus size={18} />} onClick={() => setDirectOpen(true)}>
+            {t('chat.newChat')}
+          </Menu.Item>
+          <Menu.Item leftSection={<IconUsersGroup size={18} />} onClick={() => setGroupOpen(true)}>
+            {t('chat.newGroup')}
+          </Menu.Item>
+          <Menu.Divider />
+          <Menu.Label>{t('chat.channelsSection')}</Menu.Label>
           <Menu.Item leftSection={<IconPencilPlus size={18} />} onClick={openCreate}>
             {t('dashboard.newChannel')}
           </Menu.Item>
@@ -104,6 +116,16 @@ export function NewChannelMenu({ onChanged }: NewChannelMenuProps) {
           </Menu.Item>
         </Menu.Dropdown>
       </Menu>
+
+      <NewChatModals
+        directOpen={directOpen}
+        groupOpen={groupOpen}
+        onClose={() => {
+          setDirectOpen(false)
+          setGroupOpen(false)
+        }}
+        onChanged={onChanged}
+      />
 
       <ResponsiveModal
         opened={createOpen}

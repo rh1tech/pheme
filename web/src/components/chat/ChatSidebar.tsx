@@ -6,34 +6,71 @@ import { useTranslation } from 'react-i18next'
 import { ChatSidebarMenu } from './ChatSidebarMenu'
 import { NewChannelMenu } from './NewChannelMenu'
 import { ChatListItem } from './ChatListItem'
+import { ConversationListItem } from './ConversationListItem'
 import { NotificationsBanner } from '../NotificationsBanner'
 import { CardListSkeleton } from '../Skeletons'
+import { conversationTitle } from '../../lib/conversation'
+import { useAuth } from '../../auth/context'
 import type { ChannelListApi } from '../../hooks/useChannelList'
+import type { ConversationListApi } from '../../hooks/useConversationList'
 
 interface ChatSidebarProps {
   list: ChannelListApi
-  /** The channel currently open in the conversation pane, if any. */
+  conversations: ConversationListApi
+  /** The channel or conversation currently open, if any. */
   activeId?: string
-  /** Fired on every pick, including a re-pick of the channel already open. */
+  /** Fired on every pick, including a re-pick of the row already open. */
   onSelectChannel: () => void
 }
 
-export function ChatSidebar({ list, activeId, onSelectChannel }: ChatSidebarProps) {
+// One merged row model so channels and conversations sort together by activity,
+// the way Telegram draws a single list.
+type Row =
+  | { kind: 'channel'; id: string; activity: string; text: string }
+  | { kind: 'conversation'; id: string; activity: string; text: string }
+
+export function ChatSidebar({ list, conversations, activeId, onSelectChannel }: ChatSidebarProps) {
   const { t } = useTranslation()
+  const { userId } = useAuth()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
 
-  // The whole list is already in memory, so filtering is local — no round trip.
-  const visible = useMemo(() => {
+  // Channels and conversations become one list, ordered by last activity. The
+  // filter matches a channel's name/alias or a conversation's title, all in memory.
+  const rows = useMemo<Row[]>(() => {
+    const channelRows: Row[] = list.channels.map((c) => ({
+      kind: 'channel',
+      id: c.id,
+      activity: c.lastMessage?.createdAt ?? c.createdAt,
+      text: `${c.name} ${c.alias ?? ''}`,
+    }))
+    const convRows: Row[] = conversations.conversations.map((c) => ({
+      kind: 'conversation',
+      id: c.id,
+      activity: c.lastActivity,
+      text: conversationTitle(c.conversation, userId ?? ''),
+    }))
+    const merged = [...channelRows, ...convRows]
     const q = query.trim().toLowerCase()
-    if (!q) return list.channels
-    return list.channels.filter(
-      (c) => c.name.toLowerCase().includes(q) || (c.alias ?? '').toLowerCase().includes(q),
-    )
-  }, [list.channels, query])
+    const filtered = q ? merged.filter((r) => r.text.toLowerCase().includes(q)) : merged
+    return filtered.sort((a, b) => b.activity.localeCompare(a.activity))
+  }, [list.channels, conversations.conversations, query, userId])
 
-  const empty = !list.loading && list.channels.length === 0
-  const noMatches = !list.loading && list.channels.length > 0 && visible.length === 0
+  const loading = list.loading || conversations.loading
+  const total = list.channels.length + conversations.conversations.length
+  const empty = !loading && total === 0
+  const noMatches = !loading && total > 0 && rows.length === 0
+
+  const channelById = useMemo(() => new Map(list.channels.map((c) => [c.id, c])), [list.channels])
+  const convById = useMemo(
+    () => new Map(conversations.conversations.map((c) => [c.id, c])),
+    [conversations.conversations],
+  )
+
+  function select(kind: Row['kind'], id: string) {
+    onSelectChannel()
+    navigate(kind === 'channel' ? `/channels/${id}` : `/chats/${id}`)
+  }
 
   return (
     <aside className="pheme-sidebar" data-testid="chat-sidebar">
@@ -49,14 +86,18 @@ export function ChatSidebar({ list, activeId, onSelectChannel }: ChatSidebarProp
             radius="xl"
             style={{ flex: 1 }}
           />
-          <NewChannelMenu onChanged={list.refresh} />
+          <NewChannelMenu
+            onChanged={async () => {
+              await Promise.all([list.refresh(), conversations.refresh()])
+            }}
+          />
         </Group>
       </div>
 
       <div className="pheme-sidebar-list">
         <NotificationsBanner />
 
-        {list.loading && <CardListSkeleton rows={5} />}
+        {loading && <CardListSkeleton rows={5} />}
 
         {(empty || noMatches) && (
           <Stack align="center" py="xl">
@@ -66,17 +107,30 @@ export function ChatSidebar({ list, activeId, onSelectChannel }: ChatSidebarProp
           </Stack>
         )}
 
-        {visible.map((c) => (
-          <ChatListItem
-            key={c.id}
-            channel={c}
-            active={c.id === activeId}
-            onSelect={(id) => {
-              onSelectChannel()
-              navigate(`/channels/${id}`)
-            }}
-          />
-        ))}
+        {rows.map((row) => {
+          if (row.kind === 'channel') {
+            const channel = channelById.get(row.id)
+            if (!channel) return null
+            return (
+              <ChatListItem
+                key={`ch-${row.id}`}
+                channel={channel}
+                active={row.id === activeId}
+                onSelect={(id) => select('channel', id)}
+              />
+            )
+          }
+          const item = convById.get(row.id)
+          if (!item) return null
+          return (
+            <ConversationListItem
+              key={`co-${row.id}`}
+              item={item}
+              active={row.id === activeId}
+              onSelect={(id) => select('conversation', id)}
+            />
+          )
+        })}
       </div>
     </aside>
   )

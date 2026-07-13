@@ -234,6 +234,29 @@ func (m *Memory) AdminListUsers(_ context.Context, query string, offset, limit i
 	return paginate(all, offset, limit), int64(len(all)), nil
 }
 
+func (m *Memory) SearchUsers(_ context.Context, query string, limit int) ([]domain.User, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.User
+	for _, u := range m.users {
+		if u.Status != domain.UserActive {
+			continue
+		}
+		if strings.Contains(strings.ToLower(u.Username), q) || strings.Contains(strings.ToLower(u.DisplayName), q) {
+			out = append(out, u)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (m *Memory) DeleteUser(ctx context.Context, userID string) error {
 	m.mu.RLock()
 	u, ok := m.users[userID]

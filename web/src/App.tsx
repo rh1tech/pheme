@@ -11,6 +11,7 @@ import { LoginPage } from './pages/LoginPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { ChatEmptyState } from './pages/chat/ChatEmptyState'
 import { ConversationRoute } from './pages/chat/ConversationRoute'
+import { ConversationChatRoute } from './pages/chat/ConversationChatRoute'
 import { JoinPage } from './pages/JoinPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage'
@@ -46,6 +47,8 @@ export default function App() {
               {/* Nested, so opening a discussion does not remount the feed. */}
               <Route path="messages/:messageId" element={<DiscussionPane />} />
             </Route>
+            {/* Private conversations sit beside channels in the same shell. */}
+            <Route path="/chats/:id" element={<ConversationChatRoute />} />
           </Route>
 
           {/* Everything else keeps the scrolling container layout: these are

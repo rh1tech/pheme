@@ -212,14 +212,15 @@ export function ConversationRoute() {
   }
 
   useEventStream((e) => {
-    if (e.channelId !== id) return
+    if (e.channelId !== id || !e.message) return
+    const incoming = e.message
     setMessages((prev) =>
-      prev.some((m) => m.id === e.message.id) ? prev : [...prev, e.message],
+      prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming],
     )
     // No manual scroll here: while the reader is at the bottom the feed is glued
     // there, so the new bubble pulls it down as soon as it lays out.
     if (atBottom) {
-      list.markRead(id, e.message.createdAt)
+      list.markRead(id, incoming.createdAt)
     } else {
       setUnseen((n) => n + 1)
     }

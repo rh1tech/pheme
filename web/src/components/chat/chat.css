@@ -21,6 +21,7 @@
   --pheme-sheet-bg: #f7f6fb;
   --pheme-unread-bg: rgba(119, 64, 238, 0.1);
   --pheme-unread-fg: var(--mantine-color-iris-7);
+  --pheme-own-bubble-bg: rgba(119, 64, 238, 0.12);
 }
 
 [data-mantine-color-scheme='dark'] {
@@ -35,6 +36,7 @@
   --pheme-sheet-bg: #141517;
   --pheme-unread-bg: rgba(168, 136, 245, 0.16);
   --pheme-unread-fg: var(--mantine-color-iris-2);
+  --pheme-own-bubble-bg: rgba(168, 136, 245, 0.22);
 }
 
 .pheme-shell {
@@ -653,4 +655,16 @@
       0 0 0 2px var(--mantine-color-iris-4),
       var(--mantine-shadow-xs);
   }
+}
+
+/* --- Chat bubbles (two-sided, for conversations) ------------------------- */
+
+/* A conversation bubble is one-sided per author: the reader's own messages align
+   right in the brand tint, everyone else's align left like a channel post. */
+.pheme-chat-bubble[data-own='true'] {
+  align-self: flex-end;
+  margin-left: auto;
+  background-color: var(--pheme-own-bubble-bg);
+  border-bottom-left-radius: var(--mantine-radius-lg);
+  border-bottom-right-radius: var(--mantine-radius-xs);
 }

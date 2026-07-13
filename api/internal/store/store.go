@@ -76,6 +76,11 @@ type Store interface {
 	SetChannelAvatar(ctx context.Context, channelID, avatarID string) (domain.Channel, error)
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	AdminListUsers(ctx context.Context, query string, offset, limit int) ([]domain.User, int64, error)
+	// SearchUsers finds users by a case-insensitive match on username or display
+	// name, for the "start a chat with…" picker. Email is never matched (it is not
+	// public), and the caller-supplied query is trusted to be pre-validated for a
+	// minimum length by the handler to limit enumeration.
+	SearchUsers(ctx context.Context, query string, limit int) ([]domain.User, error)
 	DeleteUser(ctx context.Context, userID string) error
 
 	// Channels
