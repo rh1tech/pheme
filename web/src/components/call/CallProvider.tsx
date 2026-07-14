@@ -131,19 +131,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
     if (handledRef.current.has(signal.callId)) return
     if (callRef.current || incoming) return // already busy; TODO: send `busy`
 
+    // Read out of the event before the closure: inside it, TypeScript can no longer prove the
+    // field is still there, and neither can we — the event object is not ours.
+    const conversationId = e.conversationId
+    const callId = signal.callId
+
     void (async () => {
-      const conversationId = e.conversationId
-      const signals = await api.callSignals(conversationId, signal.callId, 0).catch(() => [])
+      const signals = await api.callSignals(conversationId, callId, 0).catch(() => [])
       for (const s of signals) {
-        const invite = await readInvite(conversationId, userId, signal.callId, s.ciphertext)
+        const invite = await readInvite(conversationId, userId, callId, s.ciphertext)
         if (!invite) continue
-        if (handledRef.current.has(signal.callId)) return
-        setIncoming({
-          conversationId,
-          callId: signal.callId,
-          sdp: invite.sdp,
-          from: invite.from,
-        })
+        if (handledRef.current.has(callId)) return
+        setIncoming({ conversationId, callId, sdp: invite.sdp, from: invite.from })
         return
       }
     })()

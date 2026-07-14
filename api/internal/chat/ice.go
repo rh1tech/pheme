@@ -58,7 +58,7 @@ func (h *Handler) iceServers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if h.ICE.URLs == "" || h.ICE.Secret == "" {
+	if h.ICE.URLs == "" {
 		// Say so plainly rather than returning an empty list that the client would read as
 		// "no TURN available" and then fail every call behind a symmetric NAT with no
 		// explanation.
@@ -67,6 +67,18 @@ func (h *Handler) iceServers(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.Limiter != nil && !h.Limiter.Allow("ice:"+uid) {
 		httpx.Error(w, http.StatusTooManyRequests, "slow down")
+		return
+	}
+
+	// "direct" means calling is on but there is nothing to hand out: both ends are expected to
+	// reach each other on their own addresses. That is true on a LAN, and it is true of the
+	// two browsers in the end-to-end suite — where naming a STUN server that is not actually
+	// there costs ten seconds per call while the ICE agent waits for it to time out.
+	//
+	// It is NOT true of the internet, and this is not a default. A deployment that wants calls
+	// to work for people behind NAT needs real STUN and TURN URLs.
+	if strings.TrimSpace(h.ICE.URLs) == "direct" {
+		httpx.JSON(w, http.StatusOK, map[string]any{"iceServers": []iceServer{}})
 		return
 	}
 

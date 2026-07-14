@@ -33,6 +33,21 @@ export default defineConfig({
             '--use-fake-device-for-media-stream',
             '--use-fake-ui-for-media-stream',
             '--autoplay-policy=no-user-gesture-required',
+            // Chrome hides local IPs behind mDNS (.local) ICE candidates, which the two
+            // browsers then have to resolve over multicast. That is right for real users and
+            // useless here: both ends are the same machine, and mDNS resolution in a sandbox
+            // is slow and unreliable enough to make the call fail intermittently. Real host
+            // candidates make the connection deterministic.
+            '--disable-features=WebRtcHideLocalIpsWithMdns',
+            // Gather candidates on the default route only.
+            //
+            // A developer machine can easily have a dozen interfaces — VM host-only networks,
+            // virtual bridges, IPv6 ULAs — and Chrome offers a host candidate on every one of
+            // them. ICE then has to try every pair, most of which are dead ends that do not
+            // loop back, and the call connects or fails depending on the order it happens to
+            // get to a working one. That is not a property of the call; it is a property of the
+            // laptop. One interface, one pair, deterministic.
+            '--allow-loopback-in-peer-connection',
           ],
         },
         permissions: ['microphone'],
@@ -53,12 +68,11 @@ export default defineConfig({
         PHEME_MAIL_DRIVER: 'log',
         PHEME_SEED_ADMIN_EMAIL: ADMIN_EMAIL,
         PHEME_SEED_ADMIN_PASSWORD: ADMIN_PASSWORD,
-        // Calling on, with a STUN server only. The two browsers in a test are on the same
-        // host, so they reach each other directly — no TURN relay is needed, and none is
-        // configured, which also means the test would notice if the code ever started
-        // depending on one.
-        PHEME_TURN_URLS: 'stun:stun.l.google.com:19302',
-        PHEME_TURN_SECRET: 'e2e-turn-secret',
+        // Calling on, with NO ICE servers: the two browsers are on the same machine and reach
+        // each other on their own host candidates. Naming a STUN server that is not really
+        // there costs ten seconds per call while the ICE agent waits for it to time out, and
+        // naming a real public one would make the suite depend on the internet.
+        PHEME_TURN_URLS: 'direct',
       },
     },
     {

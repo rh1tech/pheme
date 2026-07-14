@@ -8,6 +8,11 @@ const PASSWORD = 'Sup3rSecret!'
 // Firefox and WebKit are not in this project's matrix; this is not about rendering.
 test.skip(({ browserName }) => browserName !== 'chromium', 'WebRTC: chromium only')
 
+// Bringing up two signed-in devices, an MLS group, a microphone and a peer connection is
+// genuinely slower than a page assertion. The suite default (30s) is not enough, and padding
+// it would be papering over a real timeout rather than allowing for real work.
+test.describe.configure({ timeout: 120_000 })
+
 /**
  * The assertion that matters.
  *
