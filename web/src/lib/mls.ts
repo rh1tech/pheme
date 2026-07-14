@@ -30,7 +30,7 @@ import { ApiError, api } from './api'
 import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
 import { clearPreviews } from './chatCache'
 import { clearSafetyPins } from './safety'
-import { loadWebDeviceId, saveWebDeviceId } from './device'
+import { loadMlsDeviceId, saveMlsDeviceId } from './device'
 import type { Conversation } from './types'
 
 const STATE_KEY = 'client-state'
@@ -278,7 +278,7 @@ class Session {
       if (keep && restored) {
         client = restored
         deviceId = deviceOf(client.identity)
-        saveWebDeviceId(deviceId)
+        saveMlsDeviceId(deviceId)
       } else {
         // A FRESH identity gets a FRESH device id, even if this browser already had one.
         //
@@ -292,9 +292,9 @@ class Session {
         //
         // Under the lock, because two tabs opening at once would otherwise each mint one
         // and each keep its own.
-        retiredDeviceId = loadWebDeviceId() ?? ''
+        retiredDeviceId = loadMlsDeviceId() ?? ''
         deviceId = crypto.randomUUID()
-        saveWebDeviceId(deviceId)
+        saveMlsDeviceId(deviceId)
         client = new MlsClient(userId, deviceId)
       }
 
@@ -1229,7 +1229,7 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
     // this browser has to answer to that device id, not to one of its own. Keeping a
     // local id here would leave the restored client unable to be added to anything: it
     // would publish keys as one device and hold leaves as another.
-    if (restoredDevice) saveWebDeviceId(restoredDevice)
+    if (restoredDevice) saveMlsDeviceId(restoredDevice)
 
     restoreNeeded = false
     ready = null

@@ -63,7 +63,7 @@ test('signing in publishes key packages so others can start a chat with you', as
   const stock = async () =>
     page.evaluate(async (apiBase: string) => {
       const accessToken = localStorage.getItem('pheme.accessToken') ?? ''
-      const deviceId = localStorage.getItem('pheme.webDeviceId') ?? ''
+      const deviceId = localStorage.getItem('pheme.mlsDeviceId') ?? ''
       const res = await fetch(
         `${apiBase}/v1/mls/key-packages/count?deviceId=${encodeURIComponent(deviceId)}`,
         { headers: { Authorization: `Bearer ${accessToken}` } },

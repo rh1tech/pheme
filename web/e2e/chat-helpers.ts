@@ -56,13 +56,13 @@ export function userId(page: Page): Promise<string> {
 
 /** This browser's MLS device id — its leaf in every group it belongs to. */
 export function deviceId(page: Page): Promise<string> {
-  return page.evaluate(() => localStorage.getItem('pheme.webDeviceId') ?? '')
+  return page.evaluate(() => localStorage.getItem('pheme.mlsDeviceId') ?? '')
 }
 
 /** How many single-use KeyPackages this device still has published. */
 export function keyPackageCount(page: Page): Promise<number> {
   return page.evaluate(async (base: string) => {
-    const deviceId = localStorage.getItem('pheme.webDeviceId') ?? ''
+    const deviceId = localStorage.getItem('pheme.mlsDeviceId') ?? ''
     const res = await fetch(
       `${base}/v1/mls/key-packages/count?deviceId=${encodeURIComponent(deviceId)}`,
       { headers: { Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}` } },
