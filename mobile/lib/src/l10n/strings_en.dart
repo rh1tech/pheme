@@ -260,4 +260,130 @@ const Map<String, String> enStrings = {
   'profile.saved': 'Profile saved',
   'profile.saveFailed': 'Could not save profile',
   'profile.loadFailed': 'Could not load your profile',
+
+  // chat — taken from web/src/i18n/en.ts so both clients say the same thing
+  'chat.title': 'Chats',
+  'chat.tabChats': 'Chats',
+  'chat.tabChannels': 'Channels',
+  'chat.searchPeople': 'Search people by name or @username',
+  'chat.noPeople': 'No one found',
+  'chat.noChats': 'No chats yet',
+  'chat.pickChatHint': 'Start a chat and your messages will appear here.',
+  'chat.noChatMessages': 'No messages yet. Say hello.',
+  'chat.newChat': 'New chat',
+  'chat.newGroup': 'New group',
+  'chat.newChatTitle': 'Start a chat',
+  'chat.newGroupTitle': 'New group',
+  'chat.groupName': 'Group name',
+  'chat.groupNamePlaceholder': 'Weekend plans',
+  'chat.createGroup': 'Create group',
+  'chat.startFailed': 'Could not start the chat',
+  'chat.composerPlaceholder': 'Write a message…',
+  'chat.send': 'Send',
+  'chat.sendFailed': 'Could not send that message',
+  'chat.memberCount': '{count} members',
+  'chat.encryptedPreview': 'Encrypted message',
+  'chat.today': 'Today',
+  'chat.yesterday': 'Yesterday',
+  'chat.loadingOlder': 'Loading older messages…',
+  'chat.conversationMenu': 'Conversation menu',
+  'chat.deleteChat': 'Delete chat',
+  'chat.deleteChatConfirm':
+      'This deletes the chat and its messages for both of you. This cannot be undone.',
+  // The one string that explains why a message is blank. Deliberately not a loading state: it is
+  // permanent. MLS gives a device no access to what was said before it joined.
+  'chat.notAvailableOnThisDevice': 'Not available on this device',
+  'chat.peerNotReady':
+      "This person hasn't set up encrypted chats yet. They need to open Pheme once — then your messages will go through.",
+  'chat.joiningOnThisDevice':
+      'Setting up encryption on this device. Messages sent from now on will appear here; anything said before won\'t.',
+  'chat.notJoined': 'Setting up encryption — try again in a moment',
+
+  // group
+  'group.membersTitle': 'Members',
+  'group.members': 'Members ({count})',
+  'group.addMember': 'Add someone',
+  'group.admin': 'Admin',
+  'group.you': 'you',
+  'group.memberActions': 'Member actions',
+  'group.makeAdmin': 'Make admin',
+  'group.removeAdmin': 'Remove admin',
+  'group.remove': 'Remove from group',
+  'group.leave': 'Leave group',
+  'group.leaveConfirm':
+      'You will stop receiving messages from this group. You can be added back by an admin.',
+  'group.deleteGroup': 'Delete group',
+  'group.deleteGroupConfirm':
+      'This deletes the group and its messages for everyone. This cannot be undone.',
+  'group.added': 'Member added',
+  'group.removed': 'Member removed',
+  'group.roleChanged': 'Role updated',
+  'group.actionFailed': 'Could not complete that action',
+
+  // safety numbers
+  'safety.verify': 'Verify encryption',
+  'safety.title': 'Verify encryption',
+  'safety.description':
+      'These numbers come from the encryption keys in this chat. If they match on both devices, no one else can read your messages.',
+  'safety.howTo':
+      'Compare them with the other person in a call or in person — not through this chat. If the numbers differ, someone may be intercepting your messages.',
+  'safety.changed':
+      'The safety number changed. This happens when someone signs in on a new device — but it can also mean someone is intercepting your messages.',
+  'safety.accept': 'I verified it — trust this number',
+  'safety.notReady':
+      'Encryption is still being set up for this chat. Try again in a moment.',
+
+  // key backup
+  'backup.menuItem': 'Chat backup',
+  'backup.title': 'Back up your chats',
+  'backup.description':
+      'Set a recovery passphrase to back up your encrypted chats. You can restore them on a new device or if this one loses its keys.',
+  'backup.warning':
+      'The passphrase never leaves your device — we cannot reset it. If you forget it, your backed-up history cannot be recovered.',
+  'backup.passphrase': 'Recovery passphrase',
+  'backup.confirm': 'Confirm passphrase',
+  'backup.tooShort': 'Use at least {min} characters',
+  'backup.mismatch': 'Passphrases do not match',
+  'backup.save': 'Back up now',
+  'backup.saved': 'Chats backed up',
+  'backup.saveFailed': 'Could not back up your chats',
+  'backup.restoreTitle': 'Restore your chats',
+  'backup.restoreDescription':
+      'This device has no chat keys, but a backup was found. Enter your recovery passphrase to restore your encrypted chats.',
+  'backup.restore': 'Restore',
+  'backup.skip': 'Start fresh on this device',
+  'backup.wrongPassphrase': 'Wrong passphrase — try again',
+
+  // calls
+  'call.start': 'Call',
+  'call.incoming': 'Incoming call',
+  'call.incomingBody': 'Voice call — end-to-end encrypted.',
+  'call.answer': 'Answer',
+  'call.decline': 'Decline',
+  'call.hangUp': 'Hang up',
+  'call.dismiss': 'Dismiss',
+  'call.encrypted': 'End-to-end encrypted',
+  'call.failed': 'Could not start the call',
+  'call.mute': 'Mute',
+  'call.unmute': 'Unmute',
+  'call.muted': 'Muted',
+  'call.speaker': 'Speaker',
+  'call.statusCalling': 'Calling…',
+  'call.statusRinging': 'Ringing…',
+  'call.statusConnecting': 'Connecting…',
+  'call.statusConnected': 'On a call',
+  'call.statusEnded': 'Call ended',
+  'call.endedHungUp': 'Call ended',
+  'call.endedDeclined': 'Call declined',
+  'call.endedBusy': 'They are on another call',
+  'call.endedUnanswered': 'No answer',
+  'call.endedAnsweredElsewhere': 'Answered on another device',
+  'call.endedFailed': 'Call failed to connect',
+  'call.endedOutOfSync':
+      'This device is out of sync — reopen the chat and try again',
+  'call.eventMissedIn': 'Missed call',
+  'call.eventMissedOut': 'No answer',
+  'call.eventDeclinedIn': 'Call declined',
+  'call.eventDeclinedOut': 'Call declined',
+  'call.eventFailed': 'Call failed to connect',
 };

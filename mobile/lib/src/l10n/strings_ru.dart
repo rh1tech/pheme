@@ -260,4 +260,129 @@ const Map<String, String> ruStrings = {
   'profile.saved': 'Профиль сохранён',
   'profile.saveFailed': 'Не удалось сохранить профиль',
   'profile.loadFailed': 'Не удалось загрузить профиль',
+
+  // chat — из web/src/i18n/ru.ts, чтобы оба клиента говорили одинаково
+  'chat.title': 'Чаты',
+  'chat.tabChats': 'Чаты',
+  'chat.tabChannels': 'Каналы',
+  'chat.searchPeople': 'Поиск людей по имени или @username',
+  'chat.noPeople': 'Никого не найдено',
+  'chat.noChats': 'Пока нет чатов',
+  'chat.pickChatHint': 'Начните чат — и сообщения появятся здесь.',
+  'chat.noChatMessages': 'Сообщений пока нет. Поздоровайтесь.',
+  'chat.newChat': 'Новый чат',
+  'chat.newGroup': 'Новая группа',
+  'chat.newChatTitle': 'Начать чат',
+  'chat.newGroupTitle': 'Новая группа',
+  'chat.groupName': 'Название группы',
+  'chat.groupNamePlaceholder': 'Планы на выходные',
+  'chat.createGroup': 'Создать группу',
+  'chat.startFailed': 'Не удалось начать чат',
+  'chat.composerPlaceholder': 'Напишите сообщение…',
+  'chat.send': 'Отправить',
+  'chat.sendFailed': 'Не удалось отправить сообщение',
+  'chat.memberCount': 'Участников: {count}',
+  'chat.encryptedPreview': 'Зашифрованное сообщение',
+  'chat.today': 'Сегодня',
+  'chat.yesterday': 'Вчера',
+  'chat.loadingOlder': 'Загрузка старых сообщений…',
+  'chat.conversationMenu': 'Меню разговора',
+  'chat.deleteChat': 'Удалить чат',
+  'chat.deleteChatConfirm':
+      'Чат и его сообщения будут удалены у вас обоих. Это действие необратимо.',
+  'chat.notAvailableOnThisDevice': 'Недоступно на этом устройстве',
+  'chat.peerNotReady':
+      'Этот человек ещё не настроил зашифрованные чаты. Ему нужно один раз открыть Pheme — тогда ваши сообщения дойдут.',
+  'chat.joiningOnThisDevice':
+      'Настраиваем шифрование на этом устройстве. Сообщения, отправленные с этого момента, появятся здесь; сказанное раньше — нет.',
+  'chat.notJoined':
+      'Настраиваем шифрование — попробуйте ещё раз через мгновение',
+
+  // group
+  'group.membersTitle': 'Участники',
+  'group.members': 'Участники ({count})',
+  'group.addMember': 'Добавить участника',
+  'group.admin': 'Админ',
+  'group.you': 'вы',
+  'group.memberActions': 'Действия с участником',
+  'group.makeAdmin': 'Назначить админом',
+  'group.removeAdmin': 'Снять админа',
+  'group.remove': 'Удалить из группы',
+  'group.leave': 'Покинуть группу',
+  'group.leaveConfirm':
+      'Вы перестанете получать сообщения этой группы. Администратор сможет добавить вас обратно.',
+  'group.deleteGroup': 'Удалить группу',
+  'group.deleteGroupConfirm':
+      'Группа и её сообщения будут удалены у всех. Это действие необратимо.',
+  'group.added': 'Участник добавлен',
+  'group.removed': 'Участник удалён',
+  'group.roleChanged': 'Роль обновлена',
+  'group.actionFailed': 'Не удалось выполнить действие',
+
+  // safety numbers
+  'safety.verify': 'Проверить шифрование',
+  'safety.title': 'Проверить шифрование',
+  'safety.description':
+      'Эти цифры получены из ключей шифрования этого чата. Если они совпадают на обоих устройствах, никто другой не может прочитать ваши сообщения.',
+  'safety.howTo':
+      'Сравните их с собеседником по звонку или лично — не через этот чат. Если цифры отличаются, кто-то может перехватывать ваши сообщения.',
+  'safety.changed':
+      'Код безопасности изменился. Так бывает, когда кто-то входит с нового устройства, — но это также может значить, что кто-то перехватывает ваши сообщения.',
+  'safety.accept': 'Я проверил — доверять этому коду',
+  'safety.notReady':
+      'Шифрование для этого чата ещё настраивается. Попробуйте через мгновение.',
+
+  // key backup
+  'backup.menuItem': 'Резервная копия чатов',
+  'backup.title': 'Резервная копия чатов',
+  'backup.description':
+      'Задайте фразу восстановления, чтобы сохранить резервную копию зашифрованных чатов. Вы сможете восстановить их на новом устройстве или если это потеряет ключи.',
+  'backup.warning':
+      'Фраза восстановления не покидает ваше устройство — мы не можем её сбросить. Если вы её забудете, сохранённую историю восстановить не удастся.',
+  'backup.passphrase': 'Фраза восстановления',
+  'backup.confirm': 'Подтвердите фразу',
+  'backup.tooShort': 'Не менее {min} символов',
+  'backup.mismatch': 'Фразы не совпадают',
+  'backup.save': 'Создать копию',
+  'backup.saved': 'Резервная копия создана',
+  'backup.saveFailed': 'Не удалось создать резервную копию',
+  'backup.restoreTitle': 'Восстановление чатов',
+  'backup.restoreDescription':
+      'На этом устройстве нет ключей чатов, но найдена резервная копия. Введите фразу восстановления, чтобы восстановить зашифрованные чаты.',
+  'backup.restore': 'Восстановить',
+  'backup.skip': 'Начать заново на этом устройстве',
+  'backup.wrongPassphrase': 'Неверная фраза — попробуйте снова',
+
+  // calls
+  'call.start': 'Позвонить',
+  'call.incoming': 'Входящий звонок',
+  'call.incomingBody': 'Голосовой звонок — со сквозным шифрованием.',
+  'call.answer': 'Ответить',
+  'call.decline': 'Отклонить',
+  'call.hangUp': 'Завершить',
+  'call.dismiss': 'Закрыть',
+  'call.encrypted': 'Сквозное шифрование',
+  'call.failed': 'Не удалось начать звонок',
+  'call.mute': 'Выключить микрофон',
+  'call.unmute': 'Включить микрофон',
+  'call.muted': 'Микрофон выключен',
+  'call.speaker': 'Динамик',
+  'call.statusCalling': 'Вызов…',
+  'call.statusRinging': 'Звонок…',
+  'call.statusConnecting': 'Соединение…',
+  'call.statusConnected': 'Идёт разговор',
+  'call.statusEnded': 'Звонок завершён',
+  'call.endedHungUp': 'Звонок завершён',
+  'call.endedDeclined': 'Звонок отклонён',
+  'call.endedBusy': 'Абонент занят',
+  'call.endedUnanswered': 'Нет ответа',
+  'call.endedAnsweredElsewhere': 'Ответили на другом устройстве',
+  'call.endedFailed': 'Не удалось соединиться',
+  'call.endedOutOfSync':
+      'Это устройство не синхронизировано — откройте чат заново и попробуйте снова',
+  'call.eventMissedIn': 'Пропущенный звонок',
+  'call.eventMissedOut': 'Нет ответа',
+  'call.eventDeclinedIn': 'Звонок отклонён',
+  'call.eventDeclinedOut': 'Звонок отклонён',
+  'call.eventFailed': 'Не удалось соединить звонок',
 };

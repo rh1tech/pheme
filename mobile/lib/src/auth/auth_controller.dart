@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../chat/chat_providers.dart';
+import '../chat/safety_pin_store.dart';
 import '../core/jwt.dart';
 import '../core/providers.dart';
 import '../core/token_store.dart';
@@ -66,7 +68,19 @@ class AuthController extends Notifier<AuthState> {
     state = AuthState(userId: userId, role: role);
   }
 
+  /// Signs out, and destroys this device's encryption keys along with every message they decrypted.
+  ///
+  /// The keys and the plaintext cache are exactly what the end-to-end encryption exists to protect.
+  /// Leaving them behind after signing out would mean the next person to pick up the phone could read
+  /// the conversations — which would make the encryption a decoration. There is no way to recover
+  /// them afterwards except from the passphrase-protected backup, and that is the point of it.
+  ///
+  /// The wipe runs BEFORE the tokens are cleared, because it is the part that matters: a failure to
+  /// clear a token logs you out anyway, whereas a failure to wipe leaves the messages readable.
   Future<void> logout() async {
+    await ref.read(mlsServiceProvider).wipeLocalKeys();
+    await ref.read(safetyPinStoreProvider).wipe();
+    await ref.read(lastSeenStoreProvider).wipe();
     await ref.read(tokenStoreProvider).clear();
     state = const AuthState();
   }

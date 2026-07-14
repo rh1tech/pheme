@@ -5,9 +5,10 @@ import 'package:go_router/go_router.dart';
 import 'auth/forgot_password_page.dart';
 import 'auth/login_page.dart';
 import 'channels/channel_page.dart';
-import 'channels/channels_page.dart';
 import 'channels/message_page.dart';
+import 'chat/conversation_chat_page.dart';
 import 'core/providers.dart';
+import 'home_shell.dart';
 import 'profile/profile_page.dart';
 import 'settings/settings_page.dart';
 
@@ -37,7 +38,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/',
-        builder: (context, state) => const ChannelsPage(),
+        builder: (context, state) => const HomeShell(),
         routes: [
           GoRoute(
             path: 'settings',
@@ -60,6 +61,12 @@ final routerProvider = Provider<GoRouter>((ref) {
                 ),
               ),
             ],
+          ),
+          GoRoute(
+            path: 'chats/:id',
+            builder: (context, state) => ConversationChatPage(
+              conversationId: state.pathParameters['id']!,
+            ),
           ),
         ],
       ),
