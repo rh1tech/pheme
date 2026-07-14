@@ -28,7 +28,7 @@ import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/phe
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { ApiError, api } from './api'
 import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
-import { cacheBody, clearPreviews } from './chatCache'
+import { cacheContent, clearPreviews } from './chatCache'
 import { clearSafetyPins } from './safety'
 import { loadMlsDeviceId, saveMlsDeviceId } from './device'
 import { serializeContent } from './chatContent'
@@ -1315,7 +1315,7 @@ export async function postCallEvent(
   // Write it into the local cache, because we will never be able to decrypt it: MLS destroys the
   // message key on encrypt, so a sender cannot read what it sent. Without this the caller — the
   // one person who knows the call went unanswered — would see its own record of it sealed.
-  await cacheBody(conversationId, msg.id, body)
+  await cacheContent(conversationId, msg.id, { body })
 }
 
 /**

@@ -41,9 +41,6 @@ const CIPHERTEXT_HEX =
 const hex = (bytes: Uint8Array): string =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 
-const unhex = (s: string): Uint8Array =>
-  new Uint8Array((s.match(/../g) ?? []).map((b) => parseInt(b, 16)))
-
 /**
  * The AAD, recomputed here rather than imported.
  *
@@ -69,11 +66,11 @@ describe('call envelope golden vector', () => {
 
   it('seals to the ciphertext the mobile client expects', async () => {
     const nonce = new Uint8Array(12).map((_, i) => 0xa0 + i)
-    const key = await crypto.subtle.importKey('raw', KEY, 'AES-GCM', false, ['encrypt'])
+    const key = await crypto.subtle.importKey('raw', KEY as BufferSource, 'AES-GCM', false, ['encrypt'])
     const sealed = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: nonce, additionalData: expectedAAD(HEADER) },
+      { name: 'AES-GCM', iv: nonce as BufferSource, additionalData: expectedAAD(HEADER) as BufferSource },
       key,
-      new TextEncoder().encode(JSON.stringify(BODY)),
+      new TextEncoder().encode(JSON.stringify(BODY)) as BufferSource,
     )
     expect(hex(new Uint8Array(sealed))).toBe(CIPHERTEXT_HEX)
   })

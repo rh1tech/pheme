@@ -192,6 +192,44 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   }
 }
 
+/**
+ * Sends and receives raw bytes, with the same bearer token and the same one-shot refresh as
+ * `request` — but no JSON on either side.
+ *
+ * Attachments cannot go through `request`. What travels here is a sealed photo: the body is
+ * ciphertext, and the response is ciphertext, and wrapping either in an envelope would mean
+ * base64-ing it for no reason and handing the server a content type it has no business knowing.
+ */
+async function requestBinary(
+  path: string,
+  init: { method: 'GET' | 'POST'; body?: Uint8Array },
+): Promise<Response> {
+  const tokens = loadTokens()
+  if (!tokens) {
+    onAuthFailure?.()
+    throw new AuthError('not authenticated')
+  }
+
+  const send = (accessToken: string): Promise<Response> =>
+    fetch(`${BASE}${path}`, {
+      method: init.method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...(init.body ? { 'Content-Type': 'application/octet-stream' } : {}),
+      },
+      body: init.body ? (init.body as BodyInit) : undefined,
+    })
+
+  let res = await send(tokens.accessToken)
+  if (res.status === 401) {
+    res = await send(await refresh(tokens))
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, `attachment request failed (${res.status})`)
+  }
+  return res
+}
+
 export const api = {
   // Auth (public)
   register: (email: string, password: string) =>
@@ -520,6 +558,31 @@ export const api = {
       method: 'POST',
       body: { ciphertext, contentType },
     }),
+
+  /**
+   * Uploads one encrypted photo and returns its blob id.
+   *
+   * The body is raw ciphertext. The server stores it as opaque bytes and is told nothing else — the
+   * key that opens it travels inside the MLS-encrypted message that references this id, and never
+   * comes here at all.
+   */
+  uploadAttachment: async (conversationId: string, sealed: Uint8Array): Promise<string> => {
+    const res = await requestBinary(`/v1/conversations/${conversationId}/attachments`, {
+      method: 'POST',
+      body: sealed,
+    })
+    const out = (await res.json()) as { id?: string }
+    return out.id ?? ''
+  },
+
+  /** Fetches one encrypted photo. Still ciphertext — the caller opens it with the key from the message. */
+  attachmentBytes: async (conversationId: string, attachmentId: string): Promise<Uint8Array> => {
+    const res = await requestBinary(
+      `/v1/conversations/${conversationId}/attachments/${attachmentId}`,
+      { method: 'GET' },
+    )
+    return new Uint8Array(await res.arrayBuffer())
+  },
   /**
    * The conversation's current members, straight from the server.
    *

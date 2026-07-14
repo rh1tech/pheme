@@ -219,6 +219,12 @@ const ru: Resources = {
     alreadySetUp: 'Шифрование на этом устройстве уже настроено в другом окне. Перезагружаем.',
   },
   chat: {
+    reply: 'Ответить',
+    replyUnknown: 'Кто-то',
+    replyUnavailable: 'Недоступно на этом устройстве',
+    attachPhoto: 'Прикрепить фото',
+    photoUnavailable: 'Фото недоступно',
+    photoFailed: 'Не удалось прикрепить фото',
     searchChannels: 'Поиск',
     noChannels: 'Пока нет чатов и каналов',
     noResults: 'Ничего не найдено',

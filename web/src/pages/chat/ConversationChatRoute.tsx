@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActionIcon, Alert, Group, Menu, Stack, Text, Textarea } from '@mantine/core'
+import { ActionIcon, Alert, CloseButton, FileButton, Group, Menu, Stack, Text, Textarea } from '@mantine/core'
 import {
+  IconArrowBackUp,
   IconArrowLeft,
   IconDots,
   IconLock,
   IconLogout,
   IconPhone,
+  IconPhoto,
   IconSend,
   IconShieldLock,
   IconTrash,
@@ -15,9 +17,13 @@ import type { KeyboardEvent } from 'react'
 import { useMediaQuery } from '@mantine/hooks'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { notifications } from '@mantine/notifications'
 import { api } from '../../lib/api'
 import { notifyError } from '../../lib/notify'
-import { deserializeContent, serializeContent } from '../../lib/chatContent'
+import { deserializeContent, serializeContent, type ChatContent, type ChatPhoto } from '../../lib/chatContent'
+import { preparePhoto, type SealedPhoto } from '../../lib/photo'
+import { PhotoGrid } from '../../components/chat/PhotoGrid'
+import { ReplyQuote } from '../../components/chat/ReplyQuote'
 import {
   MLS_APPLICATION,
   MLS_CONTROL_TYPES,
@@ -29,7 +35,7 @@ import {
   mlsSession,
   removeGroupMember,
 } from '../../lib/mls'
-import { cacheBody, loadCachedBodies, setPreview } from '../../lib/chatCache'
+import { cacheContent, loadCachedContents, setPreview } from '../../lib/chatCache'
 import { conversationAvatarKey, conversationTitle, otherMember } from '../../lib/conversation'
 import { groupByDay, messageTime } from '../../lib/time'
 import { useAuth } from '../../auth/context'
@@ -64,6 +70,9 @@ const PAGE_SIZE = 50
  * on send for our own messages, on receive for others' — and history renders from
  * that cache, never by decrypting twice.
  */
+/** How many photos may ride on one message. Telegram's album is ten; so is this. */
+const MAX_PHOTOS = 10
+
 export function ConversationChatRoute() {
   const { id = '' } = useParams()
   const { conversations, composerFocus } = useOutletContext<ChatOutletContext>()
@@ -76,7 +85,7 @@ export function ConversationChatRoute() {
 
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([]) // oldest-first
-  const [bodies, setBodies] = useState<Record<string, string>>({}) // decrypted, by id
+  const [bodies, setBodies] = useState<Record<string, ChatContent>>({}) // decrypted, by id
   // The conversation id whose local body cache has finished loading; message
   // processing waits for this so cached messages are never re-decrypted.
   const [readyId, setReadyId] = useState('')
@@ -86,6 +95,17 @@ export function ConversationChatRoute() {
   const [unseen, setUnseen] = useState(0)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+
+  /**
+   * Photos picked but not yet sent — already downscaled, stripped of their metadata and sealed.
+   *
+   * Sealed at PICK time rather than at send time so the cost of encrypting a handful of megabytes is
+   * paid while the user is still typing, not in the pause after they hit send.
+   */
+  const [pending, setPending] = useState<{ preview: string; sealed: SealedPhoto }[]>([])
+
+  /** The message being replied to. */
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
   const [safetyOpen, setSafetyOpen] = useState(false)
   const [membersOpen, setMembersOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -101,7 +121,7 @@ export function ConversationChatRoute() {
   const atBottomRef = useRef(true)
   // The decrypted-body cache mirrored into a ref, plus the set of message ids we
   // have already handled — so the one-shot decrypt never runs twice for a message.
-  const bodiesRef = useRef<Record<string, string>>({})
+  const bodiesRef = useRef<Record<string, ChatContent>>({})
   const processedRef = useRef<Set<string>>(new Set())
   // The conversation's MLS group, once this device is a member of it. Empty while it is
   // not — a device that has just signed in has to wait for a member to admit it, and
@@ -202,7 +222,7 @@ export function ConversationChatRoute() {
     let active = true
     bodiesRef.current = {}
     processedRef.current = new Set()
-    loadCachedBodies(id).then((cached) => {
+    loadCachedContents(id).then((cached) => {
       if (!active) return
       bodiesRef.current = cached
       for (const messageId of Object.keys(cached)) processedRef.current.add(messageId)
@@ -234,7 +254,7 @@ export function ConversationChatRoute() {
         // restore prompt is what resolves it.
         return
       }
-      const next = { ...bodiesRef.current }
+      const next: Record<string, ChatContent> = { ...bodiesRef.current }
       let changed = false
       for (const m of messages) {
         if (processedRef.current.has(m.id) || MLS_CONTROL_TYPES.has(m.contentType)) continue
@@ -248,15 +268,15 @@ export function ConversationChatRoute() {
             const bytes = await decryptChatMessage(id, userId, m.ciphertext)
             const content = bytes && deserializeContent(bytes)
             if (content) {
-              next[m.id] = content.body
+              next[m.id] = content
               changed = true
-              void cacheBody(id, m.id, content.body)
+              void cacheContent(id, m.id, content)
             } else if (m.senderId === userId) {
               // OUR OWN missed call, echoed back to us. MLS forward secrecy means a sender can
               // never decrypt what it sent — the message key is destroyed on encrypt — so the
               // caller, of all people, could not read the record of its own unanswered call.
               // It wrote the body down when it sent it; read it back from there.
-              const cached = await loadCachedBodies(id)
+              const cached = await loadCachedContents(id)
               if (cached[m.id] !== undefined) {
                 next[m.id] = cached[m.id]
                 changed = true
@@ -270,16 +290,18 @@ export function ConversationChatRoute() {
             const bytes = await decryptChatMessage(id, userId, m.ciphertext)
             const content = bytes && deserializeContent(bytes)
             if (content) {
-              next[m.id] = content.body
+              next[m.id] = content
               changed = true
-              void cacheBody(id, m.id, content.body)
-              setPreview(id, content.body)
+              void cacheContent(id, m.id, content)
+              // A photo with no caption still has to say something in the list — an empty row reads
+              // as a bug rather than as a picture.
+              setPreview(id, content.body || (content.photos?.length ? '__photo__' : ''))
             }
           } else {
             // Legacy plaintext (pre-encryption messages on the wire).
             const content = deserializeContent(base64ToBytes(m.ciphertext))
             if (content) {
-              next[m.id] = content.body
+              next[m.id] = content
               changed = true
             }
           }
@@ -290,7 +312,7 @@ export function ConversationChatRoute() {
           // decrypted it first — MLS lets exactly one of them succeed. In the last two
           // cases the plaintext may be in the local cache, so read that rather than
           // leaving a blank. Never retry the decrypt itself.
-          const cached = await loadCachedBodies(id)
+          const cached = await loadCachedContents(id)
           if (cached[m.id]) {
             next[m.id] = cached[m.id]
             changed = true
@@ -439,7 +461,55 @@ export function ConversationChatRoute() {
   const meMember = header?.members.find((m) => m.userId === userId)
   const iAmAdmin = meMember?.role === 'admin'
 
-  const canSend = draft.trim().length > 0
+  /** Who wrote the quoted message. Undefined when we do not hold it. */
+  function quoteAuthor(messageId: string): string | undefined {
+    const quoted = messages.find((m) => m.id === messageId)
+    if (!quoted) return undefined
+    const member = header?.members.find((mem) => mem.userId === quoted.senderId)?.user
+    return member?.displayName || member?.username || undefined
+  }
+
+  /**
+   * The quoted text, rendered from what THIS DEVICE holds.
+   *
+   * Undefined when it holds nothing — the quoted message predates this browser joining the group, so
+   * it can never be decrypted here. ReplyQuote says so rather than showing a blank.
+   */
+  function quoteText(messageId: string): string | undefined {
+    const quoted = bodies[messageId]
+    if (!quoted) return undefined
+    if (quoted.body) return quoted.body
+    return quoted.photos?.length ? t('chat.photo') : ''
+  }
+
+  /** Seals a picked photo up front, so the encryption cost is paid while the user is still typing. */
+  async function attach(files: File[]) {
+    const room = MAX_PHOTOS - pending.length
+    const taken = files.slice(0, room)
+
+    for (const file of taken) {
+      try {
+        const sealed = await preparePhoto(file)
+        setPending((prev) => [
+          ...prev,
+          { preview: URL.createObjectURL(file), sealed },
+        ])
+      } catch {
+        notifications.show({ color: 'red', message: t('chat.photoFailed') })
+      }
+    }
+  }
+
+  function removePending(index: number) {
+    setPending((prev) => {
+      URL.revokeObjectURL(prev[index].preview)
+      return prev.filter((_, i) => i !== index)
+    })
+  }
+
+  // A photo with no caption is a perfectly good message, so an empty box must not disable the
+  // button when a picture is attached.
+  const canSend = draft.trim().length > 0 || pending.length > 0
 
   async function send() {
     if (!canSend || sending || !userId || !conversation) return
@@ -454,18 +524,42 @@ export function ConversationChatRoute() {
       if (!gid) throw new Error(t('chat.notJoined'))
       setGroupId(gid)
 
-      const ciphertext = await session.encrypt(gid, serializeContent({ body }))
+      // The photos go up FIRST, each under a fresh key. The message is what carries those keys, so a
+      // message posted before its photos exist would reference blobs nobody can fetch — and if an
+      // upload fails, the message is simply never sent, which beats a bubble with a permanent hole.
+      const photos: ChatPhoto[] = []
+      for (const item of pending) {
+        const blobId = await api.uploadAttachment(id, item.sealed.bytes)
+        photos.push({
+          id: blobId,
+          key: item.sealed.key,
+          w: item.sealed.width,
+          h: item.sealed.height,
+          mime: item.sealed.mime,
+          size: item.sealed.size,
+        })
+      }
+
+      const content: ChatContent = {
+        body,
+        ...(replyTo ? { replyTo: replyTo.id } : {}),
+        ...(photos.length ? { photos } : {}),
+      }
+
+      const ciphertext = await session.encrypt(gid, serializeContent(content))
       const msg = await api.sendChatMessage(id, ciphertext, MLS_APPLICATION)
 
       // We can never decrypt our own MLS message, so record its plaintext now and
       // mark it handled so the SSE echo does not try (and fail) to decrypt it.
       processedRef.current.add(msg.id)
-      bodiesRef.current = { ...bodiesRef.current, [msg.id]: body }
+      bodiesRef.current = { ...bodiesRef.current, [msg.id]: content }
       setBodies(bodiesRef.current)
-      void cacheBody(id, msg.id, body)
-      setPreview(id, body)
+      void cacheContent(id, msg.id, content)
+      setPreview(id, body || (photos.length ? '__photo__' : ''))
 
       setDraft('')
+      setPending([])
+      setReplyTo(null)
       setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
       // Re-stick to the bottom now, before the bubble has laid out. Waiting a frame and then
       // animating there raced the feed's own re-pin — the two fought over the same scrollTop —
@@ -644,13 +738,13 @@ export function ConversationChatRoute() {
                   <DateSeparator iso={day[0].createdAt} />
                   {day.map((m) => {
                     const own = m.senderId === userId
-                    const body = bodies[m.id]
+                    const content = bodies[m.id]
                     const senderName = isGroup
                       ? conversation?.members.find((mem) => mem.userId === m.senderId)?.user
                       : undefined
                     const event =
-                      m.contentType === CALL_EVENT && body !== undefined
-                        ? readCallEvent(body)
+                      m.contentType === CALL_EVENT && content !== undefined
+                        ? readCallEvent(content.body)
                         : null
                     if (event) {
                       return (
@@ -674,10 +768,27 @@ export function ConversationChatRoute() {
                             {senderName.displayName || senderName.username || 'User'}
                           </Text>
                         )}
-                        {body !== undefined ? (
-                          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                            {body}
-                          </Text>
+
+                        {/* Context first, then the reply — the way a reply reads. */}
+                        {content?.replyTo && (
+                          <ReplyQuote
+                            author={quoteAuthor(content.replyTo)}
+                            text={quoteText(content.replyTo)}
+                          />
+                        )}
+
+                        {content?.photos?.length ? (
+                          <PhotoGrid conversationId={id} photos={content.photos} />
+                        ) : null}
+
+                        {content !== undefined ? (
+                          // A photo with no caption has no body line at all — an empty <Text> still
+                          // takes a row of leading and leaves a strip of dead space under the picture.
+                          content.body ? (
+                            <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                              {content.body}
+                            </Text>
+                          ) : null
                         ) : (
                           // Not a loading state: this device cannot read this message and
                           // never will. MLS gives a device no access to what was said before
@@ -694,6 +805,22 @@ export function ConversationChatRoute() {
                           </Text>
                         )}
                         <div className="pheme-bubble-footer">
+                          {/* Reply is the only action the server can support: there are no reactions,
+                              and a sealed message cannot be edited or deleted. It appears on hover
+                              rather than sitting there permanently, so a wall of text stays a wall of
+                              text. */}
+                          {content !== undefined && (
+                            <ActionIcon
+                              className="pheme-bubble-reply"
+                              aria-label={t('chat.reply')}
+                              variant="subtle"
+                              color="gray"
+                              size="sm"
+                              onClick={() => setReplyTo(m)}
+                            >
+                              <IconArrowBackUp size={14} />
+                            </ActionIcon>
+                          )}
                           <Text size="xs" c="dimmed">
                             {messageTime(m.createdAt, i18n.language)}
                           </Text>
@@ -743,7 +870,61 @@ export function ConversationChatRoute() {
             <Text size="xs">{t('chat.joiningOnThisDevice')}</Text>
           </Alert>
         )}
+        {/* What you are replying to, above the box you are typing into — so the context is where the
+            eye already is. */}
+        {replyTo && (
+          <Group gap="xs" wrap="nowrap" mb="xs">
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <ReplyQuote
+                author={quoteAuthor(replyTo.id)}
+                text={quoteText(replyTo.id)}
+                compact
+              />
+            </div>
+            <CloseButton
+              aria-label={t('common.cancel')}
+              onClick={() => setReplyTo(null)}
+            />
+          </Group>
+        )}
+
+        {pending.length > 0 && (
+          <div className="pheme-attachments">
+            {pending.map((item, i) => (
+              <div className="pheme-attachment" key={item.preview}>
+                <img src={item.preview} alt="" />
+                <CloseButton
+                  size="xs"
+                  radius="xl"
+                  variant="filled"
+                  color="dark"
+                  aria-label={t('common.delete')}
+                  onClick={() => removePending(i)}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
         <Group gap="xs" align="flex-end" wrap="nowrap">
+          <FileButton
+            multiple
+            accept="image/*"
+            onChange={(files) => void attach(files)}
+          >
+            {(props) => (
+              <ActionIcon
+                {...props}
+                aria-label={t('chat.attachPhoto')}
+                variant="subtle"
+                color="gray"
+                size="lg"
+                disabled={sending || pending.length >= MAX_PHOTOS}
+              >
+                <IconPhoto size={20} />
+              </ActionIcon>
+            )}
+          </FileButton>
           <Textarea
             ref={textRef}
             aria-label={t('channel.body')}

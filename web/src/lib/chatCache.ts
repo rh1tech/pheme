@@ -10,6 +10,7 @@
 // a weakening of E2EE: the plaintext is only ever on the devices that legitimately
 // hold it, exactly as the messages themselves are.
 
+import { deserializeContent, serializeContent, type ChatContent } from './chatContent'
 import { idbGet, idbSet } from './idb'
 
 // One IndexedDB entry holds the whole per-conversation body map, which keeps
@@ -21,32 +22,55 @@ const previewKey = (conversationId: string) => `pheme.chatPreview.${conversation
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
-type BodyMap = Record<string, string>
+/**
+ * messageId -> the message's SERIALISED CONTENT, not just its body.
+ *
+ * The whole content, because a message is not only text: it may carry photos and a reply. Caching
+ * just the body would mean a photo message came back as a bare caption the second time it was looked
+ * at — and there is no second decrypt to recover the rest from.
+ */
+type ContentMap = Record<string, string>
 
-async function loadMap(conversationId: string): Promise<BodyMap> {
+async function loadMap(conversationId: string): Promise<ContentMap> {
   const bytes = await idbGet(cacheKey(conversationId))
   if (!bytes) return {}
   try {
-    return JSON.parse(decoder.decode(bytes)) as BodyMap
+    const raw: unknown = JSON.parse(decoder.decode(bytes))
+    if (typeof raw !== 'object' || raw === null) return {}
+    return raw as ContentMap
   } catch {
     return {}
   }
 }
 
-/** The decrypted bodies of a conversation's messages, keyed by message id. */
-export async function loadCachedBodies(conversationId: string): Promise<BodyMap> {
-  return loadMap(conversationId)
+/** Everything this device has managed to read in a conversation, keyed by message id. */
+export async function loadCachedContents(
+  conversationId: string,
+): Promise<Record<string, ChatContent>> {
+  const map = await loadMap(conversationId)
+  const out: Record<string, ChatContent> = {}
+
+  for (const [id, serialised] of Object.entries(map)) {
+    const content = deserializeContent(encoder.encode(serialised))
+    // A cached entry from an older build is a bare body string rather than a JSON object. Reading it
+    // as one keeps every message anybody has already decrypted, which is the only copy there is.
+    out[id] = content ?? { body: serialised }
+  }
+  return out
 }
 
-/** Records the decrypted body of a message (once, at decryption time). */
-export async function cacheBody(
+/** Records a message's content, once, at decryption time. */
+export async function cacheContent(
   conversationId: string,
   messageId: string,
-  body: string,
+  content: ChatContent,
 ): Promise<void> {
+  const serialised = decoder.decode(serializeContent(content))
+
   const map = await loadMap(conversationId)
-  if (map[messageId] === body) return
-  map[messageId] = body
+  if (map[messageId] === serialised) return
+
+  map[messageId] = serialised
   await idbSet(cacheKey(conversationId), encoder.encode(JSON.stringify(map)))
 }
 

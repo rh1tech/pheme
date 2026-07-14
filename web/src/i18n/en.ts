@@ -217,6 +217,12 @@ const en = {
     alreadySetUp: 'Encryption was already set up on this device in another window. Reloading.',
   },
   chat: {
+    reply: 'Reply',
+    replyUnknown: 'Someone',
+    replyUnavailable: 'Not available on this device',
+    attachPhoto: 'Attach photo',
+    photoUnavailable: 'Photo not available',
+    photoFailed: 'Could not attach that photo',
     searchChannels: 'Search',
     noChannels: 'No chats or channels yet',
     noResults: 'Nothing found',
