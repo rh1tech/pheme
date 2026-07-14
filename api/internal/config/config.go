@@ -42,6 +42,23 @@ type Config struct {
 	// notifications. Empty disables notification images (history still carries them).
 	PublicAPIURL string
 
+	// ICE servers for 1:1 voice calls. The server never carries call media — WebRTC
+	// takes it peer to peer — but a pair behind symmetric NAT cannot reach each other
+	// directly, and TURN is the relay of last resort for them.
+	//
+	// TURNURLs is a comma-separated list of ICE URLs, e.g.
+	//   stun:turn.rh1.tech:3478,turn:turn.rh1.tech:3478?transport=udp,turns:turn.rh1.tech:5349?transport=tcp
+	// Empty disables calling entirely rather than shipping a half-working feature.
+	//
+	// TURNSecret is coturn's `static-auth-secret`. It NEVER leaves the server: what a
+	// client receives is a short-lived username/credential pair derived from it, so a
+	// leaked credential expires by itself and cannot be turned back into the secret.
+	TURNURLs   string
+	TURNSecret string
+	// TURNTTL is how long an issued TURN credential stays valid. Long enough to place a
+	// call and be re-fetched on the next one; short enough that a stolen one is worthless.
+	TURNTTL time.Duration
+
 	// Email (transactional mail: verification + password-reset codes)
 	MailDriver      string // log | smtp
 	SMTPHost        string
@@ -103,6 +120,10 @@ func Load() Config {
 		VAPIDSubject:       env("PHEME_VAPID_SUBJECT", "https://app.example.com"),
 
 		PublicAPIURL: env("PHEME_PUBLIC_API_URL", ""),
+
+		TURNURLs:   env("PHEME_TURN_URLS", ""),
+		TURNSecret: env("PHEME_TURN_SECRET", ""),
+		TURNTTL:    time.Duration(envInt("PHEME_TURN_TTL_SECONDS", 600)) * time.Second,
 
 		MailDriver:      env("PHEME_MAIL_DRIVER", "log"),
 		SMTPHost:        env("PHEME_SMTP_HOST", "localhost"),

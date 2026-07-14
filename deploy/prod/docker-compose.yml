@@ -76,6 +76,12 @@ services:
       PHEME_VAPID_PUBLIC: ${PHEME_VAPID_PUBLIC}
       PHEME_VAPID_PRIVATE: ${PHEME_VAPID_PRIVATE}
       PHEME_VAPID_SUBJECT: ${PHEME_VAPID_SUBJECT}
+      # 1:1 voice calls. The API hands clients a STUN/TURN list with a short-lived
+      # credential derived from PHEME_TURN_SECRET, which must match coturn's
+      # static-auth-secret. Leave the URLs empty to switch calling off entirely — the
+      # endpoint then refuses rather than shipping a feature that fails behind NAT.
+      PHEME_TURN_URLS: ${PHEME_TURN_URLS:-}
+      PHEME_TURN_SECRET: ${PHEME_TURN_SECRET:-}
       # Email verification / password reset. Only the app binary sends mail; it
       # relays through the host's Postfix (host.docker.internal → host-gateway),
       # which DKIM-signs and delivers direct-to-MX. Verification state lives in
@@ -138,6 +144,35 @@ services:
       PHEME_API_BASE: ${PHEME_API_BASE}
     ports:
       - "127.0.0.1:${WEB_HOST_PORT}:80"
+
+  # STUN + TURN for 1:1 voice calls. Media is peer to peer and never touches this
+  # machine — except for the minority of calls whose two ends cannot reach each other
+  # directly at all, which TURN relays. See turnserver.conf.
+  #
+  # This is the only service here that is NOT bound to 127.0.0.1, and it cannot be: TURN
+  # is not HTTP, so the host nginx cannot reverse-proxy it. `network_mode: host` is
+  # deliberate — coturn needs the real host address to generate reachable candidates, and
+  # a UDP relay range published through Docker's userland proxy performs badly.
+  #
+  # Requires on the host firewall: 3478/udp, 3478/tcp, 5349/tcp, 49160-49200/udp.
+  coturn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      # coturn reads the PEMs directly (it does not go through nginx), and does NOT
+      # reliably reload them on SIGHUP — add a certbot deploy-hook that restarts this
+      # container or TLS-TURN dies silently at the first renewal.
+      - ${PHEME_TURN_CERT_DIR:-/etc/letsencrypt/live/app.example.com}:/certs:ro
+    # The realm and the shared secret are passed here, not in turnserver.conf: that file is
+    # in git and coturn does not expand environment variables. The secret must be the same
+    # one the App API signs credentials with (PHEME_TURN_SECRET).
+    command:
+      - "-c"
+      - "/etc/coturn/turnserver.conf"
+      - "--realm=${PHEME_TURN_REALM:-app.example.com}"
+      - "--static-auth-secret=${PHEME_TURN_SECRET:-}"
 
 volumes:
   mongo-data:

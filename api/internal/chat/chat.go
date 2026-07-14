@@ -18,6 +18,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/push"
+	"github.com/rh1tech/pheme/api/internal/ratelimit"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
@@ -28,8 +29,14 @@ type Handler struct {
 	// Push may be nil (tests, or a deployment with no push configured). Chat
 	// notifications carry only the sender's name — never message content, which the
 	// server cannot read.
-	Push   push.Sender
-	Logger *slog.Logger
+	Push push.Sender
+	// ICE configures 1:1 calling. Zero value disables it: the call endpoints refuse
+	// rather than pretend.
+	ICE ICEConfig
+	// Limiter may be nil (tests). It guards the endpoints where a caller can generate
+	// work or credentials for free — call signalling and TURN credential minting.
+	Limiter ratelimit.Limiter
+	Logger  *slog.Logger
 }
 
 func (h *Handler) logger() *slog.Logger {
@@ -74,6 +81,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/conversations/{id}/mls", h.getMLSGroup)
 	mux.HandleFunc("GET /v1/conversations/{id}/mls/commits", h.listMLSCommits)
 	mux.HandleFunc("POST /v1/conversations/{id}/mls/commit", h.postMLSCommit)
+	// 1:1 voice calls. The server relays a few kilobytes of signalling and hands out ICE
+	// credentials; the media itself is peer to peer and never comes near us.
+	mux.HandleFunc("GET /v1/calls/ice-servers", h.iceServers)
 	mux.HandleFunc("PUT /v1/mls/key-backup", h.putKeyBackup)
 	mux.HandleFunc("GET /v1/mls/key-backup", h.getKeyBackup)
 }

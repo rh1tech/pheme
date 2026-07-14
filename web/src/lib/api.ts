@@ -284,6 +284,16 @@ export const api = {
       { method: 'POST', body: { devices } },
     ).then((r) => r.keyPackages ?? []),
 
+  /**
+   * The STUN/TURN servers this browser should use to find its peer, with a short-lived
+   * TURN credential. 503 when calling is not configured on the server.
+   *
+   * Fetched per call, not cached: the credential expires, and a stale one fails a relayed
+   * call in the most confusing way possible (the browser just reports that no candidate
+   * pair worked).
+   */
+  iceServers: () => request<{ iceServers: RTCIceServer[] }>('/v1/calls/ice-servers'),
+
   /** The conversation's MLS group id and epoch. `groupId` is empty until it is established. */
   mlsGroupState: (conversationId: string) =>
     request<MLSGroupState>(`/v1/conversations/${conversationId}/mls`),

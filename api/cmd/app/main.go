@@ -83,13 +83,27 @@ func main() {
 		CodeCooldown: cfg.CodeCooldown,
 	}).Routes(mux)
 	(&channel.AppHandler{
-		Store:          db,
-		Live:           bus,
-		Tokens:         tokens,
-		Publisher:      pub,
-		Blob:           blobs,
-		Admin:          &channel.AdminHandler{Store: db},
-		Chat:           &chat.Handler{Store: db, Live: bus, Push: pusher, Logger: logger},
+		Store:     db,
+		Live:      bus,
+		Tokens:    tokens,
+		Publisher: pub,
+		Blob:      blobs,
+		Admin:     &channel.AdminHandler{Store: db},
+		Chat: &chat.Handler{
+			Store: db,
+			Live:  bus,
+			Push:  pusher,
+			ICE: chat.ICEConfig{
+				URLs:   cfg.TURNURLs,
+				Secret: cfg.TURNSecret,
+				TTL:    cfg.TURNTTL,
+			},
+			// The first rate limiter on the app service. Calling gives an authenticated
+			// user two ways to make the server work for free — relaying signals and minting
+			// TURN credentials — and neither should be unbounded.
+			Limiter: b.Limiter(),
+			Logger:  logger,
+		},
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
 	}).Routes(mux)
 

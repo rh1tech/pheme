@@ -99,6 +99,10 @@ jobs:
         run: |
           scp -i ~/.ssh/id_deploy deploy/prod/docker-compose.yml \
             "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/pheme/docker-compose.yml"
+          # coturn's config. The compose file mounts it relative to /opt/pheme, so it has to
+          # be here or the container starts with coturn's defaults — which is an open relay.
+          scp -i ~/.ssh/id_deploy deploy/prod/turnserver.conf \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/pheme/turnserver.conf"
           scp -i ~/.ssh/id_deploy deploy/deploy.sh \
             "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/pheme/deploy.sh"
           ssh -i ~/.ssh/id_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" \

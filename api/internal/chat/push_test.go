@@ -57,6 +57,8 @@ func (f *fakePush) waitForPush(t *testing.T) bool {
 
 func (f *fixture) setPush(p push.Sender) { f.handler.Push = p }
 
+func (f *fixture) setICE(c ICEConfig) { f.handler.ICE = c }
+
 // device registers one push-capable device for a user.
 func (f *fixture) device(t *testing.T, userID string) string {
 	t.Helper()
