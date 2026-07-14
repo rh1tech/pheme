@@ -280,3 +280,37 @@ func (m *Mongo) GetKeyBackup(ctx context.Context, userID string) (domain.MLSKeyB
 		FindOne(ctx, bson.M{"userId": userID}).Decode(&b)
 	return b, mapErr(err)
 }
+
+// ResetMLSGroup retires the current group so a new one can be established. See the Store
+// interface: the old group is remembered, not deleted, so nothing anyone still holds is lost.
+//
+// Conditional on a group actually being established, so two clients that both notice the
+// conversation is stuck cannot retire two groups between them.
+func (m *Mongo) ResetMLSGroup(ctx context.Context, conversationID string) (domain.MLSGroupState, error) {
+	current, err := m.MLSGroupState(ctx, conversationID)
+	if err != nil {
+		return domain.MLSGroupState{}, err
+	}
+	if current.GroupID == "" {
+		return current, nil
+	}
+
+	var updated domain.Conversation
+	err = m.db.Collection("conversations").FindOneAndUpdate(
+		ctx,
+		bson.M{"_id": conversationID, "mlsGroupId": current.GroupID},
+		bson.M{
+			"$set":  bson.M{"mlsGroupId": "", "mlsEpoch": int64(0)},
+			"$push": bson.M{"mlsPriorGroupIds": bson.M{"$each": []string{current.GroupID}, "$position": 0, "$slice": maxPriorGroups}},
+		},
+		options.FindOneAndUpdate().SetReturnDocument(options.After),
+	).Decode(&updated)
+	if err != nil {
+		if mapErr(err) == ErrNotFound {
+			// Somebody else retired it first. Their reset is as good as ours.
+			return m.MLSGroupState(ctx, conversationID)
+		}
+		return domain.MLSGroupState{}, mapErr(err)
+	}
+	return updated.MLS, nil
+}

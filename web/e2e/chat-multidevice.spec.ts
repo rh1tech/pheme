@@ -407,6 +407,108 @@ test('a user whose stored identity predates device ids recovers on upgrade', asy
 })
 
 /**
+ * The group gets established even if the person who CREATED the conversation never opens it.
+ *
+ * Reserving that job for the creator looked tidy — it stops a loser burning the KeyPackages it
+ * claimed — but it is a deadlock. The creator may not come back for a week, and until they do,
+ * everybody else sits at "setting up encryption", unable to read, unable to send, and with
+ * nothing to tell them why. A wasted KeyPackage is a rounding error next to a conversation that
+ * never works. The server's compare-and-set already makes the race safe.
+ */
+test('a member who did not create the conversation can still establish its group', async ({
+  browser,
+}) => {
+  const aliceEmail = uniqueEmail('alice-est')
+  const bobEmail = uniqueEmail('bob-est')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const bob = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+
+  // Alice creates the conversation — and never opens it.
+  const conv = await startDirectChat(alice.page, bob.userId)
+  expect((await groupState(alice.page, conv)).groupId).toBe('')
+
+  // BOB opens it. He did not create it, and the group must still come up.
+  await openChatAndJoin(bob.page, conv)
+  const established = await groupState(bob.page, conv)
+  expect(established.groupId).not.toBe('')
+
+  await send(bob.page, 'i set this up myself')
+
+  // And Alice, arriving afterwards, joins the group Bob built and reads it.
+  await openChatAndJoin(alice.page, conv)
+  await expect(alice.page.getByTestId('chat-message').last()).toContainText('i set this up myself', {
+    timeout: 25_000,
+  })
+  await send(alice.page, 'so you did')
+  await expect(bob.page.getByTestId('chat-message').last()).toContainText('so you did', {
+    timeout: 20_000,
+  })
+
+  await Promise.all([alice.context.close(), bob.context.close()])
+})
+
+/**
+ * A new device is let in even though NOBODY has that conversation open.
+ *
+ * A device cannot add itself: only a member who already holds the group can Commit. So it
+ * announces itself and waits for one of them to notice — and the question that matters is who
+ * is listening. It used to be "only somebody with that exact chat open on screen", which is a
+ * deadlock dressed up as a race: two people rarely have the same conversation open at the same
+ * moment, and the device that announced just sat there telling its owner that encryption was
+ * still being set up.
+ *
+ * Here Alice is signed in and looking at her chat list. That has to be enough.
+ */
+test('a new device is admitted while the other member is not even in the chat', async ({
+  browser,
+}) => {
+  const aliceEmail = uniqueEmail('alice-admit')
+  const bobEmail = uniqueEmail('bob-admit')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const bobPhone = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+
+  const conv = await startDirectChat(alice.page, bobPhone.userId)
+  await openChatAndJoin(alice.page, conv)
+  await send(alice.page, 'first')
+  await openChatAndJoin(bobPhone.page, conv)
+
+  // Alice walks away from the conversation. She is still signed in, but she is looking at the
+  // list — which is where people actually are most of the time.
+  await alice.page.goto('/')
+  await expect(alice.page.getByTestId('chat-sidebar')).toBeVisible()
+
+  // Bob signs in on a laptop and opens the chat. Nobody is watching this conversation, and it
+  // still has to let him in.
+  const bobLaptop = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  await openChatAndJoin(bobLaptop.page, conv)
+
+  await send(bobLaptop.page, 'let me in')
+  await expect(alice.page.getByTestId('chat-sidebar')).toBeVisible()
+  await alice.page.goto(`/chats/${conv}`)
+  await expect(alice.page.getByTestId('chat-message').last()).toContainText('let me in', {
+    timeout: 25_000,
+  })
+
+  await Promise.all([alice.context.close(), bobPhone.context.close(), bobLaptop.context.close()])
+})
+
+/**
  * Leaving a group.
  *
  * MLS forbids committing your own removal (CannotRemoveSelf), so leaving cannot be a

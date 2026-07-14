@@ -222,6 +222,16 @@ type Store interface {
 	// Deciding first and failing to append would advance the epoch with no Commit for
 	// anyone to apply, stranding every member an epoch behind.
 	CommitMLSGroup(ctx context.Context, conversationID, groupID string, baseEpoch int64, msgs []domain.ChatMessage) (domain.MLSGroupState, []domain.ChatMessage, error)
+	// ResetMLSGroup retires the conversation's current group so a new one can be established.
+	//
+	// For a group nobody holds any more: every device that had it lost its key material, so
+	// there is no member left who can admit anybody, and the conversation is otherwise dead
+	// forever. The retired group is REMEMBERED, not deleted — anyone who still holds it can
+	// still read everything that was said to it — so this destroys nothing, which is what
+	// makes it safe to do without asking.
+	//
+	// A no-op when no group is established.
+	ResetMLSGroup(ctx context.Context, conversationID string) (domain.MLSGroupState, error)
 	// MLSControlMessagesSince returns the Welcomes and Commits that carried the group
 	// past `sinceEpoch`, OLDEST FIRST — the order they must be applied in.
 	//

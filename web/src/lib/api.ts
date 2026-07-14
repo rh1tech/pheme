@@ -346,6 +346,16 @@ export const api = {
     request<MLSGroupState>(`/v1/conversations/${conversationId}/mls`),
 
   /**
+   * Retires a group nobody can use any more, so the conversation can start a fresh one.
+   *
+   * The last resort, and only called by a device that has announced itself and given up on
+   * being let in. It destroys nothing — the retired group is remembered, and anyone who still
+   * holds it can still read every message that was sent to it.
+   */
+  mlsResetGroup: (conversationId: string) =>
+    request<MLSGroupState>(`/v1/conversations/${conversationId}/mls/reset`, { method: 'POST' }),
+
+  /**
    * The Welcomes and Commits that carried the group past `since`, oldest first — what a
    * member holding an older epoch must apply, in the order it must apply them.
    */

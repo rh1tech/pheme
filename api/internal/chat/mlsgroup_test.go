@@ -9,8 +9,9 @@ import (
 // The state a client reads to decide what to do: establish the group, join it, or
 // commit against it.
 type groupState struct {
-	GroupID string `json:"groupId"`
-	Epoch   int64  `json:"epoch"`
+	GroupID       string   `json:"groupId"`
+	Epoch         int64    `json:"epoch"`
+	PriorGroupIDs []string `json:"priorGroupIds"`
 }
 
 func mlsState(t *testing.T, f *fixture, token, conv string) groupState {
@@ -211,6 +212,93 @@ func TestEitherPartyMayPruneInADirectChat(t *testing.T) {
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("pruning in a direct chat: got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// A group nobody holds any more can be retired, so the conversation can start a fresh one.
+//
+// This is the only way out of a real dead end. Every device that held the group can lose its
+// key material — a browser cleared, an iOS PWA evicted on the seven-day rule — and admission is
+// a Commit, which only a member of the group can make. Once nobody holds it, nobody can let
+// anybody in, and the conversation is dead forever.
+//
+// The retired group is REMEMBERED. That is what makes this safe to do without proof, and it is
+// the whole difference between this and the old "rebuild the group" behaviour: that one deleted
+// the group and took every message in the conversation with it. Anyone who still holds an old
+// group can still read every message that was sent to it.
+func TestAGroupNobodyHoldsCanBeRetiredAndReplaced(t *testing.T) {
+	f := newFixture(t)
+	_, aliceToken := f.user(t, "alice-reset@pheme.test")
+	bobID, bobToken := f.user(t, "bob-reset@pheme.test")
+	conv := f.createDirect(t, aliceToken, bobID)
+
+	if code, _ := commit(t, f, aliceToken, conv, "grp-dead", 0); code != http.StatusOK {
+		t.Fatalf("establish: got %d", code)
+	}
+	if code, _ := commit(t, f, aliceToken, conv, "grp-dead", 1); code != http.StatusOK {
+		t.Fatalf("advance: got %d", code)
+	}
+
+	// Bob's device has announced itself and given up: nobody is coming.
+	rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/mls/reset", bobToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	// The conversation now has no group — so one can be established — and it REMEMBERS the old
+	// one, which is what stops this destroying the history that was encrypted to it.
+	after := mlsState(t, f, bobToken, conv)
+	if after.GroupID != "" || after.Epoch != 0 {
+		t.Fatalf("after a reset the conversation must have no group, got %+v", after)
+	}
+	if len(after.PriorGroupIDs) != 1 || after.PriorGroupIDs[0] != "grp-dead" {
+		t.Fatalf("the retired group must be remembered, got %v — anything encrypted to it "+
+			"would otherwise become unreadable for everyone who can still read it today",
+			after.PriorGroupIDs)
+	}
+
+	// And a fresh group establishes cleanly on top.
+	if code, state := commit(t, f, bobToken, conv, "grp-new", 0); code != http.StatusOK {
+		t.Fatalf("establish after reset: got %d", code)
+	} else if state.GroupID != "grp-new" || state.Epoch != 1 {
+		t.Fatalf("after re-establish: %+v", state)
+	}
+}
+
+// Two members who both give up at the same moment must not retire two groups between them.
+func TestConcurrentResetsRetireOneGroup(t *testing.T) {
+	f := newFixture(t)
+	_, aliceToken := f.user(t, "alice-r2@pheme.test")
+	bobID, bobToken := f.user(t, "bob-r2@pheme.test")
+	conv := f.createDirect(t, aliceToken, bobID)
+
+	if code, _ := commit(t, f, aliceToken, conv, "grp-1", 0); code != http.StatusOK {
+		t.Fatalf("establish: got %d", code)
+	}
+
+	for _, tok := range []string{aliceToken, bobToken} {
+		if rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/mls/reset", tok, nil); rec.Code != http.StatusOK {
+			t.Fatalf("reset: got %d", rec.Code)
+		}
+	}
+
+	// The second reset found nothing established and did nothing.
+	after := mlsState(t, f, bobToken, conv)
+	if len(after.PriorGroupIDs) != 1 {
+		t.Fatalf("retired %v; a second reset must not retire an empty group", after.PriorGroupIDs)
+	}
+}
+
+// Only a member may retire a conversation's group.
+func TestResetRequiresMembership(t *testing.T) {
+	f := newFixture(t)
+	_, aliceToken := f.user(t, "alice-r3@pheme.test")
+	bobID, _ := f.user(t, "bob-r3@pheme.test")
+	_, outsiderToken := f.user(t, "outsider-r3@pheme.test")
+	conv := f.createDirect(t, aliceToken, bobID)
+
+	if rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/mls/reset", outsiderToken, nil); rec.Code == http.StatusOK {
+		t.Fatal("an outsider must not be able to retire a conversation's group")
 	}
 }
 

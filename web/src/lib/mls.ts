@@ -133,6 +133,38 @@ let restoreNeeded: boolean | null = null
 // chat, sending into it, a device announcing itself — and they must not all do it at once.
 const settling = new Map<string, Promise<string | null>>()
 
+/**
+ * How long this device has been announcing itself and waiting to be let in, by conversation.
+ *
+ * In memory, so it resets when the tab does. That is deliberate: a reset is a last resort, and
+ * it should take a sustained period of a live device asking and getting nowhere — not a stale
+ * timestamp from a week ago.
+ */
+const waitingSince = new Map<string, number>()
+
+/**
+ * How long a device waits to be admitted before concluding that nobody is coming.
+ *
+ * Long enough that a member who was going to admit it would have: the app admits announced
+ * devices from anywhere, so it needs somebody to have Pheme open at all, not to be looking at
+ * the right conversation. Short enough that a person staring at "setting up encryption" is not
+ * left there.
+ */
+const STUCK_MS = 90_000
+
+function stuckFor(conversationId: string): number {
+  const since = waitingSince.get(conversationId)
+  if (since === undefined) {
+    waitingSince.set(conversationId, Date.now())
+    return 0
+  }
+  return Date.now() - since
+}
+
+function clearStuck(conversationId: string): void {
+  waitingSince.delete(conversationId)
+}
+
 /** Loads the WASM module once. Backup/restore need it before any Session exists. */
 function ensureWasm(): Promise<void> {
   if (!wasmReady) wasmReady = init(wasmUrl).then(() => undefined)
@@ -617,6 +649,29 @@ class Session {
   }
 
   /**
+   * Decrypts against whichever of the conversation's groups the message actually belongs to.
+   *
+   * A conversation can have had more than one group: when every device that held one lost its
+   * key material, the only way to talk again was to start a fresh one. The old group is not
+   * deleted, though, and neither is anything said to it — so a message from before the reset is
+   * still perfectly readable by a device that still holds the old group, and this is where that
+   * happens.
+   *
+   * Tries the current group first, since that is where all but the oldest messages live.
+   */
+  async decryptAny(groupIds: string[], ciphertextBase64: string): Promise<Uint8Array | null> {
+    for (const groupId of groupIds) {
+      try {
+        const out = await this.decrypt(groupId, ciphertextBase64)
+        if (out) return out
+      } catch {
+        // Not this group's message — or not one we can read. Try the next.
+      }
+    }
+    return null
+  }
+
+  /**
    * Derives a secret from the group for something outside MLS's own messaging, together
    * with the epoch it came from.
    *
@@ -703,7 +758,18 @@ export function ensureGroup(
   const inFlight = settling.get(conversation.id)
   if (inFlight) return inFlight
 
-  const run = settleGroup(conversation, myUserId).finally(() => settling.delete(conversation.id))
+  const run = settleGroup(conversation, myUserId)
+    .then((groupId) => {
+      // The group we ended up in goes at the FRONT of what we can read.
+      //
+      // settleGroup records what the server told it, but the server may have told it there was
+      // no group at all — and then this device went and established one. Without this, the
+      // device that created the group could not decrypt a single message in it, including its
+      // own conversation's entire history.
+      if (groupId) rememberReadableGroup(conversation.id, groupId)
+      return groupId
+    })
+    .finally(() => settling.delete(conversation.id))
   settling.set(conversation.id, run)
   return run
 }
@@ -715,18 +781,32 @@ async function settleGroup(
   const session = await mlsSession(myUserId)
   const state = await api.mlsGroupState(conversation.id)
 
-  // Nobody has established a group yet.
+  // Everything this device could read a message from. A message from before a reset was
+  // encrypted to a group that is no longer current, and it is still perfectly readable by a
+  // device that still holds that group.
+  readableGroups.set(
+    conversation.id,
+    [state.groupId, ...(state.priorGroupIds ?? [])].filter(Boolean),
+  )
+
+  // Nobody has established a group yet, so somebody must.
+  //
+  // ANY member does it, not just the conversation's creator. Reserving it for the creator
+  // looked tidy — it avoids a loser burning the KeyPackages it claimed — but it is a
+  // deadlock: if the creator never opens the chat, every other member sits at "setting up
+  // encryption" forever, with no way to make progress and nothing to tell them why. The
+  // server's compare-and-set already makes a race safe; one of them simply loses. A wasted
+  // KeyPackage is a rounding error next to a conversation that never works.
   if (!state.groupId) {
-    // Only the creator builds it. The compare-and-set would make a race safe anyway —
-    // one of them would simply lose — but a loser has burned the KeyPackages it claimed,
-    // and there is no reason to spend them.
-    if (conversation.createdBy !== myUserId) return null
     return establishGroup(session, conversation, myUserId)
   }
 
   // A group exists. Catch up on anything we missed — that may be the very Welcome that
   // lets this device in.
-  await catchUp(session, conversation.id, state.groupId)
+  //
+  // Best effort, like everything else below: a device that already holds the group must not
+  // be broken by a failure to fetch. See the guard on reconcileDevices.
+  await catchUp(session, conversation.id, state.groupId).catch(() => {})
 
   if (!(await session.hasGroup(state.groupId))) {
     // The group exists and this device is not in it: a new phone, a browser whose storage
@@ -736,10 +816,42 @@ async function settleGroup(
     // This is where the old code destroyed the group and rebuilt it. That is why a single
     // second device could make a whole conversation unreadable for everyone in it.
     await announceDevice(conversation.id)
+
+    // …unless nobody is coming.
+    //
+    // Every device that held this group can have lost its key material — a browser cleared, an
+    // iOS PWA whose storage was evicted on the seven-day rule — and nothing says that cannot
+    // happen to both people in the same week. Then there is no member left who can admit
+    // anybody, every device sits here announcing itself, and the conversation is dead forever.
+    //
+    // So after waiting long enough that a member who WAS coming would have come, retire the
+    // group and start a new one. This is safe to do without being certain, because it destroys
+    // nothing: the old group is remembered, not deleted, and anyone who still holds it can
+    // still read every message ever sent to it. The worst a premature reset can do is make
+    // everyone rejoin a fresh group. Being permanently unable to talk is worse than that.
+    if (stuckFor(conversation.id) > STUCK_MS) {
+      clearStuck(conversation.id)
+      await api.mlsResetGroup(conversation.id).catch(() => {})
+      return settleGroup(conversation, myUserId)
+    }
     return null
   }
+  clearStuck(conversation.id)
 
-  await reconcileDevices(session, conversation.id, state.groupId)
+  // WE HOLD THE GROUP. Nothing below this line may take that away.
+  //
+  // Reconciliation is hygiene — admitting somebody's new device, pruning a ghost. It talks to
+  // the network and it builds Commits, so it can fail: a stale KeyPackage that will not
+  // validate, a request that times out, a Commit the server refuses for a reason we did not
+  // anticipate. None of that says anything about whether THIS device can read THIS
+  // conversation, and it must not be allowed to imply otherwise.
+  //
+  // It was allowed to. An exception here propagated out of ensureGroup, the chat route caught
+  // it and left the group id empty, and because decryption is gated on that id the device
+  // rendered every message as "Not available on this device", refused to send, and reported
+  // that encryption was still being set up — while holding perfectly good keys the whole time.
+  // A failure to tidy up bricked a working conversation.
+  await reconcileDevices(session, conversation.id, state.groupId).catch(() => {})
   return state.groupId
 }
 
@@ -991,13 +1103,13 @@ async function announceDevice(conversationId: string): Promise<void> {
  * device already added and stop.
  */
 export async function admitAnnouncedDevice(
-  conversation: Conversation,
+  conversationId: string,
   myUserId: string,
 ): Promise<void> {
   const session = await mlsSession(myUserId)
-  const state = await api.mlsGroupState(conversation.id)
+  const state = await api.mlsGroupState(conversationId)
   if (!state.groupId || !(await session.hasGroup(state.groupId))) return
-  await reconcileDevices(session, conversation.id, state.groupId)
+  await reconcileDevices(session, conversationId, state.groupId)
 }
 
 /**
@@ -1110,6 +1222,39 @@ export async function callKeyFor(
   if (!state.groupId) return null
   const context = new TextEncoder().encode(`${callId}|${senderIdentity}`)
   return session.exportSecret(state.groupId, CALL_LABEL, context, 32)
+}
+
+/**
+ * Every group of a conversation this device could read a message from: the current one first,
+ * then any that have been retired.
+ *
+ * Recorded by settleGroup, so it is whatever the server last told us. A message from before a
+ * reset was encrypted to a group that is no longer current, and it is still readable — that is
+ * the whole point of remembering the old ones rather than deleting them.
+ */
+const readableGroups = new Map<string, string[]>()
+
+/** Puts a group at the front of what a conversation can be decrypted against. */
+function rememberReadableGroup(conversationId: string, groupId: string): void {
+  const groups = readableGroups.get(conversationId) ?? []
+  readableGroups.set(conversationId, [groupId, ...groups.filter((g) => g !== groupId)])
+}
+
+/**
+ * Decrypts a chat message against whichever of the conversation's groups it belongs to.
+ *
+ * Returns null when this device cannot read it at all — which is a real answer, not a failure:
+ * MLS gives a device no access to what was said before it joined.
+ */
+export async function decryptChatMessage(
+  conversationId: string,
+  myUserId: string,
+  ciphertextBase64: string,
+): Promise<Uint8Array | null> {
+  const groups = readableGroups.get(conversationId)
+  if (!groups || groups.length === 0) return null
+  const session = await mlsSession(myUserId)
+  return session.decryptAny(groups, ciphertextBase64)
 }
 
 /** This device's MLS identity (`userId:deviceId`) — who a call signal is from. */

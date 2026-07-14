@@ -23,8 +23,8 @@ import {
   MLS_CONTROL_TYPES,
   MLS_DEVICE,
   PeerKeysMissingError,
-  admitAnnouncedDevice,
   base64ToBytes,
+  decryptChatMessage,
   ensureGroup,
   mlsSession,
   removeGroupMember,
@@ -170,6 +170,29 @@ export function ConversationChatRoute() {
     }
   }, [id, userId, setGroupId])
 
+  // Keep asking, while this device is waiting to be let into the group.
+  //
+  // It has announced itself, and a member who holds the group will admit it — but only if one
+  // of them has the app open. Retrying is what turns "nobody was around when I asked" into
+  // "somebody will be, and I will notice". It is also what eventually establishes that nobody
+  // is coming at all, which is the only way out of a group whose every holder has lost its
+  // keys (see settleGroup).
+  //
+  // Stops the moment we are in.
+  useEffect(() => {
+    if (!userId || !conversation || conversation.id !== id || groupId) return
+    let active = true
+    const timer = setInterval(() => {
+      ensureGroup(conversation, userId)
+        .then((gid) => active && gid && setGroupId(gid))
+        .catch(() => {})
+    }, 15_000)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [id, userId, conversation, groupId, setGroupId])
+
   // Preload this conversation's already-decrypted bodies from the local cache
   // before any message processing, so cached messages are never re-decrypted.
   useEffect(() => {
@@ -200,9 +223,8 @@ export function ConversationChatRoute() {
     if (readyId !== id || !userId || !conversation || !groupId || messages.length === 0) return
     let active = true
     const run = async () => {
-      let session: Awaited<ReturnType<typeof mlsSession>>
       try {
-        session = await mlsSession(userId)
+        await mlsSession(userId)
       } catch {
         // This device has no keys yet and a backup is waiting to be restored (or the
         // WASM failed to load). Either way there is nothing to decrypt with; the
@@ -216,7 +238,11 @@ export function ConversationChatRoute() {
         processedRef.current.add(m.id)
         try {
           if (m.contentType === MLS_APPLICATION) {
-            const bytes = await session.decrypt(groupId, m.ciphertext)
+            // Against whichever of the conversation's groups this message belongs to. A
+            // conversation can have had more than one — if every device holding a group lost
+            // its keys, the only way to talk again was to start a fresh one — and the old
+            // groups are kept, so what was said to them is still readable here.
+            const bytes = await decryptChatMessage(id, userId, m.ciphertext)
             const content = bytes && deserializeContent(bytes)
             if (content) {
               next[m.id] = content.body
@@ -325,11 +351,10 @@ export function ConversationChatRoute() {
     // arrives rather than the next time somebody reloads.
     if (MLS_CONTROL_TYPES.has(msg.contentType)) {
       if (!userId || !conversation) return
-      if (msg.contentType === MLS_DEVICE && msg.senderId !== userId) {
-        // Another member signed in somewhere new and cannot read the conversation. Add
-        // their device. Everyone with the chat open will try; the server lets exactly one
-        // Commit through and the rest find nothing left to do.
-        void admitAnnouncedDevice(conversation, userId).catch(() => {})
+      if (msg.contentType === MLS_DEVICE) {
+        // Handled app-wide by useDeviceAdmission, which listens whether or not this chat is
+        // open — a device waiting to be let in must not depend on somebody happening to be
+        // looking at the right conversation.
         return
       }
       // A Welcome or a Commit: catch up on it. If it is the Welcome that admits THIS

@@ -85,6 +85,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/conversations/{id}/mls", h.getMLSGroup)
 	mux.HandleFunc("GET /v1/conversations/{id}/mls/commits", h.listMLSCommits)
 	mux.HandleFunc("POST /v1/conversations/{id}/mls/commit", h.postMLSCommit)
+	// The way out of a group nobody holds any more. Retires it (remembering it, so nothing
+	// anyone still has is lost) so a fresh one can be established.
+	mux.HandleFunc("POST /v1/conversations/{id}/mls/reset", h.postMLSReset)
 	// 1:1 voice calls. The server relays a few kilobytes of sealed signalling and hands out
 	// ICE credentials; the media itself is peer to peer and never comes near us, and nothing
 	// about a call is ever written to the database.

@@ -227,3 +227,31 @@ func (m *Memory) GetKeyBackup(_ context.Context, userID string) (domain.MLSKeyBa
 	}
 	return b, nil
 }
+
+// How many retired groups a conversation remembers. Each one is a group somebody might still
+// hold and still be reading history from; a handful is generous, and it stops an abusive
+// client growing the document without bound.
+const maxPriorGroups = 8
+
+// ResetMLSGroup retires the current group so a new one can be established. See the Store
+// interface: the old group is remembered, not deleted, so nothing anyone still holds is lost.
+func (m *Memory) ResetMLSGroup(_ context.Context, conversationID string) (domain.MLSGroupState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	c, ok := m.conversations[conversationID]
+	if !ok {
+		return domain.MLSGroupState{}, ErrNotFound
+	}
+	if c.MLS.GroupID == "" {
+		return c.MLS, nil // nothing established; nothing to retire
+	}
+
+	prior := append([]string{c.MLS.GroupID}, c.MLS.PriorGroupIDs...)
+	if len(prior) > maxPriorGroups {
+		prior = prior[:maxPriorGroups]
+	}
+	c.MLS = domain.MLSGroupState{PriorGroupIDs: prior}
+	m.conversations[conversationID] = c
+	return c.MLS, nil
+}

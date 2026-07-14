@@ -385,6 +385,21 @@ type MLSGroupState struct {
 	// a Commit says which epoch it is based on; if that is not this one, they are behind
 	// and their Commit is refused.
 	Epoch int64 `bson:"mlsEpoch,omitempty" json:"epoch"`
+	// PriorGroupIDs are the groups this conversation used to use, newest first.
+	//
+	// A conversation's group can die: every device that held it can lose its key material at
+	// once — a browser cleared, an iOS PWA whose storage was evicted, and there is no rule
+	// that says it cannot happen to both people in the same week. Nobody is left who can
+	// admit anybody, because admission is a Commit and only a member of the group can make
+	// one. Without a way out, that conversation is dead forever.
+	//
+	// The way out is to start a NEW group and remember the old one. Nothing is destroyed:
+	// anyone who still holds an old group can still read everything that was said to it, and
+	// a client decrypts a message against whichever of its groups the message belongs to. That
+	// is what makes this safe to do automatically, and it is the difference between this and
+	// the "rebuild the group" behaviour that used to wipe a conversation for everyone in it —
+	// that one deleted the old group; this one keeps it.
+	PriorGroupIDs []string `bson:"mlsPriorGroupIds,omitempty" json:"priorGroupIds,omitempty"`
 }
 
 // MLSKeyPackage is a single-use public MLS KeyPackage a user's device has

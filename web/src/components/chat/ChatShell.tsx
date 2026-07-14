@@ -1,18 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Outlet, useMatch } from "react-router-dom";
-import { useMediaQuery } from "@mantine/hooks";
-import { ChatSidebar } from "./ChatSidebar";
-import { KeyRestoreGate } from "./KeyBackup";
-import { CallProvider } from "../call/CallProvider";
-import { CallUI } from "../call/CallUI";
-import { mlsSession } from "../../lib/mls";
-import { useAuth } from "../../auth/context";
-import { useChannelList } from "../../hooks/useChannelList";
-import { useConversationList } from "../../hooks/useConversationList";
-import { useColdLaunchToList } from "../../hooks/useColdLaunchToList";
-import { useVisualViewportHeight } from "../../hooks/useVisualViewport";
-import type { ChatOutletContext } from "./context";
-import "./chat.css";
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Outlet, useMatch } from 'react-router-dom'
+import { useMediaQuery } from '@mantine/hooks'
+import { ChatSidebar } from './ChatSidebar'
+import { KeyRestoreGate } from './KeyBackup'
+import { CallProvider } from '../call/CallProvider'
+import { CallUI } from '../call/CallUI'
+import { mlsSession } from '../../lib/mls'
+import { useAuth } from '../../auth/context'
+import { useChannelList } from '../../hooks/useChannelList'
+import { useConversationList } from '../../hooks/useConversationList'
+import { useDeviceAdmission } from '../../hooks/useDeviceAdmission'
+import { useColdLaunchToList } from '../../hooks/useColdLaunchToList'
+import { useVisualViewportHeight } from '../../hooks/useVisualViewport'
+import type { ChatOutletContext } from './context'
+import './chat.css'
 
 /**
  * The chat surface: the channel list beside the conversation, mounted once for
@@ -24,43 +25,46 @@ import "./chat.css";
  * from the same stream event.
  */
 export function ChatShell() {
-  const { userId } = useAuth();
-  const list = useChannelList();
-  const conversations = useConversationList();
-  const channelMatch = useMatch({ path: "/channels/:id", end: false });
-  const chatMatch = useMatch({ path: "/chats/:id", end: false });
-  const activeId = channelMatch?.params.id ?? chatMatch?.params.id;
-  const viewportHeight = useVisualViewportHeight();
+  const { userId } = useAuth()
+  const list = useChannelList()
+  const conversations = useConversationList()
+  // Let other people's newly signed-in devices into the groups they belong to, from anywhere
+  // in the app — not only from the conversation they concern, which nobody may have open.
+  useDeviceAdmission(userId)
+  const channelMatch = useMatch({ path: '/channels/:id', end: false })
+  const chatMatch = useMatch({ path: '/chats/:id', end: false })
+  const activeId = channelMatch?.params.id ?? chatMatch?.params.id
+  const viewportHeight = useVisualViewportHeight()
   // Read synchronously on the first render (not deferred to an effect): the cold-launch
   // redirect below decides once, at mount, and a first-render "false" that only flips to
   // true afterwards would make it miss the very launch it exists to catch.
-  const isMobile = useMediaQuery("(max-width: 48em)", undefined, {
+  const isMobile = useMediaQuery('(max-width: 48em)', undefined, {
     getInitialValueInEffect: false,
-  });
+  })
 
   // On a phone, a cold launch lands on the list, not whatever channel the last
   // session was left viewing (which iOS restores). A notification tap is exempt.
-  useColdLaunchToList(Boolean(isMobile));
+  useColdLaunchToList(Boolean(isMobile))
 
   // Picking a channel should put the cursor in its message box. Counted rather
   // than derived from the channel id, so re-picking the channel already open —
   // which changes no id — still focuses.
-  const [composerFocus, setComposerFocus] = useState(0);
-  const onSelectChannel = useCallback(() => setComposerFocus((n) => n + 1), []);
+  const [composerFocus, setComposerFocus] = useState(0)
+  const onSelectChannel = useCallback(() => setComposerFocus((n) => n + 1), [])
   const context = useMemo<ChatOutletContext>(
     () => ({ list, conversations, composerFocus }),
     [list, conversations, composerFocus],
-  );
+  )
 
   // The shell is a fixed-height app, not a scrolling document. Marking the root
   // lets styles.css stop the page itself from scrolling for this surface only —
   // the container-layout pages (profile, admin) still scroll normally.
   useEffect(() => {
-    document.documentElement.dataset.surface = "chat";
+    document.documentElement.dataset.surface = 'chat'
     return () => {
-      delete document.documentElement.dataset.surface;
-    };
-  }, []);
+      delete document.documentElement.dataset.surface
+    }
+  }, [])
 
   // Bring up this device's encryption identity as soon as the user reaches the chat
   // surface, rather than waiting until they open a conversation.
@@ -70,11 +74,11 @@ export function ChatShell() {
   // them fails. Deferring it to the first conversation they open means a brand-new
   // user is unreachable until they happen to open one, which is exactly backwards.
   useEffect(() => {
-    if (!userId) return;
+    if (!userId) return
     mlsSession(userId).catch(() => {
       // No keys yet and a backup is waiting: KeyRestoreGate below prompts for it.
-    });
-  }, [userId]);
+    })
+  }, [userId])
 
   return (
     // The call layer wraps the whole surface, not a conversation: a call outlives the chat it
@@ -82,12 +86,12 @@ export function ChatShell() {
     <CallProvider>
       <div
         className="pheme-shell"
-        data-view={activeId ? "chat" : "list"}
+        data-view={activeId ? 'chat' : 'list'}
         style={
           viewportHeight === null
             ? undefined
             : ({
-                "--pheme-viewport-h": `${viewportHeight}px`,
+                '--pheme-viewport-h': `${viewportHeight}px`,
               } as React.CSSProperties)
         }
       >
@@ -104,5 +108,5 @@ export function ChatShell() {
         <CallUI />
       </div>
     </CallProvider>
-  );
+  )
 }

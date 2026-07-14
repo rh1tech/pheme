@@ -88,6 +88,16 @@ export interface ChatMessage {
 export interface MLSGroupState {
   groupId: string
   epoch: number
+  /**
+   * Groups this conversation used to use, newest first.
+   *
+   * A group can die: every device that held it can lose its key material at once. Nobody is
+   * then left who can admit anybody, because admission is a Commit and only a member can make
+   * one — so the conversation starts a new group. The old ones are kept, not deleted: anyone
+   * who still holds one can still read everything that was said to it, and a message is
+   * decrypted against whichever group it belongs to.
+   */
+  priorGroupIds?: string[]
 }
 
 /** One device of one user — the unit of MLS group membership. */

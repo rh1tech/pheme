@@ -107,6 +107,44 @@ func (h *Handler) mayRemove(r *http.Request, convID string, member domain.Conver
 	return true
 }
 
+// postMLSReset retires a group nobody can use, so the conversation can start a new one.
+//
+// A conversation's group can die outright. Every device that held it can lose its key material
+// — a browser cleared, an iOS PWA whose storage was evicted on the seven-day rule — and there
+// is no law saying that cannot happen to both people in the same week. Admission is a Commit,
+// and only a member of the group can make one, so once nobody holds it there is nobody left who
+// can let anybody in. Every device announces itself and waits, forever, and the conversation is
+// dead with no way back.
+//
+// This is the way back. It retires the group and REMEMBERS it: anyone who still holds it can
+// still read everything that was said to it, and a client decrypts each message against
+// whichever of its groups that message belongs to. Nothing is destroyed — which is the whole
+// difference between this and the "rebuild the group" behaviour it replaces, which deleted the
+// old group and took every message in the conversation down with it.
+//
+// Because it destroys nothing, it does not need to be guarded by proof that the group is really
+// dead — proof we could not obtain anyway, since the server cannot tell "nobody holds the key"
+// from "nobody is online". A client only calls it after waiting to be let in and giving up, and
+// the worst a spurious call can do is make everyone rejoin a fresh group.
+func (h *Handler) postMLSReset(w http.ResponseWriter, r *http.Request) {
+	uid, convID, _, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	if h.Limiter != nil && !h.Limiter.Allow("mlsreset:"+uid) {
+		httpx.Error(w, http.StatusTooManyRequests, "slow down")
+		return
+	}
+	state, err := h.Store.ResetMLSGroup(r.Context(), convID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not reset the group")
+		return
+	}
+	h.logger().Warn("mls group retired: no member could admit a waiting device",
+		"conversation", convID, "by", uid, "retired", state.PriorGroupIDs)
+	httpx.JSON(w, http.StatusOK, state)
+}
+
 type mlsCommitRequest struct {
 	// GroupID is the MLS group this Commit belongs to. On the very first Commit it is
 	// the id the establishing member minted; thereafter it must match what is recorded,
