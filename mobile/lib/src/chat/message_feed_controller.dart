@@ -197,29 +197,36 @@ class MessageFeedController extends Notifier<MessageFeedState> {
 
   /// Decrypts what we have not already read. Every body is cached on first sight, because there is no
   /// second: MLS destroys the message key as it goes.
+  ///
+  /// Note what this does NOT do: snapshot state.bodies, fill the snapshot, and write the whole thing
+  /// back. Three call sites run this — the first page, an older page, and a live message — and they are
+  /// not mutually exclusive. Two of them overlapping would each take a snapshot, each await their way
+  /// through a decrypt, and the one that finished last would write back a map that never contained the
+  /// other's results. The bodies survive in the local store, so nothing is lost for good, but the
+  /// messages render as unreadable until the chat is reopened — which looks exactly like a decryption
+  /// failure and is not one.
+  ///
+  /// So each result is merged into whatever state is CURRENT at the moment it lands.
   Future<void> _decrypt(List<ChatMessage> messages) async {
     if (messages.isEmpty) return;
 
     final mls = ref.read(mlsServiceProvider);
     final myUserId = ref.read(myUserIdProvider);
-    final bodies = {...state.bodies};
 
     for (final message in messages) {
-      if (bodies.containsKey(message.id)) continue;
+      if (state.bodies.containsKey(message.id)) continue;
+
+      String? body;
       try {
-        bodies[message.id] = await mls.decryptMessage(
-          _conversationId,
-          myUserId,
-          message,
-        );
+        body = await mls.decryptMessage(_conversationId, myUserId, message);
       } on Object {
         // Unreadable on this device. A real answer, not a failure — and never retried, because a
         // second attempt on a consumed key is not merely useless, it is wrong.
-        bodies[message.id] = null;
+        body = null;
       }
-    }
 
-    state = state.copyWith(bodies: bodies);
+      state = state.copyWith(bodies: {...state.bodies, message.id: body});
+    }
   }
 
   Future<void> _markRead(ChatMessage message) => ref
@@ -243,7 +250,17 @@ class MessageFeedController extends Notifier<MessageFeedState> {
   }
 }
 
-final messageFeedProvider =
-    NotifierProvider.family<MessageFeedController, MessageFeedState, String>(
+/// autoDispose, unlike callProvider — and for the mirror-image reason.
+///
+/// A call outlives its screen, so its provider must too. A conversation's decrypted messages do not:
+/// they are the plaintext of end-to-end encrypted messages, and holding every body of every chat the
+/// user has opened in memory for the lifetime of the process is both unbounded growth and a longer
+/// exposure than the feature needs. The bodies live in the local store; reopening the chat reads them
+/// straight back.
+///
+/// It also tears down this conversation's live-event listener, which otherwise accumulated one per
+/// chat ever visited.
+final messageFeedProvider = NotifierProvider.autoDispose
+    .family<MessageFeedController, MessageFeedState, String>(
       MessageFeedController.new,
     );

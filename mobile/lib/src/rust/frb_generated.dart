@@ -172,11 +172,13 @@ abstract class RustLibApi extends BaseApi {
   Future<Uint8List> crateApiVaultRandomBytes({required BigInt length});
 
   Future<Uint8List> crateApiVaultVaultOpen({
+    required String domain,
     required List<int> key,
     required List<int> sealed,
   });
 
   Future<Uint8List> crateApiVaultVaultSeal({
+    required String domain,
     required List<int> key,
     required List<int> plaintext,
   });
@@ -1060,6 +1062,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<Uint8List> crateApiVaultVaultOpen({
+    required String domain,
     required List<int> key,
     required List<int> sealed,
   }) {
@@ -1067,6 +1070,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(domain, serializer);
           sse_encode_list_prim_u_8_loose(key, serializer);
           sse_encode_list_prim_u_8_loose(sealed, serializer);
           pdeCallFfi(
@@ -1081,17 +1085,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiVaultVaultOpenConstMeta,
-        argValues: [key, sealed],
+        argValues: [domain, key, sealed],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiVaultVaultOpenConstMeta =>
-      const TaskConstMeta(debugName: "vault_open", argNames: ["key", "sealed"]);
+  TaskConstMeta get kCrateApiVaultVaultOpenConstMeta => const TaskConstMeta(
+    debugName: "vault_open",
+    argNames: ["domain", "key", "sealed"],
+  );
 
   @override
   Future<Uint8List> crateApiVaultVaultSeal({
+    required String domain,
     required List<int> key,
     required List<int> plaintext,
   }) {
@@ -1099,6 +1106,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(domain, serializer);
           sse_encode_list_prim_u_8_loose(key, serializer);
           sse_encode_list_prim_u_8_loose(plaintext, serializer);
           pdeCallFfi(
@@ -1113,7 +1121,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiVaultVaultSealConstMeta,
-        argValues: [key, plaintext],
+        argValues: [domain, key, plaintext],
         apiImpl: this,
       ),
     );
@@ -1121,7 +1129,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiVaultVaultSealConstMeta => const TaskConstMeta(
     debugName: "vault_seal",
-    argNames: ["key", "plaintext"],
+    argNames: ["domain", "key", "plaintext"],
   );
 
   @protected

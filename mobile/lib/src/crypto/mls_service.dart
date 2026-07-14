@@ -922,6 +922,23 @@ class MlsService {
       ciphertext: backup.ciphertext,
     );
 
+    // KILL EVERY LIVE SESSION BEFORE TOUCHING THE RUST CLIENT, not after.
+    //
+    // There is one Rust client per process, and mlsLoad replaces it. A session's operations queue up
+    // behind its own mutex and check assertLive() before they run — but they check the GENERATION, and
+    // if the generation is still the old one when the client underneath has already been swapped, a
+    // queued operation sails through the check and then runs against the wrong client entirely. It
+    // would export that client's state and persist it under the old session's identity: one identity's
+    // key material, written to disk under another's name.
+    //
+    // Bumping first closes the window. Anything queued is refused; anything already inside a Rust call
+    // completes against the client it started with, because Rust's own mutex is still holding it.
+    invalidateSessions();
+    _session = null;
+    _sessionUserId = '';
+    _settling.clear();
+    _readableGroups.clear();
+
     // Validate that the recovered blob really is a client state before committing to it — and read
     // back WHICH DEVICE it belongs to.
     await rust.mlsLoad(state: state);
@@ -938,13 +955,7 @@ class MlsService {
       await saveMlsDeviceId(_storage, restoredDevice);
     }
 
-    // Any session built on the identity this replaces must not write over what we just recovered.
-    invalidateSessions();
     _restoreNeeded = false;
-    _session = null;
-    _sessionUserId = '';
-    _settling.clear();
-    _readableGroups.clear();
     return true;
   }
 
@@ -955,11 +966,10 @@ class MlsService {
   /// re-derive them afterwards except from the passphrase-protected backup — which is the point of
   /// that backup.
   Future<void> wipeLocalKeys() async {
-    await rust.mlsUnload();
-    await _store.wipe();
-    await _cache.wipe();
-    await clearMlsDeviceId(_storage);
-
+    // Same ordering as restoreKeys, and for the same reason: a session whose operations are queued
+    // behind its mutex must be refused BEFORE the client they are queued against is unloaded, or one
+    // of them wakes up, passes the liveness check on a stale generation, and writes the keys the user
+    // just asked us to destroy straight back to disk.
     invalidateSessions();
     _session = null;
     _sessionUserId = '';
@@ -967,5 +977,10 @@ class MlsService {
     _settling.clear();
     _readableGroups.clear();
     _waitingSince.clear();
+
+    await rust.mlsUnload();
+    await _store.wipe();
+    await _cache.wipe();
+    await clearMlsDeviceId(_storage);
   }
 }

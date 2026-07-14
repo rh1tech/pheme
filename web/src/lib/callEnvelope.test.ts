@@ -10,7 +10,7 @@
 // it there and this one does. That is the whole point of duplicating it.
 
 import { describe, expect, it } from 'vitest'
-import { openSignal, sealSignal, type CallBody, type CallHeader } from './callEnvelope'
+import { openSignal, sealControl, sealSignal, type CallBody, type CallHeader } from './callEnvelope'
 import { base64ToBytes } from './mls'
 
 /** 00 01 02 … 1f */
@@ -93,6 +93,38 @@ describe('call envelope golden vector', () => {
     const tampered = btoa(JSON.stringify(envelope))
 
     await expect(openSignal(KEY, tampered)).rejects.toThrow()
+  })
+
+  // The only signal ever sent in the clear, and the one case the vector above does not touch.
+  //
+  // A device AHEAD of the sender cannot derive the sender's key at all — MLS exports only from the
+  // current epoch — so it cannot reply in a sealed envelope to say so. This control is that reply. If
+  // the two clients disagree about a byte of it, two ends that have fallen out of step can never tell
+  // each other, and the call rings out with nothing anywhere to say why.
+  it('serialises the epoch-mismatch control exactly as the mobile client does', () => {
+    const control: CallHeader = {
+      v: 1,
+      callId: 'b0a1c2d3-e4f5-4607-8899-aabbccddeeff',
+      epoch: 9,
+      from: 'user-2:device-2',
+      seq: 1,
+      control: 'epoch-mismatch',
+    }
+
+    expect(new TextDecoder().decode(expectedAAD(control))).toBe(
+      '[1,"b0a1c2d3-e4f5-4607-8899-aabbccddeeff",9,"user-2:device-2",1,"epoch-mismatch"]',
+    )
+
+    const wire = sealControl(control)
+    expect(new TextDecoder().decode(base64ToBytes(wire))).toBe(
+      '{"h":{"v":1,"callId":"b0a1c2d3-e4f5-4607-8899-aabbccddeeff","epoch":9,' +
+        '"from":"user-2:device-2","seq":1,"control":"epoch-mismatch"}}',
+    )
+
+    // Nothing sealed: there is nothing secret in "I am at epoch N".
+    const envelope = JSON.parse(new TextDecoder().decode(base64ToBytes(wire)))
+    expect(envelope.n).toBeUndefined()
+    expect(envelope.c).toBeUndefined()
   })
 
   it('uses a fresh nonce for every signal', async () => {

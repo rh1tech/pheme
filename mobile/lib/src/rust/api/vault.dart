@@ -12,18 +12,34 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Future<Uint8List> randomBytes({required BigInt length}) =>
     RustLib.instance.api.crateApiVaultRandomBytes(length: length);
 
-/// Seals the state blob. The nonce is 12 random bytes and is prepended to the ciphertext, so the
-/// caller stores one opaque blob and never has to keep the two in step.
+/// Seals a blob. The nonce is 12 random bytes and is prepended to the ciphertext, so the caller stores
+/// one opaque thing and never has to keep the two in step.
+///
+/// `domain` says WHAT is being sealed, and is bound in as additional authenticated data. It is not
+/// decoration: two different things are sealed under this one key — the MLS key store, and the cache of
+/// decrypted message bodies — and without a domain they would be cryptographically interchangeable.
+/// Anyone able to write into the app's private container could swap a body cache in where the key store
+/// belongs and it would open cleanly, handing arbitrary attacker-chosen bytes to `Client::import_state`.
+/// With the domain bound in, a blob sealed for one purpose simply fails to open as the other.
 Future<Uint8List> vaultSeal({
+  required String domain,
   required List<int> key,
   required List<int> plaintext,
-}) =>
-    RustLib.instance.api.crateApiVaultVaultSeal(key: key, plaintext: plaintext);
+}) => RustLib.instance.api.crateApiVaultVaultSeal(
+  domain: domain,
+  key: key,
+  plaintext: plaintext,
+);
 
-/// Opens a sealed state blob. Fails on a wrong key or a truncated file, which is what a corrupted
-/// or half-written state looks like — and the caller must treat that as "no local keys", not as a
-/// crash.
+/// Opens a sealed blob. Fails on a wrong key, a truncated file, or a blob sealed for a DIFFERENT
+/// domain — and the caller must treat all three as "not there", not as a crash: a corrupted or
+/// half-written state is not something a retry fixes.
 Future<Uint8List> vaultOpen({
+  required String domain,
   required List<int> key,
   required List<int> sealed,
-}) => RustLib.instance.api.crateApiVaultVaultOpen(key: key, sealed: sealed);
+}) => RustLib.instance.api.crateApiVaultVaultOpen(
+  domain: domain,
+  key: key,
+  sealed: sealed,
+);

@@ -31,6 +31,10 @@ class ChatCache {
 
   static const _dataKeyKey =
       'pheme.mlsDataKey'; // the same key that seals the MLS state
+
+  /// Its OWN domain, bound into the seal. The key store and this cache share a key, so without it a
+  /// body cache would open cleanly in the key store's place — handing arbitrary bytes to import_state.
+  static const _domain = 'pheme.chat.bodies.v1';
   static const _iosOptions = IOSOptions(
     accessibility: KeychainAccessibility.first_unlock,
   );
@@ -77,6 +81,7 @@ class ChatCache {
     if (await file.exists() && key != null) {
       try {
         final opened = await vaultOpen(
+          domain: _domain,
           key: key,
           sealed: await file.readAsBytes(),
         );
@@ -121,6 +126,7 @@ class ChatCache {
     if (key == null) return; // no identity yet; nothing to protect it with
 
     final sealed = await vaultSeal(
+      domain: _domain,
       key: key,
       plaintext: Uint8List.fromList(utf8.encode(jsonEncode(bodies))),
     );

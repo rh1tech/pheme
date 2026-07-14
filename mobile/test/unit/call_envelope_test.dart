@@ -115,6 +115,54 @@ void main() {
     });
   });
 
+  // The one wire path the vector above does not touch, and the one the two implementations' own
+  // comments single out as load-bearing: the only signal ever sent in the clear.
+  //
+  // A device that is AHEAD of the sender cannot derive the sender's key at all — MLS exports only from
+  // the current epoch — so it cannot reply in a sealed envelope to say so. This control is that reply.
+  // If the two clients disagree about a single byte of it, the two ends of a call that fell out of step
+  // can never tell each other, and the call rings out with no way to say why.
+  group('the epoch-mismatch control (the only cleartext signal)', () {
+    const control = CallHeader(
+      callId: 'b0a1c2d3-e4f5-4607-8899-aabbccddeeff',
+      epoch: 9,
+      from: 'user-2:device-2',
+      seq: 1,
+      control: epochMismatch,
+    );
+
+    /// What web/src/lib/callEnvelope.ts produces for this header.
+    const aad =
+        '[1,"b0a1c2d3-e4f5-4607-8899-aabbccddeeff",9,"user-2:device-2",1,"epoch-mismatch"]';
+    const envelope =
+        '{"h":{"v":1,"callId":"b0a1c2d3-e4f5-4607-8899-aabbccddeeff","epoch":9,'
+        '"from":"user-2:device-2","seq":1,"control":"epoch-mismatch"}}';
+
+    test('binds the control into the AAD exactly as the web does', () {
+      expect(utf8.decode(headerAad(control)), aad);
+    });
+
+    test('serialises the cleartext envelope byte-for-byte as the web does', () {
+      expect(utf8.decode(sealControl(control)), envelope);
+    });
+
+    test('round-trips back through openHeader', () {
+      final read = openHeader(sealControl(control));
+      expect(read?.control, epochMismatch);
+      expect(read?.epoch, 9);
+      expect(read?.from, 'user-2:device-2');
+    });
+
+    test(
+      'carries no sealed body — there is nothing secret in "I am at epoch N"',
+      () {
+        final json = jsonDecode(utf8.decode(sealControl(control))) as Map;
+        expect(json.containsKey('n'), isFalse);
+        expect(json.containsKey('c'), isFalse);
+      },
+    );
+  });
+
   group('nonce', () {
     test('is 12 bytes and never repeats', () {
       // Not a counter, and this is not a style preference: every device in the conversation can derive

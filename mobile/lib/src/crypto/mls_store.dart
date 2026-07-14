@@ -32,6 +32,11 @@ class MlsStore {
   static const _stateFile = 'mls.state';
   static const _keyLength = 32;
 
+  /// Bound into the seal as additional data, so a blob sealed for something else — the chat body
+  /// cache, which uses the same key — cannot be substituted for the key store and opened as if it
+  /// belonged here.
+  static const _domain = 'pheme.mls.state.v1';
+
   /// Readable once the user has unlocked the device at least since boot — not "while unlocked". An
   /// incoming call has to be answerable from the lock screen.
   static const _iosOptions = IOSOptions(
@@ -62,7 +67,11 @@ class MlsStore {
     if (key == null) return null;
 
     try {
-      return await vaultOpen(key: key, sealed: await file.readAsBytes());
+      return await vaultOpen(
+        domain: _domain,
+        key: key,
+        sealed: await file.readAsBytes(),
+      );
     } on Object {
       return null;
     }
@@ -75,7 +84,7 @@ class MlsStore {
   /// group on this device gone.
   Future<void> writeState(Uint8List state) async {
     final key = await _dataKey() ?? await _mintDataKey();
-    final sealed = await vaultSeal(key: key, plaintext: state);
+    final sealed = await vaultSeal(domain: _domain, key: key, plaintext: state);
 
     final file = await _stateFileHandle();
     final temp = File('${file.path}.tmp');

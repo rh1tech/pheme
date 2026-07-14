@@ -190,23 +190,44 @@ class CallEngine {
   }
 
   /// Common setup: hold the group still, pin the key, start reading the mailbox.
+  ///
+  /// The whole thing is guarded, and that guard is not defensive padding. The group freeze is a
+  /// REFCOUNT held for the life of the call, and it is released in exactly one place: end(). But a
+  /// call that fails to start never becomes a call — the engine is discarded before anyone can hold a
+  /// reference to it, so nothing ever calls end() on it, so the refcount is never given back.
+  ///
+  /// And the freeze is not scoped to this conversation. It gates reconcileDevices for EVERY
+  /// conversation in the session. So one failed call setup — the device is offline, it is not in the
+  /// group yet, the catch-up times out — would permanently stop the app from admitting anybody's new
+  /// device, anywhere, until it was restarted. Nothing would say so; chats would simply stop letting
+  /// new devices in.
   Future<void> _start() async {
     // Hold the group's membership still for the duration. Admitting somebody's newly signed-in device
     // is a Commit, a Commit moves the MLS epoch, and the epoch is what our key is derived from — so
     // reconciling mid-call would pull the key out from under a conversation two people are having. It
     // can wait thirty seconds.
-    _releaseGroup = _mls.freezeGroupForCall();
+    final release = _mls.freezeGroupForCall();
+    _releaseGroup = release;
 
-    // Be at the group's CURRENT epoch before deriving anything, and only then hold it still.
-    //
-    // The exporter exports from the current epoch and no other. A device that is behind — the other
-    // person's phone joined the group yesterday and this one has had no reason to notice — would seal
-    // its invite under an epoch its peer has already moved past, and the peer cannot go back to it.
-    // The invite arrives, cannot be opened, and is dropped without a sound: the phone buzzes from the
-    // push, which no key protects, and then nothing rings.
-    await _mls.catchUpToLatest(conversationId, _userId);
+    try {
+      // Be at the group's CURRENT epoch before deriving anything, and only then hold it still.
+      //
+      // The exporter exports from the current epoch and no other. A device that is behind — the other
+      // person's phone joined the group yesterday and this one has had no reason to notice — would seal
+      // its invite under an epoch its peer has already moved past, and the peer cannot go back to it.
+      // The invite arrives, cannot be opened, and is dropped without a sound: the phone buzzes from the
+      // push, which no key protects, and then nothing rings.
+      await _mls.catchUpToLatest(conversationId, _userId);
 
-    await _deriveKeys();
+      await _deriveKeys();
+    } on Object {
+      // Give the freeze back before the engine is thrown away. Releasing is idempotent, so end() doing
+      // it again later is harmless.
+      release();
+      _releaseGroup = null;
+      rethrow;
+    }
+
     _startPolling();
 
     _ringTimer = Timer(ringTimeout, () {
@@ -496,6 +517,12 @@ class CallEngine {
         final sdp = body.sdp;
         if (pc == null || sdp == null) return;
         if (await pc.getRemoteDescription() != null) return;
+
+        // That await is a gap the call can end across — the user hangs up, the ring times out. end()
+        // closes the peer connection and nulls it, but the local `pc` above still points at the closed
+        // one, and setting a description on it throws into a swallowed catch: the answer is lost with
+        // no retry, and a real call hangs. Re-check before touching it.
+        if (_status == CallStatus.ended || _pc != pc) return;
 
         _setStatus(CallStatus.connecting);
         await pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
