@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
+	"github.com/rh1tech/pheme/api/internal/calls"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/live"
@@ -33,6 +34,9 @@ type Handler struct {
 	// ICE configures 1:1 calling. Zero value disables it: the call endpoints refuse
 	// rather than pretend.
 	ICE ICEConfig
+	// Mailbox is the short-lived, ordered channel a call's signals pass through, and the
+	// lock that decides which of a person's devices answered. Nil disables calling.
+	Mailbox calls.Mailbox
 	// Limiter may be nil (tests). It guards the endpoints where a caller can generate
 	// work or credentials for free — call signalling and TURN credential minting.
 	Limiter ratelimit.Limiter
@@ -81,9 +85,13 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/conversations/{id}/mls", h.getMLSGroup)
 	mux.HandleFunc("GET /v1/conversations/{id}/mls/commits", h.listMLSCommits)
 	mux.HandleFunc("POST /v1/conversations/{id}/mls/commit", h.postMLSCommit)
-	// 1:1 voice calls. The server relays a few kilobytes of signalling and hands out ICE
-	// credentials; the media itself is peer to peer and never comes near us.
+	// 1:1 voice calls. The server relays a few kilobytes of sealed signalling and hands out
+	// ICE credentials; the media itself is peer to peer and never comes near us, and nothing
+	// about a call is ever written to the database.
 	mux.HandleFunc("GET /v1/calls/ice-servers", h.iceServers)
+	mux.HandleFunc("POST /v1/conversations/{id}/calls/{callId}/signal", h.postCallSignal)
+	mux.HandleFunc("GET /v1/conversations/{id}/calls/{callId}/signals", h.getCallSignals)
+	mux.HandleFunc("POST /v1/conversations/{id}/calls/{callId}/accept", h.postCallAccept)
 	mux.HandleFunc("PUT /v1/mls/key-backup", h.putKeyBackup)
 	mux.HandleFunc("GET /v1/mls/key-backup", h.getKeyBackup)
 }

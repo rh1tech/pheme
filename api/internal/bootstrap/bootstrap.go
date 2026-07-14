@@ -14,6 +14,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/broker"
+	"github.com/rh1tech/pheme/api/internal/calls"
 	"github.com/rh1tech/pheme/api/internal/config"
 	mailer "github.com/rh1tech/pheme/api/internal/email"
 	"github.com/rh1tech/pheme/api/internal/live"
@@ -127,6 +128,24 @@ func (b *Builder) Live() (live.Bus, error) {
 		return live.NewMemoryBus(), nil
 	default:
 		return nil, fmt.Errorf("unknown live driver %q", b.cfg.LiveDriver)
+	}
+}
+
+// CallMailbox builds the short-lived store behind a voice call: its signalling channel and
+// the lock that decides which of a person's devices answered.
+//
+// It follows the live bus: Redis in production, in-process otherwise. The Redis one is not
+// an optimisation — the browser placing the call and the browser answering it may be talking
+// to two different App API instances, and they must not each believe they won the race to
+// answer. Nothing here is durable; it all expires in two minutes.
+func (b *Builder) CallMailbox() calls.Mailbox {
+	switch b.cfg.LiveDriver {
+	case "redis":
+		b.logger.Info("call mailbox: redis")
+		return calls.NewRedis(b.redisClient(), "pheme:call")
+	default:
+		b.logger.Info("call mailbox: in-memory")
+		return calls.NewMemory()
 	}
 }
 

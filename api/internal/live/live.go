@@ -40,6 +40,25 @@ type Event struct {
 	// is an authorisation list, and no subscriber has any business seeing who else is on
 	// it.
 	Recipients []string `json:"recipients,omitempty"`
+
+	// CallSignal is a NUDGE for a 1:1 voice call: "call X now has a signal N". It is
+	// deliberately not the signal.
+	//
+	// This bus is allowed to drop events, and a dropped SDP answer is a call that silently
+	// never connects. So the signal itself lives in a short-lived ordered mailbox
+	// (internal/calls) and the client fetches it from there; losing this event costs a few
+	// hundred milliseconds, not the call. It also means a browser whose EventSource was
+	// reconnecting misses nothing, which the bus alone has no answer for.
+	CallSignal *CallSignal `json:"callSignal,omitempty"`
+}
+
+// CallSignal tells a member's devices that a call has something new to fetch.
+type CallSignal struct {
+	CallID string `json:"callId"`
+	Seq    int    `json:"seq"`
+	// FromUserID lets a device tell a call it is receiving from one its own user placed on
+	// another device — the caller's other devices must not ring.
+	FromUserID string `json:"fromUserId"`
 }
 
 // Bus distributes live events to subscribers.

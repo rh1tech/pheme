@@ -101,6 +101,7 @@ func main() {
 			// The first rate limiter on the app service. Calling gives an authenticated
 			// user two ways to make the server work for free — relaying signals and minting
 			// TURN credentials — and neither should be unbounded.
+			Mailbox: b.CallMailbox(),
 			Limiter: b.Limiter(),
 			Logger:  logger,
 		},

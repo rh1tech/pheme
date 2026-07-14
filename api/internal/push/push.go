@@ -29,6 +29,41 @@ type ChatNotification struct {
 	ConversationID string
 	MessageID      string
 	SenderName     string
+	// Kind separates "you have a message" from "your phone is ringing". They are the same
+	// push transport but not the same event: a call is worth waking a device for and stops
+	// mattering in thirty seconds, whereas a message can wait and should not expire.
+	Kind Kind
+	// CallID is set on a call notification. It is what lets the service worker replace an
+	// earlier ring for the same call rather than stacking a second one, and what lets a
+	// cancelled call close its own notification instead of leaving a live-looking ring that
+	// deep-links into a call nobody is on any more.
+	CallID string
+}
+
+// Kind is what a chat push is telling the device about.
+type Kind string
+
+const (
+	// KindMessage is the default: somebody sent a message.
+	KindMessage Kind = ""
+	// KindCall means somebody is calling right now.
+	KindCall Kind = "call"
+	// KindCallCancel means a call that was ringing is over — cancelled, answered elsewhere,
+	// or missed. Without it a stale notification sits there looking live.
+	KindCallCancel Kind = "call-cancel"
+)
+
+// ttl is how long the push service should keep trying to deliver this.
+//
+// A call is worthless the moment it stops ringing: delivering it two minutes later shows the
+// user an incoming call that no longer exists. A message has no such deadline.
+func (n ChatNotification) ttl() int {
+	switch n.Kind {
+	case KindCall, KindCallCancel:
+		return 30
+	default:
+		return defaultTTL
+	}
 }
 
 // Sender delivers notifications to a set of devices and reports per-device
@@ -47,6 +82,10 @@ type notification struct {
 	Body  string
 	Image string
 	Data  map[string]string
+	// TTL is how long the push service should keep trying to deliver this, in seconds. A
+	// ringing call is worthless once it has stopped ringing — delivering it two minutes late
+	// shows somebody an incoming call that no longer exists.
+	TTL int
 }
 
 func messageNotification(publicBaseURL string, msg domain.Message) notification {
@@ -55,24 +94,42 @@ func messageNotification(publicBaseURL string, msg domain.Message) notification 
 		Body:  msg.Body,
 		Image: imageURL(publicBaseURL, msg),
 		Data:  notificationData(msg),
+		TTL:   defaultTTL,
 	}
 }
 
-// chatBody is the only text a chat push ever carries. It is a constant: the server
-// cannot read the message, and must not imply that it can.
-const chatBody = "New message"
+// The only text a chat push ever carries. All constants: the server cannot read a message
+// and cannot hear a call, and must not imply that it can.
+const (
+	chatBody       = "New message"
+	callBody       = "Incoming call"
+	missedCallBody = "Missed call"
+)
+
+// defaultTTL is how long a push that is not time-critical may sit in a queue.
+const defaultTTL = 60
 
 func chatNotificationPayload(n ChatNotification) notification {
 	title := n.SenderName
 	if title == "" {
 		title = "Pheme"
 	}
-	return notification{
-		Title: title,
-		Body:  chatBody,
-		// Enough to deep-link on tap; the client decrypts once it opens the chat.
-		Data: map[string]string{"conversationId": n.ConversationID, "messageId": n.MessageID},
+	body := chatBody
+	switch n.Kind {
+	case KindCall:
+		body = callBody
+	case KindCallCancel:
+		body = missedCallBody
 	}
+	// Enough to deep-link on tap; the client decrypts once it opens the chat. A call also
+	// carries its id, so the service worker can replace an earlier ring for the same call
+	// and close it again when the call ends.
+	data := map[string]string{"conversationId": n.ConversationID, "messageId": n.MessageID}
+	if n.Kind != KindMessage {
+		data["kind"] = string(n.Kind)
+		data["callId"] = n.CallID
+	}
+	return notification{Title: title, Body: body, Data: data, TTL: n.ttl()}
 }
 
 // imageURL returns the absolute URL of a message's first image, or "" when the

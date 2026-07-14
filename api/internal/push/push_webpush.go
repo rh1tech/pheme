@@ -69,7 +69,7 @@ func (s *WebPushSender) send(ctx context.Context, n notification, devices []doma
 			Subscriber:      s.subscriber,
 			VAPIDPublicKey:  s.vapidPublic,
 			VAPIDPrivateKey: s.vapidPrivate,
-			TTL:             60,
+			TTL:             n.TTL,
 			Urgency:         webpush.UrgencyHigh,
 		})
 		if err != nil {
