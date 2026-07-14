@@ -147,6 +147,24 @@ impl MlsClient {
         self.inner.epoch(group_id).map_err(js)
     }
 
+    /// Derives a secret from the group for a purpose outside MLS's own messaging — Pheme
+    /// uses it to key voice-call signalling, so the server cannot read the SDP and
+    /// therefore cannot swap the DTLS fingerprint inside it.
+    ///
+    /// A pure read: it mutates neither the group nor the stored state, so unlike an MLS
+    /// application message it can be called freely without churning the ratchet or the
+    /// key store. It exports from the CURRENT EPOCH — see the crate docs.
+    #[wasm_bindgen(js_name = exportSecret)]
+    pub fn export_secret(
+        &self,
+        group_id: &[u8],
+        label: &str,
+        context: &[u8],
+        length: usize,
+    ) -> Result<Vec<u8>, JsError> {
+        self.inner.export_secret(group_id, label, context, length).map_err(js)
+    }
+
     /// Every leaf's `userId:deviceId`, so the caller can spot member devices that are
     /// missing from the group and add exactly those.
     #[wasm_bindgen(js_name = memberIdentities)]

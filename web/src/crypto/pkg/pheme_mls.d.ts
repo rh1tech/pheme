@@ -52,6 +52,16 @@ export class MlsClient {
      */
     epoch(group_id: Uint8Array): bigint;
     /**
+     * Derives a secret from the group for a purpose outside MLS's own messaging — Pheme
+     * uses it to key voice-call signalling, so the server cannot read the SDP and
+     * therefore cannot swap the DTLS fingerprint inside it.
+     *
+     * A pure read: it mutates neither the group nor the stored state, so unlike an MLS
+     * application message it can be called freely without churning the ratchet or the
+     * key store. It exports from the CURRENT EPOCH — see the crate docs.
+     */
+    exportSecret(group_id: Uint8Array, label: string, context: Uint8Array, length: number): Uint8Array;
+    /**
      * The full client state to persist (IndexedDB).
      */
     exportState(): Uint8Array;
@@ -165,6 +175,7 @@ export interface InitOutput {
     readonly mlsclient_deleteGroup: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_encrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly mlsclient_epoch: (a: number, b: number, c: number) => [bigint, number, number];
+    readonly mlsclient_exportSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly mlsclient_exportState: (a: number) => [number, number, number, number];
     readonly mlsclient_fromState: (a: number, b: number) => [number, number, number];
     readonly mlsclient_hasGroup: (a: number, b: number, c: number) => number;

@@ -459,6 +459,50 @@ impl Client {
         Ok(())
     }
 
+    /// Derives a secret from the group, for a purpose OUTSIDE MLS's own messaging.
+    ///
+    /// This is RFC 9420's exporter. It gives every member of the group — and nobody else —
+    /// the same bytes for the same (label, context), without sending anything and without
+    /// touching the ratchet. Pheme uses it to key the signalling of a voice call: the SDP
+    /// carries the DTLS fingerprint that the media encryption is bound to, so encrypting
+    /// the SDP under a key the server does not have is exactly what stops the server
+    /// putting itself in the middle of a call. The safety number two people already compare
+    /// for chat therefore covers their calls too.
+    ///
+    /// Why this and not an ordinary MLS application message, which would also be private:
+    ///
+    ///   * MLS decryption is ONE-SHOT — the message key is deleted on use — and this
+    ///     client's state is shared across a browser's tabs behind a single lock. Whichever
+    ///     tab won the lock would consume the call offer, and the tab the user is actually
+    ///     looking at would fail to decrypt it. Chat papers over that with a plaintext
+    ///     cache; a ringing phone cannot.
+    ///   * An application message mutates the ratchet on encrypt AND decrypt, and every
+    ///     mutation serialises the whole key store to disk. Signalling is chatty.
+    ///
+    /// This call is a pure read: it mutates neither the group nor the storage.
+    ///
+    /// **It exports from the CURRENT EPOCH.** A membership change moves the epoch and
+    /// therefore the secret, so a caller must pin the epoch it derived at (send it, and
+    /// derive once at the start of a call rather than per message) — see the call layer.
+    ///
+    /// **It gives GROUP authenticity, not SENDER authenticity.** Any member device can
+    /// derive any other's key, so a group member could forge a signal attributed to another
+    /// member. Between two people that is meaningless — the forger is either you or the
+    /// person you are talking to. It would NOT be safe for group calls without also signing
+    /// the payload against `member_keys`.
+    pub fn export_secret(
+        &self,
+        group_id: &[u8],
+        label: &str,
+        context: &[u8],
+        length: usize,
+    ) -> Result<Vec<u8>, String> {
+        let group = self.load_group(group_id)?;
+        group
+            .export_secret(self.provider.crypto(), label, context, length)
+            .map_err(err("export secret"))
+    }
+
     /// The signature public keys of every member of a group, sorted.
     ///
     /// These come from the group's own ratchet tree — the state MLS itself
@@ -1094,6 +1138,127 @@ mod tests {
         // Still a healthy two-member group.
         let ct = alice.encrypt(GID, b"intact").unwrap();
         assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"intact"[..]));
+    }
+
+    // The exporter is what makes a voice call end-to-end encrypted: every member device
+    // derives the SAME bytes for the same call, without anything being sent, so the server
+    // never sees the key that protects the SDP — and therefore cannot swap the DTLS
+    // fingerprint inside it and put itself in the middle of the call.
+    #[test]
+    fn every_device_of_every_member_derives_the_same_call_key() {
+        let alice = Client::new("alice", "laptop").unwrap();
+        let bob_phone = Client::new("bob", "phone").unwrap();
+        let bob_desktop = Client::new("bob", "desktop").unwrap();
+        establish(&alice, GID, &[&bob_phone, &bob_desktop]);
+
+        let call = b"call-abc";
+        let from_alice = alice.export_secret(GID, "pheme-call-v1", call, 32).unwrap();
+        let from_phone = bob_phone.export_secret(GID, "pheme-call-v1", call, 32).unwrap();
+        let from_desktop = bob_desktop.export_secret(GID, "pheme-call-v1", call, 32).unwrap();
+
+        assert_eq!(from_alice.len(), 32);
+        assert_eq!(from_alice, from_phone);
+        assert_eq!(
+            from_alice, from_desktop,
+            "every device in the group must derive the same call key, or the device that \
+             answers cannot decrypt the offer",
+        );
+    }
+
+    // Each SENDING device gets its own key, by putting its identity in the context.
+    //
+    // That is not decoration. All of a person's devices could otherwise encrypt under one
+    // key with independently chosen nonces, and an AES-GCM nonce collision between two of
+    // them is catastrophic — it leaks the authentication key. Separating the keys removes
+    // the possibility rather than relying on 96 random bits not repeating.
+    #[test]
+    fn each_sending_device_derives_a_distinct_key() {
+        let alice = Client::new("alice", "laptop").unwrap();
+        let bob_phone = Client::new("bob", "phone").unwrap();
+        let bob_desktop = Client::new("bob", "desktop").unwrap();
+        establish(&alice, GID, &[&bob_phone, &bob_desktop]);
+
+        let phone_key = alice.export_secret(GID, "pheme-call-v1", b"call-1|bob:phone", 32).unwrap();
+        let desktop_key = alice.export_secret(GID, "pheme-call-v1", b"call-1|bob:desktop", 32).unwrap();
+        assert_ne!(phone_key, desktop_key);
+
+        // And any member can derive the key of any sender, which is how they decrypt it.
+        assert_eq!(
+            phone_key,
+            bob_desktop.export_secret(GID, "pheme-call-v1", b"call-1|bob:phone", 32).unwrap(),
+            "a member must be able to derive another device's key in order to read it",
+        );
+    }
+
+    // A different call gets a different key, so signals from an old call cannot be replayed
+    // into a new one even by a server that kept them.
+    #[test]
+    fn a_different_call_derives_a_different_key() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let one = alice.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap();
+        let two = alice.export_secret(GID, "pheme-call-v1", b"call-2", 32).unwrap();
+        assert_ne!(one, two);
+    }
+
+    // An outsider cannot derive the call key — they do not have the group at all. This is
+    // the property that keeps the SERVER out of the call: it relays the signalling and
+    // cannot read a byte of it.
+    #[test]
+    fn an_outsider_cannot_derive_the_call_key() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        let mallory = Client::new("mallory", "dev-m").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        assert!(mallory.export_secret(GID, "pheme-call-v1", b"call-1", 32).is_err());
+    }
+
+    // The exporter is bound to the CURRENT epoch, so a membership change moves it. The call
+    // layer must therefore pin the epoch it derived at and derive once per call, not per
+    // message — this test is the reason that rule exists.
+    #[test]
+    fn the_call_key_changes_when_the_epoch_does() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let before = alice.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap();
+
+        // Somebody signs in on a new device: a Commit, and a new epoch.
+        let carol = Client::new("carol", "dev-c").unwrap();
+        let add = alice.stage_add(GID, &[carol.key_package().unwrap()]).unwrap();
+        alice.commit_accepted(GID).unwrap();
+        bob.apply_commit(GID, &add.commit).unwrap();
+
+        let after = alice.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap();
+        assert_ne!(
+            before, after,
+            "the exporter is per-epoch; a caller that re-derives mid-call would desync",
+        );
+        // And both members still agree with each other at the new epoch.
+        assert_eq!(after, bob.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap());
+    }
+
+    // Deriving must not disturb the group: it is a read. If it consumed or advanced
+    // anything, placing a call would corrupt the chat.
+    #[test]
+    fn exporting_does_not_touch_the_group() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let epoch_before = alice.epoch(GID).unwrap();
+        for _ in 0..5 {
+            alice.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap();
+        }
+        assert_eq!(alice.epoch(GID).unwrap(), epoch_before);
+
+        // Chat still works in both directions afterwards.
+        let ct = alice.encrypt(GID, b"still fine").unwrap();
+        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"still fine"[..]));
     }
 
     #[test]

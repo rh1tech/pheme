@@ -265,6 +265,35 @@ export class MlsClient {
         return BigInt.asUintN(64, ret[0]);
     }
     /**
+     * Derives a secret from the group for a purpose outside MLS's own messaging — Pheme
+     * uses it to key voice-call signalling, so the server cannot read the SDP and
+     * therefore cannot swap the DTLS fingerprint inside it.
+     *
+     * A pure read: it mutates neither the group nor the stored state, so unlike an MLS
+     * application message it can be called freely without churning the ratchet or the
+     * key store. It exports from the CURRENT EPOCH — see the crate docs.
+     * @param {Uint8Array} group_id
+     * @param {string} label
+     * @param {Uint8Array} context
+     * @param {number} length
+     * @returns {Uint8Array}
+     */
+    exportSecret(group_id, label, context, length) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(label, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray8ToWasm0(context, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_exportSecret(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, length);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v4;
+    }
+    /**
      * The full client state to persist (IndexedDB).
      * @returns {Uint8Array}
      */

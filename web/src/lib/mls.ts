@@ -617,6 +617,33 @@ class Session {
   }
 
   /**
+   * Derives a secret from the group for something outside MLS's own messaging, together
+   * with the epoch it came from.
+   *
+   * The epoch comes back with it because the exporter is per-epoch and the caller MUST pin
+   * it. Both are read under the same lock, so the pair is always consistent — read
+   * separately, a Commit landing in between would hand back a key from one epoch labelled
+   * with another, and the two ends of a call would talk past each other.
+   *
+   * Returns null when this device does not hold the group.
+   */
+  async exportSecret(
+    groupId: string,
+    label: string,
+    context: Uint8Array,
+    length: number,
+  ): Promise<{ secret: Uint8Array; epoch: number } | null> {
+    return this.exclusive(async () => {
+      const bytes = groupBytes(groupId)
+      if (!this.client.hasGroup(bytes)) return null
+      // A pure read: no ratchet mutation, so nothing to persist. That is the whole reason
+      // signalling uses this rather than MLS application messages.
+      const secret = this.client.exportSecret(bytes, label, context, length)
+      return { secret, epoch: this.epochUnlocked(groupId) }
+    })
+  }
+
+  /**
    * The safety number for a conversation: the digits two people compare, out of band, to
    * prove no one is in the middle. Computed from the group's own ratchet tree, so a
    * KeyPackage the server swapped in shows up as a different number.
@@ -780,6 +807,15 @@ async function reconcileDevices(
   conversationId: string,
   groupId: string,
 ): Promise<void> {
+  // Not while a call is up. Every add and every prune here is a Commit, a Commit moves the
+  // epoch, and the epoch is what the call's encryption key is derived from — so reconciling
+  // mid-call would pull the key out from under a conversation two people are having right
+  // now, to admit a device that can perfectly well wait thirty seconds.
+  //
+  // Nothing is lost by deferring: the device that wants in has announced itself, and the
+  // next time anyone opens the chat — including the moment this call ends — it is admitted.
+  if (callsInProgress > 0) return
+
   // Leaves we would prune but are not allowed to (we are not an admin). Remembered so the
   // loop does not keep retrying the same refusal instead of getting on with the adds.
   const pruned: string[] = []
@@ -1033,6 +1069,98 @@ export async function removeGroupMember(
     }
   }
   await api.removeConversationMember(conversationId, memberUserId)
+}
+
+// --- call keys ------------------------------------------------------------
+//
+// A voice call's media is encrypted by WebRTC itself (DTLS-SRTP), but the key exchange for
+// that is authenticated by a fingerprint carried in the SDP — and the SDP goes through our
+// server. A server that could rewrite the fingerprint could put itself in the middle of the
+// call and listen to all of it.
+//
+// So the SDP is encrypted under a key derived from the conversation's MLS group, which the
+// server does not have. That makes a call exactly as private as the chat it is placed from,
+// and the safety number two people already compare covers both.
+
+/** The exporter label. Changing it changes every derived key, so it is versioned. */
+const CALL_LABEL = 'pheme-call-v1'
+
+/**
+ * The key a given DEVICE encrypts its call signalling with, plus the epoch it was derived
+ * at. Returns null when this device does not hold the conversation's group.
+ *
+ * Keyed per sending device, not per call: all of a person's devices would otherwise encrypt
+ * under one key with independently chosen nonces, and an AES-GCM nonce collision between
+ * two of them leaks the authentication key. This removes the possibility rather than
+ * trusting 96 random bits not to repeat.
+ *
+ * Every member device can derive any sender's key — that is how they decrypt it — so this
+ * gives GROUP authenticity, not SENDER authenticity. Between two people that is meaningless
+ * (a forger could only be you or the person you are talking to). It would not be sound for
+ * group calls without also signing the payload.
+ */
+export async function callKeyFor(
+  conversationId: string,
+  myUserId: string,
+  callId: string,
+  senderIdentity: string,
+): Promise<{ secret: Uint8Array; epoch: number } | null> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId) return null
+  const context = new TextEncoder().encode(`${callId}|${senderIdentity}`)
+  return session.exportSecret(state.groupId, CALL_LABEL, context, 32)
+}
+
+/** This device's MLS identity (`userId:deviceId`) — who a call signal is from. */
+export async function myIdentity(myUserId: string): Promise<string> {
+  return (await mlsSession(myUserId)).identity
+}
+
+/**
+ * Brings this device up to `epoch` so it can derive a call key that was minted there.
+ *
+ * The exporter only ever exports from the CURRENT epoch, so two devices at different epochs
+ * derive different keys and cannot talk. A device that is behind can catch up — that is what
+ * this does. A device that is AHEAD cannot go back, and must tell the caller so instead.
+ *
+ * Returns the epoch this device ended up at.
+ */
+export async function catchUpToEpoch(
+  conversationId: string,
+  myUserId: string,
+  epoch: number,
+): Promise<number> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId) return 0
+  const current = await session.epoch(state.groupId)
+  if (current >= epoch) return current
+  await catchUp(session, conversationId, state.groupId)
+  return session.epoch(state.groupId)
+}
+
+/**
+ * Holds the group's membership still for the duration of a call.
+ *
+ * Reconciliation adds a member's newly signed-in device to the group, which is a Commit, and
+ * a Commit moves the epoch — which moves the call key underneath a call that is already
+ * ringing. The change is not urgent: the new device waits a few seconds and is admitted the
+ * moment the call ends.
+ *
+ * A counter and not a boolean, because a second call can start before the first has finished
+ * tearing down, and the first one's cleanup must not unfreeze the second.
+ */
+let callsInProgress = 0
+
+export function freezeGroupForCall(): () => void {
+  callsInProgress++
+  let released = false
+  return () => {
+    if (released) return // a release must be idempotent; callers run it in finally blocks
+    released = true
+    callsInProgress = Math.max(0, callsInProgress - 1)
+  }
 }
 
 /** The safety number for a conversation, or '' before its group exists. */
