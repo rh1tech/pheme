@@ -41,6 +41,58 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      # Includes the call-signal golden vector, which is the same vector the Flutter
+      # client asserts. If the two ever disagree by a byte, calls between a phone and a
+      # browser stop connecting with nothing in any log to say why.
+      - run: npm test
+
+  crypto:
+    name: Crypto (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The MLS core, shared by the web (via WASM) and the phone (via FFI). It has tests
+      # and nothing was running them.
+      - run: cargo test --manifest-path crates/pheme-mls/Cargo.toml
+      # The Dart FFI facade over it, whose tests pin the invariants that fail silently:
+      # a device's state captured after minting its key package, decrypt-exactly-once,
+      # and a sender never being able to read its own message.
+      - run: cargo test --manifest-path mobile/rust/Cargo.toml
+
+      # The web's WASM bundle is built from the same crate and VENDORED into
+      # web/src/crypto/pkg/, so nothing in the web build would notice if a change to the
+      # crate broke the wasm target — it would keep using the committed bundle, and the
+      # break would surface the next time somebody ran wasm-pack, long after the change.
+      #
+      # This checks the target still compiles. It deliberately does NOT rebuild the bundle
+      # and diff it against the committed one: wasm-pack's output is not byte-reproducible
+      # across toolchain versions, so that job would fail for reasons that have nothing to
+      # do with the code, and a check that cries wolf is a check people learn to ignore.
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo check --manifest-path crates/pheme-mls/Cargo.toml --target wasm32-unknown-unknown
+
+  mobile:
+    name: Mobile (Flutter)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: mobile/pubspec.yaml
+          cache: true
+      - run: flutter pub get
+      - run: dart format --set-exit-if-changed lib test
+      - run: flutter analyze
+      # Includes the call-signal golden vector generated from the web client. It is pure
+      # Dart precisely so it runs here, with no NDK and no native library — a test that
+      # needs a compiled Rust lib would not run on this box, which means in practice it
+      # would not run at all.
+      - run: flutter test
 
   e2e:
     name: E2E (Playwright)

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!--
+		The network. A sandboxed Mac app has NO outbound network access without this — the app builds,
+		launches, and then silently cannot reach the API at all.
+	-->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- Voice calls: the microphone, and the WebRTC media path. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!--
+		flutter_secure_storage keeps the MLS data key here. Without the keychain group the key cannot be
+		written, so the encryption state cannot be sealed, and nothing decrypts.
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)tech.rh1.pheme.phemeMobile</string>
+	</array>
+</dict>
+</plist>

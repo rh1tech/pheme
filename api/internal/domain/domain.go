@@ -25,6 +25,12 @@ const (
 	PlatformIOS     Platform = "ios"
 	PlatformAndroid Platform = "android"
 	PlatformWeb     Platform = "web"
+	// PlatformMacOS is the desktop app. It registers a device like any other — the call answer-lock is
+	// keyed on a server-issued device id, so a Mac must have one or it cannot pick up a call — but it
+	// carries no push token of any kind. There is no PushKit on macOS, so it cannot be rung while it is
+	// closed; it hears about a call over the live stream, like the web does, which is the honest
+	// arrangement for a machine that is either open or off.
+	PlatformMacOS Platform = "macos"
 )
 
 // SubscriptionStatus is the lifecycle state of a channel subscription.

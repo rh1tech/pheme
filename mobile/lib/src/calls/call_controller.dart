@@ -108,12 +108,20 @@ class CallController extends Notifier<CallState?> {
     final engine = _engine;
     if (engine == null) return;
 
-    // The PUSH device id, issued by the server — not the MLS one. The answer lock is keyed on it, and
+    // The PUSH device id, issued by the server — NOT the MLS one. The answer lock is keyed on it, and
     // conflating the two is a bug this codebase has already had.
-    final deviceId = ref.read(deviceControllerProvider);
+    //
+    // ensureRegistered rather than a plain read, because a device can be signed in and ringing without
+    // ever having registered — the user declined notifications, or this is a Mac with no Firebase. It
+    // deliberately does not prompt: being asked for notification permission by a phone that is already
+    // ringing would be absurd, and declining would silently make the call unanswerable.
+    final deviceId = await ref
+        .read(deviceControllerProvider.notifier)
+        .ensureRegistered();
+
     if (deviceId == null) {
-      // With no registered device there is no way to claim the call, and answering anyway would leave
-      // every one of the user's devices believing it had won.
+      // Without an id there is no way to claim the call, and answering anyway would leave every one of
+      // the user's devices believing it had won.
       await engine.end(CallEndReason.failed, notifyPeer: true);
       return;
     }

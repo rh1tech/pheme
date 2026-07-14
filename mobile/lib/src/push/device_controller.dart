@@ -1,26 +1,61 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/providers.dart';
 
-/// Holds the locally-registered push device id (null until the user enables
-/// notifications). Seeded from persisted state at startup; [register] obtains
-/// an FCM token, registers the device with the App API and persists the id.
+/// This device's server-issued id.
+///
+/// Two things need it, and they are NOT the same thing, which is why registering a device and enabling
+/// push are now separate:
+///
+///   * PUSH. Needs a token, which needs Firebase and the user's permission. Optional: the app works
+///     without it, over the live stream.
+///   * THE CALL ANSWER-LOCK. Needs only the id. Every device the user is signed in on rings, and
+///     exactly one may pick up — the server decides which, keyed on this id.
+///
+/// They used to be one call, and the consequence was that a user who declined notifications, or a Mac
+/// with no Firebase, had no device id — and therefore could not ANSWER A CALL. The phone rang and the
+/// button did nothing. Registering now always happens; the push token is attached when there is one.
 class DeviceController extends Notifier<String?> {
   @override
   String? build() => ref.read(initialAppStateProvider).deviceId;
 
   bool get isRegistered => state != null;
 
-  /// Registers this device for push. Throws [PushUnavailableException] when
-  /// Firebase isn't configured or permission is denied; callers surface that.
+  /// Registers this device with the server, with a push token if we can get one and without if we
+  /// cannot. Returns the device id.
   Future<String> register() async {
     final existing = state;
     if (existing != null) return existing;
+
     final id = await ref
         .read(pushServiceProvider)
         .registerDevice(ref.read(repositoryProvider));
+
     await ref.read(settingsStoreProvider).saveDeviceId(id);
     state = id;
     return id;
   }
+
+  /// Makes sure this device has an id, without asking for notification permission.
+  ///
+  /// Called before a call can be answered. It must not prompt: being asked for notification permission
+  /// by a phone that is already ringing would be absurd, and declining it would silently make the call
+  /// unanswerable.
+  Future<String?> ensureRegistered() async {
+    final existing = state;
+    if (existing != null) return existing;
+
+    try {
+      return await register();
+    } on Object {
+      return null;
+    }
+  }
+
+  /// True where push can work at all. macOS has no FCM in this app and no PushKit anywhere, so a Mac
+  /// hears about a call over the live stream — which is the honest arrangement for a machine that is
+  /// either open or off.
+  bool get pushSupported => !Platform.isMacOS;
 }

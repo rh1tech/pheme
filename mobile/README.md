@@ -54,6 +54,70 @@ updates over SSE when Firebase isn't configured.
 The Android build already enables core-library desugaring and declares the
 `POST_NOTIFICATIONS` permission required by Android 13+.
 
+## Encryption (MLS)
+
+Chat and calls are end-to-end encrypted with MLS (RFC 9420). The client is **the same Rust crate the
+web app uses** — `crates/pheme-mls` — reached over FFI instead of WASM, so both clients run the same
+ratchet. `mobile/rust` is the flutter_rust_bridge facade over it.
+
+Building the app builds the crate, so you need a Rust toolchain:
+
+```bash
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android \
+                  aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
+cargo install cargo-ndk        # Android; the Gradle task shells out to it
+```
+
+To change the FFI surface, edit `mobile/rust/src/api/` and regenerate:
+
+```bash
+cargo install flutter_rust_bridge_codegen --version '^2'
+flutter_rust_bridge_codegen generate      # from mobile/
+```
+
+The generated Dart (`lib/src/rust/`) and Rust (`mobile/rust/src/frb_generated.rs`) are committed, so a
+plain `flutter build` needs no codegen step.
+
+> The Android build does **not** use cargokit, which flutter_rust_bridge scaffolds by default. Cargokit
+> calls `Project.exec()` and reads `android.applicationVariants`, both removed in Gradle 9 / AGP 9,
+> which this app is on. `rust_builder/android/build.gradle` runs `cargo-ndk` instead.
+
+## Calls
+
+1:1 voice, peer to peer (coturn relays only when the two ends cannot reach each other). Signalling is
+sealed under a key exported from the conversation's MLS group, so the server relays the SDP and cannot
+read it.
+
+**Ringing a device that is asleep needs server-side setup**, and without it calls only work while the
+app is in the foreground:
+
+- **Android** — a data-only high-priority FCM message. Works with the same `google-services.json` as
+  messages.
+- **iOS** — a PushKit VoIP push, which **FCM cannot send**: it is a different token, a different topic
+  (`<bundle>.voip`) and a different push type. The API talks to APNs directly. Set `PHEME_APNS_KEY_FILE`,
+  `PHEME_APNS_KEY_ID`, `PHEME_APNS_TEAM_ID`, `PHEME_APNS_BUNDLE_ID`, and `PHEME_APNS_PRODUCTION` to match
+  how the app was signed — a token minted against the sandbox is rejected by the production gateway with
+  `BadDeviceToken`, and vice versa, which is the most common reason a VoIP push silently never arrives.
+
+Without APNs configured, an incoming call on iOS arrives as a banner rather than a ringing call screen.
+
+## Platforms
+
+| | Chat | Calls | Push |
+|---|---|---|---|
+| Android | ✅ | ✅ ringing | FCM |
+| iOS | ✅ | ✅ ringing (CallKit) | FCM + APNs VoIP |
+| macOS | ✅ | ✅ while the app is open | none |
+
+macOS has no PushKit and no FCM here, so it cannot be rung while it is closed — it hears about a call
+over the live stream, like the web does. It still registers a device, because the call answer-lock is
+keyed on the server-issued device id: without one, the app rings and Answer does nothing.
+
+**macOS needs signing to build.** Its entitlements include Keychain Sharing, which
+`flutter_secure_storage` requires — without it, values *appear* to be written and never are, so the MLS
+data key silently never persists and nothing decrypts after a restart. Open `macos/Runner.xcworkspace`
+in Xcode once and set a development team.
+
 ## Develop
 
 ```bash
@@ -69,4 +133,5 @@ Before committing, all of these must pass clean:
 dart format --set-exit-if-changed lib test
 flutter analyze
 flutter test
+cargo test --manifest-path rust/Cargo.toml
 ```

@@ -183,36 +183,43 @@ class PushService {
     );
   }
 
-  /// Requests notification permission and registers this device's FCM token with
-  /// the App API, returning the server device id. Throws
-  /// [PushUnavailableException] if Firebase isn't configured.
+  /// Registers this device with the server and returns its id, attaching push tokens if we can get
+  /// them.
+  ///
+  /// It registers EVEN WITHOUT PUSH, and that is the point. The device id is not only a push address:
+  /// it is what the call answer-lock is keyed on. Every device the user is signed in on rings, and the
+  /// server decides which one may pick up — by this id. So a user who declined notifications, or a Mac
+  /// with no Firebase, still needs one, or their phone rings and the Answer button does nothing.
+  ///
+  /// It used to throw in all three of those cases.
   Future<String> registerDevice(PhemeRepository repo) async {
-    if (!_available) {
-      throw PushUnavailableException(
-        'Push notifications are not configured (missing google-services.json).',
-      );
+    String? fcmToken;
+    String? voipToken;
+
+    if (_available) {
+      final messaging = FirebaseMessaging.instance;
+      final settings = await messaging.requestPermission();
+
+      // A denial costs the user their notifications. It must not also cost them the ability to answer
+      // a call, so we carry on and register without a token.
+      if (settings.authorizationStatus != AuthorizationStatus.denied) {
+        fcmToken = await messaging.getToken();
+        if (fcmToken != null) {
+          // Handy for testing: paste this into Firebase Console → Cloud Messaging → "Send test
+          // message". Debug builds only.
+          debugPrint('Pheme FCM token: $fcmToken');
+        }
+      }
+
+      // The iOS PushKit token, which is NOT the FCM token — a different token for a different topic,
+      // and the only one that can ring a sleeping iPhone. Both are sent: FCM carries messages, PushKit
+      // carries calls. Null everywhere but iOS.
+      voipToken = await _voipToken();
     }
-    final messaging = FirebaseMessaging.instance;
-    final settings = await messaging.requestPermission();
-    if (settings.authorizationStatus == AuthorizationStatus.denied) {
-      throw PushUnavailableException('Notification permission was denied.');
-    }
-    final token = await messaging.getToken();
-    if (token == null) {
-      throw PushUnavailableException('Could not obtain an FCM token.');
-    }
-    // Handy for testing: paste this token into Firebase Console → Cloud
-    // Messaging → "Send test message". Logged only in debug builds.
-    debugPrint('Pheme FCM token: $token');
-    // The iOS PushKit token, which is NOT the FCM token — it is a different token for a different
-    // topic, and it is the only one that can ring a sleeping iPhone. Both are sent: FCM carries
-    // messages, PushKit carries calls. Empty on Android, where a data-only high-priority FCM message
-    // does the job.
-    final voipToken = await _voipToken();
 
     final device = await repo.createDevice(
       platform: _platform,
-      fcmToken: token,
+      fcmToken: fcmToken,
       voipToken: voipToken,
     );
     return device.id;
@@ -231,5 +238,15 @@ class PushService {
     }
   }
 
-  String get _platform => Platform.isIOS ? 'ios' : 'android';
+  /// What this device tells the server it is.
+  ///
+  /// This used to be `isIOS ? 'ios' : 'android'`, which reports ANDROID on a Mac — and that is not
+  /// merely untidy: the server routes a call to PushKit for an iOS device with a VoIP token, and
+  /// decides what a push may carry from the platform. A device lying about what it is gets the wrong
+  /// treatment for the rest of its life.
+  String get _platform {
+    if (Platform.isIOS) return 'ios';
+    if (Platform.isMacOS) return 'macos';
+    return 'android';
+  }
 }
