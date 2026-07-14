@@ -444,7 +444,11 @@ export function ConversationChatRoute() {
 
       setDraft('')
       setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
-      requestAnimationFrame(() => scrollToBottom('smooth'))
+      // Re-stick to the bottom now, before the bubble has laid out. Waiting a frame and then
+      // animating there raced the feed's own re-pin — the two fought over the same scrollTop —
+      // and left the new message parked under the keyboard often enough to look broken. Taking
+      // the position immediately means the feed simply holds it as the bubble grows into place.
+      scrollToBottom()
       textRef.current?.focus()
     } catch (e) {
       if (e instanceof PeerKeysMissingError) {

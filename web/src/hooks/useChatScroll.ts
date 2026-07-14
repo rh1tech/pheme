@@ -72,6 +72,13 @@ export function useChatScroll(resetKey: string, onReachBottom?: () => void): Cha
   // like a finger does, and without this the feed's own correction would read as
   // the reader scrolling away — instantly releasing the position it just took.
   const programmatic = useRef(false)
+  // How far the reader currently sits from the bottom, kept up to date as they scroll.
+  //
+  // It has to be recorded as it goes, because the moment it is needed it can no longer be
+  // measured: a ResizeObserver fires *after* layout, when the viewport has already shrunk and
+  // the old height is gone. Restoring this distance is what keeps the keyboard from covering
+  // whatever the reader was in the middle of reading.
+  const bottomDistance = useRef(0)
 
   const reachedBottom = useRef(onReachBottom)
   useEffect(() => {
@@ -186,12 +193,40 @@ export function useChatScroll(resetKey: string, onReachBottom?: () => void): Cha
     return () => observer.disconnect()
   }, [applyMode, setScrollTop])
 
+  // The VIEWPORT's height changes too, and for one reason that matters: the on-screen
+  // keyboard. It shrinks the shell, and with it the feed — but not the feed's *content*, so
+  // the observer above never hears about it. The reader is left looking at whatever the
+  // keyboard did not cover, which is not where they were.
+  //
+  // Nothing scrolled, so restoring the distance from the bottom puts them back: the last
+  // message stays on the last message, and a reader mid-backlog keeps the line they were on.
+  useEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+
+    let lastHeight = el.clientHeight
+    const observer = new ResizeObserver(() => {
+      const height = el.clientHeight
+      if (height === lastHeight) return // a width change (rotation, pane resize) moves nothing
+      lastHeight = height
+
+      if (mode.current.kind === 'free') {
+        setScrollTop(el.scrollHeight - height - bottomDistance.current)
+        return
+      }
+      applyMode()
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [applyMode, setScrollTop])
+
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
     const onScroll = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight
       const bottom = distance <= BOTTOM_EPSILON
+      bottomDistance.current = Math.max(0, distance)
       setAtBottom(bottom)
       // The reader's own scrolling always wins: reaching the bottom re-sticks,
       // moving away from it releases whatever the feed was holding. The feed's own

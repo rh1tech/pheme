@@ -320,6 +320,12 @@ export function ConversationRoute() {
   // has not streamed in by now, reload the newest page rather than leave the
   // sender staring at a feed that looks like it dropped their message.
   function onSent() {
+    // Sending is an unambiguous request to see the newest message — even from someone who had
+    // scrolled up into the backlog, and especially on a phone, where the keyboard is now
+    // covering the half of the feed the message just landed in. Re-stick to the bottom, and
+    // the feed will hold there as the bubble lays out.
+    scrollToBottom()
+
     window.setTimeout(() => {
       // Only reconcile the tail for a reader who is looking at it. Someone who has
       // jumped to a search hit must not be dragged back to the newest message.
