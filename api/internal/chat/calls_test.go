@@ -142,6 +142,63 @@ func TestCallSignalPublishesANudgeNotTheSignal(t *testing.T) {
 	_ = bobID
 }
 
+// A callee whose live stream is down when the invite is published never hears the call. The
+// invite is not lost — it sits in the mailbox for two minutes — but nothing looks at it again,
+// so the call rings out against a device that was sitting right there. The caller re-nudges
+// while it waits, and this is what that does.
+func TestReRingingRepublishesTheNudgeWithoutTouchingTheMailbox(t *testing.T) {
+	f := newFixture(t)
+	f.enableCalls()
+	aliceID, aliceToken := f.user(t, "alice-rering@pheme.test")
+	bobID, bobToken := f.user(t, "bob-rering@pheme.test")
+	conv := f.createDirect(t, aliceToken, bobID)
+
+	if code, _ := postSignal(t, f, aliceToken, conv, "call-r", []byte("the-invite"), true); code != http.StatusOK {
+		t.Fatalf("invite: got %d", code)
+	}
+
+	events, cancel := f.handler.Live.Subscribe()
+	defer cancel()
+
+	rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/calls/call-r/ring", aliceToken, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("re-ring: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	e := <-events
+	if e.CallSignal == nil || e.CallSignal.CallID != "call-r" {
+		t.Fatalf("re-ring must republish the nudge, got %+v", e.CallSignal)
+	}
+	if e.CallSignal.FromUserID != aliceID {
+		t.Fatalf("the nudge must still name the caller, so their own devices do not ring; got %q",
+			e.CallSignal.FromUserID)
+	}
+
+	// It points at the invite; it does not add to it. A re-ring that appended would grow the
+	// mailbox once every few seconds for as long as the phone rang, and the callee replays the
+	// whole mailbox on every nudge.
+	signals := getSignals(t, f, bobToken, conv, "call-r", 0)
+	if len(signals) != 1 {
+		t.Fatalf("mailbox has %d signals, want just the invite — a re-ring must not append",
+			len(signals))
+	}
+}
+
+// Ringing somebody is not something a stranger gets to do.
+func TestReRingingRequiresMembership(t *testing.T) {
+	f := newFixture(t)
+	f.enableCalls()
+	_, aliceToken := f.user(t, "alice-rering-auth@pheme.test")
+	bobID, _ := f.user(t, "bob-rering-auth@pheme.test")
+	_, malloryToken := f.user(t, "mallory-rering@pheme.test")
+	conv := f.createDirect(t, aliceToken, bobID)
+
+	rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/calls/call-x/ring", malloryToken, nil)
+	if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+		t.Fatalf("a non-member re-ringing a call: got %d, want it refused", rec.Code)
+	}
+}
+
 // Exactly one device may answer.
 //
 // Every device a person is signed in on rings, and the loser has already opened its

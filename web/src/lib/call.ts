@@ -75,6 +75,15 @@ const ICE_GATHER_TIMEOUT_MS = 2_000
 /** While a call is being set up, re-read the mailbox this often in case a nudge was dropped. */
 const POLL_MS = 400
 
+/**
+ * How often the caller re-points the callee at a still-unanswered invite.
+ *
+ * Three seconds gives a callee whose stream is reconnecting about a dozen chances to hear the
+ * call before it times out, and costs the server a dozen pub/sub messages — nothing, next to a
+ * call that rings out against a device that was awake the whole time.
+ */
+const RE_RING_MS = 3_000
+
 /** A fresh, unguessable call id. Random, so an old call's signals cannot be replayed into a new one. */
 function newCallId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16))
@@ -118,6 +127,7 @@ export class Call {
 
   private releaseGroup: (() => void) | null = null
   private pollTimer: ReturnType<typeof setInterval> | null = null
+  private reRingTimer: ReturnType<typeof setInterval> | null = null
   private ringTimer: ReturnType<typeof setTimeout> | null = null
   private draining = false
 
@@ -260,6 +270,37 @@ export class Call {
     await this.gatheringComplete(pc)
 
     await this.send({ kind: 'invite', sdp: pc.localDescription?.sdp ?? '' }, { ring: true })
+    this.startReRinging()
+  }
+
+  /**
+   * Keeps pointing the callee at the invite for as long as we are ringing.
+   *
+   * The invite is published exactly once, so a callee whose live stream is down at that moment
+   * — reconnecting, backgrounded, moving between cells — never hears it, and the call rings out
+   * against a phone that was sitting right there. The invite has not gone anywhere: it is in
+   * the mailbox for two minutes. Nothing was looking at it.
+   *
+   * So say it again, every few seconds, until they pick up or we give up. The callee refetches
+   * the whole mailbox on any nudge, so repeating it rings a device exactly once, and a device
+   * that comes back to life ten seconds in still rings.
+   */
+  private startReRinging(): void {
+    this.reRingTimer = setInterval(() => {
+      if (this.status !== 'calling') {
+        this.stopReRinging()
+        return
+      }
+      void api.callRing(this.conversationId, this.callId).catch(() => {
+        // Best effort by construction — the next tick tries again, and the ring timeout is
+        // what ultimately gives up.
+      })
+    }, RE_RING_MS)
+  }
+
+  private stopReRinging(): void {
+    if (this.reRingTimer) clearInterval(this.reRingTimer)
+    this.reRingTimer = null
   }
 
   /**
@@ -516,6 +557,7 @@ export class Call {
         case 'connected':
           this.setStatus('connected')
           this.stopPolling()
+          this.stopReRinging()
           if (this.ringTimer) clearTimeout(this.ringTimer)
           break
         case 'failed':
@@ -572,6 +614,7 @@ export class Call {
     if (notifyPeer) await this.send({ kind: 'hangup' }, { cancel: reason === 'unanswered' })
 
     this.stopPolling()
+    this.stopReRinging()
     if (this.ringTimer) clearTimeout(this.ringTimer)
     this.ringTimer = null
 

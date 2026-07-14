@@ -116,6 +116,54 @@ func (h *Handler) postCallSignal(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, signal)
 }
 
+// postCallRing re-nudges the other end while a call is still ringing.
+//
+// The invite is published once, and if the callee's live stream happens to be down at that
+// instant — reconnecting, backgrounded, moving between cells — the ring is simply missed. The
+// invite itself is not lost: it sits in the mailbox for two minutes. But nothing ever looked
+// at it again, so the call rang out against a device that would have answered.
+//
+// This re-publishes the nudge, and the nudge is all it does: no signal is appended and no push
+// is sent (the push already went out with the invite, and buzzing a phone every few seconds is
+// not ringing, it is harassment). The callee refetches the whole mailbox on any nudge, so a
+// repeat is idempotent — a device already ringing stays ringing exactly once.
+func (h *Handler) postCallRing(w http.ResponseWriter, r *http.Request) {
+	uid, convID, _, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	if h.Mailbox == nil {
+		httpx.Error(w, http.StatusServiceUnavailable, "calling is not configured on this server")
+		return
+	}
+	if h.Limiter != nil && !h.Limiter.Allow("call:"+uid) {
+		httpx.Error(w, http.StatusTooManyRequests, "slow down")
+		return
+	}
+	callID := r.PathValue("callId")
+	if callID == "" {
+		httpx.Error(w, http.StatusBadRequest, "callId is required")
+		return
+	}
+
+	recipients, err := h.memberIDs(r.Context(), convID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not load members")
+		return
+	}
+	to := make([]string, 0, len(recipients))
+	for id := range recipients {
+		to = append(to, id)
+	}
+
+	h.Live.Publish(live.Event{
+		ConversationID: convID,
+		Recipients:     to,
+		CallSignal:     &live.CallSignal{CallID: callID, FromUserID: uid},
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // getCallSignals returns everything the caller has not seen. This is the transport of
 // record; SSE is only the nudge that says to come and look.
 func (h *Handler) getCallSignals(w http.ResponseWriter, r *http.Request) {

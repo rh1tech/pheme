@@ -95,6 +95,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/conversations/{id}/calls/{callId}/signal", h.postCallSignal)
 	mux.HandleFunc("GET /v1/conversations/{id}/calls/{callId}/signals", h.getCallSignals)
 	mux.HandleFunc("POST /v1/conversations/{id}/calls/{callId}/accept", h.postCallAccept)
+	mux.HandleFunc("POST /v1/conversations/{id}/calls/{callId}/ring", h.postCallRing)
 	mux.HandleFunc("PUT /v1/mls/key-backup", h.putKeyBackup)
 	mux.HandleFunc("GET /v1/mls/key-backup", h.getKeyBackup)
 }

@@ -325,6 +325,20 @@ export const api = {
     ).then((r) => r.signals ?? []),
 
   /**
+   * Re-nudges the other end while the call is still ringing.
+   *
+   * The invite goes out once, and a callee whose live stream is momentarily down — mid
+   * reconnect, backgrounded, changing cells — simply misses it. The invite is still in the
+   * mailbox; nothing was looking. This asks the server to point at it again. No push: the
+   * phone was already buzzed by the invite.
+   */
+  callRing: (conversationId: string, callId: string) =>
+    request<void>(`/v1/conversations/${conversationId}/calls/${callId}/ring`, {
+      method: 'POST',
+      quiet: true,
+    }),
+
+  /**
    * Claims the call for THIS device. Resolves true if we answered it, false if another of
    * our devices got there first — an answer, not an error, and the reason it is decided by
    * the server rather than by a race over a bus that may drop the message.
@@ -631,9 +645,42 @@ export function imageUrl(id: string): string {
   return `${BASE}/v1/images/${id}`
 }
 
-/** Builds the SSE stream URL with the current access token as a query parameter. */
-export function streamUrl(): string | null {
+// A stream connection must last longer than the token that opened it is valid for,
+// and the token cannot be renewed in flight — EventSource cannot set headers, so the
+// token is baked into the URL at connect time. Refresh anything that would expire
+// mid-connection before opening, or the server would hang up on us almost at once.
+const STREAM_TOKEN_FLOOR_MS = 2 * 60 * 1000
+
+/** Seconds-since-epoch expiry of a JWT, or null if it has no readable `exp`. */
+function tokenExpiry(jwt: string): number | null {
+  const payload = jwt.split('.')[1]
+  if (!payload) return null
+  try {
+    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')))
+    return typeof claims.exp === 'number' ? claims.exp : null
+  } catch {
+    return null // not a JWT we can read; treat as opaque and let the server judge it
+  }
+}
+
+/**
+ * Builds the SSE stream URL, refreshing the access token first if it is expired or
+ * close enough to expiry that the connection would not outlive it.
+ *
+ * Returns null when there is no usable session.
+ */
+export async function streamUrl(): Promise<string | null> {
   const tokens = loadTokens()
   if (!tokens) return null
-  return `${BASE}/v1/stream?token=${encodeURIComponent(tokens.accessToken)}`
+
+  let access = tokens.accessToken
+  const exp = tokenExpiry(access)
+  if (exp === null || exp * 1000 - Date.now() < STREAM_TOKEN_FLOOR_MS) {
+    try {
+      access = await refresh(tokens)
+    } catch {
+      return null // refresh() has already cleared the session and signalled auth failure
+    }
+  }
+  return `${BASE}/v1/stream?token=${encodeURIComponent(access)}`
 }

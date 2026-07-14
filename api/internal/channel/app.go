@@ -589,6 +589,14 @@ func (h *AppHandler) getMessage(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, h.withCommentCounts(r.Context(), []domain.Message{msg})[0])
 }
 
+// streamHeartbeat is how often an idle stream emits a comment line. Without it an
+// idle connection is indistinguishable from a dead one: intermediaries (nginx,
+// Cloudflare, a carrier NAT) drop a silent connection after their own timeout, and
+// the client only finds out the next time it tries to receive an event — which for
+// a ringing call is far too late. A comment costs a handful of bytes and keeps the
+// path warm.
+const streamHeartbeat = 25 * time.Second
+
 // stream is a Server-Sent Events endpoint delivering live messages. It accepts
 // the access token via the "token" query parameter because EventSource cannot
 // set an Authorization header. Production may expose this as a WebSocket and fan
@@ -598,12 +606,19 @@ func (h *AppHandler) getMessage(w http.ResponseWriter, r *http.Request) {
 // forwarded, so a client only ever receives channels it is an active member of,
 // and a block (or removal) silences an already-open connection on the next event
 // rather than only on reconnect.
+//
+// The stream ends when the access token it was opened with expires. It has to: the
+// token is checked once, at connect, so a stream that outlived its token would be a
+// session that never ends — a signed-out user would keep receiving events until they
+// closed the tab. Ending it is safe because the client reconnects with a fresh token
+// (see useEventStream), and cheap because a reconnect is one request every 15 minutes.
 func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
-	uid, err := h.Tokens.Parse(r.URL.Query().Get("token"), auth.AccessToken)
+	claims, err := h.Tokens.ParseClaims(r.URL.Query().Get("token"), auth.AccessToken)
 	if err != nil {
 		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	uid := claims.Subject
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		httpx.Error(w, http.StatusInternalServerError, "streaming unsupported")
@@ -612,9 +627,22 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// Defeats nginx's proxy buffering, which would otherwise hold events back until
+	// its buffer filled — turning a live stream into a batched one.
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	events, cancel := h.Live.Subscribe()
 	defer cancel()
+
+	var expiry <-chan time.Time
+	if exp := claims.ExpiresAt; exp != nil {
+		t := time.NewTimer(time.Until(exp.Time))
+		defer t.Stop()
+		expiry = t.C
+	}
+
+	beat := time.NewTicker(streamHeartbeat)
+	defer beat.Stop()
 
 	fmt.Fprintf(w, ": connected\n\n")
 	flusher.Flush()
@@ -623,6 +651,11 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-expiry:
+			return
+		case <-beat.C:
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
 		case e, ok := <-events:
 			if !ok {
 				return

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/live"
 )
@@ -147,5 +148,50 @@ func TestBlockedUserLosesLiveStreamImmediately(t *testing.T) {
 	}
 	if ev.ChannelID != chB.ID || ev.Message.ID != b1.ID {
 		t.Fatalf("next event = (ch %s, msg %s), want channel B event (ch %s, msg %s)", ev.ChannelID, ev.Message.ID, chB.ID, b1.ID)
+	}
+}
+
+// A live stream must not outlive the token that opened it.
+//
+// The token is checked once, at connect, because EventSource cannot send an Authorization
+// header and the credential has to ride in the URL. A stream that then ran forever would be a
+// session that never ends — one that survives the access token expiring, and that a sign-out
+// on another device could not reach.
+//
+// The client's side of this is the interesting half: EventSource reconnects on a dropped
+// connection but NOT on an HTTP error status, and it always retries the same URL — so a client
+// that let the browser handle reconnection would replay a dead token, get a 401, and go silent
+// permanently. It reopens with a fresh token instead (see useEventStream).
+func TestStreamEndsWhenItsTokenExpires(t *testing.T) {
+	f := newAppFixture(t)
+	// A token that outlives the connect handshake and little else.
+	shortLived := auth.NewTokenManager("test-secret", 700*time.Millisecond, 24*time.Hour)
+	f.h.Tokens = shortLived
+
+	u := seedUser(t, f.store, "expiring-stream@pheme.test", domain.RoleUser)
+	token, _, err := shortLived.Issue(u.ID, string(domain.RoleUser))
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	srv := httptest.NewServer(f.mux)
+	defer srv.Close()
+
+	conn := openStream(t, srv.URL, token)
+	defer conn.close()
+
+	// The stream is open and idle. It must end on its own when the token behind it expires,
+	// rather than keep an authenticated channel alive on a credential that is no longer valid.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for conn.sc.Scan() { //nolint:revive // draining until the server hangs up is the assertion
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream outlived its access token; it must end so the client reconnects with a fresh one")
 	}
 }
