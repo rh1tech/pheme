@@ -43,6 +43,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
+
+# Rust: cargo output, and the .so files cargo-ndk stages for Gradle.
+/rust/target/
+/rust_builder/android/build/
 
 # Firebase (secrets — do not commit)
 android/app/google-services.json

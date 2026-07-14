@@ -8,9 +8,14 @@ import 'src/core/providers.dart';
 import 'src/core/settings_store.dart';
 import 'src/core/token_store.dart';
 import 'src/push/push_service.dart';
+import 'src/rust/frb_generated.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Loads the Rust MLS library. Everything encrypted goes through it, so a failure here is fatal
+  // rather than degraded: without it the app cannot read a single message.
+  await RustLib.init();
 
   // Load persisted state before the first frame so controllers seed
   // synchronously (auth identity, theme/locale, server URL, push device).

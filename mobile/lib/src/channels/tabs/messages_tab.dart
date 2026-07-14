@@ -107,10 +107,14 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
   }
 
   void _onLiveEvent(LiveEvent event) {
+    // The stream multiplexes channel broadcasts, chat messages and call nudges onto one event, so a
+    // channel tab has to check that this event is a channel message at all before reading it.
+    final message = event.message;
+    if (message == null) return;
     if (event.channelId != widget.channelId) return;
     if (_activeQuery.isNotEmpty) return;
-    if (_messages.any((m) => m.id == event.message.id)) return;
-    setState(() => _messages = [event.message, ..._messages]);
+    if (_messages.any((m) => m.id == message.id)) return;
+    setState(() => _messages = [message, ..._messages]);
   }
 
   @override

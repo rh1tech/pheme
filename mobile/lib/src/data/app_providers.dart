@@ -1,13 +1,23 @@
 import 'package:collection/collection.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/jwt.dart';
 import '../core/providers.dart';
+import '../core/token_store.dart';
 import '../live/sse_client.dart';
 import '../models/models.dart';
 
-/// Live message stream (SSE). Active only while authenticated; rebuilds when the
-/// base URL changes. Auto-disposes when no screen is listening.
-final liveEventsProvider = StreamProvider.autoDispose<LiveEvent>((ref) {
+/// Refresh the access token before opening the stream if it has less than this left. The server
+/// kills the stream when the token expires, so opening one with a nearly-dead token buys a
+/// connection that is about to be cut.
+const _streamTokenFloor = Duration(minutes: 2);
+
+/// The live event stream (SSE). Active only while authenticated; rebuilds when the base URL changes.
+///
+/// Deliberately NOT autoDispose, unlike everything else here: an incoming call has to ring whether
+/// or not a screen happens to be listening. If this stream only existed while some widget watched
+/// it, the phone would go quiet exactly when the app was idle.
+final liveEventsProvider = StreamProvider<LiveEvent>((ref) {
   final auth = ref.watch(authControllerProvider);
   if (!auth.isAuthenticated) return const Stream<LiveEvent>.empty();
 
@@ -15,11 +25,33 @@ final liveEventsProvider = StreamProvider.autoDispose<LiveEvent>((ref) {
     settingsControllerProvider.select((s) => s.baseUrl),
   );
   final tokenStore = ref.watch(tokenStoreProvider);
+  final repo = ref.watch(repositoryProvider);
 
-  final client = SseClient(
-    baseUrl: baseUrl,
-    getToken: () async => tokenStore.current?.accessToken,
-  );
+  Future<String?> freshToken() async {
+    final tokens = tokenStore.current;
+    if (tokens == null) return null;
+
+    final expiry = decodeExpiry(tokens.accessToken);
+    final soon = DateTime.now().toUtc().add(_streamTokenFloor);
+    if (expiry != null && expiry.isAfter(soon)) return tokens.accessToken;
+
+    try {
+      final refreshed = await repo.refreshSession(tokens.refreshToken);
+      await tokenStore.save(
+        Tokens(
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken,
+        ),
+      );
+      return refreshed.accessToken;
+    } on Object {
+      // Refresh failed — hand back what we have. The connection will be refused and the loop will
+      // back off and try again; if the session is truly gone, the next API call drops us to login.
+      return tokens.accessToken;
+    }
+  }
+
+  final client = SseClient(baseUrl: baseUrl, freshToken: freshToken);
   client.start();
   ref.onDispose(client.close);
   return client.events;

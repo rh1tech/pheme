@@ -1,0 +1,24 @@
+[package]
+name = "rust_lib_pheme_mobile"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Dart FFI facade over pheme-mls. The mobile counterpart of crates/pheme-mls/src/wasm.rs, which is the same crate's binding for the web."
+
+[lib]
+# cdylib -> Android .so; staticlib -> iOS/macOS .a; lib -> frb codegen and `cargo test`.
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+pheme-mls = { path = "../../crates/pheme-mls" }
+flutter_rust_bridge = "=2.12.0"
+anyhow = "1"
+parking_lot = "0.12"
+# The at-rest seal for the persisted state blob. Deliberately NOT pheme-mls's
+# backup::encrypt, which is Argon2id at 64 MiB — right for a passphrase, far too
+# slow for something rewritten on every message.
+aes-gcm = "0.10"
+getrandom = "0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

@@ -1,5 +1,7 @@
 // Domain models mirroring the Pheme App API responses (see web/src/lib/types.ts).
 
+import 'chat_models.dart' show ChatMessage;
+
 enum SubscriptionMode {
   open,
   approval;
@@ -462,15 +464,80 @@ class Device {
   );
 }
 
-/// Live event delivered over the SSE stream: `{channelId, message}`.
+/// A live event delivered over the SSE stream.
+///
+/// One event name (`message`) carries four different shapes, told apart by which fields are present
+/// — see `live.Event` in api/internal/live/live.go. Every field is therefore nullable, and nothing
+/// may assume the shape it happens to be interested in:
+///
+///   * a channel broadcast    `{channelId, message}`
+///   * a conversation message `{conversationId, chatMessage}`  (includes MLS control traffic)
+///   * a conversation deleted `{conversationId, conversationDeleted}`
+///   * a call nudge           `{conversationId, callSignal}`
+///
+/// This used to require `message` and throw on everything else, and `SseClient` swallowed the
+/// exception — so every chat message and every incoming call was silently dropped on the floor.
 class LiveEvent {
-  LiveEvent({required this.channelId, required this.message});
+  LiveEvent({
+    this.channelId,
+    this.message,
+    this.conversationId,
+    this.chatMessage,
+    this.conversationDeleted = false,
+    this.callSignal,
+  });
 
-  final String channelId;
-  final Message message;
+  final String? channelId;
+  final Message? message;
 
-  factory LiveEvent.fromJson(Map<String, dynamic> j) => LiveEvent(
-    channelId: j['channelId'] as String? ?? '',
-    message: Message.fromJson((j['message'] as Map).cast<String, dynamic>()),
+  final String? conversationId;
+  final ChatMessage? chatMessage;
+  final bool conversationDeleted;
+
+  /// A nudge, NOT the signal itself. The live bus is allowed to drop events for slow consumers, and
+  /// a dropped SDP answer is a call that never connects — so the signal of record lives in the
+  /// server's ordered mailbox and this only says "go read it".
+  final CallSignalNudge? callSignal;
+
+  factory LiveEvent.fromJson(Map<String, dynamic> j) {
+    final message = j['message'] as Map?;
+    final chatMessage = j['chatMessage'] as Map?;
+    final callSignal = j['callSignal'] as Map?;
+
+    return LiveEvent(
+      channelId: j['channelId'] as String?,
+      message: message == null
+          ? null
+          : Message.fromJson(message.cast<String, dynamic>()),
+      conversationId: j['conversationId'] as String?,
+      chatMessage: chatMessage == null
+          ? null
+          : ChatMessage.fromJson(chatMessage.cast<String, dynamic>()),
+      conversationDeleted: j['conversationDeleted'] as bool? ?? false,
+      callSignal: callSignal == null
+          ? null
+          : CallSignalNudge.fromJson(callSignal.cast<String, dynamic>()),
+    );
+  }
+}
+
+/// The `callSignal` field of a [LiveEvent]: which call moved, and how far.
+class CallSignalNudge {
+  CallSignalNudge({
+    required this.callId,
+    required this.seq,
+    required this.fromUserId,
+  });
+
+  final String callId;
+  final int seq;
+
+  /// The sending user. Our own other devices must not ring for our own call.
+  final String fromUserId;
+
+  factory CallSignalNudge.fromJson(Map<String, dynamic> j) => CallSignalNudge(
+    callId: j['callId'] as String? ?? '',
+    seq: (j['seq'] as num?)?.toInt() ?? 0,
+    fromUserId: j['fromUserId'] as String? ?? '',
   );
 }

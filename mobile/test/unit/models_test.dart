@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pheme_mobile/src/models/models.dart';
 
@@ -107,14 +109,57 @@ void main() {
   });
 
   group('LiveEvent.fromJson', () {
-    test('parses nested message', () {
+    test('parses a channel broadcast', () {
       final e = LiveEvent.fromJson({
         'channelId': 'c1',
         'message': {'id': 'm1', 'title': 'hi'},
       });
       expect(e.channelId, 'c1');
-      expect(e.message.id, 'm1');
-      expect(e.message.title, 'hi');
+      expect(e.message?.id, 'm1');
+      expect(e.message?.title, 'hi');
+      expect(e.chatMessage, isNull);
+      expect(e.callSignal, isNull);
+    });
+
+    // The stream puts every shape on one event name and tells them apart by which fields are set.
+    // This used to require `message`, and SseClient swallowed the resulting exception — so every
+    // chat message and every incoming call was silently dropped. These three pin that shut.
+    test('parses a conversation message without a channel message', () {
+      final e = LiveEvent.fromJson({
+        'conversationId': 'v1',
+        'chatMessage': {
+          'id': 'cm1',
+          'conversationId': 'v1',
+          'senderId': 'u1',
+          'contentType': 'application/mls',
+          'ciphertext': 'aGVsbG8=',
+        },
+      });
+      expect(e.conversationId, 'v1');
+      expect(e.chatMessage?.id, 'cm1');
+      expect(e.chatMessage?.ciphertext, utf8.encode('hello'));
+      expect(e.message, isNull);
+    });
+
+    test('parses a call nudge', () {
+      final e = LiveEvent.fromJson({
+        'conversationId': 'v1',
+        'callSignal': {'callId': 'call-1', 'seq': 3, 'fromUserId': 'u2'},
+      });
+      expect(e.callSignal?.callId, 'call-1');
+      expect(e.callSignal?.seq, 3);
+      expect(e.callSignal?.fromUserId, 'u2');
+      expect(e.message, isNull);
+    });
+
+    test('parses a conversation deletion', () {
+      final e = LiveEvent.fromJson({
+        'conversationId': 'v1',
+        'conversationDeleted': true,
+      });
+      expect(e.conversationId, 'v1');
+      expect(e.conversationDeleted, isTrue);
+      expect(e.message, isNull);
     });
   });
 

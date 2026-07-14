@@ -1,7 +1,11 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../core/api_client.dart';
 import '../core/api_exception.dart';
+import '../models/chat_models.dart';
 import '../models/models.dart';
 
 /// Typed wrapper over the Pheme App API (non-admin surface), mirroring
@@ -31,6 +35,19 @@ class PhemeRepository {
   Future<TokenResponse> login(String email, String password) => _post(
     '/v1/auth/login',
     {'email': email, 'password': password},
+    public: true,
+  ).then((d) => TokenResponse.fromJson(d));
+
+  /// Exchanges a refresh token for a new pair.
+  ///
+  /// Dio already refreshes transparently on a 401, but that only helps a request that gets a reply.
+  /// The SSE stream is closed by the server the moment its token expires, and reconnecting with the
+  /// same dead token just gets closed again — so it has to refresh *before* it dials, which means
+  /// asking for it explicitly. Refreshing is a plain JWT re-issue with no server-side revocation
+  /// list, so this racing with the interceptor's own refresh is harmless: both simply succeed.
+  Future<TokenResponse> refreshSession(String refreshToken) => _post(
+    '/v1/auth/refresh',
+    {'refreshToken': refreshToken},
     public: true,
   ).then((d) => TokenResponse.fromJson(d));
 
@@ -347,12 +364,337 @@ class PhemeRepository {
     '/v1/channels/$channelId/messages/$messageId/comments/$commentId',
   );
 
+  // --- Conversations ---
+
+  /// Opens (or re-opens) the direct chat with [userId]. Idempotent: the server dedupes on the
+  /// unordered pair, so calling it twice returns the same conversation rather than a second one.
+  Future<Conversation> createDirectChat(String userId) =>
+      _post('/v1/conversations', {
+        'kind': 'direct',
+        'memberIds': [userId],
+      }).then((d) => Conversation.fromJson(d));
+
+  /// Creates a group. The caller becomes its admin; everyone else joins as a plain member.
+  Future<Conversation> createGroupChat(String title, List<String> memberIds) =>
+      _post('/v1/conversations', {
+        'kind': 'group',
+        'title': title,
+        'memberIds': memberIds,
+      }).then((d) => Conversation.fromJson(d));
+
+  Future<List<Conversation>> listConversations() =>
+      _get('/v1/conversations').then(
+        (d) => ((d['conversations'] as List?) ?? const [])
+            .map(
+              (e) => Conversation.fromJson((e as Map).cast<String, dynamic>()),
+            )
+            .toList(),
+      );
+
+  Future<Conversation> getConversation(String id) =>
+      _get('/v1/conversations/$id').then((d) => Conversation.fromJson(d));
+
+  /// Direct: either party may delete. Group: admins only.
+  Future<void> deleteConversation(String id) =>
+      _delete('/v1/conversations/$id');
+
+  /// One page of history, newest-first, walking backwards. [cursor] is the previous page's
+  /// [ChatMessagesPage.nextCursor].
+  Future<ChatMessagesPage> listChatMessages(
+    String id, {
+    String? cursor,
+    int limit = 50,
+  }) async {
+    final d = await _get(
+      '/v1/conversations/$id/messages',
+      query: {'limit': limit, 'cursor': ?cursor},
+    );
+    final next = d['nextCursor'] as String?;
+    return ChatMessagesPage(
+      messages: ((d['messages'] as List?) ?? const [])
+          .map((e) => ChatMessage.fromJson((e as Map).cast<String, dynamic>()))
+          .toList(),
+      // The server only sends a cursor when the page was full; an empty string means "no more".
+      nextCursor: (next == null || next.isEmpty) ? null : next,
+    );
+  }
+
+  /// Posts an encrypted message.
+  ///
+  /// The server rejects MLS Welcomes and Commits here — those go to [mlsCommit], because they have
+  /// to be ordered against an epoch and an ordinary message does not.
+  Future<ChatMessage> sendChatMessage(
+    String id,
+    Uint8List ciphertext,
+    String contentType,
+  ) => _post('/v1/conversations/$id/messages', {
+    'ciphertext': base64Encode(ciphertext),
+    'contentType': contentType,
+  }).then((d) => ChatMessage.fromJson(d));
+
+  // --- Group membership ---
+
+  Future<List<ConversationMember>> listConversationMembers(String id) =>
+      _get('/v1/conversations/$id/members').then(
+        (d) => ((d['members'] as List?) ?? const [])
+            .map(
+              (e) => ConversationMember.fromJson(
+                (e as Map).cast<String, dynamic>(),
+              ),
+            )
+            .toList(),
+      );
+
+  /// Adds a member. Groups only, admins only.
+  Future<ConversationMember> addConversationMember(String id, String userId) =>
+      _post('/v1/conversations/$id/members', {
+        'userId': userId,
+      }).then((d) => ConversationMember.fromJson(d));
+
+  Future<void> setConversationMemberRole(
+    String id,
+    String userId,
+    ChannelRole role,
+  ) => _patch('/v1/conversations/$id/members/$userId', {'role': role.wire});
+
+  /// Removes a member — or, when [userId] is the caller, leaves.
+  Future<void> removeConversationMember(String id, String userId) =>
+      _delete('/v1/conversations/$id/members/$userId');
+
+  /// Searches public profiles. The server requires at least two characters and never matches on
+  /// email.
+  Future<List<PublicUser>> searchUsers(String q) =>
+      _get('/v1/users/search', query: {'q': q}).then(
+        (d) => ((d['users'] as List?) ?? const [])
+            .map((e) => PublicUser.fromJson((e as Map).cast<String, dynamic>()))
+            .toList(),
+      );
+
+  // --- MLS key material ---
+
+  /// Publishes this device's KeyPackages, so other members can add it to a group.
+  Future<void> publishKeyPackages(
+    String deviceId,
+    List<Uint8List> keyPackages, {
+    Uint8List? lastResortKeyPackage,
+  }) => _post('/v1/mls/key-packages', {
+    'deviceId': deviceId,
+    'keyPackages': keyPackages.map(base64Encode).toList(),
+    if (lastResortKeyPackage != null)
+      'lastResortKeyPackage': base64Encode(lastResortKeyPackage),
+  });
+
+  /// How much single-use stock this device has left, so we know when to replenish.
+  Future<MLSKeyPackageCount> keyPackageCount(String deviceId) => _get(
+    '/v1/mls/key-packages/count',
+    query: {'deviceId': deviceId},
+  ).then((d) => MLSKeyPackageCount.fromJson(d));
+
+  /// Purges a retired device's key packages, so nobody claims one it can no longer open.
+  Future<void> deleteKeyPackages(String deviceId) =>
+      _delete('/v1/mls/key-packages', query: {'deviceId': deviceId});
+
+  /// Every device every member has published, as `userId -> [deviceId]`. Consumes nothing — this is
+  /// the directory reconciliation diffs against.
+  Future<Map<String, List<String>>> mlsDevices(String conversationId) async {
+    final d = await _get('/v1/conversations/$conversationId/mls/devices');
+    final devices = (d['devices'] as Map?) ?? const {};
+    return devices.map(
+      (k, v) => MapEntry(
+        k as String,
+        ((v as List?) ?? const []).map((e) => e as String).toList(),
+      ),
+    );
+  }
+
+  /// Claims one KeyPackage per named device. Each is single-use, so this consumes stock.
+  ///
+  /// Throws a 404 [ApiException] when none of the devices has a usable package left — which means
+  /// the peer cannot be added, not that the request was malformed.
+  Future<List<MLSClaimedKeyPackage>> claimKeyPackages(
+    String conversationId,
+    List<MLSDeviceRef> devices,
+  ) =>
+      _post('/v1/conversations/$conversationId/mls/key-packages/claim', {
+        'devices': devices.map((d) => d.toJson()).toList(),
+      }).then(
+        (d) => ((d['keyPackages'] as List?) ?? const [])
+            .map(
+              (e) => MLSClaimedKeyPackage.fromJson(
+                (e as Map).cast<String, dynamic>(),
+              ),
+            )
+            .toList(),
+      );
+
+  Future<MLSGroupState> mlsGroupState(String conversationId) => _get(
+    '/v1/conversations/$conversationId/mls',
+  ).then((d) => MLSGroupState.fromJson(d));
+
+  /// Every Welcome and Commit after [since], oldest-first, so a device can catch up in order.
+  Future<List<ChatMessage>> mlsCommitsSince(String conversationId, int since) =>
+      _get(
+        '/v1/conversations/$conversationId/mls/commits',
+        query: {'since': since},
+      ).then(
+        (d) => ((d['messages'] as List?) ?? const [])
+            .map(
+              (e) => ChatMessage.fromJson((e as Map).cast<String, dynamic>()),
+            )
+            .toList(),
+      );
+
+  /// Offers a Commit as the group's next epoch. A compare-and-set on [baseEpoch].
+  ///
+  /// This is the one call whose failure is not an error: two members can stage a Commit at the same
+  /// epoch and only one can win. The loser gets [MlsCommitResult.accepted] == false along with the
+  /// state that did win, and must discard its own Commit (never apply it), catch up, and retry.
+  Future<MlsCommitResult> mlsCommit(
+    String conversationId, {
+    required String groupId,
+    required int baseEpoch,
+    required Uint8List commit,
+    Uint8List? welcome,
+    List<String> removes = const [],
+  }) async {
+    try {
+      final d = await _post('/v1/conversations/$conversationId/mls/commit', {
+        'groupId': groupId,
+        'baseEpoch': baseEpoch,
+        'commit': base64Encode(commit),
+        if (welcome != null) 'welcome': base64Encode(welcome),
+        if (removes.isNotEmpty) 'removes': removes,
+      });
+      return MlsCommitResult(accepted: true, state: MLSGroupState.fromJson(d));
+    } on DioException catch (e) {
+      final body = e.response?.data;
+      if (e.response?.statusCode == 409 && body is Map) {
+        return MlsCommitResult(
+          accepted: false,
+          state: MLSGroupState.fromJson(body.cast<String, dynamic>()),
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// Retires the current group and starts a fresh one, for the case where a device could never be
+  /// admitted. The old group is remembered in [MLSGroupState.priorGroupIds] — nothing already sent
+  /// becomes unreadable.
+  Future<MLSGroupState> mlsResetGroup(String conversationId) => _post(
+    '/v1/conversations/$conversationId/mls/reset',
+    const {},
+  ).then((d) => MLSGroupState.fromJson(d));
+
+  /// Stores the passphrase-sealed client state. The server can read none of it.
+  Future<void> putKeyBackup(
+    String deviceId, {
+    required Uint8List salt,
+    required Uint8List nonce,
+    required Uint8List ciphertext,
+  }) => _put('/v1/mls/key-backup', {
+    'deviceId': deviceId,
+    'salt': base64Encode(salt),
+    'nonce': base64Encode(nonce),
+    'ciphertext': base64Encode(ciphertext),
+  });
+
+  /// The sealed backup, or null when there is none.
+  Future<MLSKeyBackup?> getKeyBackup() async {
+    try {
+      return MLSKeyBackup.fromJson(await _get('/v1/mls/key-backup'));
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  // --- Calls ---
+
+  /// The STUN/TURN servers for this call. Fetched per call, never cached: the credentials expire.
+  ///
+  /// Throws [CallingUnavailableException] when the server has no TURN configured — which is how the
+  /// UI knows not to offer a call button at all.
+  Future<List<IceServer>> iceServers() async {
+    try {
+      final d = await _get('/v1/calls/ice-servers');
+      return ((d['iceServers'] as List?) ?? const [])
+          .map((e) => IceServer.fromJson((e as Map).cast<String, dynamic>()))
+          .toList();
+    } on ApiException catch (e) {
+      if (e.statusCode == 503) throw CallingUnavailableException();
+      rethrow;
+    }
+  }
+
+  /// Appends a sealed signal to the call's mailbox and returns its sequence number.
+  ///
+  /// [ring] is set only on the invite: it is what fans a push out to the callee's devices. [cancel]
+  /// is set when giving up before an answer, and takes the ringing notification back off their lock
+  /// screen — without it a dead call sits there looking live.
+  Future<int> callSignal(
+    String conversationId,
+    String callId,
+    Uint8List ciphertext, {
+    bool ring = false,
+    bool cancel = false,
+  }) => _post('/v1/conversations/$conversationId/calls/$callId/signal', {
+    'ciphertext': base64Encode(ciphertext),
+    if (ring) 'ring': true,
+    if (cancel) 'cancel': true,
+  }).then((d) => (d['seq'] as num?)?.toInt() ?? 0);
+
+  /// Reads the call's mailbox from a cursor. This — not the live stream — is the transport of
+  /// record: the stream may drop a nudge, and a dropped SDP answer is a call that never connects.
+  Future<List<CallSignal>> callSignals(
+    String conversationId,
+    String callId, {
+    int since = 0,
+  }) =>
+      _get(
+        '/v1/conversations/$conversationId/calls/$callId/signals',
+        query: {'since': since},
+      ).then(
+        (d) => ((d['signals'] as List?) ?? const [])
+            .map((e) => CallSignal.fromJson((e as Map).cast<String, dynamic>()))
+            .toList(),
+      );
+
+  /// Claims the call for this device. The server-side answer lock.
+  ///
+  /// Returns true if we won. False means another of our own devices picked up first, and this one
+  /// must stop ringing and let go of the microphone. That verdict cannot ride the live stream —
+  /// the stream is allowed to drop events, and a device holding an open mic cannot be left guessing.
+  Future<bool> callAccept(
+    String conversationId,
+    String callId,
+    String deviceId,
+  ) async {
+    try {
+      await _post('/v1/conversations/$conversationId/calls/$callId/accept', {
+        'deviceId': deviceId,
+      });
+      return true;
+    } on ApiException catch (e) {
+      if (e.statusCode == 409) return false;
+      rethrow;
+    }
+  }
+
+  /// Re-nudges an unanswered invite over the live stream. Deliberately sends no push: re-buzzing
+  /// somebody's phone every three seconds is harassment.
+  Future<void> callRing(String conversationId, String callId) =>
+      _post('/v1/conversations/$conversationId/calls/$callId/ring', const {});
+
   // --- HTTP helpers ---
 
   Future<Map<String, dynamic>> _get(
     String path, {
     Map<String, dynamic>? query,
   }) => _send(() => _dio.get<dynamic>(path, queryParameters: query));
+
+  Future<Map<String, dynamic>> _put(String path, Object? body) =>
+      _send(() => _dio.put<dynamic>(path, data: body));
 
   Future<Map<String, dynamic>> _post(
     String path,

@@ -1,0 +1,111 @@
+// Builds the Rust MLS library for Android and drops the .so files into jniLibs.
+//
+// This deliberately does NOT use cargokit's gradle plugin (../cargokit/gradle/plugin.gradle), which
+// flutter_rust_bridge scaffolds by default. That plugin calls Project.exec() and reaches into
+// android.applicationVariants — both removed in Gradle 9 / AGP 9, which this project is on. It fails
+// with "Could not find method exec()". Rather than pin the whole app back to AGP 8 to satisfy a build
+// script, we do the one thing that plugin was there to do: run cargo-ndk.
+//
+// Always a release build, on purpose. A debug MLS build is slow enough to be felt on every message,
+// and building per-variant is exactly what forced cargokit into the variant APIs that broke it.
+//
+// Requires: rustup targets aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android,
+// and `cargo install cargo-ndk`.
+
+group 'com.flutter_rust_bridge.rust_lib_pheme_mobile'
+version '1.0'
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:9.0.1'
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: 'com.android.library'
+
+def rustDir = file("../../rust")
+// Resolved eagerly to a File, not left as a Provider: AGP 9 rejects Providers in the SourceSet API
+// because it cannot tell generated from static sources, and it drops the implicit task dependency.
+// We wire that dependency explicitly on preBuild below, so there is nothing to lose here.
+def jniLibsDir = layout.buildDirectory.dir("jniLibs").get().asFile
+
+android {
+    namespace 'com.flutter_rust_bridge.rust_lib_pheme_mobile'
+    compileSdk 36
+    ndkVersion "28.2.13676358"
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk 24
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDir jniLibsDir
+        }
+    }
+}
+
+// Gradle does not run through a login shell, so cargo is frequently absent from its PATH even when it
+// is on the developer's — most visibly when the build is launched from Android Studio. Fall back to
+// the rustup default location before giving up.
+def cargoBin = {
+    def onPath = System.getenv("PATH")
+            ?.split(File.pathSeparator)
+            ?.collect { new File(it, "cargo") }
+            ?.find { it.canExecute() }
+    if (onPath != null) {
+        return onPath.absolutePath
+    }
+    def rustup = new File(System.getProperty("user.home"), ".cargo/bin/cargo")
+    if (rustup.canExecute()) {
+        return rustup.absolutePath
+    }
+    throw new GradleException("cargo not found. Install Rust (https://rustup.rs), then `cargo install cargo-ndk`.")
+}()
+
+def cargoNdkBuild = tasks.register("cargoNdkBuild", Exec) {
+    description = "Builds the Rust MLS library for every Android ABI."
+    workingDir rustDir
+
+    inputs.dir(new File(rustDir, "src"))
+    inputs.file(new File(rustDir, "Cargo.toml"))
+    // The facade is a thin wrapper over this crate, so a change there has to rebuild the .so too.
+    inputs.dir(file("../../../crates/pheme-mls/src"))
+    outputs.dir(jniLibsDir)
+
+    environment "ANDROID_NDK_HOME",
+            new File(android.sdkDirectory, "ndk/${android.ndkVersion}").absolutePath
+
+    commandLine cargoBin, "ndk",
+            "-t", "arm64-v8a",
+            "-t", "armeabi-v7a",
+            "-t", "x86_64",
+            "-o", jniLibsDir.absolutePath,
+            "--platform", "24",
+            "build", "--release"
+}
+
+// preBuild is the one lifecycle task every AGP variant already depends on, so hooking it needs no
+// variant introspection at all — which is the whole reason this survives AGP 9.
+tasks.configureEach { task ->
+    if (task.name == "preBuild") {
+        task.dependsOn(cargoNdkBuild)
+    }
+}

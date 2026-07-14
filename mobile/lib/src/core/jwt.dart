@@ -27,3 +27,14 @@ String? decodeUserId(String accessToken) =>
 
 String? decodeRole(String accessToken) =>
     _decode(accessToken)['role'] as String?;
+
+/// When [accessToken] expires, or null if it carries no `exp`.
+///
+/// Needed because the server closes the SSE stream the moment the token that opened it expires, and
+/// a reconnect that reuses the dead token just gets closed again. The client has to notice *before*
+/// connecting, not after.
+DateTime? decodeExpiry(String accessToken) {
+  final exp = _decode(accessToken)['exp'];
+  if (exp is! num) return null;
+  return DateTime.fromMillisecondsSinceEpoch(exp.toInt() * 1000, isUtc: true);
+}
