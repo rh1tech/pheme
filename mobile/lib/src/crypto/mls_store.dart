@@ -25,13 +25,36 @@ import 'package:path_provider/path_provider.dart';
 import '../rust/api/vault.dart';
 
 class MlsStore {
-  MlsStore(this._storage);
+  /// [namespace] separates one device's storage from another's IN THE SAME PROCESS.
+  ///
+  /// Empty in the app, where there is one device and the plain key names are the right ones. The
+  /// integration tests use it to stand up two devices at once, which is the only way to exercise the
+  /// group choreography — establish, welcome, commit, admit — against a real server, and the only way
+  /// to test what happens to a device that joins late.
+  MlsStore(this._storage, {String namespace = ''}) : _ns = namespace;
 
-  static const _dataKeyKey = 'pheme.mlsDataKey';
-  static const _ownerKey = 'pheme.mlsOwner';
-  static const _freshKey = 'pheme.mlsFreshAccepted';
-  static const _groupsKey = 'pheme.mlsGroups.v1';
-  static const _stateFile = 'mls.state';
+  final String _ns;
+
+  /// The generation of the key material in THIS store. Bumped by every wipe and every restore.
+  ///
+  /// A session is built on one generation of one store, and dies when that generation moves under it —
+  /// which is what stops it writing its keys back over the ones that replaced them.
+  ///
+  /// It belongs to the store and not to the process, because "the keys were replaced" is a fact about
+  /// a particular key store. A process-wide counter says the same thing in the app, where there is one
+  /// store — and says something false the moment there are two, where one device minting its identity
+  /// would declare every other device's keys destroyed.
+  int get generation => _generation;
+  int _generation = 0;
+
+  void invalidate() => _generation++;
+
+  String get _dataKeyKey => 'pheme.mlsDataKey$_ns';
+  String get _ownerKey => 'pheme.mlsOwner$_ns';
+  String get _freshKey => 'pheme.mlsFreshAccepted$_ns';
+  String get _groupsKey => 'pheme.mlsGroups.v1$_ns';
+  String get _stateFile => 'mls$_ns.state';
+
   static const _keyLength = 32;
 
   /// Bound into the seal as additional data, so a blob sealed for something else — the chat body

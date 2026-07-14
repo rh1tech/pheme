@@ -28,10 +28,14 @@ import '../rust/api/vault.dart';
 import 'chat_content.dart';
 
 class ChatCache {
-  ChatCache(this._storage);
+  /// [namespace] must match the MlsStore's — the two share a data key, and in a two-device test each
+  /// device needs its own. Empty in the app.
+  ChatCache(this._storage, {String namespace = ''}) : _ns = namespace;
 
-  static const _dataKeyKey =
-      'pheme.mlsDataKey'; // the same key that seals the MLS state
+  final String _ns;
+
+  /// The same key that seals the MLS state.
+  String get _dataKeyKey => 'pheme.mlsDataKey$_ns';
 
   /// Its OWN domain, bound into the seal. The key store and this cache share a key, so without it a
   /// body cache would open cleanly in the key store's place — handing arbitrary bytes to import_state.
@@ -55,7 +59,7 @@ class ChatCache {
 
   Future<Directory> _dir() async {
     final support = await getApplicationSupportDirectory();
-    final dir = Directory('${support.path}/bodies');
+    final dir = Directory('${support.path}/bodies$_ns');
     if (!await dir.exists()) await dir.create(recursive: true);
     return dir;
   }

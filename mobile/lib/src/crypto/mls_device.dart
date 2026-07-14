@@ -18,20 +18,35 @@ import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Where the MLS device id lives. Deliberately NOT 'pheme.deviceId', which is the push one.
-const _mlsDeviceIdKey = 'pheme.mlsDeviceId';
+///
+/// [namespace] is empty in the app. The integration tests use it to keep two devices apart in one
+/// process — and it has to be here too, because two devices sharing a device id would share a leaf,
+/// which is precisely the bug this whole file exists to prevent.
+String _mlsDeviceIdKey(String namespace) => 'pheme.mlsDeviceId$namespace';
 
 const _iosOptions = IOSOptions(
   accessibility: KeychainAccessibility.first_unlock,
 );
 
-Future<String?> loadMlsDeviceId(FlutterSecureStorage storage) =>
-    storage.read(key: _mlsDeviceIdKey, iOptions: _iosOptions);
+Future<String?> loadMlsDeviceId(
+  FlutterSecureStorage storage, {
+  String namespace = '',
+}) => storage.read(key: _mlsDeviceIdKey(namespace), iOptions: _iosOptions);
 
-Future<void> saveMlsDeviceId(FlutterSecureStorage storage, String deviceId) =>
-    storage.write(key: _mlsDeviceIdKey, value: deviceId, iOptions: _iosOptions);
+Future<void> saveMlsDeviceId(
+  FlutterSecureStorage storage,
+  String deviceId, {
+  String namespace = '',
+}) => storage.write(
+  key: _mlsDeviceIdKey(namespace),
+  value: deviceId,
+  iOptions: _iosOptions,
+);
 
-Future<void> clearMlsDeviceId(FlutterSecureStorage storage) =>
-    storage.delete(key: _mlsDeviceIdKey, iOptions: _iosOptions);
+Future<void> clearMlsDeviceId(
+  FlutterSecureStorage storage, {
+  String namespace = '',
+}) => storage.delete(key: _mlsDeviceIdKey(namespace), iOptions: _iosOptions);
 
 /// A leaf identity: `userId:deviceId`.
 String deviceIdentity(String userId, String deviceId) => '$userId:$deviceId';

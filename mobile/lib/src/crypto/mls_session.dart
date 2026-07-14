@@ -39,58 +39,136 @@ class ExportedSecret {
   final int epoch;
 }
 
-/// The generation of key material currently on this device.
+/// THE ONE RUST CLIENT, AND THE ONE QUEUE THAT GUARDS IT.
 ///
-/// Bumped by every wipe and every restore. A session built on an older generation is dead, and
-/// [MlsSession.assertLive] is what stops it writing its keys back over the ones that replaced them.
-int _generation = 0;
+/// There is exactly one MLS client per process — the Rust side makes that structural, and it is right,
+/// because one device has one ratchet. What was NOT guarded is that a client can be swapped: load a
+/// different state blob and the same client is now a different device.
+///
+/// So the queue is process-wide, not per-session. It has to be. A per-session lock serialises each
+/// session against itself and leaves them free to interleave with each other — and every interleaving
+/// is a session issuing calls against somebody else's ratchet:
+///
+///   * `_commit` holds its lock across the network round trip that offers the Commit to the server.
+///     Another session claiming the client in that window means `commitAccepted` lands on the WRONG
+///     client — accepting one device's Commit into another device's state.
+///   * `load()` mints an identity and exports it. Racing that against another session's operation
+///     exports whatever client happened to be installed, so a device can persist — and then publish
+///     key packages for — an identity that is not its own. That is not theoretical: it is what this
+///     queue was written for. The group refused the second device with DuplicateSignatureKey, because
+///     its key package carried the first device's signature key.
+///
+/// In the app there is one session and this queue is a formality. It is what makes a two-device test
+/// possible in one process, which is the only way to exercise the group choreography — establish,
+/// welcome, commit, admit — against a real server.
+Future<void> _clientTail = Future<void>.value();
 
-void invalidateSessions() => _generation++;
+/// Which session's state the client is currently holding.
+int _clientOwner = -1;
+int _nextSessionTag = 0;
+
+/// Runs [op] with the one Rust client to itself, from the first call through to the last write.
+Future<T> _withClient<T>(Future<T> Function() op) {
+  final result = _clientTail.then((_) => op());
+  // The tail must never carry an error forward: a failed operation is the caller's problem, but a tail
+  // that completed with an error would skip every callback chained after it — so every later call
+  // would wait forever for a turn that never comes. Swallow it here; the caller still sees it via
+  // [result].
+  _clientTail = result.then((_) {}, onError: (Object _) {});
+  return result;
+}
 
 class MlsSession {
-  MlsSession._(this._store, this.userId, this.deviceId, this._generationTag);
+  MlsSession._(this._store, this.userId, this.deviceId, this._generationTag)
+    : _tag = _nextSessionTag++;
 
   final MlsStore _store;
   final String userId;
   final String deviceId;
   final int _generationTag;
 
-  /// Serialises `rust call -> persist`. See the file comment: this is the point.
-  Future<void> _tail = Future<void>.value();
+  /// Identifies this session's claim on the one Rust client.
+  final int _tag;
+
+  /// The last state we persisted, so we can put the Rust client back the way we left it if another
+  /// session has since loaded its own.
+  Uint8List? _blob;
 
   /// This device's leaf identity, as it appears in the group.
   String get identity => deviceIdentity(userId, deviceId);
 
-  /// Runs [op] with exclusive access to the MLS state.
+  /// Runs [op] with exclusive access to the MLS state — the Rust call AND the disk write that follows
+  /// it, which is the unit that has to be atomic.
   ///
-  /// Checked before the operation and not merely before the write: an encrypt on a destroyed
-  /// identity still consumes ratchet state, and there is no reason to run it at all.
+  /// Liveness is checked before the operation and not merely before the write: an encrypt on a
+  /// destroyed identity still consumes ratchet state, and there is no reason to run it at all.
   Future<T> _exclusive<T>(Future<T> Function() op) {
-    final completer = Completer<T>();
-    _tail = _tail.then((_) async {
-      try {
-        _assertLive();
-        completer.complete(await op());
-      } on Object catch (e, s) {
-        completer.completeError(e, s);
-      }
+    return _withClient(() async {
+      _assertLive();
+      await _claimClient();
+      return op();
     });
-    return completer.future;
+  }
+
+  /// Makes sure the one Rust client is holding OUR state before we ask it to do anything.
+  ///
+  /// Almost always a no-op: in a running app there is one session and it already owns the client.
+  Future<void> _claimClient() async {
+    if (_clientOwner == _tag) return;
+
+    final blob = _blob;
+    if (blob == null) {
+      // We have never persisted, so there is nothing to restore. That only happens before load()
+      // finishes, and load() installs the client itself.
+      _clientOwner = _tag;
+      return;
+    }
+
+    await rust.mlsLoad(state: blob);
+    _clientOwner = _tag;
   }
 
   void _assertLive() {
-    if (_generation != _generationTag) {
+    if (_store.generation != _generationTag) {
       throw const SessionInvalidatedException();
     }
   }
 
   /// Persists the state a mutating call handed back. Must be called before its result is acted on.
-  Future<void> _persist(Uint8List state) => _store.writeState(state);
+  Future<void> _persist(Uint8List state) async {
+    // Remember it in memory as well as on disk: this is what lets us put the client back if another
+    // session borrows it.
+    _blob = state;
+    await _store.writeState(state);
+  }
 
   // --- lifecycle -------------------------------------------------------------------------------
 
   /// Loads this device's session, minting an identity if it has none.
+  ///
+  /// Runs inside the client queue like every other Rust call. Minting installs a brand new identity in
+  /// the one client and immediately exports it; if another session's operation is allowed to interleave
+  /// there, what gets exported is whatever client is installed at that instant — and the device
+  /// persists, and then publishes key packages for, an identity that is not its own.
   static Future<MlsSession> load({
+    required MlsStore store,
+    required String userId,
+    required String? storedDeviceId,
+    required Future<void> Function(String deviceId) rememberDeviceId,
+    required bool mustRestore,
+  }) {
+    return _withClient(
+      () => _load(
+        store: store,
+        userId: userId,
+        storedDeviceId: storedDeviceId,
+        rememberDeviceId: rememberDeviceId,
+        mustRestore: mustRestore,
+      ),
+    );
+  }
+
+  static Future<MlsSession> _load({
     required MlsStore store,
     required String userId,
     required String? storedDeviceId,
@@ -101,7 +179,7 @@ class MlsSession {
     // MLS identity would send their key material out under our name.
     if (await store.owner() != userId) {
       await store.wipe();
-      invalidateSessions();
+      store.invalidate();
     }
 
     final saved = await store.readState();
@@ -149,8 +227,15 @@ class MlsSession {
     }
 
     await store.setOwner(userId);
-    final session = MlsSession._(store, userId, deviceId, _generation);
+
+    final session = MlsSession._(store, userId, deviceId, store.generation);
     session._retiredDeviceId = retiredDeviceId;
+
+    // The client is now holding THIS session's state — load() is what put it there. Claim it, and
+    // remember the blob so we can put it back if another session ever borrows the client.
+    session._blob = await store.readState();
+    _clientOwner = session._tag;
+
     return session;
   }
 

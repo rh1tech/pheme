@@ -63,13 +63,19 @@ const callKeyLabel = 'pheme-call-v1';
 /// One per session. Held by a provider so the group state, the in-flight settles and the call freeze
 /// are shared by everything that touches a conversation.
 class MlsService {
+  /// [namespace] separates one device's storage from another's in the same process. Empty in the app;
+  /// the integration tests use it to run two devices at once.
   MlsService({
     required PhemeRepository repository,
     required FlutterSecureStorage storage,
     required this._cache,
+    String namespace = '',
   }) : _repo = repository,
        _storage = storage,
-       _store = MlsStore(storage);
+       _ns = namespace,
+       _store = MlsStore(storage, namespace: namespace);
+
+  final String _ns;
 
   final PhemeRepository _repo;
   final FlutterSecureStorage _storage;
@@ -127,8 +133,8 @@ class MlsService {
     final session = await MlsSession.load(
       store: _store,
       userId: userId,
-      storedDeviceId: await loadMlsDeviceId(_storage),
-      rememberDeviceId: (id) => saveMlsDeviceId(_storage, id),
+      storedDeviceId: await loadMlsDeviceId(_storage, namespace: _ns),
+      rememberDeviceId: (id) => saveMlsDeviceId(_storage, id, namespace: _ns),
       mustRestore: await _needsRestore(userId),
     );
 
@@ -1074,7 +1080,7 @@ class MlsService {
     //
     // Bumping first closes the window. Anything queued is refused; anything already inside a Rust call
     // completes against the client it started with, because Rust's own mutex is still holding it.
-    invalidateSessions();
+    _store.invalidate();
     _session = null;
     _sessionUserId = '';
     _settling.clear();
@@ -1093,7 +1099,7 @@ class MlsService {
     // to that name, not to one of its own. Keeping a local id here would leave the restored client
     // unable to be added to anything: publishing keys as one device and holding leaves as another.
     if (restoredDevice.isNotEmpty) {
-      await saveMlsDeviceId(_storage, restoredDevice);
+      await saveMlsDeviceId(_storage, restoredDevice, namespace: _ns);
     }
 
     _restoreNeeded = false;
@@ -1111,7 +1117,7 @@ class MlsService {
     // behind its mutex must be refused BEFORE the client they are queued against is unloaded, or one
     // of them wakes up, passes the liveness check on a stale generation, and writes the keys the user
     // just asked us to destroy straight back to disk.
-    invalidateSessions();
+    _store.invalidate();
     _session = null;
     _sessionUserId = '';
     _restoreNeeded = null;
@@ -1122,6 +1128,6 @@ class MlsService {
     await rust.mlsUnload();
     await _store.wipe();
     await _cache.wipe();
-    await clearMlsDeviceId(_storage);
+    await clearMlsDeviceId(_storage, namespace: _ns);
   }
 }
