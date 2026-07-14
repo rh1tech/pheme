@@ -55,6 +55,7 @@ dependencies:
     path: rust_builder
   flutter_rust_bridge: 2.12.0
   path_provider: ^2.1.6
+  cryptography: ^2.9.0
 
 dev_dependencies:
   flutter_test:
