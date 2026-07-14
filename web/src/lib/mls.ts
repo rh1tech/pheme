@@ -339,15 +339,26 @@ class Session {
       return { s, fresh: !keep, retiredDeviceId }
     })
 
+    // Everything below is HOUSEKEEPING, and none of it blocks the session.
+    //
+    // Purging a dead identity's KeyPackages and topping up the stock of live ones are both about being
+    // REACHABLE — about somebody else being able to start a chat with this device. Neither has any
+    // bearing on whether this device can read the conversations it is already in.
+    //
+    // They used to be awaited, so the first conversation opened after a reload waited on two network
+    // calls before it could show a message — and while it waited, the composer said encryption was
+    // still being set up. It was not. It was publishing KeyPackages.
+    //
     // Outside the lock (these take it themselves; taking it twice would deadlock).
-    // The identity this one replaces may still have public KeyPackages on the server. Their
-    // private halves are gone, so anyone claiming one would build a group this device could
-    // never join. Purge them before publishing new ones — and purging them is also what
-    // tells everyone else that leaf is a ghost, so the group can prune it.
-    if (session.retiredDeviceId) {
-      await api.deleteKeyPackages(session.retiredDeviceId).catch(() => {})
-    }
-    await session.s.replenishKeyPackages()
+    void (async () => {
+      if (session.retiredDeviceId) {
+        await api.deleteKeyPackages(session.retiredDeviceId).catch(() => {})
+      }
+      await session.s.replenishKeyPackages().catch(() => {
+        // A peer starting a chat finds no package and has to retry. Nothing we are already in breaks.
+      })
+    })()
+
     return session.s
   }
 
@@ -787,10 +798,10 @@ async function settleGroup(
   // Everything this device could read a message from. A message from before a reset was
   // encrypted to a group that is no longer current, and it is still perfectly readable by a
   // device that still holds that group.
-  readableGroups.set(
-    conversation.id,
-    [state.groupId, ...(state.priorGroupIds ?? [])].filter(Boolean),
-  )
+  const allGroups = [state.groupId, ...(state.priorGroupIds ?? [])].filter(Boolean)
+  readableGroups.set(conversation.id, allGroups)
+  // Write it down, so the NEXT open of this conversation needs none of this.
+  if (state.groupId) void rememberGroupIds(conversation.id, allGroups)
 
   // Nobody has established a group yet, so somebody must.
   //
@@ -1237,10 +1248,82 @@ export async function callKeyFor(
  */
 const readableGroups = new Map<string, string[]>()
 
+// ---------------------------------------------------------------------------------------------
+// WHICH GROUP EACH CONVERSATION IS, remembered across reloads.
+//
+// It is the one thing about a conversation's encrypted group that this device cannot work out for
+// itself: the group's ID. Everything else it already knows — it is holding the ratchet.
+//
+// And the id never moves. The server sets it once, through a compare-and-set, and only a reset can
+// change it — which is rare, deliberate, and remembers the old id anyway.
+//
+// So asking the server for it on every open is asking a question we already know the answer to, and
+// paying several round trips to hear it — during which nothing can be decrypted, nothing renders, and
+// the only thing the UI can honestly say is that encryption is still being set up. It is not. It is
+// waiting for the post.
+// ---------------------------------------------------------------------------------------------
+
+const GROUPS_KEY = 'group-ids'
+
+type GroupIdMap = Record<string, string[]>
+
+async function storedGroupIds(): Promise<GroupIdMap> {
+  const bytes = await idbGet(GROUPS_KEY)
+  if (!bytes) return {}
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes))
+    return typeof parsed === 'object' && parsed !== null ? (parsed as GroupIdMap) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Writes down what a conversation's groups are, so the next open needs no network at all. */
+async function rememberGroupIds(conversationId: string, groupIds: string[]): Promise<void> {
+  if (groupIds.length === 0) return
+
+  const all = await storedGroupIds()
+  const existing = all[conversationId]
+  if (existing && existing.length === groupIds.length && existing.every((g, i) => g === groupIds[i])) {
+    return
+  }
+
+  all[conversationId] = groupIds
+  await idbSet(GROUPS_KEY, new TextEncoder().encode(JSON.stringify(all)))
+}
+
+/**
+ * What this device already knows about a conversation's group, WITHOUT ASKING THE SERVER.
+ *
+ * Returns the group id when this tab holds the group and can read the conversation right now; null
+ * when it genuinely does not know — a conversation never opened here, or one this device has not been
+ * admitted to.
+ *
+ * Holding the ratchet is the actual test, and it is a local one. If we hold it, we are in the group,
+ * and there is nothing the server could say that would change that.
+ */
+export async function primeGroup(
+  conversationId: string,
+  myUserId: string,
+): Promise<string | null> {
+  const known = (await storedGroupIds())[conversationId]
+  if (!known || known.length === 0) return null
+
+  // Every group the conversation has ever had. A message from before a reset was encrypted to one that
+  // is no longer current, and it is still perfectly readable.
+  readableGroups.set(conversationId, known)
+
+  const session = await mlsSession(myUserId)
+  return (await session.hasGroup(known[0])) ? known[0] : null
+}
+
 /** Puts a group at the front of what a conversation can be decrypted against. */
 function rememberReadableGroup(conversationId: string, groupId: string): void {
   const groups = readableGroups.get(conversationId) ?? []
-  readableGroups.set(conversationId, [groupId, ...groups.filter((g) => g !== groupId)])
+  const all = [groupId, ...groups.filter((g) => g !== groupId)]
+  readableGroups.set(conversationId, all)
+  // On disk too. Best effort: a failure costs one round trip next time, not correctness.
+  void rememberGroupIds(conversationId, all)
 }
 
 /**

@@ -132,6 +132,21 @@ class MlsService {
       mustRestore: await _needsRestore(userId),
     );
 
+    // Everything below this line is HOUSEKEEPING, and none of it blocks the session.
+    //
+    // Purging a dead identity's key packages, and topping up the stock of live ones, are both about
+    // being REACHABLE — about someone else being able to start a chat with this device. Neither has
+    // the slightest bearing on whether this device can read the conversations it is already in.
+    //
+    // They used to be awaited, so the first chat opened after launch waited on two network calls
+    // before it could show a single message, and while it waited the composer said encryption was
+    // still being set up. It was not. It was publishing key packages.
+    unawaited(_houseKeeping(session));
+    return session;
+  }
+
+  /// Purge the retired identity's key packages, and top up the stock. Best effort, in the background.
+  Future<void> _houseKeeping(MlsSession session) async {
     // The identity this one replaces may still have public key packages on the server. Their private
     // halves are gone, so anyone claiming one would build a group this device could never join. Purge
     // them before publishing new ones — and purging them is also what tells everyone else that leaf
@@ -141,8 +156,12 @@ class MlsService {
       await _repo.deleteKeyPackages(retired).catchError((_) {});
     }
 
-    await _replenishKeyPackages(session);
-    return session;
+    try {
+      await _replenishKeyPackages(session);
+    } on Object {
+      // A peer starting a chat will find no package and simply have to retry. Nothing this device is
+      // already in is affected.
+    }
   }
 
   /// Publishes fresh key packages when the server's stock runs low, and makes sure this device has
@@ -200,6 +219,36 @@ class MlsService {
     return run;
   }
 
+  /// What this device already knows about a conversation's group, WITHOUT ASKING THE SERVER.
+  ///
+  /// Returns the group id when this device holds the group and can read the conversation right now.
+  /// Null when it genuinely does not know — a chat never opened on this device, or one it has not been
+  /// admitted to.
+  ///
+  /// This is the whole answer to "why does it say encryption is being set up every time I open a
+  /// chat". It was not being set up. The device was holding the ratchet the entire time; the only
+  /// thing it lacked was the group's ID, a string the server hands out once and never changes — and
+  /// waiting three round trips to be told it again meant nothing could decrypt, nothing could render,
+  /// and the only honest thing the UI could say was "still working on it".
+  ///
+  /// So: remember the id. Then a returning device knows instantly, decrypts from the first frame, and
+  /// reconciles with the server in the background where nobody is watching.
+  Future<String?> primeGroup(String conversationId, String myUserId) async {
+    final known = await _store.groupIds(conversationId);
+    if (known.isEmpty) return null;
+
+    // Every group the conversation has ever had. A message from before a reset was encrypted to one
+    // that is no longer current, and it is still perfectly readable.
+    _readableGroups[conversationId] = known;
+
+    final session = await this.session(myUserId);
+    final current = known.first;
+
+    // Holding the ratchet is the actual test, and it is a local one. If we hold it, we are in the
+    // group — there is nothing the server could tell us that would change that.
+    return await session.hasGroup(current) ? current : null;
+  }
+
   Future<String?> _settleGroup(
     Conversation conversation,
     String myUserId,
@@ -208,6 +257,10 @@ class MlsService {
     final state = await _repo.mlsGroupState(conversation.id);
 
     _readableGroups[conversation.id] = state.allGroupIds;
+    // Write it down, so the NEXT open of this chat needs none of this.
+    if (state.isEstablished) {
+      await _store.rememberGroupIds(conversation.id, state.allGroupIds);
+    }
 
     // Nobody has established a group yet, so somebody must.
     //
@@ -574,10 +627,12 @@ class MlsService {
 
   void _rememberReadable(String conversationId, String groupId) {
     final groups = _readableGroups[conversationId] ?? const <String>[];
-    _readableGroups[conversationId] = [
-      groupId,
-      ...groups.where((g) => g != groupId),
-    ];
+    final all = [groupId, ...groups.where((g) => g != groupId)];
+    _readableGroups[conversationId] = all;
+
+    // On disk too, so the next open of this chat asks the server nothing. Best effort: a failure here
+    // costs one round trip next time, not correctness.
+    unawaited(_store.rememberGroupIds(conversationId, all).catchError((_) {}));
   }
 
   // --- membership ------------------------------------------------------------------------------

@@ -20,7 +20,7 @@ class MessageFeedState {
     this.contents = const {},
     this.loading = true,
     this.loadingOlder = false,
-    this.joined = false,
+    this.joined,
     this.peerNotReady = false,
     this.cursor,
   });
@@ -36,7 +36,15 @@ class MessageFeedState {
   final bool loadingOlder;
 
   /// Whether this device holds the conversation's MLS group and can therefore encrypt to it.
-  final bool joined;
+  ///
+  /// NULL MEANS "NOT KNOWN YET", and the difference matters more than it looks. It used to be a plain
+  /// bool starting at false, so from the first frame until the group settled the app told the user
+  /// encryption was still being set up — every single time a chat was opened, on a device that had
+  /// been holding the keys for weeks. It was not setting anything up. It was waiting for the network
+  /// to confirm something it already knew.
+  ///
+  /// A banner is only honest when we KNOW the answer is no.
+  final bool? joined;
 
   /// Whether the other person has published no keys at all. Distinct from [joined] because the two
   /// are different problems: this one is theirs to fix, and no amount of waiting resolves it.
@@ -52,6 +60,7 @@ class MessageFeedState {
     bool? loadingOlder,
     bool? joined,
     bool? peerNotReady,
+    bool clearJoined = false,
     String? cursor,
     bool clearCursor = false,
   }) {
@@ -60,11 +69,28 @@ class MessageFeedState {
       contents: contents ?? this.contents,
       loading: loading ?? this.loading,
       loadingOlder: loadingOlder ?? this.loadingOlder,
-      joined: joined ?? this.joined,
+      joined: clearJoined ? null : (joined ?? this.joined),
       peerNotReady: peerNotReady ?? this.peerNotReady,
       cursor: clearCursor ? null : (cursor ?? this.cursor),
     );
   }
+}
+
+/// The one line above the composer that explains why sending may not work yet.
+///
+/// Exactly two reasons produce a line, and there is a third state that must produce NOTHING: we have
+/// not finished asking yet. That third state used to produce one, because `joined` was a bool starting
+/// at false — so every chat, every time it opened, announced that encryption was being set up for as
+/// long as the network took to confirm a group this device had been holding for weeks.
+///
+/// Lives here, next to the state it reads, so the widget and the test cannot drift apart: there is one
+/// rule, and both of them use it.
+String? feedNoticeKey(MessageFeedState feed) {
+  if (feed.peerNotReady) return 'chat.peerNotReady';
+  // Only when we KNOW the answer is no. Null means "still asking", and the honest thing to do while
+  // still asking is to say nothing at all.
+  if (feed.joined == false) return 'chat.joiningOnThisDevice';
+  return null;
 }
 
 class MessageFeedController extends Notifier<MessageFeedState> {
@@ -87,27 +113,43 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     return const MessageFeedState();
   }
 
+  /// Opening a chat, in the order that makes it feel instant.
+  ///
+  /// The old order was: settle the group with the server (three or four round trips), THEN fetch the
+  /// messages, THEN decrypt. Nothing could render until the server had confirmed a group id this
+  /// device already knew, and while it waited the composer announced that encryption was being set up.
+  ///
+  /// The new order asks the device what it already knows, and only then asks the network:
+  ///
+  ///   1. the plaintext store, so anything read before is on screen at once;
+  ///   2. the group ids we have written down, which is enough to decrypt — no network at all;
+  ///   3. the messages;
+  ///   4. and only now, in the BACKGROUND, the settle: catch up on commits, admit new devices,
+  ///      prune ghosts. None of it blocks a single pixel.
   Future<void> _load() async {
     final repo = ref.read(repositoryProvider);
     final mls = ref.read(mlsServiceProvider);
     final myUserId = ref.read(myUserIdProvider);
 
-    // Warm the plaintext store before anything renders. Every body this device has ever read lives
-    // there and nowhere else — a message decrypts exactly once.
+    // Every body this device has ever read lives here and nowhere else — a message decrypts exactly
+    // once — so this is not a cache warm-up, it is loading the messages.
     await ref.read(chatCacheProvider).load(_conversationId);
 
-    // Getting into the group is what makes reading possible, so it comes first. A null group id is a
-    // normal state — this device has announced itself and is waiting to be admitted — not a failure.
-    var joined = false;
-    var peerNotReady = false;
+    // What we already know, from disk, without asking anyone.
+    bool? joined;
     try {
-      final conversation = await repo.getConversation(_conversationId);
-      joined = await mls.ensureGroup(conversation, myUserId) != null;
-    } on PeerKeysMissingException {
-      peerNotReady = true;
+      joined = await mls.primeGroup(_conversationId, myUserId) != null;
     } on Object {
-      // Reading history may still work — this device may hold the group from an earlier session.
+      // Leave it unknown. The settle below will say.
+      joined = null;
     }
+    // Holding the group is proof. NOT holding it is not proof of anything yet — it may just be a chat
+    // this device has never opened. Only the settle can tell the difference, so stay quiet until it
+    // does rather than accusing the app of still setting encryption up.
+    state = state.copyWith(
+      joined: joined == true ? true : null,
+      clearJoined: joined != true,
+    );
 
     try {
       final page = await repo.listChatMessages(
@@ -122,19 +164,60 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       state = state.copyWith(
         messages: messages,
         loading: false,
-        joined: joined,
-        peerNotReady: peerNotReady,
         cursor: page.nextCursor,
         clearCursor: page.nextCursor == null,
       );
       await _decrypt(messages);
     } on Object {
-      state = state.copyWith(
-        loading: false,
-        joined: joined,
-        peerNotReady: peerNotReady,
-      );
+      state = state.copyWith(loading: false);
     }
+
+    // Now the network. Everything above already rendered.
+    await _settle();
+  }
+
+  /// Brings the group up to date with the server. Runs AFTER the chat is on screen, never before it.
+  Future<void> _settle() async {
+    final repo = ref.read(repositoryProvider);
+    final mls = ref.read(mlsServiceProvider);
+    final myUserId = ref.read(myUserIdProvider);
+
+    try {
+      final conversation = await repo.getConversation(_conversationId);
+      final groupId = await mls.ensureGroup(conversation, myUserId);
+
+      state = state.copyWith(joined: groupId != null, peerNotReady: false);
+
+      // The settle may have caught up on commits that let us read messages we could not read a moment
+      // ago — the very Welcome that admits this device, for instance. Try the ones we gave up on.
+      await _decryptUnread();
+    } on PeerKeysMissingException {
+      state = state.copyWith(joined: false, peerNotReady: true);
+    } on Object {
+      // The network is down, or the settle failed. If we HOLD the group, none of that matters: we can
+      // read and we can send, and telling the user encryption is being set up would be a lie. Leave
+      // whatever primeGroup concluded.
+    }
+  }
+
+  /// Re-tries the messages that would not decrypt, after a catch-up may have made them readable.
+  ///
+  /// Only the ones we have no content for. A message that DID decrypt must never be decrypted twice —
+  /// the key is gone, and asking again is not merely useless, it is wrong.
+  Future<void> _decryptUnread() async {
+    final pending = state.messages
+        .where((m) => state.contents[m.id] == null)
+        .toList(growable: false);
+    if (pending.isEmpty) return;
+
+    // Drop them from the map so _decrypt does not skip them as already-attempted.
+    final contents = {...state.contents};
+    for (final m in pending) {
+      contents.remove(m.id);
+    }
+    state = state.copyWith(contents: contents);
+
+    await _decrypt(pending);
   }
 
   Future<void> loadOlder() async {

@@ -317,7 +317,9 @@ class _ChatViewState extends ConsumerState<_ChatView> {
           AdaptiveIconButton(
             icon: Icons.call_outlined,
             semanticLabel: l10n.t('call.start'),
-            onPressed: feed.joined ? () => _placeCall() : null,
+            // Enabled the moment we know we hold the group — which, on a chat this device has
+            // opened before, is the first frame.
+            onPressed: feed.joined == true ? () => _placeCall() : null,
           ),
         AdaptiveIconButton(
           icon: Icons.lock_outline,
@@ -393,12 +395,11 @@ class _ChatViewState extends ConsumerState<_ChatView> {
     return content.hasPhotos ? l10n.t('chat.photo') : '';
   }
 
-  /// The one line above the composer that explains why sending may not work yet. There are exactly
-  /// two reasons, and they are different problems with different resolutions.
+  /// The rule lives in message_feed_controller.dart, next to the state it reads, so this and its test
+  /// cannot drift apart.
   String? _notice(MessageFeedState feed, AppLocalizations l10n) {
-    if (feed.peerNotReady) return l10n.t('chat.peerNotReady');
-    if (!feed.joined) return l10n.t('chat.joiningOnThisDevice');
-    return null;
+    final key = feedNoticeKey(feed);
+    return key == null ? null : l10n.t(key);
   }
 }
 

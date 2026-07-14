@@ -33,6 +33,7 @@ import {
   decryptChatMessage,
   ensureGroup,
   mlsSession,
+  primeGroup,
   removeGroupMember,
 } from '../../lib/mls'
 import { cacheContent, loadCachedContents, setPreview } from '../../lib/chatCache'
@@ -114,6 +115,24 @@ export function ConversationChatRoute() {
   // The conversation whose peer has published no keys (so we cannot encrypt to them).
   // Keyed by id and derived, so switching chats clears the banner without a reset.
   const [peerNotReadyId, setPeerNotReadyId] = useState('')
+
+  /**
+   * Whether the group has been settled with the server for THIS conversation yet.
+   *
+   * Without it there is no way to tell "we have not asked" from "we asked, and this device is not in
+   * the group" — and the app assumed the second. So every chat, every time it was opened, announced
+   * that encryption was being set up until the network came back. A banner is only honest once the
+   * answer is actually known.
+   */
+  const [settledFor, setSettledFor] = useState('')
+
+  /**
+   * Whether the group has been settled with the server for THIS conversation.
+   *
+   * Keyed on the id rather than reset in an effect, so switching chats cannot leave a stale "yes"
+   * behind for a moment — which would be the same bug in the other direction.
+   */
+  const groupSettled = settledFor === id
   const peerNotReady = peerNotReadyId === id
   const textRef = useRef<HTMLTextAreaElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -162,6 +181,31 @@ export function ConversationChatRoute() {
     if (!isMobile) textRef.current?.focus()
   }, [id, composerFocus, isMobile])
 
+  // What this device already knows, from its own storage, before the network is asked anything.
+  //
+  // This is the difference between a chat that opens instantly and one that spends several round trips
+  // telling the user encryption is being set up — on a device that has been holding the keys for weeks.
+  // It was never setting anything up. It was waiting to be told a group id it already knew.
+  //
+  // Holding the ratchet is the proof, and it is local. Once we have it, messages decrypt and the
+  // composer works; the settle below then runs in the background where nobody is looking.
+  useEffect(() => {
+    if (!userId) return
+    let active = true
+
+    primeGroup(id, userId)
+      .then((gid) => {
+        if (active && gid) setGroupId(gid)
+      })
+      .catch(() => {
+        // Nothing known. The settle will say.
+      })
+
+    return () => {
+      active = false
+    }
+  }, [id, userId, setGroupId])
+
   useEffect(() => {
     let active = true
     api
@@ -179,12 +223,15 @@ export function ConversationChatRoute() {
             if (!active) return
             setGroupId(gid ?? '')
             setPeerNotReadyId('')
+            setSettledFor(id)
           })
           .catch((e: unknown) => {
             // The other person has published no keys on any device, so nothing can be
             // encrypted to them. Say so plainly, where the user is about to type, rather
             // than letting them discover it by having a message fail to send.
-            if (active) setPeerNotReadyId(e instanceof PeerKeysMissingError ? id : '')
+            if (!active) return
+            setPeerNotReadyId(e instanceof PeerKeysMissingError ? id : '')
+            setSettledFor(id)
           })
       })
       .catch(() => active && setConversation(null))
@@ -858,7 +905,9 @@ export function ConversationChatRoute() {
             — it has just signed in, and a member has to admit it. It is not stuck, and it
             is not loading; it is waiting, and it will not be able to read what was said
             before it arrives. Saying so beats a composer that silently refuses to send. */}
-        {!peerNotReady && !loading && !groupId && (
+        {/* Only once we KNOW the answer is no. `settled` is what separates that from "still asking",
+            and while we are still asking the honest thing to do is say nothing. */}
+        {!peerNotReady && !loading && groupSettled && !groupId && (
           <Alert
             variant="light"
             color="blue"

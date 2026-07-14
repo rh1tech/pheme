@@ -15,6 +15,7 @@
 // the call cannot be decrypted, and the very first call after every reboot fails. `first_unlock` is
 // what makes that work, and it is why it is spelled out here rather than left to the default.
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -29,6 +30,7 @@ class MlsStore {
   static const _dataKeyKey = 'pheme.mlsDataKey';
   static const _ownerKey = 'pheme.mlsOwner';
   static const _freshKey = 'pheme.mlsFreshAccepted';
+  static const _groupsKey = 'pheme.mlsGroups.v1';
   static const _stateFile = 'mls.state';
   static const _keyLength = 32;
 
@@ -111,8 +113,84 @@ class MlsStore {
   Future<void> acceptFresh() =>
       _storage.write(key: _freshKey, value: 'true', iOptions: _iosOptions);
 
+  // --- which group each conversation is ---------------------------------------------------------
+  //
+  // The one thing about a conversation's encrypted group that this device CANNOT work out for itself:
+  // the group's id. Everything else it already knows — it is holding the ratchet.
+  //
+  // And the id never changes. The server sets it once, on a compare-and-set, and the only thing that
+  // can move it is a reset, which is rare, deliberate, and remembers the old id anyway.
+  //
+  // So asking the server for it every time a chat is opened is asking a question we already know the
+  // answer to, and paying three network round trips to hear it — during which the app cannot decrypt a
+  // single message and tells the user encryption is "still being set up". It is not. It is just
+  // waiting for the post.
+
+  /// Every group id a conversation has ever had, current one first. Empty when we have never settled
+  /// this conversation on this device.
+  Future<List<String>> groupIds(String conversationId) async {
+    final all = await _groups();
+    return all[conversationId] ?? const [];
+  }
+
+  /// Remembers what a conversation's groups are, so the next open needs no network at all.
+  Future<void> rememberGroupIds(
+    String conversationId,
+    List<String> groupIds,
+  ) async {
+    if (groupIds.isEmpty) return;
+
+    final all = await _groups();
+    final existing = all[conversationId];
+    if (existing != null && _sameList(existing, groupIds)) return;
+
+    all[conversationId] = groupIds;
+    await _storage.write(
+      key: _groupsKey,
+      value: jsonEncode(all),
+      iOptions: _iosOptions,
+    );
+  }
+
+  Map<String, List<String>>? _groupsCache;
+
+  Future<Map<String, List<String>>> _groups() async {
+    final cached = _groupsCache;
+    if (cached != null) return cached;
+
+    final raw = await _storage.read(key: _groupsKey, iOptions: _iosOptions);
+    final out = <String, List<String>>{};
+
+    if (raw != null) {
+      try {
+        (jsonDecode(raw) as Map<String, dynamic>).forEach((id, groups) {
+          if (groups is List) {
+            out[id] = groups.whereType<String>().toList();
+          }
+        });
+      } on FormatException {
+        // Corrupt. The worst that costs is one round trip to the server to learn them again.
+      }
+    }
+    return _groupsCache = out;
+  }
+
+  static bool _sameList(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   /// Erases the keys and everything derived from them. Logout.
   Future<void> wipe() async {
+    _groupsCache = null;
+    await _storage.delete(key: _groupsKey, iOptions: _iosOptions);
+    await _wipeKeys();
+  }
+
+  Future<void> _wipeKeys() async {
     final file = await _stateFileHandle();
     if (await file.exists()) await file.delete();
     await _storage.delete(key: _dataKeyKey, iOptions: _iosOptions);
