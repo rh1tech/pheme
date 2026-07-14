@@ -6,6 +6,22 @@
 		<string>Pheme needs access to your photos so you can attach images to the messages you send.</string>
 		<key>NSCameraUsageDescription</key>
 		<string>Pheme uses the camera to scan channel QR codes.</string>
+		<key>NSMicrophoneUsageDescription</key>
+		<string>Pheme uses the microphone for end-to-end encrypted voice calls.</string>
+		<!--
+			audio: keeps the call alive when the app is backgrounded or the screen locks. Without it iOS
+			       suspends the process mid-sentence and the call goes silent.
+			voip:  lets a PushKit push wake the app to ring an incoming call. Apple requires that every
+			       VoIP push report a call to CallKit immediately — a push that does not gets the app
+			       killed, and repeated offences get VoIP delivery revoked entirely.
+			remote-notification: message pushes.
+		-->
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>audio</string>
+			<string>voip</string>
+			<string>remote-notification</string>
+		</array>
 		<key>CADisableMinimumFrameDurationOnPhone</key>
 		<true/>
 		<key>CFBundleDevelopmentRegion</key>

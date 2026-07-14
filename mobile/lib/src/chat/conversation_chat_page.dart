@@ -13,6 +13,7 @@ import '../core/snackbar.dart';
 import '../crypto/mls_errors.dart';
 import '../l10n/app_localizations.dart';
 import '../models/chat_models.dart';
+import '../calls/call_controller.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
 import '../widgets/adaptive/adaptive_scaffold.dart';
 import '../widgets/error_view.dart';
@@ -113,6 +114,15 @@ class _ChatViewState extends ConsumerState<_ChatView> {
     }
   }
 
+  Future<void> _placeCall() async {
+    try {
+      await ref.read(callProvider.notifier).place(_conversationId);
+    } on Object catch (e) {
+      if (!mounted) return;
+      notifyError(context, AppLocalizations.of(context).t('call.failed'), e);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -120,6 +130,11 @@ class _ChatViewState extends ConsumerState<_ChatView> {
     final myUserId = ref.watch(myUserIdProvider);
     final feed = ref.watch(messageFeedProvider(_conversationId));
     final title = conversationTitle(conversation, myUserId, l10n);
+
+    // The server answers 503 when it has no TURN, and that is not a transient failure — it is how the
+    // client learns not to offer a call button at all.
+    final callingAvailable = ref.watch(callingAvailableProvider).value ?? false;
+    final onACall = ref.watch(callProvider) != null;
 
     final other = conversation.otherMember(myUserId);
     final avatarId = conversation.isGroup
@@ -156,6 +171,16 @@ class _ChatViewState extends ConsumerState<_ChatView> {
         ],
       ),
       trailing: [
+        // 1:1 only — the call code is a two-party exchange, and a group call would need signed
+        // signalling (every member can derive every other member's key, which gives group
+        // authenticity but not sender authenticity). Hidden entirely when the server has no TURN
+        // configured, rather than offered as a button that cannot work.
+        if (!conversation.isGroup && callingAvailable && !onACall)
+          AdaptiveIconButton(
+            icon: Icons.call_outlined,
+            semanticLabel: l10n.t('call.start'),
+            onPressed: feed.joined ? () => _placeCall() : null,
+          ),
         AdaptiveIconButton(
           icon: Icons.lock_outline,
           semanticLabel: l10n.t('safety.verify'),

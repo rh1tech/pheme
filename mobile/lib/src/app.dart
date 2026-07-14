@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/providers.dart';
 import 'l10n/app_localizations.dart';
 import 'push/push_service.dart';
+import 'calls/call_ui.dart';
 import 'router.dart';
 import 'theme.dart';
 
@@ -79,7 +80,10 @@ class _PhemeAppState extends ConsumerState<PhemeApp> {
       // with the Iris brand colour and the resolved brightness.
       builder: (context, child) => CupertinoTheme(
         data: _cupertinoTheme(context, themeMode),
-        child: child ?? const SizedBox.shrink(),
+        // The call surface sits ABOVE the router, not inside a route. A call outlives the screen it
+        // was placed from — walk back to the conversation list mid-call and the bar comes with you —
+        // and an incoming call has to be able to ring over whatever happens to be on screen.
+        child: CallOverlay(child: child ?? const SizedBox.shrink()),
       ),
     );
   }

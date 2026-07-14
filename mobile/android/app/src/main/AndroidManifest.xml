@@ -5,6 +5,16 @@
     <!-- Camera permission for scanning channel QR codes (mobile_scanner). -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
+
+    <!-- Voice calls. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Routing between the earpiece, the loudspeaker and a headset. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <!-- API 31+: required to route a call to a paired headset. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <!-- Keeps the connection alive while the screen is off during a call. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <application
         android:label="Pheme"
         android:name="${applicationName}"
