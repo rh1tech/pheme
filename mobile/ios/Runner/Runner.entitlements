@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		The push entitlement. Without it the app receives no remote notifications at all — neither
+		message pushes nor the VoIP pushes that ring an incoming call — and there was no entitlements
+		file in this project before now, which is to say push has never actually been entitled.
+
+		`development` targets Apple's sandbox APNs gateway. A release build must be signed with
+		`production`, and the server must be pointed at the matching gateway (PHEME_APNS_PRODUCTION):
+		a token minted against one gateway is rejected by the other with BadDeviceToken, which is the
+		single most common reason a VoIP push silently never arrives.
+	-->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

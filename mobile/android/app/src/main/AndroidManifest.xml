@@ -15,6 +15,31 @@
     <!-- Keeps the connection alive while the screen is off during a call. -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+
+    <!--
+        The lock-screen ringer.
+
+        A full-screen intent, NOT ConnectionService. ConnectionService buys the system in-call UI and
+        Telecom audio routing, at the cost of MANAGE_OWN_CALLS, a PhoneAccount the user has to enable
+        by hand on several OEMs, and a long tail of vendor breakage. For a 1:1 audio call with our own
+        in-call UI, a high-importance full-screen-intent notification gives us the one thing we
+        actually need — to ring a locked phone — and nothing we do not.
+
+        Android 14+ grants USE_FULL_SCREEN_INTENT automatically only to apps whose core function is
+        calling; otherwise it silently degrades to a heads-up notification. It also needs a Play
+        Console declaration.
+    -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+
+    <!--
+        The foreground service that holds the microphone for the duration of a call.
+
+        Type `microphone`, not `phoneCall`: phoneCall requires MANAGE_OWN_CALLS and a Telecom-managed
+        call, which is the ConnectionService path we are deliberately not on.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <application
         android:label="Pheme"
         android:name="${applicationName}"
@@ -27,7 +52,9 @@
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues

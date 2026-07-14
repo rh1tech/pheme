@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'src/app.dart';
+import 'src/calls/call_service.dart';
 import 'src/core/app_config.dart';
 import 'src/core/providers.dart';
 import 'src/core/settings_store.dart';
@@ -35,16 +36,25 @@ Future<void> main() async {
   final push = PushService();
   await push.init();
 
+  final container = ProviderContainer(
+    overrides: [
+      initialAppStateProvider.overrideWithValue(initial),
+      secureStorageProvider.overrideWithValue(storage),
+      tokenStoreProvider.overrideWithValue(tokenStore),
+      settingsStoreProvider.overrideWithValue(settingsStore),
+      pushServiceProvider.overrideWithValue(push),
+    ],
+  );
+
+  // Listens for the platform ringer BEFORE the first frame, and outside the widget tree.
+  //
+  // A call has to be answerable when the app was not running at all — cold-launched in the background
+  // by a VoIP push, with no route mounted and nothing on screen. If this lived in a widget, the accept
+  // event would arrive before there was a widget to hear it, and the user would tap Answer on a call
+  // screen wired to nothing.
+  container.read(callServiceProvider).start();
+
   runApp(
-    ProviderScope(
-      overrides: [
-        initialAppStateProvider.overrideWithValue(initial),
-        secureStorageProvider.overrideWithValue(storage),
-        tokenStoreProvider.overrideWithValue(tokenStore),
-        settingsStoreProvider.overrideWithValue(settingsStore),
-        pushServiceProvider.overrideWithValue(push),
-      ],
-      child: const PhemeApp(),
-    ),
+    UncontrolledProviderScope(container: container, child: const PhemeApp()),
   );
 }
