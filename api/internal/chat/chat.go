@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/calls"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
@@ -40,7 +41,14 @@ type Handler struct {
 	// Limiter may be nil (tests). It guards the endpoints where a caller can generate
 	// work or credentials for free — call signalling and TURN credential minting.
 	Limiter ratelimit.Limiter
-	Logger  *slog.Logger
+	// Blobs stores the encrypted photos members attach to messages. Nil disables
+	// attachments: the endpoints refuse rather than pretend.
+	//
+	// What it holds is ciphertext sealed under a key the server never receives — the key
+	// travels inside the MLS-encrypted message that references the photo. So this is a
+	// store of things it cannot open, which is the point.
+	Blobs  blob.Store
+	Logger *slog.Logger
 }
 
 func (h *Handler) logger() *slog.Logger {
@@ -58,6 +66,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/conversations/{id}", h.getConversation)
 	mux.HandleFunc("DELETE /v1/conversations/{id}", h.deleteConversation)
 	mux.HandleFunc("GET /v1/conversations/{id}/messages", h.listMessages)
+	mux.HandleFunc("POST /v1/conversations/{id}/attachments", h.uploadAttachment)
+	mux.HandleFunc("GET /v1/conversations/{id}/attachments/{attachmentId}", h.getAttachment)
 	mux.HandleFunc("POST /v1/conversations/{id}/messages", h.postMessage)
 	mux.HandleFunc("GET /v1/conversations/{id}/members", h.listMembers)
 	mux.HandleFunc("POST /v1/conversations/{id}/members", h.addMember)

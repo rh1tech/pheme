@@ -20,6 +20,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -30,6 +31,8 @@ import '../models/chat_models.dart';
 import '../rust/api/mls.dart' as rust;
 import 'chat_cache.dart';
 import 'chat_content.dart';
+import 'image_size.dart';
+import 'photo_crypto.dart';
 import 'mls_device.dart';
 import 'mls_errors.dart';
 import 'mls_session.dart';
@@ -674,15 +677,33 @@ class MlsService {
   Future<ChatMessage> sendMessage(
     Conversation conversation,
     String myUserId,
-    String body,
-  ) async {
+    String body, {
+    String? replyTo,
+    List<Uint8List> photos = const [],
+  }) async {
     final session = await this.session(myUserId);
     final groupId = await ensureGroup(conversation, myUserId);
     if (groupId == null) throw const NotInGroupException();
 
+    // The photos go up FIRST, and each gets a fresh key.
+    //
+    // The order matters: the message is what carries the keys, so a message posted before its photos
+    // exist would reference blobs nobody can fetch. Upload first, and if an upload fails the message
+    // is simply never sent — better than a bubble with a permanent hole in it.
+    final attachments = <ChatPhoto>[];
+    for (final photo in photos) {
+      attachments.add(await _uploadPhoto(conversation.id, photo));
+    }
+
+    final content = ChatContent(
+      body: body,
+      replyTo: replyTo,
+      photos: attachments,
+    );
+
     final ciphertext = await session.encrypt(
       groupId,
-      serializeContent(ChatContent(body: body)),
+      serializeContent(content),
     );
     final message = await _repo.sendChatMessage(
       conversation.id,
@@ -690,8 +711,44 @@ class MlsService {
       ContentType.application,
     );
 
-    await _cache.cacheBody(conversation.id, message.id, body);
+    await _cache.cacheContent(conversation.id, message.id, content);
     return message;
+  }
+
+  /// Seals one photo, uploads the ciphertext, and returns the reference that goes inside the message.
+  ///
+  /// The key is minted here and travels ONLY in the return value — which the caller puts inside the
+  /// MLS-encrypted content. It is never sent to the server, never logged, and never stored anywhere
+  /// but the message. That is the entire difference between an encrypted photo and a photo in a
+  /// database.
+  Future<ChatPhoto> _uploadPhoto(
+    String conversationId,
+    Uint8List plaintext,
+  ) async {
+    final size = await decodeImageSize(plaintext);
+    final sealed = await sealPhoto(plaintext);
+
+    final id = await _repo.uploadAttachment(conversationId, sealed.bytes);
+    if (id.isEmpty) throw Exception('could not upload that photo');
+
+    return ChatPhoto(
+      id: id,
+      key: base64Encode(sealed.key),
+      width: size.width,
+      height: size.height,
+      mime: 'image/jpeg',
+      size: plaintext.length,
+    );
+  }
+
+  /// Fetches and opens one photo. The bytes are ready to draw.
+  ///
+  /// Unlike a message, a photo CAN be fetched twice — the blob stays on the server and the key stays
+  /// in the message, so nothing is consumed by reading it. That is why photos are cached for speed
+  /// rather than for correctness, which is the opposite of everything else here.
+  Future<Uint8List> fetchPhoto(String conversationId, ChatPhoto photo) async {
+    final sealed = await _repo.downloadAttachment(conversationId, photo.id);
+    return openPhoto(keyBase64: photo.key, sealed: sealed);
   }
 
   /// Decrypts a message against whichever of the conversation's groups it belongs to, and caches the
@@ -700,12 +757,12 @@ class MlsService {
   /// Returns the cached body when we have already read it, and null when this device cannot read it at
   /// all. Null is a real answer, not a failure: MLS gives a device no access to what was said before
   /// it joined.
-  Future<String?> decryptMessage(
+  Future<ChatContent?> decryptMessage(
     String conversationId,
     String myUserId,
     ChatMessage message,
   ) async {
-    final cached = _cache.body(conversationId, message.id);
+    final cached = _cache.content(conversationId, message.id);
     if (cached != null) return cached;
 
     final groups = _readableGroups[conversationId];
@@ -715,9 +772,9 @@ class MlsService {
     final plaintext = await session.decryptAny(groups, message.ciphertext);
     if (plaintext == null) return null;
 
-    final body = parseContent(plaintext).body;
-    await _cache.cacheBody(conversationId, message.id, body);
-    return body;
+    final content = parseContent(plaintext);
+    await _cache.cacheContent(conversationId, message.id, content);
+    return content;
   }
 
   /// Posts the record of a call into the conversation, encrypted like anything else.
@@ -734,10 +791,10 @@ class MlsService {
     final state = await _repo.mlsGroupState(conversationId);
     if (!state.isEstablished || !await session.hasGroup(state.groupId)) return;
 
-    final body = '{"outcome":"$outcome"}';
+    final content = ChatContent(body: '{"outcome":"$outcome"}');
     final ciphertext = await session.encrypt(
       state.groupId,
-      serializeContent(ChatContent(body: body)),
+      serializeContent(content),
     );
     final message = await _repo.sendChatMessage(
       conversationId,
@@ -747,7 +804,7 @@ class MlsService {
 
     // Straight into the cache: we will never be able to decrypt it. Without this the caller — the one
     // person who knows the call went unanswered — would see its own record of it sealed.
-    await _cache.cacheBody(conversationId, message.id, body);
+    await _cache.cacheContent(conversationId, message.id, content);
   }
 
   // --- calls -----------------------------------------------------------------------------------

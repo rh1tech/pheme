@@ -199,6 +199,22 @@ type Store interface {
 	// conversation, keyed by conversation id, for chat-list ordering/preview.
 	LastChatMessagesByConversations(ctx context.Context, conversationIDs []string) (map[string]domain.ChatMessage, error)
 
+	// CreateAttachment records that an encrypted photo belongs to a conversation. The
+	// bytes live in the blob store; this is what authorises a download and what says
+	// which blobs to delete when the conversation goes.
+	CreateAttachment(ctx context.Context, a domain.Attachment) error
+	// GetAttachment returns an attachment record, or ErrNotFound.
+	//
+	// The caller MUST check the conversation id it returns against the one in the
+	// request. Without that, a member of any conversation could fetch any attachment:
+	// their membership of the conversation in the URL would be satisfied while the blob
+	// belonged to a different one entirely.
+	GetAttachment(ctx context.Context, id string) (domain.Attachment, error)
+	// ListAttachmentIDs returns every attachment id in a conversation, for cleanup.
+	ListAttachmentIDs(ctx context.Context, conversationID string) ([]string, error)
+	// DeleteAttachments removes a conversation's attachment records.
+	DeleteAttachments(ctx context.Context, conversationID string) error
+
 	// MLSGroupState returns the conversation's MLS group id and epoch. The group id is
 	// empty until somebody establishes the group.
 	MLSGroupState(ctx context.Context, conversationID string) (domain.MLSGroupState, error)

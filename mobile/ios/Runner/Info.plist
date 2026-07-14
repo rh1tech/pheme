@@ -3,7 +3,7 @@
 <plist version="1.0">
 	<dict>
 		<key>NSPhotoLibraryUsageDescription</key>
-		<string>Pheme needs access to your photos so you can attach images to the messages you send.</string>
+		<string>Pheme needs access to your photos so you can send them in your end-to-end encrypted chats.</string>
 		<key>NSCameraUsageDescription</key>
 		<string>Pheme uses the camera to scan channel QR codes.</string>
 		<key>NSMicrophoneUsageDescription</key>

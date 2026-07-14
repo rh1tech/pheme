@@ -4,10 +4,15 @@
 // bottom-align when there are few of them, keeps the newest in view, and holds scroll position when
 // an older page is prepended, all without the manual scroll-anchoring the web has to do.
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
+
+import '../crypto/chat_content.dart';
 
 import '../core/providers.dart';
 import '../core/snackbar.dart';
@@ -27,6 +32,8 @@ import 'safety_number_sheet.dart';
 import 'widgets/call_event_bubble.dart';
 import 'widgets/conversation_avatar.dart';
 import 'widgets/message_bubble.dart';
+import 'widgets/photo_grid.dart';
+import 'widgets/reply_quote.dart';
 
 class ConversationChatPage extends ConsumerWidget {
   const ConversationChatPage({super.key, required this.conversationId});
@@ -67,6 +74,9 @@ class _ChatView extends ConsumerStatefulWidget {
 /// screen instead, with a count of what they have not seen.
 const _stickToBottom = 120.0;
 
+/// How many photos may ride on one message. Telegram's album is ten; so is this.
+const _maxPhotos = 10;
+
 class _ChatViewState extends ConsumerState<_ChatView> {
   final _composer = TextEditingController();
   final _scroll = ScrollController();
@@ -78,6 +88,17 @@ class _ChatViewState extends ConsumerState<_ChatView> {
 
   /// Messages that have arrived while the user was reading back through history.
   int _unseen = 0;
+
+  /// Photos picked but not yet sent, as decoded bytes.
+  ///
+  /// image_picker is asked to resize and re-encode, which is not only about size: reading the picture
+  /// back out of the platform's own encoder STRIPS THE METADATA. A phone photo routinely carries the
+  /// GPS coordinates of where it was taken inside its EXIF block, and shipping an end-to-end encrypted
+  /// photo with the sender's home address inside it would be a fine joke at our expense.
+  final _photos = <Uint8List>[];
+
+  /// The message being replied to, if any.
+  ChatMessage? _replyingTo;
 
   String get _conversationId => widget.conversation.id;
 
@@ -136,18 +157,63 @@ class _ChatViewState extends ConsumerState<_ChatView> {
     setState(() => _unseen++);
   }
 
+  /// Picks photos. Resized and re-encoded by the platform, which is what strips the EXIF.
+  Future<void> _attach() async {
+    try {
+      final picked = await ImagePicker().pickMultiImage(
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 82,
+        limit: _maxPhotos - _photos.length,
+      );
+      if (picked.isEmpty || !mounted) return;
+
+      final bytes = <Uint8List>[];
+      for (final file in picked) {
+        bytes.add(await file.readAsBytes());
+      }
+      if (!mounted) return;
+
+      setState(() {
+        _photos.addAll(bytes);
+        if (_photos.length > _maxPhotos) {
+          _photos.removeRange(_maxPhotos, _photos.length);
+        }
+      });
+    } on Object catch (e) {
+      if (!mounted) return;
+      notifyError(
+        context,
+        AppLocalizations.of(context).t('chat.photoFailed'),
+        e,
+      );
+    }
+  }
+
+  void _startReply(ChatMessage message) {
+    setState(() => _replyingTo = message);
+  }
+
   Future<void> _send() async {
     final body = _composer.text.trim();
-    if (body.isEmpty || _sending) return;
+    // A photo with no caption is a perfectly good message.
+    if ((body.isEmpty && _photos.isEmpty) || _sending) return;
+
+    final photos = List<Uint8List>.from(_photos);
+    final replyTo = _replyingTo?.id;
 
     setState(() => _sending = true);
     try {
       await ref
           .read(messageFeedProvider(_conversationId).notifier)
-          .send(widget.conversation, body);
+          .send(widget.conversation, body, replyTo: replyTo, photos: photos);
       if (!mounted) return;
 
       _composer.clear();
+      setState(() {
+        _photos.clear();
+        _replyingTo = null;
+      });
       HapticFeedback.lightImpact();
       // Sending always follows your own message down. You wrote it; you want to see it land.
       _atBottom = true;
@@ -275,6 +341,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                   conversation: conversation,
                   myUserId: myUserId,
                   scroll: _scroll,
+                  onReply: _startReply,
                 ),
                 Positioned(
                   right: 12,
@@ -293,10 +360,37 @@ class _ChatViewState extends ConsumerState<_ChatView> {
             sending: _sending,
             onSend: _send,
             notice: _notice(feed, l10n),
+            onAttach: _photos.length >= _maxPhotos ? () {} : _attach,
+            photos: _photos,
+            onRemovePhoto: (i) => setState(() => _photos.removeAt(i)),
+            replyingTo: _replyingTo,
+            replyAuthor: _replyAuthor(conversation),
+            replyText: _replyText(feed, l10n),
+            onCancelReply: () => setState(() => _replyingTo = null),
           ),
         ],
       ),
     );
+  }
+
+  /// Who wrote the message being replied to.
+  String? _replyAuthor(Conversation conversation) {
+    final replyingTo = _replyingTo;
+    if (replyingTo == null) return null;
+    final member = conversation.memberOf(replyingTo.senderId);
+    return member == null ? null : userLabel(member.user);
+  }
+
+  /// The text of the message being replied to. Null when this device cannot read it — which is a real
+  /// state, not a loading one, and ReplyQuote says so.
+  String? _replyText(MessageFeedState feed, AppLocalizations l10n) {
+    final replyingTo = _replyingTo;
+    if (replyingTo == null) return null;
+
+    final content = feed.contents[replyingTo.id];
+    if (content == null) return null;
+    if (content.body.isNotEmpty) return content.body;
+    return content.hasPhotos ? l10n.t('chat.photo') : '';
   }
 
   /// The one line above the composer that explains why sending may not work yet. There are exactly
@@ -395,12 +489,14 @@ class _Feed extends ConsumerWidget {
     required this.conversation,
     required this.myUserId,
     required this.scroll,
+    required this.onReply,
   });
 
   final MessageFeedState feed;
   final Conversation conversation;
   final String myUserId;
   final ScrollController scroll;
+  final void Function(ChatMessage) onReply;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -455,7 +551,9 @@ class _Feed extends ConsumerWidget {
               message: message,
               conversation: conversation,
               myUserId: myUserId,
-              body: feed.bodies[message.id],
+              content: feed.contents[message.id],
+              feed: feed,
+              onReply: onReply,
               // A new day always begins a new run, whatever the clock says.
               startsRun: startsDay || !_sameRun(older, message),
               endsRun: !_sameRun(message, newer),
@@ -523,12 +621,14 @@ class _FeedSkeleton extends StatelessWidget {
   }
 }
 
-class _Message extends StatelessWidget {
+class _Message extends ConsumerWidget {
   const _Message({
     required this.message,
     required this.conversation,
     required this.myUserId,
-    required this.body,
+    required this.content,
+    required this.feed,
+    required this.onReply,
     required this.startsRun,
     required this.endsRun,
   });
@@ -536,16 +636,23 @@ class _Message extends StatelessWidget {
   final ChatMessage message;
   final Conversation conversation;
   final String myUserId;
-  final String? body;
+
+  /// Null when this device cannot read the message at all.
+  final ChatContent? content;
+
+  /// Needed to resolve a reply's quote from a message we already hold.
+  final MessageFeedState feed;
+
+  final void Function(ChatMessage) onReply;
   final bool startsRun;
   final bool endsRun;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isOwn = message.senderId == myUserId;
 
     if (message.contentType == ContentType.callEvent) {
-      final outcome = CallOutcome.parse(body);
+      final outcome = CallOutcome.parse(content?.body);
       if (outcome == null) return const SizedBox.shrink();
       return CallEventBubble(
         outcome: outcome,
@@ -561,21 +668,61 @@ class _Message extends StatelessWidget {
       senderName = member == null ? null : userLabel(member.user);
     }
 
+    final photos = content?.photos ?? const <ChatPhoto>[];
+
     return MessageBubble(
-      body: body,
+      body: content?.body,
       createdAt: message.createdAt,
       isOwn: isOwn,
       senderName: senderName,
       startsRun: startsRun,
       endsRun: endsRun,
-      onLongPress: body == null ? null : () => _showActions(context, body!),
+      onLongPress: content == null
+          ? null
+          : () => _showActions(context, ref, content!),
+      quote: _quote(context),
+      photos: photos.isEmpty
+          ? null
+          : PhotoGrid(conversationId: conversation.id, photos: photos),
     );
   }
 
-  /// Long-press a message to copy it. The one action there is, because it is the only one the server
-  /// can support: there is no reply field, no reactions, and a message cannot be edited or deleted
-  /// once it is sealed.
-  void _showActions(BuildContext context, String text) {
+  /// The quoted message, rendered from what THIS DEVICE already holds — never from text copied into
+  /// the reply. A sender who could supply the quote could quote you as saying anything at all.
+  Widget? _quote(BuildContext context) {
+    final replyTo = content?.replyTo;
+    if (replyTo == null) return null;
+
+    ChatMessage? quoted;
+    for (final m in feed.messages) {
+      if (m.id == replyTo) {
+        quoted = m;
+        break;
+      }
+    }
+
+    // We do not hold it: it was sent before this device joined the group, and no amount of waiting
+    // will change that. ReplyQuote says so rather than pretending to load.
+    final quotedContent = quoted == null ? null : feed.contents[quoted.id];
+
+    String? author;
+    if (quoted != null) {
+      final member = conversation.memberOf(quoted.senderId);
+      author = member == null ? null : userLabel(member.user);
+    }
+
+    return ReplyQuote(author: author, text: _quoteText(context, quotedContent));
+  }
+
+  /// What a quote shows. A photo with no caption still has to say something.
+  String? _quoteText(BuildContext context, ChatContent? quoted) {
+    if (quoted == null) return null;
+    if (quoted.body.isNotEmpty) return quoted.body;
+    if (quoted.hasPhotos) return AppLocalizations.of(context).t('chat.photo');
+    return '';
+  }
+
+  void _showActions(BuildContext context, WidgetRef ref, ChatContent content) {
     final l10n = AppLocalizations.of(context);
     HapticFeedback.mediumImpact();
 
@@ -583,15 +730,29 @@ class _Message extends StatelessWidget {
       context: context,
       showDragHandle: true,
       builder: (sheet) => SafeArea(
-        child: ListTile(
-          leading: const Icon(Icons.copy_outlined),
-          title: Text(l10n.t('common.copy')),
-          onTap: () async {
-            await Clipboard.setData(ClipboardData(text: text));
-            if (!sheet.mounted) return;
-            Navigator.of(sheet).pop();
-            notifySuccess(context, l10n.t('common.copied'));
-          },
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.reply_outlined),
+              title: Text(l10n.t('chat.reply')),
+              onTap: () {
+                Navigator.of(sheet).pop();
+                onReply(message);
+              },
+            ),
+            if (content.body.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.copy_outlined),
+                title: Text(l10n.t('common.copy')),
+                onTap: () async {
+                  await Clipboard.setData(ClipboardData(text: content.body));
+                  if (!sheet.mounted) return;
+                  Navigator.of(sheet).pop();
+                  notifySuccess(context, l10n.t('common.copied'));
+                },
+              ),
+          ],
         ),
       ),
     );
@@ -604,6 +765,13 @@ class _Composer extends StatelessWidget {
     required this.sending,
     required this.onSend,
     required this.notice,
+    required this.onAttach,
+    required this.photos,
+    required this.onRemovePhoto,
+    required this.replyingTo,
+    required this.replyAuthor,
+    required this.replyText,
+    required this.onCancelReply,
   });
 
   final TextEditingController controller;
@@ -611,10 +779,27 @@ class _Composer extends StatelessWidget {
   final VoidCallback onSend;
   final String? notice;
 
+  final VoidCallback onAttach;
+
+  /// Photos picked but not yet sent. Held as decoded bytes so the strip can show them without
+  /// touching the disk again.
+  final List<Uint8List> photos;
+  final void Function(int) onRemovePhoto;
+
+  final ChatMessage? replyingTo;
+  final String? replyAuthor;
+  final String? replyText;
+  final VoidCallback onCancelReply;
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
+
+    // Something to send: text, or a photo, or both. A photo with no caption is a perfectly good
+    // message, so an empty box must not disable the button when a picture is attached.
+    final canSend =
+        !sending && (controller.text.trim().isNotEmpty || photos.isNotEmpty);
 
     return SafeArea(
       top: false,
@@ -624,7 +809,7 @@ class _Composer extends StatelessWidget {
             top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.5)),
           ),
         ),
-        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
         child: Column(
           children: [
             if (notice != null)
@@ -649,9 +834,53 @@ class _Composer extends StatelessWidget {
                   ],
                 ),
               ),
+
+            // What you are replying to, above the box you are typing into — so the context is where
+            // the eye already is.
+            if (replyingTo != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: ReplyQuote(
+                        author: replyAuthor,
+                        text: replyText,
+                        compact: true,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: onCancelReply,
+                      icon: const Icon(Icons.close, size: 18),
+                      tooltip: l10n.t('common.cancel'),
+                    ),
+                  ],
+                ),
+              ),
+
+            if (photos.isNotEmpty)
+              SizedBox(
+                height: 72,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.only(bottom: 8),
+                  itemCount: photos.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 6),
+                  itemBuilder: (context, i) => _PickedPhoto(
+                    bytes: photos[i],
+                    onRemove: () => onRemovePhoto(i),
+                  ),
+                ),
+              ),
+
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
+                IconButton(
+                  onPressed: sending ? null : onAttach,
+                  icon: const Icon(Icons.photo_outlined),
+                  tooltip: l10n.t('chat.attachPhoto'),
+                ),
                 Expanded(
                   child: TextField(
                     controller: controller,
@@ -675,7 +904,7 @@ class _Composer extends StatelessWidget {
                 ),
                 const SizedBox(width: 6),
                 IconButton.filled(
-                  onPressed: sending ? null : onSend,
+                  onPressed: canSend ? onSend : null,
                   icon: sending
                       ? const AdaptiveProgress(size: 16)
                       : const Icon(Icons.arrow_upward, size: 20),
@@ -686,6 +915,40 @@ class _Composer extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// A photo waiting to be sent.
+class _PickedPhoto extends StatelessWidget {
+  const _PickedPhoto({required this.bytes, required this.onRemove});
+
+  final Uint8List bytes;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.memory(bytes, width: 64, height: 64, fit: BoxFit.cover),
+        ),
+        Positioned(
+          top: -6,
+          right: -6,
+          child: IconButton(
+            onPressed: onRemove,
+            iconSize: 16,
+            visualDensity: VisualDensity.compact,
+            style: IconButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.surface,
+            ),
+            icon: const Icon(Icons.close),
+          ),
+        ),
+      ],
     );
   }
 }

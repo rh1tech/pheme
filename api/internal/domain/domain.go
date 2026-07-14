@@ -343,6 +343,25 @@ type ConversationMember struct {
 // its content is an opaque, client-encrypted Ciphertext the server never reads.
 // ContentType lets clients tell an application message from an MLS control
 // message (Commit/Welcome) that rides the same ordered log.
+// Attachment binds an encrypted photo to the conversation it belongs to.
+//
+// It records nothing about the photo, because the server knows nothing about the photo. What it
+// received was AES-GCM ciphertext sealed under a key that lives inside the MLS-encrypted message
+// referencing it — so there is no width, no height, no content type and no filename here. Those are
+// properties of the plaintext, and they travel with the key.
+//
+// The record exists for exactly two reasons: to authorise a download (this blob belongs to THAT
+// conversation, so only its members may fetch it), and to know what to delete when the conversation
+// goes.
+type Attachment struct {
+	// ID is the blob id, which is also the id the encrypted message refers to.
+	ID             string    `bson:"_id,omitempty" json:"id"`
+	ConversationID string    `bson:"conversationId" json:"conversationId"`
+	// Size of the ciphertext. The one thing the server does learn.
+	Size      int       `bson:"size" json:"size"`
+	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
+}
+
 type ChatMessage struct {
 	ID             string `bson:"_id,omitempty" json:"id"`
 	ConversationID string `bson:"conversationId" json:"conversationId"`

@@ -25,6 +25,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../rust/api/vault.dart';
+import 'chat_content.dart';
 
 class ChatCache {
   ChatCache(this._storage);
@@ -41,8 +42,12 @@ class ChatCache {
 
   final FlutterSecureStorage _storage;
 
-  /// conversationId -> (messageId -> body). Loaded lazily, written through.
-  final _bodies = <String, Map<String, String>>{};
+  /// conversationId -> (messageId -> the SERIALISED CONTENT, not just the body).
+  ///
+  /// The whole content, because a message is not only text: it may carry photos and a reply. Storing
+  /// just the body would mean a photo message came back as a bare caption the second time it was
+  /// looked at — and there is no second decrypt to recover the rest from.
+  final _contents = <String, Map<String, String>>{};
 
   /// The newest body per conversation, for the conversation-list preview. The list cannot decrypt
   /// anything — it only ever sees ciphertext — so a preview can only come from here.
@@ -69,9 +74,10 @@ class ChatCache {
     );
   }
 
-  /// Every body known for a conversation. Empty is a legitimate answer, not a failure.
+  /// Every message this device has managed to read in a conversation. Empty is a legitimate answer,
+  /// not a failure.
   Future<Map<String, String>> load(String conversationId) async {
-    final cached = _bodies[conversationId];
+    final cached = _contents[conversationId];
     if (cached != null) return cached;
 
     final bodies = <String, String>{};
@@ -95,28 +101,44 @@ class ChatCache {
       }
     }
 
-    _bodies[conversationId] = bodies;
+    _contents[conversationId] = bodies;
     final newest = bodies.values.isNotEmpty ? bodies.values.last : null;
-    if (newest != null) _previews.putIfAbsent(conversationId, () => newest);
+    if (newest != null) {
+      _previews.putIfAbsent(conversationId, () => _previewOf(newest));
+    }
     return bodies;
   }
 
-  /// Records a body on first sight. Also becomes the conversation's preview.
-  Future<void> cacheBody(
+  /// Records a message's content on first sight. Also becomes the conversation's preview.
+  Future<void> cacheContent(
     String conversationId,
     String messageId,
-    String body,
+    ChatContent content,
   ) async {
-    final bodies = await load(conversationId);
-    if (bodies[messageId] == body) return;
-    bodies[messageId] = body;
-    _previews[conversationId] = body;
-    await _flush(conversationId, bodies);
+    final serialised = utf8.decode(serializeContent(content));
+
+    final contents = await load(conversationId);
+    if (contents[messageId] == serialised) return;
+
+    contents[messageId] = serialised;
+    _previews[conversationId] = _previewOf(serialised);
+    await _flush(conversationId, contents);
   }
 
-  /// The body of a message, if this device ever managed to read it.
-  String? body(String conversationId, String messageId) =>
-      _bodies[conversationId]?[messageId];
+  /// A message's content, if this device ever managed to read it.
+  ChatContent? content(String conversationId, String messageId) {
+    final serialised = _contents[conversationId]?[messageId];
+    if (serialised == null) return null;
+    return parseContent(Uint8List.fromList(utf8.encode(serialised)));
+  }
+
+  /// What a conversation-list row shows: the caption, or a note that it was a photo.
+  String _previewOf(String serialised) {
+    final content = parseContent(Uint8List.fromList(utf8.encode(serialised)));
+    if (content.body.isNotEmpty) return content.body;
+    // A photo with no caption still has to say something. An empty row reads as a bug.
+    return content.hasPhotos ? '__photo__' : '';
+  }
 
   /// The newest body seen for a conversation — the list preview.
   String? preview(String conversationId) => _previews[conversationId];
@@ -138,7 +160,7 @@ class ChatCache {
 
   /// Forgets a conversation's bodies — it was deleted.
   Future<void> forget(String conversationId) async {
-    _bodies.remove(conversationId);
+    _contents.remove(conversationId);
     _previews.remove(conversationId);
     final file = await _file(conversationId);
     if (await file.exists()) await file.delete();
@@ -147,7 +169,7 @@ class ChatCache {
   /// Erases every decrypted body. Logout: this is the plaintext the encryption exists to protect,
   /// and leaving it behind on a shared device would defeat the whole thing.
   Future<void> wipe() async {
-    _bodies.clear();
+    _contents.clear();
     _previews.clear();
     final dir = await _dir();
     if (await dir.exists()) await dir.delete(recursive: true);

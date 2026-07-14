@@ -93,6 +93,9 @@ func main() {
 			Store: db,
 			Live:  bus,
 			Push:  pusher,
+			// The same blob store the channel images use. What it holds here is ciphertext
+			// the server cannot open — the key is inside the encrypted message.
+			Blobs: blobs,
 			ICE: chat.ICEConfig{
 				URLs:   cfg.TURNURLs,
 				Secret: cfg.TURNSecret,

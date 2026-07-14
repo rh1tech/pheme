@@ -354,6 +354,12 @@ func (h *Handler) deleteConversation(w http.ResponseWriter, r *http.Request) {
 		recipients = append(recipients, m.UserID)
 	}
 
+	// The photos go with the messages. Their keys lived inside the messages, so a blob left behind
+	// is not merely orphaned — it is landfill nobody, including us, will ever be able to open.
+	//
+	// Before the conversation row goes, because the attachment records are keyed on it.
+	h.deleteConversationAttachments(r, convID)
+
 	if err := h.Store.DeleteConversation(r.Context(), convID); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not delete conversation")
 		return

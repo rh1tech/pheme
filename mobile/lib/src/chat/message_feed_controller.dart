@@ -3,6 +3,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/providers.dart';
+import 'dart:typed_data';
+
+import '../crypto/chat_content.dart';
 import '../crypto/mls_errors.dart';
 import '../data/app_providers.dart';
 import '../models/chat_models.dart';
@@ -14,7 +17,7 @@ const _pageSize = 50;
 class MessageFeedState {
   const MessageFeedState({
     this.messages = const [],
-    this.bodies = const {},
+    this.contents = const {},
     this.loading = true,
     this.loadingOlder = false,
     this.joined = false,
@@ -25,8 +28,9 @@ class MessageFeedState {
   /// Oldest first. The view reverses this for display.
   final List<ChatMessage> messages;
 
-  /// messageId -> plaintext. Absent means this device cannot read it, which is a real answer.
-  final Map<String, String?> bodies;
+  /// messageId -> the decrypted content. Absent means this device cannot read it, which is a real
+  /// answer, not a failure — MLS gives a device no access to what was said before it joined.
+  final Map<String, ChatContent?> contents;
 
   final bool loading;
   final bool loadingOlder;
@@ -43,7 +47,7 @@ class MessageFeedState {
 
   MessageFeedState copyWith({
     List<ChatMessage>? messages,
-    Map<String, String?>? bodies,
+    Map<String, ChatContent?>? contents,
     bool? loading,
     bool? loadingOlder,
     bool? joined,
@@ -53,7 +57,7 @@ class MessageFeedState {
   }) {
     return MessageFeedState(
       messages: messages ?? this.messages,
-      bodies: bodies ?? this.bodies,
+      contents: contents ?? this.contents,
       loading: loading ?? this.loading,
       loadingOlder: loadingOlder ?? this.loadingOlder,
       joined: joined ?? this.joined,
@@ -198,7 +202,7 @@ class MessageFeedController extends Notifier<MessageFeedState> {
   /// Decrypts what we have not already read. Every body is cached on first sight, because there is no
   /// second: MLS destroys the message key as it goes.
   ///
-  /// Note what this does NOT do: snapshot state.bodies, fill the snapshot, and write the whole thing
+  /// Note what this does NOT do: snapshot state.contents, fill the snapshot, and write the whole thing
   /// back. Three call sites run this — the first page, an older page, and a live message — and they are
   /// not mutually exclusive. Two of them overlapping would each take a snapshot, each await their way
   /// through a decrypt, and the one that finished last would write back a map that never contained the
@@ -214,18 +218,20 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     final myUserId = ref.read(myUserIdProvider);
 
     for (final message in messages) {
-      if (state.bodies.containsKey(message.id)) continue;
+      if (state.contents.containsKey(message.id)) continue;
 
-      String? body;
+      ChatContent? content;
       try {
-        body = await mls.decryptMessage(_conversationId, myUserId, message);
+        content = await mls.decryptMessage(_conversationId, myUserId, message);
       } on Object {
         // Unreadable on this device. A real answer, not a failure — and never retried, because a
         // second attempt on a consumed key is not merely useless, it is wrong.
-        body = null;
+        content = null;
       }
 
-      state = state.copyWith(bodies: {...state.bodies, message.id: body});
+      state = state.copyWith(
+        contents: {...state.contents, message.id: content},
+      );
     }
   }
 
@@ -233,16 +239,33 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       .read(lastSeenProvider.notifier)
       .markRead(_conversationId, message.createdAt);
 
-  /// Sends a message. The body goes into the local store at send time — MLS destroys the key on
+  /// Sends a message. The content goes into the local store at send time — MLS destroys the key on
   /// encrypt, so this is the only chance we will ever have to read back what we just said.
-  Future<void> send(Conversation conversation, String body) async {
+  Future<void> send(
+    Conversation conversation,
+    String body, {
+    String? replyTo,
+    List<Uint8List> photos = const [],
+  }) async {
     final message = await ref
         .read(mlsServiceProvider)
-        .sendMessage(conversation, ref.read(myUserIdProvider), body);
+        .sendMessage(
+          conversation,
+          ref.read(myUserIdProvider),
+          body,
+          replyTo: replyTo,
+          photos: photos,
+        );
+
+    // Read back what the service actually cached, so the photo references carry the blob ids the
+    // message really has rather than a hopeful reconstruction of them.
+    final content =
+        ref.read(chatCacheProvider).content(conversation.id, message.id) ??
+        ChatContent(body: body, replyTo: replyTo);
 
     state = state.copyWith(
       messages: [...state.messages, message],
-      bodies: {...state.bodies, message.id: body},
+      contents: {...state.contents, message.id: content},
       joined: true,
       peerNotReady: false,
     );

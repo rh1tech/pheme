@@ -29,12 +29,20 @@ class MessageBubble extends StatelessWidget {
     this.startsRun = true,
     this.endsRun = true,
     this.onLongPress,
+    this.quote,
+    this.photos,
   });
 
   /// The decrypted body, or null when this device cannot read the message.
   final String? body;
   final String createdAt;
   final bool isOwn;
+
+  /// The quoted message this one replies to, if any.
+  final Widget? quote;
+
+  /// The photos this message carries, if any.
+  final Widget? photos;
 
   /// Shown above other people's messages in a group. Null in a direct chat — there is only one other
   /// person and their name is in the header.
@@ -117,7 +125,21 @@ class MessageBubble extends StatelessWidget {
                     ),
                   ),
                 ),
-              _Body(body: body, l10n: l10n),
+              // The quote sits above everything, the way a reply reads: context first, then the reply.
+              if (quote != null) quote!,
+
+              if (photos != null) ...[
+                photos!,
+                // A caption gets air above it. A photo with no caption gets none — the gap would be
+                // the only thing in the bubble.
+                if (body != null && body!.isNotEmpty) const SizedBox(height: 6),
+              ],
+
+              // A photo with no caption has no body line at all. An empty Text still takes a row of
+              // leading and leaves a strip of dead space under the picture.
+              if (photos == null || body == null || body!.isNotEmpty)
+                _Body(body: body, l10n: l10n),
+
               // Likewise the timestamp: a run of five messages sent in the same minute does not need
               // five identical clocks down its side.
               if (endsRun) ...[

@@ -443,6 +443,48 @@ class PhemeRepository {
     'contentType': contentType,
   }).then((d) => ChatMessage.fromJson(d));
 
+  /// Uploads one encrypted photo and returns its blob id.
+  ///
+  /// The body is raw ciphertext, not JSON and not multipart: the server stores it as opaque bytes and
+  /// must not be handed a filename or a content type it has no business knowing. What it can open, it
+  /// cannot — the key travels inside the MLS-encrypted message that references this id.
+  Future<String> uploadAttachment(
+    String conversationId,
+    Uint8List sealed,
+  ) async {
+    final res = await _send(
+      () => _dio.post<dynamic>(
+        '/v1/conversations/$conversationId/attachments',
+        data: Stream.fromIterable([sealed]),
+        options: Options(
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': sealed.length,
+          },
+        ),
+      ),
+    );
+    return res['id'] as String? ?? '';
+  }
+
+  /// Fetches one encrypted photo. Still ciphertext — the caller opens it with the key from the message.
+  Future<Uint8List> downloadAttachment(
+    String conversationId,
+    String attachmentId,
+  ) async {
+    try {
+      final res = await _dio.get<List<int>>(
+        '/v1/conversations/$conversationId/attachments/$attachmentId',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(res.data ?? const []);
+    } on DioException catch (e) {
+      final err = e.error;
+      if (err is ApiException || err is AuthException) throw err as Object;
+      throw ApiException(0, e.message ?? 'network error');
+    }
+  }
+
   // --- Group membership ---
 
   Future<List<ConversationMember>> listConversationMembers(String id) =>

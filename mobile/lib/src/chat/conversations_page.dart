@@ -195,6 +195,9 @@ class _ConversationRow extends ConsumerWidget {
     if (last == null) return '';
     // Control traffic is not something a person said. It has no preview.
     if (ContentType.control.contains(last.contentType)) return '';
+    // A photo with no caption. The cache writes a marker rather than an empty string, because an empty
+    // row reads as a bug rather than as a picture.
+    if (cached == '__photo__') return l10n.t('chat.photo');
     if (cached != null && cached.isNotEmpty) return cached;
     return l10n.t('chat.encryptedPreview');
   }

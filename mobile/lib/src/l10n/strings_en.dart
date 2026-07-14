@@ -264,6 +264,12 @@ const Map<String, String> enStrings = {
   // chat — taken from web/src/i18n/en.ts so both clients say the same thing
   'chat.search': 'Search',
   'chat.noResults': 'Nothing found',
+  'chat.reply': 'Reply',
+  'chat.replyUnknown': 'Someone',
+  'chat.replyUnavailable': 'Not available on this device',
+  'chat.attachPhoto': 'Attach photo',
+  'chat.photo': 'Photo',
+  'chat.photoFailed': 'Could not attach that photo',
   'chat.title': 'Chats',
   'chat.tabChats': 'Chats',
   'chat.tabChannels': 'Channels',

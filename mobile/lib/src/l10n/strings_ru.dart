@@ -264,6 +264,12 @@ const Map<String, String> ruStrings = {
   // chat — из web/src/i18n/ru.ts, чтобы оба клиента говорили одинаково
   'chat.search': 'Поиск',
   'chat.noResults': 'Ничего не найдено',
+  'chat.reply': 'Ответить',
+  'chat.replyUnknown': 'Кто-то',
+  'chat.replyUnavailable': 'Недоступно на этом устройстве',
+  'chat.attachPhoto': 'Прикрепить фото',
+  'chat.photo': 'Фото',
+  'chat.photoFailed': 'Не удалось прикрепить фото',
   'chat.title': 'Чаты',
   'chat.tabChats': 'Чаты',
   'chat.tabChannels': 'Каналы',

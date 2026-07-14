@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sort"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -227,4 +229,48 @@ func (m *Mongo) LastChatMessagesByConversations(ctx context.Context, conversatio
 		out[msg.ConversationID] = msg
 	}
 	return out, nil
+}
+
+// --- attachments ---
+
+func (m *Mongo) CreateAttachment(ctx context.Context, a domain.Attachment) error {
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = time.Now().UTC()
+	}
+	_, err := m.db.Collection("attachments").InsertOne(ctx, a)
+	return err
+}
+
+func (m *Mongo) GetAttachment(ctx context.Context, id string) (domain.Attachment, error) {
+	var a domain.Attachment
+	err := m.db.Collection("attachments").FindOne(ctx, bson.M{"_id": id}).Decode(&a)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return domain.Attachment{}, ErrNotFound
+	}
+	return a, err
+}
+
+func (m *Mongo) ListAttachmentIDs(ctx context.Context, conversationID string) ([]string, error) {
+	cur, err := m.db.Collection("attachments").
+		Find(ctx, bson.M{"conversationId": conversationID})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cur.Close(ctx) }()
+
+	var out []string
+	for cur.Next(ctx) {
+		var a domain.Attachment
+		if err := cur.Decode(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a.ID)
+	}
+	return out, cur.Err()
+}
+
+func (m *Mongo) DeleteAttachments(ctx context.Context, conversationID string) error {
+	_, err := m.db.Collection("attachments").
+		DeleteMany(ctx, bson.M{"conversationId": conversationID})
+	return err
 }

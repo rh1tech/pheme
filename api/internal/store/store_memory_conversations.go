@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sort"
+	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
@@ -234,4 +235,49 @@ func (m *Memory) LastChatMessagesByConversations(_ context.Context, conversation
 		out[msg.ConversationID] = msg
 	}
 	return out, nil
+}
+
+// --- attachments ---
+
+func (m *Memory) CreateAttachment(_ context.Context, a domain.Attachment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = time.Now().UTC()
+	}
+	m.attachments[a.ID] = a
+	return nil
+}
+
+func (m *Memory) GetAttachment(_ context.Context, id string) (domain.Attachment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	a, ok := m.attachments[id]
+	if !ok {
+		return domain.Attachment{}, ErrNotFound
+	}
+	return a, nil
+}
+
+func (m *Memory) ListAttachmentIDs(_ context.Context, conversationID string) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var ids []string
+	for id, a := range m.attachments {
+		if a.ConversationID == conversationID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (m *Memory) DeleteAttachments(_ context.Context, conversationID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, a := range m.attachments {
+		if a.ConversationID == conversationID {
+			delete(m.attachments, id)
+		}
+	}
+	return nil
 }
