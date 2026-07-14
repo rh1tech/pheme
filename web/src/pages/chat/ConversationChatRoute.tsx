@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActionIcon, Alert, Group, Menu, Stack, Text, Textarea } from '@mantine/core'
-import { IconArrowLeft, IconDots, IconLock, IconLogout, IconSend, IconShieldLock, IconTrash, IconUsers } from '@tabler/icons-react'
+import {
+  IconArrowLeft,
+  IconDots,
+  IconLock,
+  IconLogout,
+  IconPhone,
+  IconSend,
+  IconShieldLock,
+  IconTrash,
+  IconUsers,
+} from '@tabler/icons-react'
 import type { KeyboardEvent } from 'react'
 import { useMediaQuery } from '@mantine/hooks'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
@@ -33,6 +43,7 @@ import { ChatSkeleton } from '../../components/chat/ChatSkeleton'
 import { SafetyNumberModal } from '../../components/chat/SafetyNumber'
 import { GroupMembersModal } from '../../components/chat/GroupMembersModal'
 import { ConfirmModal } from '../../components/ConfirmModal'
+import { useCalls } from '../../components/call/context'
 import { isSameDay } from '../../lib/time'
 import type { ChatOutletContext } from '../../components/chat/context'
 import type { ChatMessage, Conversation } from '../../lib/types'
@@ -58,6 +69,7 @@ export function ConversationChatRoute() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const isMobile = useMediaQuery('(max-width: 48em)')
+  const { call, place } = useCalls()
 
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([]) // oldest-first
@@ -118,7 +130,10 @@ export function ConversationChatRoute() {
     atBottomRef.current = atBottom
   })
 
-  useEdgeSwipeBack(Boolean(isMobile), useCallback(() => navigate('/'), [navigate]))
+  useEdgeSwipeBack(
+    Boolean(isMobile),
+    useCallback(() => navigate('/'), [navigate]),
+  )
 
   useEffect(() => {
     if (!isMobile) textRef.current?.focus()
@@ -456,6 +471,20 @@ export function ConversationChatRoute() {
               </Text>
             )}
           </Stack>
+          {/* Calling is 1:1 only, and only once this device is actually in the group — there is
+              nothing to encrypt a call to otherwise. */}
+          {!isGroup && (
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              aria-label={t('call.start')}
+              data-testid="start-call"
+              disabled={!groupId || call !== null}
+              onClick={() => void place(id)}
+            >
+              <IconPhone size={20} />
+            </ActionIcon>
+          )}
           <ActionIcon
             variant="subtle"
             color="gray"
@@ -472,7 +501,10 @@ export function ConversationChatRoute() {
             </Menu.Target>
             <Menu.Dropdown>
               {isGroup && (
-                <Menu.Item leftSection={<IconUsers size={18} />} onClick={() => setMembersOpen(true)}>
+                <Menu.Item
+                  leftSection={<IconUsers size={18} />}
+                  onClick={() => setMembersOpen(true)}
+                >
                   {t('group.membersTitle')}
                 </Menu.Item>
               )}
@@ -521,7 +553,9 @@ export function ConversationChatRoute() {
         loading={actionBusy}
         title={isGroup ? t('group.deleteGroup') : t('chat.deleteChat')}
       >
-        <Text size="sm">{isGroup ? t('group.deleteGroupConfirm') : t('chat.deleteChatConfirm')}</Text>
+        <Text size="sm">
+          {isGroup ? t('group.deleteGroupConfirm') : t('chat.deleteChatConfirm')}
+        </Text>
       </ConfirmModal>
 
       <ConfirmModal

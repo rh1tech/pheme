@@ -253,6 +253,19 @@ export interface LiveEvent {
   chatMessage?: ChatMessage
   /** The conversation was deleted; drop it from the list and leave it if open. */
   conversationDeleted?: boolean
+  /**
+   * A voice call has a new signal — a NUDGE, not the signal itself.
+   *
+   * The live stream is allowed to drop events, and a dropped SDP answer is a call that
+   * silently never connects. So the signal lives in an ordered mailbox the client reads from
+   * a cursor, and losing this event costs a few hundred milliseconds rather than the call.
+   */
+  callSignal?: {
+    callId: string
+    seq: number
+    /** Who sent it. A user's own other devices must not ring for a call they placed. */
+    fromUserId: string
+  }
 }
 
 // --- Admin types ---

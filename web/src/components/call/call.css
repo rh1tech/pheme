@@ -1,0 +1,63 @@
+/* The in-call bar. It sits above everything and does not move with the routes, because a
+   call outlives the conversation you placed it from. */
+
+.pheme-call-bar {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 400;
+
+  min-width: min(22rem, calc(100vw - 2rem));
+  padding: 0.5rem 0.5rem 0.5rem 1rem;
+  border-radius: 999px;
+
+  background: var(--mantine-color-body);
+  border: 1px solid var(--mantine-color-default-border);
+  box-shadow: 0 8px 24px -8px rgb(0 0 0 / 0.35);
+
+  animation: pheme-call-drop 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Connected reads as live, not as an error. */
+.pheme-call-bar[data-status='connected'] {
+  border-color: var(--mantine-color-green-6);
+}
+
+.pheme-call-bar[data-status='ended'] {
+  opacity: 0.75;
+}
+
+@keyframes pheme-call-drop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -0.75rem);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* The answer button pulses, because a ringing phone should look like one. */
+.pheme-call-ring {
+  animation: pheme-call-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pheme-call-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(64 192 87 / 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 0.6rem rgb(64 192 87 / 0);
+  }
+}
+
+/* Motion is decoration here; the call works identically without it. */
+@media (prefers-reduced-motion: reduce) {
+  .pheme-call-bar,
+  .pheme-call-ring {
+    animation: none;
+  }
+}

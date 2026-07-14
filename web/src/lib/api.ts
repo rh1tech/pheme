@@ -294,6 +294,48 @@ export const api = {
    */
   iceServers: () => request<{ iceServers: RTCIceServer[] }>('/v1/calls/ice-servers'),
 
+  /**
+   * Relays one sealed signal. `ring` wakes the other person's devices with a push, and only
+   * the invite sets it — the rest of the exchange rides the live stream, and pushing for
+   * every signal would buzz a phone half a dozen times per call.
+   */
+  callSignal: (conversationId: string, callId: string, ciphertext: string, ring = false) =>
+    request<{ seq: number }>(`/v1/conversations/${conversationId}/calls/${callId}/signal`, {
+      method: 'POST',
+      body: { ciphertext, ring },
+      quiet: true,
+    }),
+
+  /**
+   * Everything this device has not seen yet, in order.
+   *
+   * This is the transport of record, not the live stream: the live bus is allowed to drop
+   * events, and a dropped SDP answer is a call that silently never connects. The stream only
+   * nudges; the signals are fetched from here.
+   */
+  callSignals: (conversationId: string, callId: string, since: number) =>
+    request<{ signals: { seq: number; ciphertext: string }[] }>(
+      `/v1/conversations/${conversationId}/calls/${callId}/signals?since=${since}`,
+      { quiet: true },
+    ).then((r) => r.signals ?? []),
+
+  /**
+   * Claims the call for THIS device. Resolves true if we answered it, false if another of
+   * our devices got there first — an answer, not an error, and the reason it is decided by
+   * the server rather than by a race over a bus that may drop the message.
+   */
+  callAccept: (conversationId: string, callId: string, deviceId: string) =>
+    request<{ winner: string }>(`/v1/conversations/${conversationId}/calls/${callId}/accept`, {
+      method: 'POST',
+      body: { deviceId },
+      quiet: true,
+    })
+      .then(() => true)
+      .catch((e: unknown) => {
+        if (e instanceof ApiError && e.status === 409) return false
+        throw e
+      }),
+
   /** The conversation's MLS group id and epoch. `groupId` is empty until it is established. */
   mlsGroupState: (conversationId: string) =>
     request<MLSGroupState>(`/v1/conversations/${conversationId}/mls`),
