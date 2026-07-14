@@ -24,10 +24,22 @@ type Event struct {
 	// ConversationDeleted marks a conversation that has been removed, so members drop
 	// it from their list without a refetch. Carries ConversationID.
 	ConversationDeleted bool `json:"conversationDeleted,omitempty"`
-	// Recipients authorises delivery of an event whose usual membership check no
-	// longer holds — a deletion, whose membership rows are already gone. Never
-	// serialised to clients; used only by the stream's per-recipient filter.
-	Recipients []string `json:"-"`
+	// Recipients authorises delivery of an event whose usual membership check no longer
+	// holds — a deletion, whose membership rows are already gone by the time anyone can
+	// be told about it.
+	//
+	// It MUST be serialised. In production the bus is Redis (live_redis.go), which moves
+	// an Event between processes by marshalling it to JSON: a `json:"-"` here — which is
+	// what this field used to carry — silently deleted the list in transit, so every
+	// subscriber saw nil, fell through to the membership check, and found the very rows
+	// the deletion had just removed. The event was then dropped. Conversation deletions
+	// reached nobody in production, and the in-memory bus used by dev and the tests hid
+	// it, because there the struct is passed by value and never encoded at all.
+	//
+	// The stream strips it again before writing to the client (see the SSE handler): it
+	// is an authorisation list, and no subscriber has any business seeing who else is on
+	// it.
+	Recipients []string `json:"recipients,omitempty"`
 }
 
 // Bus distributes live events to subscribers.

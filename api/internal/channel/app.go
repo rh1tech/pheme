@@ -643,6 +643,12 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 			} else if !h.canReadChannel(r.Context(), uid, e.ChannelID) {
 				continue // not (or no longer) an active member of this channel
 			}
+			// The recipient list travels between processes (the Redis bus marshals the
+			// event to JSON) but must not travel to the browser: it is an authorisation
+			// list, and telling one subscriber who else was on it leaks the membership of
+			// a conversation they have just been removed from. `e` is this loop's own
+			// copy, so clearing it here affects nobody else's delivery.
+			e.Recipients = nil
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", mustJSON(e))
 			flusher.Flush()
 		}
