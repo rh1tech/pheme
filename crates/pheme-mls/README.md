@@ -45,6 +45,14 @@ group never accepted is forked off the conversation — permanently, and silentl
   `commit_accepted(id)` / `commit_rejected(id)` — the server's verdict.
 - `epoch(id)`, `member_identities(id)` — what a caller diffs to find missing devices.
 - `encrypt(id, plaintext)`, `decrypt(id, ciphertext)`.
+- `export_secret(id, label, context, len)` — RFC 9420's exporter. Every member of the
+  group derives the same bytes for the same (label, context); nobody else can. Used to
+  key voice-call signalling, so the server cannot read the SDP and therefore cannot
+  swap the DTLS fingerprint inside it and put itself in the middle of a call. A pure
+  read: it mutates neither the group nor the storage, which is why it suits signalling
+  and an ordinary application message does not (those are one-shot to decrypt, and they
+  churn the ratchet and the key store on every send). **Bound to the current epoch** —
+  a caller must pin the epoch it derived at.
 - `export_state()` — the whole client state for persistence (IndexedDB on web).
 
 `src/wasm.rs` wraps this as `MlsClient` for JavaScript.
