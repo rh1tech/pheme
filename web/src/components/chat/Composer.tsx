@@ -236,6 +236,10 @@ export function Composer({ channelId, focusSignal, onSent }: ComposerProps) {
             loading={sending}
             disabled={!canSend}
             onClick={send}
+            // Keep the keyboard up: tapping send must not blur the text field, since
+            // iOS won't restore focus after the async send completes.
+            onMouseDown={(e) => e.preventDefault()}
+            onPointerDown={(e) => e.preventDefault()}
           >
             <IconSend size={18} />
           </ActionIcon>

@@ -611,6 +611,13 @@ export function ConversationChatRoute() {
             loading={sending}
             disabled={!canSend}
             onClick={send}
+            // Keep the keyboard up: a tap on the send button would otherwise blur the
+            // textarea, and iOS will not restore focus programmatically after send()'s
+            // awaits (that only works inside the original gesture). Preventing the
+            // default on pointer-down stops the button from taking focus at all, so the
+            // textarea keeps it and the next message can be typed straight away.
+            onMouseDown={(e) => e.preventDefault()}
+            onPointerDown={(e) => e.preventDefault()}
           >
             <IconSend size={18} />
           </ActionIcon>
