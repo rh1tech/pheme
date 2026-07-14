@@ -168,10 +168,9 @@ services:
     profiles: ["calls"]
     volumes:
       - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
-      # coturn reads the PEMs directly (it does not go through nginx), and does NOT
-      # reliably reload them on SIGHUP — add a certbot deploy-hook that restarts this
-      # container or TLS-TURN dies silently at the first renewal.
-      - ${PHEME_TURN_CERT_DIR:-/etc/letsencrypt/live/app.example.com}:/certs:ro
+      # No certificate is mounted, because TLS-TURN is off — this host has only a Cloudflare
+      # ORIGIN certificate, which no browser trusts. See turnserver.conf for what enabling
+      # `turns:` would need (a publicly trusted cert on a DNS-only name), and mount it here.
     # The realm and the shared secret are passed here, not in turnserver.conf: that file is
     # in git and coturn does not expand environment variables. The secret must be the same
     # one the App API signs credentials with (PHEME_TURN_SECRET).
