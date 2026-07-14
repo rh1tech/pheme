@@ -159,6 +159,13 @@ services:
     image: coturn/coturn:4.6
     restart: unless-stopped
     network_mode: host
+    # Opt-in. It stays down until the host is actually ready for it — the firewall open on
+    # 3478/5349 and the relay range, a real PHEME_TURN_SECRET, and a certificate it can read.
+    # Starting it before any of that would give a restart loop and an open relay, so a deploy
+    # that has not been prepared for calling simply does not bring it up.
+    #
+    # Turn it on with COMPOSE_PROFILES=calls in the environment file.
+    profiles: ["calls"]
     volumes:
       - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
       # coturn reads the PEMs directly (it does not go through nginx), and does NOT

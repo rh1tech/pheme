@@ -44,6 +44,7 @@ import { SafetyNumberModal } from '../../components/chat/SafetyNumber'
 import { GroupMembersModal } from '../../components/chat/GroupMembersModal'
 import { ConfirmModal } from '../../components/ConfirmModal'
 import { useCalls } from '../../components/call/context'
+import { useCallingAvailable } from '../../hooks/useCallingAvailable'
 import { isSameDay } from '../../lib/time'
 import type { ChatOutletContext } from '../../components/chat/context'
 import type { ChatMessage, Conversation } from '../../lib/types'
@@ -70,6 +71,7 @@ export function ConversationChatRoute() {
   const navigate = useNavigate()
   const isMobile = useMediaQuery('(max-width: 48em)')
   const { call, place } = useCalls()
+  const callingAvailable = useCallingAvailable()
 
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([]) // oldest-first
@@ -497,8 +499,9 @@ export function ConversationChatRoute() {
             )}
           </Stack>
           {/* Calling is 1:1 only, and only once this device is actually in the group — there is
-              nothing to encrypt a call to otherwise. */}
-          {!isGroup && (
+              nothing to encrypt a call to otherwise. Hidden entirely on a server that has no
+              STUN/TURN configured: a button that can only ever fail is worse than no button. */}
+          {!isGroup && callingAvailable && (
             <ActionIcon
               variant="subtle"
               color="gray"
