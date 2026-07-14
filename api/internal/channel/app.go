@@ -389,6 +389,9 @@ type createDeviceRequest struct {
 	Platform   domain.Platform `json:"platform"`
 	FCMToken   string          `json:"fcmToken,omitempty"`
 	WebPushSub string          `json:"webPushSub,omitempty"`
+	// VoIPToken is the iOS PushKit token. A separate token from FCMToken, and both are sent: the FCM
+	// one carries messages, and this one carries calls, because only it can reach PushKit.
+	VoIPToken string `json:"voipToken,omitempty"`
 }
 
 func (h *AppHandler) createDevice(w http.ResponseWriter, r *http.Request) {
@@ -405,6 +408,7 @@ func (h *AppHandler) createDevice(w http.ResponseWriter, r *http.Request) {
 		Platform:   req.Platform,
 		FCMToken:   req.FCMToken,
 		WebPushSub: req.WebPushSub,
+		VoIPToken:  req.VoIPToken,
 		CreatedAt:  time.Now().UTC(),
 		LastSeenAt: time.Now().UTC(),
 	})

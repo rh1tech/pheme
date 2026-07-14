@@ -3,6 +3,8 @@ package push
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
@@ -55,11 +57,7 @@ func (s *FCMSender) send(ctx context.Context, n notification, devices []domain.D
 			results = append(results, Result{DeviceID: d.ID, Status: domain.DeliverySkipped})
 			continue
 		}
-		batch = append(batch, &messaging.Message{
-			Token:        d.FCMToken,
-			Notification: &messaging.Notification{Title: n.Title, Body: n.Body, ImageURL: n.Image},
-			Data:         n.Data,
-		})
+		batch = append(batch, buildMessage(d.FCMToken, n))
 		batched = append(batched, d.ID)
 	}
 
@@ -87,6 +85,78 @@ func (s *FCMSender) send(ctx context.Context, n notification, devices []domain.D
 		results = append(results, res)
 	}
 	return results, nil
+}
+
+// buildMessage turns a notification into an FCM message with the per-platform delivery options that
+// decide whether it arrives in time to be worth anything.
+//
+// The message carried none of these. Every push went out as a plain `notification` message with no
+// AndroidConfig and no APNSConfig, which means default priority and no expiry — and the consequence
+// was not that calls rang late, it was that a call could not ring a sleeping phone at all. Two
+// separate reasons, and both had to be fixed:
+//
+//   - ANDROID. A normal-priority message is held by Doze and App Standby until the device next comes
+//     out of idle, which may be an hour. Only a HIGH-priority message punches through. And it must be
+//     DATA-ONLY: a message with a `notification` payload is rendered by the system tray while the app
+//     is backgrounded and does NOT reliably start the app's background handler — but starting that
+//     handler is the entire job here, because it is what raises the ringer.
+//
+//   - iOS. An alert push arrives at whatever priority APNs feels like and cannot show a call screen.
+//     A real ringing call needs PushKit, which FCM cannot reach (see domain.Device.VoIPToken and
+//     push_apns_voip.go). What is set here is the FALLBACK for an iPhone with no PushKit token: a
+//     time-sensitive, high-priority alert — a banner rather than a call screen, but at least a prompt
+//     one.
+//
+// A TTL matters for the same reason a call matters: it is worthless the moment it stops ringing.
+// Delivering it two minutes later shows somebody an incoming call that no longer exists.
+func buildMessage(token string, n notification) *messaging.Message {
+	ttl := time.Duration(n.TTL) * time.Second
+	expiry := strconv.FormatInt(time.Now().Add(ttl).Unix(), 10)
+
+	msg := &messaging.Message{Token: token, Data: n.Data}
+
+	priority := "normal"
+	if n.Urgent {
+		priority = "high"
+	} else {
+		// Only a non-urgent push gets a notification payload. See above: on a call, this payload is
+		// precisely what would stop the ringer from ever being raised.
+		msg.Notification = &messaging.Notification{
+			Title:    n.Title,
+			Body:     n.Body,
+			ImageURL: n.Image,
+		}
+	}
+
+	msg.Android = &messaging.AndroidConfig{
+		Priority:    priority,
+		TTL:         &ttl,
+		CollapseKey: n.CollapseKey,
+	}
+
+	apsAlert := &messaging.ApsAlert{Title: n.Title, Body: n.Body}
+	headers := map[string]string{
+		"apns-priority":   "10",
+		"apns-push-type":  "alert",
+		"apns-expiration": expiry,
+	}
+	if n.CollapseKey != "" {
+		// So a cancelled call REPLACES its own ring on the lock screen rather than stacking a second
+		// notification underneath it.
+		headers["apns-collapse-id"] = n.CollapseKey
+	}
+
+	aps := &messaging.Aps{Alert: apsAlert, Sound: "default"}
+	if n.Urgent {
+		// iOS 15+. Lets a call cut through a Focus mode, which is the whole point of a call.
+		aps.CustomData = map[string]any{"interruption-level": "time-sensitive"}
+	}
+
+	msg.APNS = &messaging.APNSConfig{
+		Headers: headers,
+		Payload: &messaging.APNSPayload{Aps: aps},
+	}
+	return msg
 }
 
 var _ Sender = (*FCMSender)(nil)

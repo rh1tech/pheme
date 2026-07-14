@@ -182,6 +182,12 @@ type Device struct {
 	Platform   Platform `bson:"platform" json:"platform"`
 	FCMToken   string   `bson:"fcmToken,omitempty" json:"fcmToken,omitempty"`
 	WebPushSub string   `bson:"webPushSub,omitempty" json:"webPushSub,omitempty"`
+	// VoIPToken is an iOS PushKit token, and it is NOT the FCM token — it is a different token, for a
+	// different APNs topic (<bundle>.voip), delivered by a different push type. FCM cannot send to it:
+	// it has no way to learn a PushKit token, cannot override apns-topic, and does not support
+	// apns-push-type: voip. So an iPhone that should ring while the app is asleep needs this, and a
+	// direct APNs connection to use it (see push_apns_voip.go). Empty on every other platform.
+	VoIPToken string `bson:"voipToken,omitempty" json:"voipToken,omitempty"`
 	// WebPushEndpoint is the subscription's endpoint URL, stored separately so a
 	// web device can be uniquely identified (and upserted) by it.
 	WebPushEndpoint string    `bson:"webPushEndpoint,omitempty" json:"-"`

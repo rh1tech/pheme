@@ -86,6 +86,17 @@ type notification struct {
 	// ringing call is worthless once it has stopped ringing — delivering it two minutes late
 	// shows somebody an incoming call that no longer exists.
 	TTL int
+	// Urgent means this has to wake a sleeping device, and it is what separates a call from
+	// everything else. It buys high priority (so Doze does not sit on it) and, on Android, a
+	// DATA-ONLY message — because a message carrying a notification payload is rendered by the
+	// system tray and does not reliably start the background handler that raises the ringer.
+	//
+	// It is not a synonym for "important". A message is important; a message can also wait.
+	Urgent bool
+	// CollapseKey lets a later push REPLACE an earlier one rather than stack on top of it. A call
+	// and its cancellation share one, so hanging up before an answer takes the ring back off the
+	// other person's lock screen instead of leaving a dead call sitting there looking live.
+	CollapseKey string
 }
 
 func messageNotification(publicBaseURL string, msg domain.Message) notification {
@@ -125,11 +136,30 @@ func chatNotificationPayload(n ChatNotification) notification {
 	// carries its id, so the service worker can replace an earlier ring for the same call
 	// and close it again when the call ends.
 	data := map[string]string{"conversationId": n.ConversationID, "messageId": n.MessageID}
-	if n.Kind != KindMessage {
+
+	isCall := n.Kind != KindMessage
+	collapseKey := ""
+	if isCall {
 		data["kind"] = string(n.Kind)
 		data["callId"] = n.CallID
+		// The caller's name has to be IN THE DATA, not only in the title. A call is delivered as a
+		// data-only message precisely so it starts the client's background handler, and a data-only
+		// message has no title to read — so a name left only up there would reach nobody, and the
+		// phone would ring for an anonymous stranger.
+		data["callerName"] = title
+		// One key per call, shared by the ring and its cancellation, so the cancel replaces the ring
+		// rather than stacking a second notification under it.
+		collapseKey = "call:" + n.CallID
 	}
-	return notification{Title: title, Body: body, Data: data, TTL: n.ttl()}
+
+	return notification{
+		Title:       title,
+		Body:        body,
+		Data:        data,
+		TTL:         n.ttl(),
+		Urgent:      isCall,
+		CollapseKey: collapseKey,
+	}
 }
 
 // imageURL returns the absolute URL of a message's first image, or "" when the

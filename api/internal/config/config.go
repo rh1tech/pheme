@@ -33,8 +33,19 @@ type Config struct {
 
 	// Push
 	FCMCredentialsFile string // path to Firebase service-account JSON
-	VAPIDPublicKey     string
-	VAPIDPrivateKey    string
+
+	// APNs, for iOS VoIP pushes only. FCM handles every other iOS notification; it cannot handle this
+	// one, because a ringing call needs PushKit and FCM cannot reach it (see push_apns_voip.go).
+	// Leave APNsKeyFile empty and iPhones simply fall back to an ordinary alert — a banner instead of
+	// a call screen.
+	APNsKeyFile    string // path to the .p8 signing key
+	APNsKeyID      string
+	APNsTeamID     string
+	APNsBundleID   string // the VoIP topic is this + ".voip"
+	APNsProduction bool   // Apple's production gateway rather than the sandbox
+
+	VAPIDPublicKey  string
+	VAPIDPrivateKey string
 	VAPIDSubject       string // VAPID contact: an https: URL or mailto: address. Apple Web Push requires an https: URL (it rejects mailto: with 403 BadJwtToken).
 
 	// PublicAPIURL is the externally reachable base URL of the App API (e.g.
@@ -115,9 +126,16 @@ func Load() Config {
 		RefreshTokenTTL: envDuration("PHEME_REFRESH_TTL", 720*time.Hour),
 
 		FCMCredentialsFile: env("PHEME_FCM_CREDENTIALS", ""),
-		VAPIDPublicKey:     env("PHEME_VAPID_PUBLIC", ""),
-		VAPIDPrivateKey:    env("PHEME_VAPID_PRIVATE", ""),
-		VAPIDSubject:       env("PHEME_VAPID_SUBJECT", "https://app.example.com"),
+
+		APNsKeyFile:    env("PHEME_APNS_KEY_FILE", ""),
+		APNsKeyID:      env("PHEME_APNS_KEY_ID", ""),
+		APNsTeamID:     env("PHEME_APNS_TEAM_ID", ""),
+		APNsBundleID:   env("PHEME_APNS_BUNDLE_ID", ""),
+		APNsProduction: envBool("PHEME_APNS_PRODUCTION", false),
+
+		VAPIDPublicKey:  env("PHEME_VAPID_PUBLIC", ""),
+		VAPIDPrivateKey: env("PHEME_VAPID_PRIVATE", ""),
+		VAPIDSubject:    env("PHEME_VAPID_SUBJECT", "https://app.example.com"),
 
 		PublicAPIURL: env("PHEME_PUBLIC_API_URL", ""),
 

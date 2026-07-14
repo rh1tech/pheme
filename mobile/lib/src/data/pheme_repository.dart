@@ -272,9 +272,20 @@ class PhemeRepository {
 
   // --- Devices & subscriptions ---
 
-  Future<Device> createDevice({required String platform, String? fcmToken}) {
+  /// Registers this device for push.
+  ///
+  /// [voipToken] is the iOS PushKit token, and it is a DIFFERENT token from [fcmToken] — both are
+  /// sent. FCM carries messages; only PushKit can carry a call that rings a sleeping iPhone, and FCM
+  /// has no way to reach it.
+  Future<Device> createDevice({
+    required String platform,
+    String? fcmToken,
+    String? voipToken,
+  }) {
     final body = <String, dynamic>{'platform': platform};
     if (fcmToken != null) body['fcmToken'] = fcmToken;
+    if (voipToken != null && voipToken.isNotEmpty)
+      body['voipToken'] = voipToken;
     return _post('/v1/devices', body).then((d) => Device.fromJson(d));
   }
 

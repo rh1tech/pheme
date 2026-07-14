@@ -166,22 +166,58 @@ func (b *Builder) Limiter() ratelimit.Limiter {
 func (b *Builder) Push(ctx context.Context) (push.Sender, error) {
 	switch b.cfg.PushDriver {
 	case "fcm":
-		return push.NewFCMSender(ctx, b.cfg.FCMCredentialsFile, b.cfg.PublicAPIURL)
+		fcm, err := push.NewFCMSender(ctx, b.cfg.FCMCredentialsFile, b.cfg.PublicAPIURL)
+		if err != nil {
+			return nil, err
+		}
+		// Composed even with no web push, so an iPhone can still be rung over PushKit — which is a
+		// thing the FCM sender is structurally incapable of doing on its own.
+		return push.NewMultiSender(fcm, nil, b.voip()), nil
 	case "webpush":
-		return push.NewWebPushSender(b.cfg.VAPIDPublicKey, b.cfg.VAPIDPrivateKey, b.cfg.VAPIDSubject, b.cfg.PublicAPIURL), nil
+		web := push.NewWebPushSender(b.cfg.VAPIDPublicKey, b.cfg.VAPIDPrivateKey, b.cfg.VAPIDSubject, b.cfg.PublicAPIURL)
+		return push.NewMultiSender(nil, web, b.voip()), nil
 	case "both":
 		fcm, err := push.NewFCMSender(ctx, b.cfg.FCMCredentialsFile, b.cfg.PublicAPIURL)
 		if err != nil {
 			return nil, err
 		}
 		web := push.NewWebPushSender(b.cfg.VAPIDPublicKey, b.cfg.VAPIDPrivateKey, b.cfg.VAPIDSubject, b.cfg.PublicAPIURL)
-		return push.NewMultiSender(fcm, web), nil
+		return push.NewMultiSender(fcm, web, b.voip()), nil
 	case "log", "":
 		b.logger.Info("push: log (no-op)")
 		return push.NewLogSender(), nil
 	default:
 		return nil, fmt.Errorf("unknown push driver %q", b.cfg.PushDriver)
 	}
+}
+
+// voip builds the APNs VoIP sender, or nil when APNs is not configured.
+//
+// Nil is a supported deployment, not a failure: without it an iPhone still gets an ordinary alert for
+// an incoming call — a banner rather than a ringing call screen. That is a degraded experience, so it
+// is logged loudly, but it is not a reason to refuse to start. A bad key, on the other hand, IS logged
+// as an error and then ignored, because a server that will not boot is worse than one that cannot ring
+// an iPhone.
+func (b *Builder) voip() push.VoIPSender {
+	if b.cfg.APNsKeyFile == "" {
+		b.logger.Info("push: APNs not configured — iOS calls will arrive as alerts, not ringing calls")
+		return nil
+	}
+
+	sender, err := push.NewAPNsVoIPSender(push.APNsConfig{
+		KeyFile:    b.cfg.APNsKeyFile,
+		KeyID:      b.cfg.APNsKeyID,
+		TeamID:     b.cfg.APNsTeamID,
+		BundleID:   b.cfg.APNsBundleID,
+		Production: b.cfg.APNsProduction,
+	})
+	if err != nil {
+		b.logger.Error("push: APNs VoIP disabled", "error", err)
+		return nil
+	}
+
+	b.logger.Info("push: APNs VoIP", "topic", b.cfg.APNsBundleID+".voip", "production", b.cfg.APNsProduction)
+	return sender
 }
 
 // Codes builds the verification-code store (pending signups, reset codes,

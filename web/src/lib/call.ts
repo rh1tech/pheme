@@ -124,9 +124,16 @@ export async function listAudioDevices(): Promise<{ inputs: AudioDevice[]; outpu
 }
 
 /** A fresh, unguessable call id. Random, so an old call's signals cannot be replayed into a new one. */
+/**
+ * A call id.
+ *
+ * A UUID specifically, and not merely a unique string, because iOS identifies a call to CallKit BY A
+ * UUID — it will not report one under anything else. The id is opaque to the server and to this
+ * client, so the shape costs nothing here and is the difference between the mobile app being able to
+ * ring and not.
+ */
 function newCallId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16))
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return crypto.randomUUID()
 }
 
 /**
