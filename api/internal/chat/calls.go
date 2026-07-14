@@ -41,6 +41,13 @@ type callSignalRequest struct {
 	// time. It already knows they are in a conversation together, and it cannot be otherwise
 	// — something has to wake a sleeping device.
 	Ring bool `json:"ring,omitempty"`
+	// Cancel says this call has stopped ringing — the caller gave up, or hung up before it was
+	// answered. It closes the notification the ring put on the other person's lock screen.
+	//
+	// Without it a missed call leaves a live-looking ring sitting there, and tapping it
+	// deep-links into a call nobody is on any more. The push that takes a notification away is
+	// as much a part of ringing as the one that puts it there.
+	Cancel bool `json:"cancel,omitempty"`
 }
 
 // postCallSignal relays one sealed signalling blob to the conversation's other devices.
@@ -101,7 +108,10 @@ func (h *Handler) postCallSignal(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if req.Ring {
-		h.ringMembers(convID, uid, callID)
+		h.ringMembers(convID, uid, callID, push.KindCall)
+	}
+	if req.Cancel {
+		h.ringMembers(convID, uid, callID, push.KindCallCancel)
 	}
 	httpx.JSON(w, http.StatusOK, signal)
 }
@@ -188,7 +198,7 @@ func (h *Handler) postCallAccept(w http.ResponseWriter, r *http.Request) {
 // exactly what ringing means. The notification names the caller and nothing else; the server
 // has nothing else to tell, and would not be able to say what the call is about even if it
 // wanted to.
-func (h *Handler) ringMembers(convID, callerID, callID string) {
+func (h *Handler) ringMembers(convID, callerID, callID string, kind push.Kind) {
 	if h.Push == nil {
 		return
 	}
@@ -225,7 +235,7 @@ func (h *Handler) ringMembers(convID, callerID, callID string) {
 		if _, err := h.Push.SendChat(ctx, push.ChatNotification{
 			ConversationID: convID,
 			SenderName:     h.senderName(ctx, callerID),
-			Kind:           push.KindCall,
+			Kind:           kind,
 			CallID:         callID,
 		}, devices); err != nil {
 			log.Error("call ring: send", "conversation", convID, "error", err)

@@ -19,14 +19,39 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  const title = payload.title || 'Pheme'
   const data = payload.data || {}
+
+  // A call that is no longer ringing — cancelled, missed, or answered on another device.
+  //
+  // Close the notification rather than show a second one. Without this a missed call leaves a
+  // live-looking ring sitting on the lock screen, and tapping it deep-links into a call that
+  // nobody is on any more. Nothing here shows anything: it takes something away.
+  if (data.kind === 'call-cancel') {
+    event.waitUntil(
+      (async () => {
+        const open = await self.registration.getNotifications({ tag: data.callId })
+        for (const n of open) n.close()
+      })(),
+    )
+    return
+  }
+
+  const isCall = data.kind === 'call'
+  const title = payload.title || 'Pheme'
   const options = {
     body: payload.body || '',
     image: payload.image || undefined,
-    // One notification per conversation or channel, replaced as newer ones arrive.
-    tag: data.conversationId || data.channelId || undefined,
+    // One notification per call, per conversation, or per channel — replaced as newer ones
+    // arrive. A call is tagged by the CALL, not the conversation: it has to be closable on its
+    // own when it stops ringing, and it must not be replaced by an ordinary message.
+    tag: isCall ? data.callId : data.conversationId || data.channelId || undefined,
     renotify: true,
+    // A ringing phone should not quietly dismiss itself after a few seconds.
+    requireInteraction: isCall,
+    // Deliberately no action buttons. iOS Safari does not render notification actions at all,
+    // so an "Answer" button would simply be missing there — and a call feature that looks
+    // different depending on where the notification lands is worse than one that always says
+    // "tap to open".
     data,
   }
 
@@ -41,6 +66,11 @@ self.addEventListener('push', (event) => {
 // cold-launch-to-list redirect (which sends a phone that merely reopened on an old
 // channel back to the list) leaves it alone.
 function targetPath(data) {
+  if (data.kind === 'call' && data.conversationId && data.callId) {
+    // The call id goes in the URL because a cold-launched app has no live stream yet and so
+    // never saw the invite. It reads the call out of the mailbox instead, and rings.
+    return `/chats/${data.conversationId}?from=push&call=${encodeURIComponent(data.callId)}`
+  }
   if (data.conversationId) return `/chats/${data.conversationId}?from=push`
   if (data.channelId && data.messageId) {
     return `/channels/${data.channelId}/messages/${data.messageId}?from=push`

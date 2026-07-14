@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/rh1tech/pheme/api/internal/calls"
+	"github.com/rh1tech/pheme/api/internal/push"
 )
 
 func (f *fixture) enableCalls() { f.handler.Mailbox = calls.NewMemory() }
@@ -244,5 +245,103 @@ func TestCallEndpointsRefuseWhenCallingIsNotConfigured(t *testing.T) {
 
 	if code, _ := postSignal(t, f, aliceToken, conv, "c", []byte("x"), false); code != http.StatusServiceUnavailable {
 		t.Fatalf("got %d, want 503 when calling is unconfigured", code)
+	}
+}
+
+// Ringing wakes every device the callee has — that is what ringing means — and names only the
+// caller. The server cannot say what the call is about and must not imply that it can.
+func TestRingingNotifiesTheCalleesDevices(t *testing.T) {
+	f := newFixture(t)
+	f.enableCalls()
+	pusher := newFakePush()
+	f.setPush(pusher)
+
+	aliceID, aliceToken := f.user(t, "alice-ring@pheme.test")
+	bobID, _ := f.user(t, "bob-ring@pheme.test")
+	f.setDisplayName(t, aliceID, "Alice")
+	bobPhone := f.device(t, bobID)
+	f.device(t, aliceID) // the caller's own device must not ring
+	conv := f.createDirect(t, aliceToken, bobID)
+
+	if code, _ := postSignal(t, f, aliceToken, conv, "call-r", []byte("offer"), true); code != http.StatusOK {
+		t.Fatalf("invite: got %d", code)
+	}
+	if !pusher.waitForPush(t) {
+		t.Fatal("expected the callee's devices to ring")
+	}
+	notes := pusher.notifications()
+	if len(notes) != 1 || notes[0].Kind != push.KindCall || notes[0].CallID != "call-r" {
+		t.Fatalf("ring = %+v, want one call notification for call-r", notes)
+	}
+	if notes[0].SenderName != "Alice" {
+		t.Fatalf("ring must name the caller, got %q", notes[0].SenderName)
+	}
+
+	pusher.mu.Lock()
+	devices := pusher.toDevs[0]
+	pusher.mu.Unlock()
+	if len(devices) != 1 || devices[0].ID != bobPhone {
+		t.Fatalf("rang %+v; only the callee's devices should ring", devices)
+	}
+}
+
+// Only the INVITE rings. The rest of a call's signalling — the answer, the hangup — goes over
+// the live stream, and pushing for each one would buzz a phone half a dozen times per call.
+func TestOnlyTheInviteRings(t *testing.T) {
+	f := newFixture(t)
+	f.enableCalls()
+	pusher := newFakePush()
+	f.setPush(pusher)
+
+	_, aliceToken := f.user(t, "alice-quiet@pheme.test")
+	bobID, _ := f.user(t, "bob-quiet@pheme.test")
+	f.device(t, bobID)
+	conv := f.createDirect(t, aliceToken, bobID)
+
+	if code, _ := postSignal(t, f, aliceToken, conv, "call-q", []byte("ice"), false); code != http.StatusOK {
+		t.Fatalf("signal: got %d", code)
+	}
+	if pusher.waitForPush(t) {
+		t.Fatal("a signal that is not an invite must not ring anyone")
+	}
+}
+
+// A call that stops ringing has to TAKE THE NOTIFICATION AWAY.
+//
+// Otherwise a missed call leaves a live-looking ring on the lock screen, and tapping it
+// deep-links into a call nobody is on any more. The push that removes a notification is as much
+// a part of ringing as the one that puts it there.
+func TestACancelledCallClosesItsNotification(t *testing.T) {
+	f := newFixture(t)
+	f.enableCalls()
+	pusher := newFakePush()
+	f.setPush(pusher)
+
+	_, aliceToken := f.user(t, "alice-cancel@pheme.test")
+	bobID, _ := f.user(t, "bob-cancel@pheme.test")
+	f.device(t, bobID)
+	conv := f.createDirect(t, aliceToken, bobID)
+
+	postSignal(t, f, aliceToken, conv, "call-c", []byte("offer"), true)
+	if !pusher.waitForPush(t) {
+		t.Fatal("expected a ring")
+	}
+
+	// Alice gives up before Bob picks up.
+	rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/calls/call-c/signal", aliceToken,
+		map[string]any{"ciphertext": []byte("hangup"), "cancel": true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cancel: got %d", rec.Code)
+	}
+	if !pusher.waitForPush(t) {
+		t.Fatal("expected a cancel push to close the ring")
+	}
+
+	notes := pusher.notifications()
+	if len(notes) != 2 {
+		t.Fatalf("got %d notifications, want a ring and a cancel", len(notes))
+	}
+	if notes[1].Kind != push.KindCallCancel || notes[1].CallID != "call-c" {
+		t.Fatalf("second notification = %+v, want a cancel for call-c", notes[1])
 	}
 }

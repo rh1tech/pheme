@@ -238,10 +238,10 @@ export class Call {
     }
   }
 
-  private async send(body: CallBody, ring = false): Promise<void> {
+  private async send(body: CallBody, opts: { ring?: boolean; cancel?: boolean } = {}): Promise<void> {
     if (!this.secret) return
     const wire = await sealSignal(this.secret, this.header(++this.seq), body)
-    await api.callSignal(this.conversationId, this.callId, wire, ring).catch(() => {
+    await api.callSignal(this.conversationId, this.callId, wire, opts).catch(() => {
       // A signal that does not go out is a call that does not connect, but there is nothing to
       // retry against here: the caller's ring timeout is what gives up. Swallowing it keeps a
       // failed hangup from throwing out of a cleanup path.
@@ -259,7 +259,7 @@ export class Call {
     await pc.setLocalDescription(offer)
     await this.gatheringComplete(pc)
 
-    await this.send({ kind: 'invite', sdp: pc.localDescription?.sdp ?? '' }, true)
+    await this.send({ kind: 'invite', sdp: pc.localDescription?.sdp ?? '' }, { ring: true })
   }
 
   /**
@@ -298,7 +298,10 @@ export class Call {
 
   /** Hangs up, from either end and at any point. */
   async hangUp(): Promise<void> {
-    await this.send({ kind: 'hangup' })
+    // Hanging up on a call that never connected is a MISSED call, and it has to take the ring
+    // off the other person's lock screen. Otherwise a notification sits there looking live and
+    // deep-links into a call nobody is on.
+    await this.send({ kind: 'hangup' }, { cancel: this.status === 'calling' })
     await this.end('hung-up', false)
   }
 
@@ -460,7 +463,7 @@ export class Call {
     }
     // Re-offer under the new key, if we are the one placing the call.
     if (this.outgoing && this.pc?.localDescription) {
-      await this.send({ kind: 'invite', sdp: this.pc.localDescription.sdp }, false)
+      await this.send({ kind: 'invite', sdp: this.pc.localDescription.sdp })
     }
   }
 
@@ -564,7 +567,9 @@ export class Call {
     if (this.status === 'ended') return
     this.setStatus('ended', reason)
 
-    if (notifyPeer) await this.send({ kind: 'hangup' })
+    // A call that gives up while it was still ringing must also close the notification it put
+    // on the other person's lock screen.
+    if (notifyPeer) await this.send({ kind: 'hangup' }, { cancel: reason === 'unanswered' })
 
     this.stopPolling()
     if (this.ringTimer) clearTimeout(this.ringTimer)

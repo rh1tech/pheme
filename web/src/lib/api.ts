@@ -299,10 +299,15 @@ export const api = {
    * the invite sets it — the rest of the exchange rides the live stream, and pushing for
    * every signal would buzz a phone half a dozen times per call.
    */
-  callSignal: (conversationId: string, callId: string, ciphertext: string, ring = false) =>
+  callSignal: (
+    conversationId: string,
+    callId: string,
+    ciphertext: string,
+    opts: { ring?: boolean; cancel?: boolean } = {},
+  ) =>
     request<{ seq: number }>(`/v1/conversations/${conversationId}/calls/${callId}/signal`, {
       method: 'POST',
-      body: { ciphertext, ring },
+      body: { ciphertext, ring: opts.ring ?? false, cancel: opts.cancel ?? false },
       quiet: true,
     }),
 

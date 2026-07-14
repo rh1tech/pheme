@@ -148,6 +148,37 @@ export function CallProvider({ children }: { children: ReactNode }) {
     })()
   })
 
+  // A call tapped from a push notification.
+  //
+  // The app was closed when it rang, so it never saw the invite go by on the live stream —
+  // there was no live stream. The notification carries the call id instead, and the call is
+  // read out of the mailbox, where it is still sitting.
+  //
+  // Runs once per call id: if the call has already gone (the caller gave up while the phone
+  // was being unlocked) there is simply nothing in the mailbox, and nothing rings.
+  useEffect(() => {
+    if (!userId) return
+    const params = new URLSearchParams(window.location.search)
+    const callId = params.get('call')
+    const conversationId = window.location.pathname.match(/^\/chats\/([^/]+)/)?.[1]
+    if (!callId || !conversationId) return
+    if (handledRef.current.has(callId) || callRef.current) return
+
+    let live = true
+    void (async () => {
+      const signals = await api.callSignals(conversationId, callId, 0).catch(() => [])
+      for (const s of signals) {
+        const invite = await readInvite(conversationId, userId, callId, s.ciphertext)
+        if (!invite || !live || handledRef.current.has(callId)) continue
+        setIncoming({ conversationId, callId, sdp: invite.sdp, from: invite.from })
+        return
+      }
+    })()
+    return () => {
+      live = false
+    }
+  }, [userId])
+
   // The microphone must not survive the tab. A refresh mid-call would otherwise leave the
   // recording indicator on until the browser noticed.
   useEffect(() => {
