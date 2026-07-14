@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { createUserViaAdmin, loginAsAdmin, uniqueEmail } from './helpers'
-import { openChatAndJoin, signInOnNewDevice, startDirectChat } from './chat-helpers'
+import { openChatAndJoin, send, signInOnNewDevice, startDirectChat } from './chat-helpers'
 
 const PASSWORD = 'Sup3rSecret!'
 
@@ -185,4 +185,114 @@ test('only one of the callee’s devices can answer, and the others stop ringing
   })
 
   await Promise.all([alice.context.close(), phone.context.close(), laptop.context.close()])
+})
+
+/**
+ * The callee rings while they are looking at the chat LIST, not at the conversation.
+ *
+ * This is what calling somebody actually looks like. Nobody sits with the right conversation
+ * open waiting to be called — they are on the list, or in a different chat, or they just
+ * unlocked the phone. Every other test here opens the conversation on both sides first, which
+ * quietly settles its MLS group on the callee's device; if ringing depends on that having
+ * happened, calling works in the tests and nowhere else.
+ */
+test('a callee who is not in the conversation still rings', async ({ browser }) => {
+  const aliceEmail = uniqueEmail('alice-list')
+  const bobEmail = uniqueEmail('bob-list')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const bob = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+
+  const conv = await startDirectChat(alice.page, bob.userId)
+  await openChatAndJoin(alice.page, conv)
+  await openChatAndJoin(bob.page, conv)
+
+  // Bob walks away from the conversation and sits on the chat list, exactly as he would in
+  // life. Everything his device knows about the group it still knows — it just is not looking
+  // at it.
+  // A RELOAD, not just a navigation: a fresh JavaScript context, with the MLS state rebuilt
+  // from IndexedDB rather than still warm in memory. That is the state a device is in when a
+  // call arrives — the app was opened, or reopened, and the conversation has not been touched.
+  await bob.page.goto('/')
+  await bob.page.reload()
+  await expect(bob.page.getByTestId('chat-sidebar')).toBeVisible({ timeout: 30_000 })
+
+  await alice.page.getByTestId('start-call').click()
+  await expect(alice.page.getByTestId('call-bar')).toBeVisible()
+
+  // He must ring anyway.
+  await expect(bob.page.getByTestId('incoming-call')).toBeVisible({ timeout: 30_000 })
+  await bob.page.getByTestId('answer-call').click()
+
+  await expect(alice.page.getByTestId('call-bar')).toHaveAttribute('data-status', 'connected', {
+    timeout: 30_000,
+  })
+  await expect.poll(() => inboundAudioPackets(bob.page), { timeout: 20_000 }).toBeGreaterThan(0)
+
+  await Promise.all([alice.context.close(), bob.context.close()])
+})
+
+/**
+ * A call still rings after the group's epoch has moved on.
+ *
+ * MLS's exporter only exports from the CURRENT epoch, so the two ends must derive the call key
+ * at the same one. The caller is the end that has to be right: a recipient who is behind can
+ * catch up to the epoch named in the invite, but one who is AHEAD cannot go back — there is no
+ * way to export a past epoch — and simply cannot open the invite.
+ *
+ * So a caller sitting on a stale epoch seals an invite nobody can read. And it fails in the
+ * cruellest possible way: the push notification is sent by the server, which needs no key, so
+ * the callee's phone buzzes — and then nothing rings, and no error is raised anywhere.
+ *
+ * Admitting somebody's second device is a Commit, and a Commit moves the epoch. That happens in
+ * the background, in a conversation nobody is looking at. This is the everyday case.
+ */
+test('a call rings after another device joins and moves the epoch', async ({ browser }) => {
+  const aliceEmail = uniqueEmail('alice-epoch')
+  const bobEmail = uniqueEmail('bob-epoch')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const bob = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+
+  const conv = await startDirectChat(alice.page, bob.userId)
+  await openChatAndJoin(alice.page, conv)
+  await openChatAndJoin(bob.page, conv)
+
+  // Bob signs in on a second device. Admitting it is a Commit, which moves the group's epoch
+  // out from under everybody who is not paying attention.
+  const bob2 = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  await openChatAndJoin(bob2.page, conv)
+
+  // The new device really is in the group — it can read what is said now.
+  await send(alice.page, 'after the epoch moved')
+  await expect(bob2.page.getByTestId('chat-message').filter({ hasText: 'after the epoch moved' }))
+    .toBeVisible({ timeout: 40_000 })
+
+  // Now call. Whatever epoch anyone happens to be sitting on, the invite must be readable.
+  await alice.page.getByTestId('start-call').click()
+  await expect(alice.page.getByTestId('call-bar')).toBeVisible()
+
+  await expect(bob.page.getByTestId('incoming-call')).toBeVisible({ timeout: 30_000 })
+  await bob.page.getByTestId('answer-call').click()
+
+  await expect(alice.page.getByTestId('call-bar')).toHaveAttribute('data-status', 'connected', {
+    timeout: 30_000,
+  })
+  await expect.poll(() => inboundAudioPackets(bob.page), { timeout: 20_000 }).toBeGreaterThan(0)
+
+  await Promise.all([alice.context.close(), bob.context.close(), bob2.context.close()])
 })

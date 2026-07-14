@@ -1286,6 +1286,29 @@ export async function catchUpToEpoch(
 }
 
 /**
+ * Applies every Commit the server has, so this device is at the group's current epoch.
+ *
+ * A caller MUST do this before it derives a call key. The exporter only exports from the
+ * CURRENT epoch, and a device that is behind — someone else's phone was admitted to the group
+ * an hour ago and nothing has made this tab notice — would seal its invite under an epoch its
+ * peer has already left behind. The peer cannot go back to it (MLS has no way to export a past
+ * epoch), so it silently cannot read the invite, and the call rings out with no way to say why.
+ *
+ * The recipient can survive being behind — it catches up to the epoch named in the header. It
+ * cannot survive being ahead. So the sender is the one that has to be current, and this is
+ * where it becomes current.
+ *
+ * Returns the epoch this device ended up at.
+ */
+export async function catchUpToLatest(conversationId: string, myUserId: string): Promise<number> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId) return 0
+  await catchUp(session, conversationId, state.groupId)
+  return session.epoch(state.groupId)
+}
+
+/**
  * Holds the group's membership still for the duration of a call.
  *
  * Reconciliation adds a member's newly signed-in device to the group, which is a Commit, and

@@ -145,7 +145,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
         setIncoming({ conversationId, callId, sdp: invite.sdp, from: invite.from })
         return
       }
-    })()
+      // Somebody is calling — the nudge said so — and this device found nothing it could open.
+      // readInvite has already said why. This says that it happened at all, which is the thing
+      // you cannot infer from a phone that simply sits there not ringing.
+      console.warn(
+        `[call] nudged about call ${callId} but none of its ${signals.length} signal(s) ` +
+          `could be read as an invite — this device will not ring`,
+      )
+    })().catch((e: unknown) => {
+      console.warn(`[call] failed to handle the nudge for call ${callId}:`, e)
+    })
   })
 
   // A call tapped from a push notification.

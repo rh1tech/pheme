@@ -16,6 +16,7 @@ import { ApiError, api } from './api'
 import {
   callKeyFor,
   catchUpToEpoch,
+  catchUpToLatest,
   freezeGroupForCall,
   myIdentity,
 } from './mls'
@@ -200,6 +201,16 @@ export class Call {
     // derived from — so reconciling mid-call would pull the key out from under a conversation
     // two people are having. It can wait thirty seconds.
     this.releaseGroup = freezeGroupForCall()
+
+    // Be at the group's current epoch BEFORE deriving anything, and only then hold it still.
+    //
+    // The exporter exports from the current epoch and no other. A device that is behind — the
+    // other person's phone joined the group yesterday and this tab has had no reason to notice
+    // — would otherwise seal its invite under an epoch its peer has already moved past, and the
+    // peer cannot go back to it. The invite arrives, cannot be opened, and is dropped without a
+    // sound: the phone buzzes from the push (which the server sends and no key protects) and
+    // then nothing rings. Whichever end is stale, calls from it vanish.
+    await catchUpToLatest(this.conversationId, this.userId)
 
     await this.deriveKeys()
     this.startPolling()
@@ -650,25 +661,42 @@ export async function readInvite(
   try {
     header = openHeader(wire)
   } catch {
-    return null
+    return null // not a call envelope at all; the server relays whatever it is handed
   }
+  // Not an invite: a signal for a call we are not on, or a control message. Not our business,
+  // and not a failure — say nothing.
   if (header.callId !== callId || header.control) return null
 
-  const me = await myIdentity(userId)
-  if (header.from === me) return null // our own invite, echoed back
-
-  // The invite was sealed at the caller's epoch. If we are behind — they added a device and we
-  // have not caught up — we can get there.
-  await catchUpToEpoch(conversationId, userId, header.epoch)
-
-  const key = await callKeyFor(conversationId, userId, callId, header.from)
-  if (!key || key.epoch !== header.epoch) return null
-
   try {
+    const me = await myIdentity(userId)
+    if (header.from === me) return null // our own invite, echoed back to us
+
+    // The invite was sealed at the caller's epoch. If we are behind — a device joined the group
+    // and this tab never noticed — we can get there. If we end up AHEAD we cannot: MLS will not
+    // export a past epoch, and there is no way back to it.
+    await catchUpToEpoch(conversationId, userId, header.epoch)
+
+    const key = await callKeyFor(conversationId, userId, callId, header.from)
+    if (!key) {
+      throw new Error('this device cannot derive a key for the conversation’s group — is it a member?')
+    }
+    if (key.epoch !== header.epoch) {
+      throw new Error(
+        `sealed at epoch ${header.epoch}, but this device is at ${key.epoch}, and a past ` +
+          `epoch's key cannot be derived — the caller is on a stale epoch`,
+      )
+    }
+
     const body = await openSignal(key.secret, wire)
     if (body.kind !== 'invite' || !body.sdp) return null
     return { from: header.from, sdp: body.sdp, epoch: header.epoch }
-  } catch {
+  } catch (e) {
+    // An invite we could not open is a call that does not ring, and until now it did not make a
+    // sound: the phone buzzed from the push — which the server sends and no key protects — and
+    // then nothing happened, with no error anywhere to say why. Two rounds of "calls don't work"
+    // went by without this line. It is also why the throws above exist: every one of these was
+    // once a bare `return null`.
+    console.warn(`[call] could not open an invite for call ${callId}:`, e)
     return null
   }
 }
