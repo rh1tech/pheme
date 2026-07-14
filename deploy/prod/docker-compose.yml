@@ -168,9 +168,12 @@ services:
     profiles: ["calls"]
     volumes:
       - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
-      # No certificate is mounted, because TLS-TURN is off — this host has only a Cloudflare
-      # ORIGIN certificate, which no browser trusts. See turnserver.conf for what enabling
-      # `turns:` would need (a publicly trusted cert on a DNS-only name), and mount it here.
+      # The TLS-TURN certificate, for `turns:` on 5349. NOT /etc/letsencrypt: coturn runs as
+      # nobody and cannot read it (0700 root), and mounting `live/` alone would hand the
+      # container a directory of dangling symlinks into `archive/`. A certbot deploy hook
+      # publishes a readable copy here and restarts this container on renewal — see
+      # turnserver.conf, which explains why the restart is not optional.
+      - ${PHEME_TURN_CERT_DIR:-/opt/pheme/prod/turn-certs}:/certs:ro
     # The realm and the shared secret are passed here, not in turnserver.conf: that file is
     # in git and coturn does not expand environment variables. The secret must be the same
     # one the App API signs credentials with (PHEME_TURN_SECRET).
