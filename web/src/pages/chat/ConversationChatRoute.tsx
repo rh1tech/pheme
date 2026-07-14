@@ -31,6 +31,7 @@ import {
   PeerKeysMissingError,
   base64ToBytes,
   decryptChatMessage,
+  confirmGroup,
   ensureGroup,
   mlsSession,
   primeGroup,
@@ -124,6 +125,15 @@ export function ConversationChatRoute() {
    * that encryption was being set up until the network came back. A banner is only honest once the
    * answer is actually known.
    */
+  /**
+   * The conversation this tab can DECRYPT, from its own storage, with no network.
+   *
+   * Kept apart from groupId on purpose. Readability is safe to take from a cache; membership is not,
+   * and the group to encrypt to is not. See primeGroup.
+   */
+  const [readableFor, setReadableFor] = useState('')
+  const readable = readableFor === id
+
   const [settledFor, setSettledFor] = useState('')
 
   /**
@@ -193,12 +203,29 @@ export function ConversationChatRoute() {
     if (!userId) return
     let active = true
 
-    primeGroup(id, userId)
-      .then((gid) => {
-        if (active && gid) setGroupId(gid)
+    // Priming makes the conversation READABLE. It deliberately does NOT set groupId — that is the
+    // group `send` encrypts to, and a remembered id is not proof it is still the current one. If
+    // another device reset the conversation, trusting the cache here would seal the next message to a
+    // retired group that nobody is in, with no error anywhere. Only confirmGroup may set it.
+    primeGroup(id)
+      .then((primed) => {
+        if (active && primed) setReadableFor(id)
       })
       .catch(() => {
-        // Nothing known. The settle will say.
+        // Nothing known locally. The confirm below will say.
+      })
+
+    // The authoritative answer, in ONE round trip, alongside everything else the page is fetching. It
+    // lands long before the user has typed anything, so the composer and the call button are honest by
+    // the time they could be used.
+    confirmGroup(id, userId)
+      .then((gid) => {
+        if (!active) return
+        setGroupId(gid ?? '')
+        setSettledFor(id)
+      })
+      .catch(() => {
+        // Leave it unknown; the full settle gets another go.
       })
 
     return () => {
@@ -290,7 +317,10 @@ export function ConversationChatRoute() {
   // even for conversations nobody has open, and getting it wrong forks the device off the
   // group. lib/mls owns all of it (ensureGroup → catchUp).
   useEffect(() => {
-    if (readyId !== id || !userId || !conversation || !groupId || messages.length === 0) return
+    // Decryption needs only the groups this device can READ, which priming supplies from disk. It
+    // must not wait for the server to confirm which one is current — that is a question about sending.
+    if (readyId !== id || !userId || !conversation || (!groupId && !readable) || messages.length === 0)
+      return
     let active = true
     const run = async () => {
       try {
@@ -376,7 +406,7 @@ export function ConversationChatRoute() {
     return () => {
       active = false
     }
-  }, [messages, readyId, userId, id, conversation, groupId])
+  }, [messages, readyId, userId, id, conversation, groupId, readable])
 
   useEffect(() => {
     let active = true

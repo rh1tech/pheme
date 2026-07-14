@@ -135,27 +135,24 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     // once — so this is not a cache warm-up, it is loading the messages.
     await ref.read(chatCacheProvider).load(_conversationId);
 
-    // What we already know, from disk, without asking anyone.
-    bool? joined;
-    try {
-      joined = await mls.primeGroup(_conversationId, myUserId) != null;
-    } on Object {
-      // Leave it unknown. The settle below will say.
-      joined = null;
-    }
-    // Holding the group is proof. NOT holding it is not proof of anything yet — it may just be a chat
-    // this device has never opened. Only the settle can tell the difference, so stay quiet until it
-    // does rather than accusing the app of still setting encryption up.
-    state = state.copyWith(
-      joined: joined == true ? true : null,
-      clearJoined: joined != true,
+    // Enough to READ, from disk, without asking anyone. NOT enough to claim we are in the group — see
+    // MlsService.primeGroup. That distinction is the whole safety of this fast path.
+    await mls.primeGroup(_conversationId).catchError((_) {});
+
+    // The two things we need from the network, asked for AT THE SAME TIME:
+    //   * the messages;
+    //   * which group is current, and whether we are in it.
+    //
+    // Concurrently, so confirming the group is free — it finishes while the messages are still in
+    // flight, and the composer and the call button are honest by the time the first bubble lands.
+    final messagesFuture = repo.listChatMessages(
+      _conversationId,
+      limit: _pageSize,
     );
+    final confirmFuture = mls.confirmGroup(_conversationId, myUserId);
 
     try {
-      final page = await repo.listChatMessages(
-        _conversationId,
-        limit: _pageSize,
-      );
+      final page = await messagesFuture;
       // The server returns newest-first; we hold oldest-first.
       final messages = page.messages.reversed
           .where((m) => !m.isControl)
@@ -172,7 +169,21 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       state = state.copyWith(loading: false);
     }
 
-    // Now the network. Everything above already rendered.
+    try {
+      final groupId = await confirmFuture;
+      state = state.copyWith(joined: groupId != null);
+
+      // Confirming may have told us the conversation was RESET while we were away: the group we had
+      // written down is retired, and the current one is one we have never seen. Anything that failed
+      // to decrypt a moment ago against the old group may open now against the new one.
+      await _decryptUnread();
+    } on Object {
+      // We do not know. Say nothing: `joined` stays null and the banner stays quiet. The settle below
+      // gets another go.
+    }
+
+    // The heavy part — catch up on commits, admit new devices, prune ghosts — with the chat already on
+    // screen and nobody waiting on it.
     await _settle();
   }
 

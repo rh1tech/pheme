@@ -1293,28 +1293,63 @@ async function rememberGroupIds(conversationId: string, groupIds: string[]): Pro
 }
 
 /**
- * What this device already knows about a conversation's group, WITHOUT ASKING THE SERVER.
+ * Makes a conversation READABLE from what this device already knows, without asking the server.
  *
- * Returns the group id when this tab holds the group and can read the conversation right now; null
- * when it genuinely does not know — a conversation never opened here, or one this device has not been
- * admitted to.
+ * Returns true when there was something to prime — enough to start decrypting immediately, with no
+ * network at all.
  *
- * Holding the ratchet is the actual test, and it is a local one. If we hold it, we are in the group,
- * and there is nothing the server could say that would change that.
+ * ------------------------------------------------------------------------------------------------
+ * WHAT THIS DOES NOT DO, AND MUST NOT: hand back a group id to ENCRYPT to, or claim membership.
+ *
+ * A remembered id is enough to read. It is not proof of membership. If another device reset the
+ * conversation, the current group is one this tab has never heard of — and a client that trusted this
+ * cache would cheerfully seal its next message to the RETIRED group. Everyone else is on the new one.
+ * Nobody could read it. Nothing would report an error, because nothing went wrong: the message was
+ * encrypted perfectly, to a group nobody is in.
+ *
+ * Reading cannot lie in that direction. A message from the old group still opens with the old group,
+ * and one from the new group simply does not open — a miss, not a forgery, and confirmGroup repairs it
+ * a moment later.
+ *
+ * Only the server can say which group is current. See confirmGroup.
+ * ------------------------------------------------------------------------------------------------
  */
-export async function primeGroup(
+export async function primeGroup(conversationId: string): Promise<boolean> {
+  const known = (await storedGroupIds())[conversationId]
+  if (!known || known.length === 0) return false
+
+  // Every group the conversation has ever had. A message from before a reset was encrypted to one that
+  // is no longer current, and it is still perfectly readable by a device that still holds it.
+  readableGroups.set(conversationId, known)
+  return true
+}
+
+/**
+ * Asks the server which group is current, and whether this device is in it. ONE round trip.
+ *
+ * The authoritative answer, and the only one that may enable sending or calling. Deliberately separate
+ * from ensureGroup, which also catches up on Commits, admits new devices and prunes ghosts — all worth
+ * doing, all worth doing in the background, none of it worth making the user wait for.
+ *
+ * It also REPAIRS THE CACHE. If another device reset the conversation, the id we had written down is
+ * retired, and this is where we find out: the old group stays readable, the new one becomes the one we
+ * must be admitted to, and ensureGroup does the admitting.
+ */
+export async function confirmGroup(
   conversationId: string,
   myUserId: string,
 ): Promise<string | null> {
-  const known = (await storedGroupIds())[conversationId]
-  if (!known || known.length === 0) return null
-
-  // Every group the conversation has ever had. A message from before a reset was encrypted to one that
-  // is no longer current, and it is still perfectly readable.
-  readableGroups.set(conversationId, known)
-
   const session = await mlsSession(myUserId)
-  return (await session.hasGroup(known[0])) ? known[0] : null
+  const state = await api.mlsGroupState(conversationId)
+
+  const all = [state.groupId, ...(state.priorGroupIds ?? [])].filter(Boolean)
+  if (all.length > 0) {
+    readableGroups.set(conversationId, all)
+    void rememberGroupIds(conversationId, all)
+  }
+
+  if (!state.groupId) return null
+  return (await session.hasGroup(state.groupId)) ? state.groupId : null
 }
 
 /** Puts a group at the front of what a conversation can be decrypted against. */

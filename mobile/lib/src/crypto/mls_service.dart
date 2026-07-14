@@ -219,34 +219,63 @@ class MlsService {
     return run;
   }
 
-  /// What this device already knows about a conversation's group, WITHOUT ASKING THE SERVER.
-  ///
-  /// Returns the group id when this device holds the group and can read the conversation right now.
-  /// Null when it genuinely does not know — a chat never opened on this device, or one it has not been
-  /// admitted to.
+  /// Makes a conversation READABLE from what this device already knows, without asking the server.
   ///
   /// This is the whole answer to "why does it say encryption is being set up every time I open a
   /// chat". It was not being set up. The device was holding the ratchet the entire time; the only
-  /// thing it lacked was the group's ID, a string the server hands out once and never changes — and
-  /// waiting three round trips to be told it again meant nothing could decrypt, nothing could render,
-  /// and the only honest thing the UI could say was "still working on it".
+  /// thing it lacked was the group's ID — and waiting three round trips to be told a string it already
+  /// knew meant nothing could decrypt, nothing could render, and the only thing the UI could honestly
+  /// say was "still working on it".
   ///
-  /// So: remember the id. Then a returning device knows instantly, decrypts from the first frame, and
-  /// reconciles with the server in the background where nobody is watching.
-  Future<String?> primeGroup(String conversationId, String myUserId) async {
+  /// -----------------------------------------------------------------------------------------------
+  /// WHAT THIS DOES NOT DO, AND MUST NOT: say that this device is IN the group.
+  ///
+  /// A remembered id is enough to READ. It is not proof of membership, and it is not the group to
+  /// encrypt to. If another device reset the conversation, the current group is one we have never
+  /// heard of — and a client that trusted this cache would cheerfully encrypt its next message to the
+  /// RETIRED group. Everyone else is on the new one. Nobody could read it. Nothing would report an
+  /// error, because nothing went wrong: the message was sealed perfectly, to a group nobody is in.
+  ///
+  /// Reading is safe because it cannot lie in that direction: a message from the old group still opens
+  /// with the old group, and one from the new group simply does not open — which is a miss, not a
+  /// forgery, and [confirmGroup] repairs it a moment later.
+  ///
+  /// Only the server can say which group is current. See [confirmGroup].
+  /// -----------------------------------------------------------------------------------------------
+  Future<void> primeGroup(String conversationId) async {
     final known = await _store.groupIds(conversationId);
-    if (known.isEmpty) return null;
+    if (known.isEmpty) return;
 
     // Every group the conversation has ever had. A message from before a reset was encrypted to one
-    // that is no longer current, and it is still perfectly readable.
+    // that is no longer current, and it is still perfectly readable by a device that still holds it.
     _readableGroups[conversationId] = known;
+  }
 
+  /// Asks the server which group is current, and whether this device is in it. ONE round trip.
+  ///
+  /// The authoritative answer, and the only one that may enable sending or calling. It is deliberately
+  /// separate from [ensureGroup], which also catches up on commits, admits new devices and prunes
+  /// ghosts — worth doing, and worth doing in the background, but not worth making the user wait for.
+  ///
+  /// Returns the current group id when this device holds it; null when it does not — which is a real
+  /// answer, and the one case the "setting up encryption" banner exists for.
+  ///
+  /// It also REPAIRS THE CACHE. If another device reset the conversation, the id we had written down is
+  /// retired, and this is where we find out: the old group stays readable, the new one becomes the one
+  /// we must be admitted to, and [ensureGroup] does the admitting.
+  Future<String?> confirmGroup(String conversationId, String myUserId) async {
     final session = await this.session(myUserId);
-    final current = known.first;
+    final state = await _repo.mlsGroupState(conversationId);
 
-    // Holding the ratchet is the actual test, and it is a local one. If we hold it, we are in the
-    // group — there is nothing the server could tell us that would change that.
-    return await session.hasGroup(current) ? current : null;
+    if (state.allGroupIds.isNotEmpty) {
+      _readableGroups[conversationId] = state.allGroupIds;
+      await _store
+          .rememberGroupIds(conversationId, state.allGroupIds)
+          .catchError((_) {});
+    }
+
+    if (!state.isEstablished) return null;
+    return await session.hasGroup(state.groupId) ? state.groupId : null;
   }
 
   Future<String?> _settleGroup(
