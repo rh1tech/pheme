@@ -296,3 +296,48 @@ test('a call rings after another device joins and moves the epoch', async ({ bro
 
   await Promise.all([alice.context.close(), bob.context.close(), bob2.context.close()])
 })
+
+/**
+ * A call nobody answers leaves a record in the conversation.
+ *
+ * Without one, a missed call is a single buzz while you were away and then silence — nothing
+ * afterwards says that anybody wanted you, or who. So the caller writes it into the chat, as a
+ * real encrypted message: it is there on every device, after a reload, for both people.
+ *
+ * It is written ONCE, by the caller. The callee writing one of its own would put the same missed
+ * call in the transcript twice.
+ */
+test('a call nobody answers leaves a missed-call record in the chat', async ({ browser }) => {
+  const aliceEmail = uniqueEmail('alice-missed')
+  const bobEmail = uniqueEmail('bob-missed')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const bob = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+
+  const conv = await startDirectChat(alice.page, bob.userId)
+  await openChatAndJoin(alice.page, conv)
+  await openChatAndJoin(bob.page, conv)
+
+  // Alice calls; Bob's device rings and he refuses it.
+  await alice.page.getByTestId('start-call').click()
+  await expect(bob.page.getByTestId('incoming-call')).toBeVisible({ timeout: 30_000 })
+  await bob.page.getByTestId('decline-call').click()
+
+  // Both of them end up with the call in the transcript — exactly one entry each, and it is
+  // not a chat bubble, because nobody said anything.
+  await expect(alice.page.getByTestId('call-event')).toHaveCount(1, { timeout: 30_000 })
+  await expect(bob.page.getByTestId('call-event')).toHaveCount(1, { timeout: 30_000 })
+
+  // And it survives a reload, which a purely local flourish would not.
+  await bob.page.reload()
+  await expect(bob.page.getByTestId('call-event')).toHaveCount(1, { timeout: 30_000 })
+
+  await Promise.all([alice.context.close(), bob.context.close()])
+})

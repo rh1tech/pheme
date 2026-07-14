@@ -19,6 +19,29 @@ export function isSameDay(a: string, b: string): boolean {
   return startOfDay(new Date(a)) === startOfDay(new Date(b))
 }
 
+/**
+ * Splits messages into consecutive runs that fall on the same calendar day.
+ *
+ * The feed renders one run per day, as its own section, and that is not merely tidy: the day
+ * pill is `position: sticky`, and a sticky element pins itself inside its CONTAINING BLOCK. Left
+ * as flat siblings, every pill in the conversation shares the same containing block and every
+ * one of them pins to the same few pixels below the top — so "Today" arrives and parks directly
+ * on top of "Yesterday", which is still sitting there. Giving each day its own section is what
+ * makes a pill leave when its day scrolls away, and it is the reason this function exists.
+ */
+export function groupByDay<T extends { createdAt: string }>(messages: readonly T[]): T[][] {
+  const days: T[][] = []
+  for (const message of messages) {
+    const current = days[days.length - 1]
+    if (current && isSameDay(current[0].createdAt, message.createdAt)) {
+      current.push(message)
+      continue
+    }
+    days.push([message])
+  }
+  return days
+}
+
 /** Clock time, e.g. "18:11". Used on message bubbles. */
 export function messageTime(iso: string, locale: string): string {
   return new Date(iso).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })

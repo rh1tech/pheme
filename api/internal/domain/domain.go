@@ -364,6 +364,15 @@ const (
 	// its group" — posted by a device that holds no group, so that a member who does hold
 	// it adds this device. It carries no key material.
 	ContentTypeMLSDevice = "application/mls-device"
+	// ContentTypeCallEvent is the record a call leaves in the conversation when nobody
+	// answered it. Unlike the types above it IS user-visible — it is the "missed call" in
+	// the transcript — and it is encrypted like any other message, so the server knows only
+	// that one exists, never what it says.
+	//
+	// It is here for one reason: so that the server does not push a notification for it. The
+	// phone was already rung when the call came in, and buzzing it a second time to announce
+	// that the call it just told you about was missed is not a notification, it is a nag.
+	ContentTypeCallEvent = "application/pheme-call-event"
 )
 
 // MLSGroupState is a conversation's MLS group: which group it is, and how far

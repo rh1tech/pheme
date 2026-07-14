@@ -237,6 +237,19 @@
   padding: 0.75rem var(--pheme-pane-x);
 }
 
+/* One day of the conversation, and the containing block its date pill sticks inside.
+
+   The pill is `position: sticky`, and a sticky element pins itself within its containing block —
+   so without this section every pill in the whole history shares one containing block (the feed)
+   and every one of them pins to the same few pixels below the top. "Today" arrives and parks
+   directly on top of "Yesterday", which is still sitting there. Scoped to a day, a pill is
+   carried off the screen by its own day, and the next one takes its place. */
+.pheme-day {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
 .pheme-day-pill {
   position: sticky;
   top: 0.25rem;
@@ -728,4 +741,32 @@
   background-color: var(--pheme-own-bubble-bg);
   border-bottom-left-radius: var(--mantine-radius-lg);
   border-bottom-right-radius: var(--mantine-radius-xs);
+}
+
+/* --- The record a call leaves ---------------------------------------------- */
+
+/* Deliberately not a bubble. Nobody said this — it is a note about what happened, and dressing
+   it as speech would put words in the caller's mouth. So it reads as an aside: centred, quiet,
+   and unmistakably not a message. */
+.pheme-call-event {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  max-width: 100%;
+  margin: 0.25rem 0;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background-color: var(--mantine-color-default-hover);
+  color: var(--mantine-color-dimmed);
+}
+
+/* A missed call is the one thing in this list a person might be sorry to have not seen, so it
+   is allowed to carry a little colour. A declined one is a decision, not a loss. */
+.pheme-call-event[data-outcome='missed'] {
+  color: var(--mantine-color-red-8);
+}
+
+:root[data-mantine-color-scheme='dark'] .pheme-call-event[data-outcome='missed'] {
+  color: var(--mantine-color-red-4);
 }

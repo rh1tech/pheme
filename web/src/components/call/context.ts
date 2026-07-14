@@ -23,6 +23,12 @@ export interface CallContextValue {
   decline: () => Promise<void>
   hangUp: () => Promise<void>
   dismiss: () => void
+  /** Stops sending the microphone. The track stays in the connection and transmits silence. */
+  setMuted: (muted: boolean) => void
+  /** Switches the microphone mid-call, without renegotiating. */
+  setInputDevice: (deviceId: string) => Promise<void>
+  /** Sends the call's audio to a chosen speaker. Unsupported in Safari — see canChooseOutput. */
+  setOutputDevice: (deviceId: string) => Promise<void>
 }
 
 export const CallContext = createContext<CallContextValue | null>(null)

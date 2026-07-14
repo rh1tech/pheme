@@ -28,9 +28,12 @@ import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/phe
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { ApiError, api } from './api'
 import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
-import { clearPreviews } from './chatCache'
+import { cacheBody, clearPreviews } from './chatCache'
 import { clearSafetyPins } from './safety'
 import { loadMlsDeviceId, saveMlsDeviceId } from './device'
+import { serializeContent } from './chatContent'
+import { CALL_EVENT, writeCallEvent } from './callEvent'
+import type { CallEvent } from './callEvent'
 import type { Conversation } from './types'
 
 const STATE_KEY = 'client-state'
@@ -1283,6 +1286,36 @@ export async function catchUpToEpoch(
   if (current >= epoch) return current
   await catchUp(session, conversationId, state.groupId)
   return session.epoch(state.groupId)
+}
+
+/**
+ * Posts the record of a call into the conversation, encrypted to the group like anything else.
+ *
+ * Only the caller does this, and only for a call that was never answered — so exactly one
+ * message is written, by the one device that knows the call rang out. It is a real message: the
+ * other end reads it from its own history, on every device, after a reload, forever. Nothing
+ * about it is a local UI flourish.
+ *
+ * Silently does nothing if this device does not hold the group. A device that cannot encrypt is
+ * a device whose call could not have happened either, and there is nobody to tell.
+ */
+export async function postCallEvent(
+  conversationId: string,
+  myUserId: string,
+  event: CallEvent,
+): Promise<void> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) return
+
+  const body = writeCallEvent(event)
+  const ciphertext = await session.encrypt(state.groupId, serializeContent({ body }))
+  const msg = await api.sendChatMessage(conversationId, ciphertext, CALL_EVENT)
+
+  // Write it into the local cache, because we will never be able to decrypt it: MLS destroys the
+  // message key on encrypt, so a sender cannot read what it sent. Without this the caller — the
+  // one person who knows the call went unanswered — would see its own record of it sealed.
+  await cacheBody(conversationId, msg.id, body)
 }
 
 /**

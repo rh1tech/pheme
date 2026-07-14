@@ -194,11 +194,15 @@ func (h *Handler) senderName(ctx context.Context, userID string) string {
 	return ""
 }
 
-// isControlContent reports whether a content type is MLS protocol traffic rather
-// than a user-visible message.
+// isControlContent reports whether a content type must not raise a push notification.
+//
+// The MLS types are protocol traffic and nobody wrote them. A call event is different: it is
+// user-visible, and it is the "missed call" line in the transcript — but the phone was rung
+// when the call came in, and buzzing it again to say the call it just announced went
+// unanswered is not a notification, it is a nag.
 func isControlContent(contentType string) bool {
 	switch contentType {
-	case contentTypeMLSWelcome, contentTypeMLSCommit, contentTypeMLSDevice:
+	case contentTypeMLSWelcome, contentTypeMLSCommit, contentTypeMLSDevice, contentTypeCallEvent:
 		return true
 	default:
 		return false
@@ -217,6 +221,7 @@ const (
 	contentTypeMLSWelcome = domain.ContentTypeMLSWelcome
 	contentTypeMLSCommit  = domain.ContentTypeMLSCommit
 	contentTypeMLSDevice  = domain.ContentTypeMLSDevice
+	contentTypeCallEvent  = domain.ContentTypeCallEvent
 )
 
 type addMemberRequest struct {

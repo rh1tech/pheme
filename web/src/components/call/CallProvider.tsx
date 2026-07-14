@@ -6,10 +6,44 @@ import { loadMlsDeviceId } from '../../lib/device'
 import { useAuth } from '../../auth/context'
 import { useEventStream } from '../../hooks/useEventStream'
 import { notifyError } from '../../lib/notify'
-import { PeerKeysMissingError } from '../../lib/mls'
+import { PeerKeysMissingError, postCallEvent } from '../../lib/mls'
+import type { CallEventOutcome } from '../../lib/callEvent'
 import { useTranslation } from 'react-i18next'
 
 import { CallContext, type CallContextValue } from './context'
+
+/**
+ * Writes a missed call into the conversation, so it leaves a trace.
+ *
+ * A call that rang out while you were away buzzed the phone once and then left nothing behind —
+ * no way to see that anyone had wanted you, or who. That is what this fixes, and it is a real
+ * encrypted message, not a UI flourish: it is in the history on every device, after a reload,
+ * for both people.
+ *
+ * ONLY THE CALLER WRITES IT, and only for a call nobody picked up. The callee writing one too
+ * would put the same missed call in the chat twice; and a call that was answered is not a missed
+ * call, it is a conversation, and the two people who had it do not need to be told it happened.
+ */
+async function recordCall(s: CallSnapshot, userId: string): Promise<void> {
+  if (!s.outgoing || s.seconds > 0) return
+
+  const outcome: CallEventOutcome | null =
+    s.reason === 'unanswered'
+      ? 'missed'
+      : s.reason === 'declined'
+        ? 'declined'
+        : s.reason === 'failed'
+          ? 'failed'
+          : null
+  // Everything else — we hung up before it rang out, they were busy, it was answered on another
+  // of their devices — is not a missed call and gets no entry.
+  if (!outcome) return
+
+  await postCallEvent(s.conversationId, userId, { outcome }).catch(() => {
+    // The record is worth having and not worth failing a call over. If it does not land, the
+    // call simply leaves no trace, which is where we were before.
+  })
+}
 
 /**
  * Owns the one call this browser can be on.
@@ -39,16 +73,17 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const onChange = useCallback(
     (s: CallSnapshot) => {
       setSnapshot(s)
-      if (s.status === 'ended') {
-        handledRef.current.add(s.callId)
-        // Leave the ended state up for a moment so the user can see WHY it ended — declined,
-        // unanswered, answered on another device — rather than having the window vanish.
-        setTimeout(() => {
-          if (callRef.current?.callId === s.callId) clear()
-        }, 2500)
-      }
+      if (s.status !== 'ended') return
+
+      handledRef.current.add(s.callId)
+      if (userId) void recordCall(s, userId)
+      // Leave the ended state up for a moment so the user can see WHY it ended — declined,
+      // unanswered, answered on another device — rather than having the window vanish.
+      setTimeout(() => {
+        if (callRef.current?.callId === s.callId) clear()
+      }, 2500)
     },
-    [clear],
+    [clear, userId],
   )
 
   const place = useCallback(
@@ -112,6 +147,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const dismiss = useCallback(() => clear(), [clear])
+
+  const setMuted = useCallback((muted: boolean) => {
+    callRef.current?.setMuted(muted)
+  }, [])
+
+  const setInputDevice = useCallback(async (deviceId: string) => {
+    await callRef.current?.setInputDevice(deviceId)
+  }, [])
+
+  const setOutputDevice = useCallback(async (deviceId: string) => {
+    await callRef.current?.setOutputDevice(deviceId)
+  }, [])
 
   // Incoming calls, and every signal for a call we are already on.
   useEventStream((e) => {
@@ -207,6 +254,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
         decline,
         hangUp,
         dismiss,
+        setMuted,
+        setInputDevice,
+        setOutputDevice,
       }}
     >
       {children}

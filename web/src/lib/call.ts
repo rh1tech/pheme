@@ -57,6 +57,10 @@ export interface CallSnapshot {
   /** True when we placed it. */
   outgoing: boolean
   reason?: CallEndReason
+  /** True while the microphone is not being sent. */
+  muted: boolean
+  /** Seconds of connected audio, for the record the call leaves in the chat. */
+  seconds: number
 }
 
 /** How long a call rings before it gives up. */
@@ -85,6 +89,40 @@ const POLL_MS = 400
  */
 const RE_RING_MS = 3_000
 
+/**
+ * Whether this browser can send audio to a chosen output device.
+ *
+ * Safari does not implement `setSinkId`, which means an iPhone cannot be asked to move a call
+ * between the earpiece and the loudspeaker — the web platform simply does not expose the
+ * choice, and iOS makes it for you. There is no polyfill and no trick; a native app would use
+ * CallKit, and a web app has nothing. So the UI hides the control here rather than offering a
+ * button that does nothing.
+ */
+export function canChooseOutput(): boolean {
+  return typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype
+}
+
+export interface AudioDevice {
+  deviceId: string
+  label: string
+}
+
+/**
+ * The microphones and speakers this browser will admit to having.
+ *
+ * Labels are blank until the page holds a microphone permission, so this is only worth calling
+ * once a call is up — which is the only time we offer it.
+ */
+export async function listAudioDevices(): Promise<{ inputs: AudioDevice[]; outputs: AudioDevice[] }> {
+  if (!navigator.mediaDevices?.enumerateDevices) return { inputs: [], outputs: [] }
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+  const pick = (kind: MediaDeviceKind): AudioDevice[] =>
+    devices
+      .filter((d) => d.kind === kind && d.deviceId)
+      .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `${kind} ${i + 1}` }))
+  return { inputs: pick('audioinput'), outputs: canChooseOutput() ? pick('audiooutput') : [] }
+}
+
 /** A fresh, unguessable call id. Random, so an old call's signals cannot be replayed into a new one. */
 function newCallId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16))
@@ -112,6 +150,13 @@ export class Call {
   private pc: RTCPeerConnection | null = null
   private localStream: MediaStream | null = null
   private remoteAudio: HTMLAudioElement | null = null
+
+  private muted = false
+  /** Chosen output device, remembered so it survives the remote track arriving later. */
+  private outputDeviceId = ''
+  /** When the audio came up, and when it went away, so the call can say how long it lasted. */
+  private connectedAt = 0
+  private endedAt = 0
 
   /** Our own identity and the key we seal with. Derived once — see `deriveKeys`. */
   private identity = ''
@@ -180,11 +225,86 @@ export class Call {
       status: this.status,
       outgoing: this.outgoing,
       reason: this.reason,
+      muted: this.muted,
+      seconds: this.duration(),
     }
+  }
+
+  /** How long audio has actually been flowing. Zero for a call that never connected. */
+  private duration(): number {
+    if (this.connectedAt === 0) return 0
+    const until = this.status === 'ended' ? this.endedAt : Date.now()
+    return Math.max(0, Math.round((until - this.connectedAt) / 1000))
   }
 
   private emit(): void {
     this.onChange(this.snapshot())
+  }
+
+  // --- controls -------------------------------------------------------------
+
+  /**
+   * Mutes the microphone by disabling the track rather than stopping it.
+   *
+   * A stopped track cannot be restarted — it would need a fresh getUserMedia and a
+   * renegotiation to put back — and it drops the browser's recording indicator, which would
+   * tell the other person you had hung up when you had only stopped talking. A disabled track
+   * stays in the peer connection and transmits silence, which is what mute means.
+   */
+  setMuted(muted: boolean): void {
+    this.muted = muted
+    for (const track of this.localStream?.getAudioTracks() ?? []) track.enabled = !muted
+    this.emit()
+  }
+
+  /**
+   * Sends the call's audio to a particular output device.
+   *
+   * `setSinkId` is not available everywhere — notably not in Safari, and so not on any iPhone,
+   * where the web platform offers no way to choose between the earpiece and the loudspeaker at
+   * all. The UI asks {@link canChooseOutput} before it offers the choice, rather than showing a
+   * control that silently does nothing.
+   */
+  async setOutputDevice(deviceId: string): Promise<void> {
+    this.outputDeviceId = deviceId
+    await this.applyOutputDevice()
+  }
+
+  private async applyOutputDevice(): Promise<void> {
+    const audio = this.remoteAudio
+    if (!audio || !this.outputDeviceId || !canChooseOutput()) return
+    await (audio as HTMLAudioElement & { setSinkId(id: string): Promise<void> })
+      .setSinkId(this.outputDeviceId)
+      .catch(() => {
+        // The device was unplugged between listing it and choosing it. The browser falls back
+        // to the default output on its own, which is what we would do anyway.
+      })
+  }
+
+  /**
+   * Switches the microphone mid-call, without renegotiating.
+   *
+   * `replaceTrack` swaps what the existing sender transmits, so the peer connection — and the
+   * DTLS-SRTP session under it — is untouched. Re-adding a track instead would force a new
+   * offer/answer round trip through the signalling mailbox, for a change the other end has no
+   * business knowing about.
+   */
+  async setInputDevice(deviceId: string): Promise<void> {
+    if (!this.pc) return
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: deviceId } },
+      video: false,
+    })
+    const track = stream.getAudioTracks()[0]
+    if (!track) return
+    track.enabled = !this.muted // a switch must not quietly un-mute you
+
+    const sender = this.pc.getSenders().find((s) => s.track?.kind === 'audio')
+    if (sender) await sender.replaceTrack(track)
+
+    for (const old of this.localStream?.getTracks() ?? []) old.stop()
+    this.localStream = stream
+    this.emit()
   }
 
   private setStatus(status: CallStatus, reason?: CallEndReason): void {
@@ -557,6 +677,9 @@ export class Call {
         this.remoteAudio.autoplay = true
       }
       this.remoteAudio.srcObject = e.streams[0]
+      // The remote track arrives long after the user could have picked an output device, so the
+      // choice is re-applied here rather than assumed to have stuck.
+      void this.applyOutputDevice()
       void this.remoteAudio.play().catch(() => {
         // Autoplay can be refused before a user gesture. Answering IS a gesture, so this is
         // rare; if it happens the user hears nothing and hangs up, which is honest.
@@ -566,6 +689,7 @@ export class Call {
     pc.onconnectionstatechange = () => {
       switch (pc.connectionState) {
         case 'connected':
+          if (this.connectedAt === 0) this.connectedAt = Date.now()
           this.setStatus('connected')
           this.stopPolling()
           this.stopReRinging()
@@ -618,6 +742,7 @@ export class Call {
    */
   async end(reason: CallEndReason, notifyPeer: boolean): Promise<void> {
     if (this.status === 'ended') return
+    this.endedAt = Date.now() // before setStatus: the snapshot it emits reports the duration
     this.setStatus('ended', reason)
 
     // A call that gives up while it was still ringing must also close the notification it put

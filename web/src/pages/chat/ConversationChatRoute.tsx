@@ -31,13 +31,15 @@ import {
 } from '../../lib/mls'
 import { cacheBody, loadCachedBodies, setPreview } from '../../lib/chatCache'
 import { conversationAvatarKey, conversationTitle, otherMember } from '../../lib/conversation'
-import { messageTime } from '../../lib/time'
+import { groupByDay, messageTime } from '../../lib/time'
 import { useAuth } from '../../auth/context'
 import { useEventStream } from '../../hooks/useEventStream'
 import { useChatScroll } from '../../hooks/useChatScroll'
 import { useEdgeSwipeBack } from '../../hooks/useEdgeSwipeBack'
 import { ChannelAvatar } from '../../components/chat/ChannelAvatar'
 import { DateSeparator } from '../../components/chat/DateSeparator'
+import { CallEventBubble } from '../../components/chat/CallEventBubble'
+import { CALL_EVENT, readCallEvent } from '../../lib/callEvent'
 import { JumpToBottom } from '../../components/chat/JumpToBottom'
 import { ChatSkeleton } from '../../components/chat/ChatSkeleton'
 import { SafetyNumberModal } from '../../components/chat/SafetyNumber'
@@ -45,7 +47,6 @@ import { GroupMembersModal } from '../../components/chat/GroupMembersModal'
 import { ConfirmModal } from '../../components/ConfirmModal'
 import { useCalls } from '../../components/call/context'
 import { useCallingAvailable } from '../../hooks/useCallingAvailable'
-import { isSameDay } from '../../lib/time'
 import type { ChatOutletContext } from '../../components/chat/context'
 import type { ChatMessage, Conversation } from '../../lib/types'
 
@@ -239,7 +240,29 @@ export function ConversationChatRoute() {
         if (processedRef.current.has(m.id) || MLS_CONTROL_TYPES.has(m.contentType)) continue
         processedRef.current.add(m.id)
         try {
-          if (m.contentType === MLS_APPLICATION) {
+          // A call's record is encrypted exactly like a message, because it IS one — the
+          // difference is only what the body means, which the bubble decides. The one thing it
+          // must not do is become the chat list's preview: "{"outcome":"missed"}" is not a
+          // sentence, and a missed call has no words to preview.
+          if (m.contentType === CALL_EVENT) {
+            const bytes = await decryptChatMessage(id, userId, m.ciphertext)
+            const content = bytes && deserializeContent(bytes)
+            if (content) {
+              next[m.id] = content.body
+              changed = true
+              void cacheBody(id, m.id, content.body)
+            } else if (m.senderId === userId) {
+              // OUR OWN missed call, echoed back to us. MLS forward secrecy means a sender can
+              // never decrypt what it sent — the message key is destroyed on encrypt — so the
+              // caller, of all people, could not read the record of its own unanswered call.
+              // It wrote the body down when it sent it; read it back from there.
+              const cached = await loadCachedBodies(id)
+              if (cached[m.id] !== undefined) {
+                next[m.id] = cached[m.id]
+                changed = true
+              }
+            }
+          } else if (m.contentType === MLS_APPLICATION) {
             // Against whichever of the conversation's groups this message belongs to. A
             // conversation can have had more than one — if every device holding a group lost
             // its keys, the only way to talk again was to start a fresh one — and the old
@@ -614,55 +637,72 @@ export function ConversationChatRoute() {
               </Text>
             )}
             {!loading &&
-              visibleMessages.map((m, i) => {
-                const prev = visibleMessages[i - 1]
-                const startsDay = !prev || !isSameDay(prev.createdAt, m.createdAt)
-                const own = m.senderId === userId
-                const body = bodies[m.id]
-                const senderName = isGroup
-                  ? conversation?.members.find((mem) => mem.userId === m.senderId)?.user
-                  : undefined
-                return (
-                  <div key={m.id} style={{ display: 'contents' }}>
-                    {startsDay && <DateSeparator iso={m.createdAt} />}
-                    <div
-                      className="pheme-bubble pheme-chat-bubble"
-                      data-own={own}
-                      data-testid="chat-message"
-                    >
-                      {isGroup && !own && senderName && (
-                        <Text size="xs" fw={600} c="iris">
-                          {senderName.displayName || senderName.username || 'User'}
-                        </Text>
-                      )}
-                      {body !== undefined ? (
-                        <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                          {body}
-                        </Text>
-                      ) : (
-                        // Not a loading state: this device cannot read this message and
-                        // never will. MLS gives a device no access to what was said before
-                        // it joined the group, so a message from before this browser or
-                        // phone signed in stays sealed here even though it is perfectly
-                        // readable on the device that received it.
-                        //
-                        // Saying that is the whole point. The old placeholder was an
-                        // ellipsis, which reads as "still loading" — so a conversation that
-                        // was permanently broken looked like one that was about to arrive,
-                        // and nobody could tell the difference.
-                        <Text size="sm" c="dimmed" fs="italic" data-testid="chat-message-sealed">
-                          {t('chat.notAvailableOnThisDevice')}
-                        </Text>
-                      )}
-                      <div className="pheme-bubble-footer">
-                        <Text size="xs" c="dimmed">
-                          {messageTime(m.createdAt, i18n.language)}
-                        </Text>
+              groupByDay(visibleMessages).map((day) => (
+                // One section per day, so the day's sticky pill pins within its own day and is
+                // carried off by it. See groupByDay.
+                <section className="pheme-day" key={day[0].id}>
+                  <DateSeparator iso={day[0].createdAt} />
+                  {day.map((m) => {
+                    const own = m.senderId === userId
+                    const body = bodies[m.id]
+                    const senderName = isGroup
+                      ? conversation?.members.find((mem) => mem.userId === m.senderId)?.user
+                      : undefined
+                    const event =
+                      m.contentType === CALL_EVENT && body !== undefined
+                        ? readCallEvent(body)
+                        : null
+                    if (event) {
+                      return (
+                        <CallEventBubble
+                          key={m.id}
+                          event={event}
+                          own={own}
+                          at={messageTime(m.createdAt, i18n.language)}
+                        />
+                      )
+                    }
+                    return (
+                      <div
+                        key={m.id}
+                        className="pheme-bubble pheme-chat-bubble"
+                        data-own={own}
+                        data-testid="chat-message"
+                      >
+                        {isGroup && !own && senderName && (
+                          <Text size="xs" fw={600} c="iris">
+                            {senderName.displayName || senderName.username || 'User'}
+                          </Text>
+                        )}
+                        {body !== undefined ? (
+                          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                            {body}
+                          </Text>
+                        ) : (
+                          // Not a loading state: this device cannot read this message and
+                          // never will. MLS gives a device no access to what was said before
+                          // it joined the group, so a message from before this browser or
+                          // phone signed in stays sealed here even though it is perfectly
+                          // readable on the device that received it.
+                          //
+                          // Saying that is the whole point. The old placeholder was an
+                          // ellipsis, which reads as "still loading" — so a conversation that
+                          // was permanently broken looked like one that was about to arrive,
+                          // and nobody could tell the difference.
+                          <Text size="sm" c="dimmed" fs="italic" data-testid="chat-message-sealed">
+                            {t('chat.notAvailableOnThisDevice')}
+                          </Text>
+                        )}
+                        <div className="pheme-bubble-footer">
+                          <Text size="xs" c="dimmed">
+                            {messageTime(m.createdAt, i18n.language)}
+                          </Text>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                )
-              })}
+                    )
+                  })}
+                </section>
+              ))}
           </div>
         </div>
         <JumpToBottom visible={!atBottom} count={unseen} onClick={() => scrollToBottom('smooth')} />

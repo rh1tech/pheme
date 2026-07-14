@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { Fragment, useEffect, useRef } from 'react'
 import { Center, Loader, Text } from '@mantine/core'
 import { useTranslation } from 'react-i18next'
 import { MessageBubble } from './MessageBubble'
@@ -6,7 +6,7 @@ import { DateSeparator } from './DateSeparator'
 import { UnreadDivider } from './UnreadDivider'
 import { JumpToBottom } from './JumpToBottom'
 import { ChatSkeleton } from './ChatSkeleton'
-import { isSameDay } from '../../lib/time'
+import { groupByDay } from '../../lib/time'
 import type { Message, MessageImage } from '../../lib/types'
 import type { RefObject } from 'react'
 
@@ -119,24 +119,26 @@ export function MessageFeed({
           )}
 
           {!loading &&
-            messages.map((m, i) => {
-              const previous = messages[i - 1]
-              const startsDay = !previous || !isSameDay(previous.createdAt, m.createdAt)
-              return (
-                <div key={m.id} style={{ display: 'contents' }}>
-                  {startsDay && <DateSeparator iso={m.createdAt} />}
-                  {m.id === firstUnreadId && <UnreadDivider />}
-                  <MessageBubble
-                    message={m}
-                    active={m.id === activeMessageId}
-                    highlighted={m.id === highlightId}
-                    onOpenDiscussion={onOpenDiscussion}
-                    onOpenMedia={onOpenMedia}
-                    onOpenMenu={onOpenMenu}
-                  />
-                </div>
-              )
-            })}
+            groupByDay(messages).map((day) => (
+              // One section per day, so the day's sticky pill pins within its own day and is
+              // carried off by it. See groupByDay.
+              <section className="pheme-day" key={day[0].id}>
+                <DateSeparator iso={day[0].createdAt} />
+                {day.map((m) => (
+                  <Fragment key={m.id}>
+                    {m.id === firstUnreadId && <UnreadDivider />}
+                    <MessageBubble
+                      message={m}
+                      active={m.id === activeMessageId}
+                      highlighted={m.id === highlightId}
+                      onOpenDiscussion={onOpenDiscussion}
+                      onOpenMedia={onOpenMedia}
+                      onOpenMenu={onOpenMenu}
+                    />
+                  </Fragment>
+                ))}
+              </section>
+            ))}
         </div>
       </div>
 
