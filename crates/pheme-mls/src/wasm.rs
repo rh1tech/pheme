@@ -15,11 +15,13 @@ pub struct MlsClient {
 
 #[wasm_bindgen]
 impl MlsClient {
-    /// Creates a fresh identity. `identity` is the user/device id bytes.
+    /// Creates a fresh identity for one DEVICE of one user. Both ids are required —
+    /// an MLS leaf is a device, and a client that cannot say which device it is ends up
+    /// sharing a leaf with the user's other devices, which then cannot decrypt.
     #[wasm_bindgen(constructor)]
-    pub fn new(identity: &[u8]) -> Result<MlsClient, JsError> {
+    pub fn new(user_id: &str, device_id: &str) -> Result<MlsClient, JsError> {
         Ok(MlsClient {
-            inner: Client::new(identity).map_err(js)?,
+            inner: Client::new(user_id, device_id).map_err(js)?,
         })
     }
 
@@ -29,6 +31,17 @@ impl MlsClient {
         Ok(MlsClient {
             inner: Client::import_state(state).map_err(js)?,
         })
+    }
+
+    /// This client's credential identity, `userId:deviceId`.
+    ///
+    /// It is the authoritative answer to "which device am I?". A restored backup carries
+    /// the identity of the device it was taken FROM, and the groups in that state hold
+    /// leaves under that name — so the browser it is restored into has to answer to it,
+    /// whatever its own local storage happens to say.
+    #[wasm_bindgen(getter)]
+    pub fn identity(&self) -> String {
+        String::from_utf8_lossy(self.inner.identity()).into_owned()
     }
 
     /// A single-use public KeyPackage to publish to the server.
@@ -61,20 +74,15 @@ impl MlsClient {
         self.inner.has_group(group_id)
     }
 
-    /// Adds a member; returns their Welcome and the group's Commit.
-    #[wasm_bindgen(js_name = addMember)]
-    pub fn add_member(&self, group_id: &[u8], key_package: &[u8]) -> Result<AddOutput, JsError> {
-        let r = self.inner.add_member(group_id, key_package).map_err(js)?;
-        Ok(AddOutput {
-            welcome: r.welcome,
-            commit: r.commit,
-        })
-    }
-
-    /// Adds several members in one Commit (all newcomers land at the same epoch).
-    /// `key_packages` is a JS array of Uint8Array. Returns a single Welcome for all.
-    #[wasm_bindgen(js_name = addMembers)]
-    pub fn add_members(
+    /// STAGES the addition of several devices in one Commit (all newcomers land at the
+    /// same epoch). `key_packages` is a JS array of Uint8Array; one Welcome covers all.
+    ///
+    /// The Commit is NOT applied. Call `commitAccepted` once the server has taken it as
+    /// the group's next epoch, or `commitRejected` if another member's Commit landed
+    /// first. Applying it before the server agrees is what forks a client off the group
+    /// for good.
+    #[wasm_bindgen(js_name = stageAdd)]
+    pub fn stage_add(
         &self,
         group_id: &[u8],
         key_packages: js_sys::Array,
@@ -83,17 +91,71 @@ impl MlsClient {
             .iter()
             .map(|v| js_sys::Uint8Array::new(&v).to_vec())
             .collect();
-        let r = self.inner.add_members(group_id, &kps).map_err(js)?;
+        let r = self.inner.stage_add(group_id, &kps).map_err(js)?;
         Ok(AddOutput {
             welcome: r.welcome,
             commit: r.commit,
         })
     }
 
-    /// Removes a member by their identity bytes; returns the Commit to relay.
-    #[wasm_bindgen(js_name = removeMember)]
-    pub fn remove_member(&self, group_id: &[u8], identity: &[u8]) -> Result<Vec<u8>, JsError> {
-        self.inner.remove_member(group_id, identity).map_err(js)
+    /// STAGES the removal of every device belonging to each of `user_ids` (a JS array of
+    /// strings). Not applied until `commitAccepted`. Removing only one leaf would leave
+    /// the removed member reading the group from their other device.
+    ///
+    /// This client's own leaves are never removed: MLS forbids committing your own
+    /// removal, so leaving is not a Commit — see the crate docs.
+    #[wasm_bindgen(js_name = stageRemoveUsers)]
+    pub fn stage_remove_users(
+        &self,
+        group_id: &[u8],
+        user_ids: js_sys::Array,
+    ) -> Result<Vec<u8>, JsError> {
+        let ids: Vec<String> = user_ids.iter().filter_map(|v| v.as_string()).collect();
+        self.inner.stage_remove_users(group_id, &ids).map_err(js)
+    }
+
+    /// STAGES the removal of the exact leaves named by `identities` (`userId:deviceId`).
+    ///
+    /// For pruning a ghost device — one whose key material no longer exists anywhere —
+    /// while leaving that person's live devices alone. Removing by USER would take their
+    /// working phone out along with the ghost.
+    #[wasm_bindgen(js_name = stageRemoveDevices)]
+    pub fn stage_remove_devices(
+        &self,
+        group_id: &[u8],
+        identities: js_sys::Array,
+    ) -> Result<Vec<u8>, JsError> {
+        let ids: Vec<String> = identities.iter().filter_map(|v| v.as_string()).collect();
+        self.inner.stage_remove_devices(group_id, &ids).map_err(js)
+    }
+
+    /// Applies the Commit we staged, now that the server has accepted it.
+    #[wasm_bindgen(js_name = commitAccepted)]
+    pub fn commit_accepted(&self, group_id: &[u8]) -> Result<(), JsError> {
+        self.inner.commit_accepted(group_id).map_err(js)
+    }
+
+    /// Throws away a Commit the server refused, leaving the group untouched so we can
+    /// catch up on the winning Commit and try again.
+    #[wasm_bindgen(js_name = commitRejected)]
+    pub fn commit_rejected(&self, group_id: &[u8]) -> Result<(), JsError> {
+        self.inner.commit_rejected(group_id).map_err(js)
+    }
+
+    /// The group's current epoch — what a Commit is proposed against.
+    pub fn epoch(&self, group_id: &[u8]) -> Result<u64, JsError> {
+        self.inner.epoch(group_id).map_err(js)
+    }
+
+    /// Every leaf's `userId:deviceId`, so the caller can spot member devices that are
+    /// missing from the group and add exactly those.
+    #[wasm_bindgen(js_name = memberIdentities)]
+    pub fn member_identities(&self, group_id: &[u8]) -> Result<js_sys::Array, JsError> {
+        let out = js_sys::Array::new();
+        for id in self.inner.member_identities(group_id).map_err(js)? {
+            out.push(&JsValue::from_str(&String::from_utf8_lossy(&id)));
+        }
+        Ok(out)
     }
 
     #[wasm_bindgen(js_name = joinFromWelcome)]

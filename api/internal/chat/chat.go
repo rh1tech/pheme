@@ -60,7 +60,20 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/mls/key-packages", h.publishKeyPackages)
 	mux.HandleFunc("GET /v1/mls/key-packages/count", h.keyPackageCount)
 	mux.HandleFunc("DELETE /v1/mls/key-packages", h.deleteKeyPackages)
-	mux.HandleFunc("GET /v1/mls/key-packages/{userId}/claim", h.claimKeyPackage)
+	// Both device-scoped: an MLS leaf is a device, so a group is built from a KeyPackage
+	// per DEVICE of each member, never one per user. `devices` answers which devices
+	// exist without consuming anything; `claim` hands out a package for named ones.
+	//
+	// Both hang off a CONVERSATION, so membership in it is the authorization: you can
+	// only see, or claim keys for, the devices of people you are actually talking to. A
+	// global key directory would let any signed-in stranger enumerate a victim's devices
+	// and drain their single-use KeyPackages on a loop.
+	mux.HandleFunc("GET /v1/conversations/{id}/mls/devices", h.listDevices)
+	mux.HandleFunc("POST /v1/conversations/{id}/mls/key-packages/claim", h.claimKeyPackages)
+	// The conversation's MLS group, and the compare-and-set that serialises Commits.
+	mux.HandleFunc("GET /v1/conversations/{id}/mls", h.getMLSGroup)
+	mux.HandleFunc("GET /v1/conversations/{id}/mls/commits", h.listMLSCommits)
+	mux.HandleFunc("POST /v1/conversations/{id}/mls/commit", h.postMLSCommit)
 	mux.HandleFunc("PUT /v1/mls/key-backup", h.putKeyBackup)
 	mux.HandleFunc("GET /v1/mls/key-backup", h.getKeyBackup)
 }

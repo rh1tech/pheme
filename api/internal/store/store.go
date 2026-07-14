@@ -17,6 +17,12 @@ import (
 // ErrNotFound is returned when a requested entity does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrEpochConflict is returned by AdvanceMLSGroup when the caller's Commit is based
+// on an epoch the conversation has already moved past — another member's Commit got
+// there first. The caller must apply that Commit and re-propose, never force its own:
+// a Commit applied locally but rejected by the group forks the client off it for good.
+var ErrEpochConflict = errors.New("mls epoch conflict")
+
 // ErrAliasTaken is returned when setting a channel alias that another channel
 // already uses (case-insensitively). Handlers map it to HTTP 409.
 var ErrAliasTaken = errors.New("alias taken")
@@ -193,11 +199,55 @@ type Store interface {
 	// conversation, keyed by conversation id, for chat-list ordering/preview.
 	LastChatMessagesByConversations(ctx context.Context, conversationIDs []string) (map[string]domain.ChatMessage, error)
 
+	// MLSGroupState returns the conversation's MLS group id and epoch. The group id is
+	// empty until somebody establishes the group.
+	MLSGroupState(ctx context.Context, conversationID string) (domain.MLSGroupState, error)
+	// CommitMLSGroup is the compare-and-set that serialises MLS Commits — and, in the
+	// same breath, relays the control messages that Commit consists of.
+	//
+	// An MLS group has exactly one history: two members who both Commit against epoch N
+	// produce two incompatible epoch N+1s, and a member who applies the wrong one is
+	// forked off the conversation permanently. Something has to pick a winner, and the
+	// server — the one party every member agrees on — is it.
+	//
+	// It accepts the change only when baseEpoch matches the epoch the conversation is
+	// actually at (or, for the very first Commit, when no group has been established at
+	// all), advances to baseEpoch+1, and appends `msgs` — the Welcome and Commit. A
+	// caller whose base is stale gets ErrEpochConflict with the CURRENT state, so it can
+	// catch up and re-propose.
+	//
+	// The decision and the relay are one operation on purpose. Appending the messages
+	// first would publish a Welcome from a Commit the group is about to refuse, and a
+	// device that joined from it would land in a group with no other members in it.
+	// Deciding first and failing to append would advance the epoch with no Commit for
+	// anyone to apply, stranding every member an epoch behind.
+	CommitMLSGroup(ctx context.Context, conversationID, groupID string, baseEpoch int64, msgs []domain.ChatMessage) (domain.MLSGroupState, []domain.ChatMessage, error)
+	// MLSControlMessagesSince returns the Welcomes and Commits that carried the group
+	// past `sinceEpoch`, OLDEST FIRST — the order they must be applied in.
+	//
+	// A member that has fallen behind cannot decrypt anything until it applies the
+	// Commits it missed, and those may be far outside the page of history the client
+	// loads. Asking by epoch makes catching up exact and bounded instead of a trawl.
+	MLSControlMessagesSince(ctx context.Context, conversationID string, sinceEpoch int64) ([]domain.ChatMessage, error)
+
 	// MLS key directory (public KeyPackages). The server only relays these.
 	AddKeyPackages(ctx context.Context, packages []domain.MLSKeyPackage) error
-	// ClaimKeyPackage returns and removes one of a user's KeyPackages (they are
-	// single-use). ErrNotFound when the user has none left to claim.
-	ClaimKeyPackage(ctx context.Context, userID string) (domain.MLSKeyPackage, error)
+	// DevicesWithKeyPackages lists, per user, the devices that have published
+	// KeyPackages — WITHOUT consuming any.
+	//
+	// This is how a member works out which devices are missing from an MLS group: claiming
+	// is destructive, so it cannot be used to ask "who is out there?". Every device of a
+	// member needs its own leaf, so the answer has to be per device, never per user.
+	DevicesWithKeyPackages(ctx context.Context, userIDs []string) (map[string][]string, error)
+	// ClaimKeyPackage returns and removes one KeyPackage belonging to ONE DEVICE of a
+	// user (they are single-use; the reusable last-resort one is returned without being
+	// removed). ErrNotFound when that device has published none.
+	//
+	// Device-scoped, not user-scoped. A user-scoped claim hands back a package belonging
+	// to whichever of the user's devices the store happened to find, so a group built
+	// from it contains one arbitrary device of theirs and every other device is locked
+	// out of the conversation.
+	ClaimKeyPackage(ctx context.Context, userID, deviceID string) (domain.MLSKeyPackage, error)
 	// CountKeyPackages reports how many SINGLE-USE packages a device has left, so a
 	// client replenishes before running out. The last-resort package is excluded: it
 	// is never consumed, so counting it would tell the client it has stock it does

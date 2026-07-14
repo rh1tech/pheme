@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -101,21 +102,135 @@ func (h *Handler) publishKeyPackages(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// claimKeyPackage hands out (and removes) one of a user's KeyPackages, so the
-// caller can add them to a group. Single-use: a claimed package is never reused.
-func (h *Handler) claimKeyPackage(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireUser(w, r); !ok {
+type claimKeyPackagesRequest struct {
+	// The exact devices to claim for. A claim is per DEVICE, never per user: every
+	// device of a member is its own MLS leaf, and one that is not in the group cannot
+	// decrypt a single message sent to it.
+	Devices []deviceRef `json:"devices"`
+}
+
+type deviceRef struct {
+	UserID   string `json:"userId"`
+	DeviceID string `json:"deviceId"`
+}
+
+// How many devices one claim may cover. A conversation's members between them have a
+// handful of devices; this only stops the endpoint being used to drain the directory.
+const maxClaimDevices = 64
+
+// claimKeyPackages hands out one KeyPackage per named DEVICE, so the caller can add
+// each of them to the group as its own leaf. Single-use packages are consumed; a
+// device that has run out falls back to its reusable last-resort package.
+//
+// Scoped to a conversation the caller is IN, and to devices belonging to that
+// conversation's members. Both halves matter. Unscoped, any signed-in stranger could
+// stand in a loop draining a victim's published KeyPackages — never making them
+// unreachable, because the last-resort package is never consumed, but permanently
+// pinning them to it, so every join reuses one init key and quietly gives up the forward
+// secrecy that the single-use packages exist to provide. There is no reason to let
+// anyone claim keys for someone they are not talking to.
+//
+// Devices that have published nothing are simply absent from the response rather than
+// failing the whole call: one member who has never opened Pheme must not stop a group
+// from being formed with everyone else.
+func (h *Handler) claimKeyPackages(w http.ResponseWriter, r *http.Request) {
+	_, convID, _, ok := h.requireMember(w, r)
+	if !ok {
 		return
 	}
-	target := r.PathValue("userId")
-	kp, err := h.Store.ClaimKeyPackage(r.Context(), target)
+	var req claimKeyPackagesRequest
+	if !httpx.DecodeLimited(w, r, &req, maxSmallBodyBytes) {
+		return
+	}
+	if len(req.Devices) == 0 || len(req.Devices) > maxClaimDevices {
+		httpx.Error(w, http.StatusBadRequest, "between 1 and 64 devices are required")
+		return
+	}
+	members, err := h.memberIDs(r.Context(), convID)
 	if err != nil {
-		// None left: the target has not published, or has run dry. The caller
-		// cannot start an encrypted chat until they do.
-		httpx.Error(w, http.StatusNotFound, "no key package available for that user")
+		httpx.Error(w, http.StatusInternalServerError, "could not load members")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"keyPackage": kp.KeyPackage})
+
+	type claimed struct {
+		UserID     string `json:"userId"`
+		DeviceID   string `json:"deviceId"`
+		KeyPackage []byte `json:"keyPackage"`
+	}
+	out := make([]claimed, 0, len(req.Devices))
+	for _, d := range req.Devices {
+		if d.UserID == "" || d.DeviceID == "" {
+			httpx.Error(w, http.StatusBadRequest, "each device needs a userId and a deviceId")
+			return
+		}
+		if !members[d.UserID] {
+			httpx.Error(w, http.StatusForbidden, "that user is not in this conversation")
+			return
+		}
+		kp, err := h.Store.ClaimKeyPackage(r.Context(), d.UserID, d.DeviceID)
+		if err != nil {
+			continue // that device has published nothing; the others still stand
+		}
+		out = append(out, claimed{UserID: d.UserID, DeviceID: d.DeviceID, KeyPackage: kp.KeyPackage})
+	}
+	if len(out) == 0 {
+		// Nobody we asked for is reachable. The caller cannot start an encrypted chat
+		// with them until they open Pheme on a device that publishes keys.
+		httpx.Error(w, http.StatusNotFound, "no key packages available for those devices")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"keyPackages": out})
+}
+
+// listDevices reports which devices each member of a conversation has published
+// KeyPackages for, WITHOUT consuming any.
+//
+// This is what makes device reconciliation possible: a member holding the group needs to
+// know which devices ought to be in it before it can add the ones that are not, and it
+// cannot find that out by claiming — claiming destroys what it hands back.
+//
+// Scoped to the conversation's own members, so it is not a directory anyone can walk to
+// enumerate a stranger's devices.
+func (h *Handler) listDevices(w http.ResponseWriter, r *http.Request) {
+	_, convID, _, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	members, err := h.memberIDs(r.Context(), convID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not load members")
+		return
+	}
+	userIDs := make([]string, 0, len(members))
+	for uid := range members {
+		userIDs = append(userIDs, uid)
+	}
+	devices, err := h.Store.DevicesWithKeyPackages(r.Context(), userIDs)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not list devices")
+		return
+	}
+	// Always answer for every member, so the caller can tell "no devices" from "not in
+	// the response".
+	for _, uid := range userIDs {
+		if devices[uid] == nil {
+			devices[uid] = []string{}
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"devices": devices})
+}
+
+// memberIDs is the conversation's membership as a set, for authorization checks.
+func (h *Handler) memberIDs(ctx context.Context, convID string) (map[string]bool, error) {
+	members, err := h.Store.ConversationMembers(ctx, convID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(members))
+	for _, m := range members {
+		out[m.UserID] = true
+	}
+	return out, nil
 }
 
 // The sealed backup blob is the whole exported client state; a few groups' ratchet

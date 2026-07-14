@@ -18,6 +18,54 @@ use sha2::{Digest, Sha256};
 
 const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
+/// How many past epochs' secrets a group keeps.
+///
+/// OpenMLS defaults this to 0: the moment a Commit is applied, every message from
+/// the previous epoch becomes undecryptable forever. In a chat that is not a corner
+/// case — it is what happens every time somebody joins or leaves, and it turns all
+/// the history a client has not already decrypted into blanks. Application messages
+/// also arrive out of order (an SSE Commit overtaking a page of older messages, a
+/// user scrolling back), and every one of those decrypts against an older epoch.
+///
+/// Keeping a window of past epoch secrets is the RFC 9420 answer. The cost is
+/// bounded and explicit: forward secrecy is weakened by exactly this window — a
+/// device compromised now also exposes messages from its last 32 epochs.
+const MAX_PAST_EPOCHS: usize = 32;
+
+/// Separates the user id from the device id inside a credential. Neither half can
+/// contain it: user ids are hex Mongo ids and device ids are UUIDs.
+const IDENTITY_SEP: u8 = b':';
+
+/// The bytes Pheme puts in an MLS credential: `userId:deviceId`.
+///
+/// **An MLS leaf is a device, not a person.** Two devices of the same user are two
+/// independent clients holding different private keys; each must occupy its own leaf
+/// or it simply cannot decrypt the group's messages. Naming only the user in the
+/// credential — as this crate used to — meant a group could hold at most one of
+/// somebody's devices, and every other device of theirs saw an unreadable
+/// conversation.
+///
+/// Carrying the device id here also gives `remove_user` something to work with: with
+/// a bare user id, two leaves of the same person are indistinguishable, and removing
+/// "them" takes out whichever leaf was found first while the other keeps on reading.
+pub fn identity(user_id: &str, device_id: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(user_id.len() + 1 + device_id.len());
+    out.extend_from_slice(user_id.as_bytes());
+    out.push(IDENTITY_SEP);
+    out.extend_from_slice(device_id.as_bytes());
+    out
+}
+
+/// The user half of a credential identity — everything before the first separator.
+/// Falls back to the whole string, so a credential minted before device ids existed
+/// still resolves to its user rather than to nothing.
+pub fn user_of(identity: &[u8]) -> Vec<u8> {
+    match identity.iter().position(|&b| b == IDENTITY_SEP) {
+        Some(i) => identity[..i].to_vec(),
+        None => identity.to_vec(),
+    }
+}
+
 /// A Pheme MLS client: one identity plus every group it belongs to, all held in a
 /// single serializable provider.
 pub struct Client {
@@ -36,14 +84,21 @@ pub struct AddResult {
 }
 
 impl Client {
-    /// Creates a fresh client identity. `identity` is the stable user/device label
-    /// embedded in the MLS credential (Pheme uses the user id).
-    pub fn new(identity: &[u8]) -> Result<Self, String> {
+    /// Creates a fresh client identity for ONE DEVICE of one user.
+    ///
+    /// Both halves are required, and that is deliberate: an MLS leaf is a device, so a
+    /// client that knows only which user it belongs to cannot be told apart from that
+    /// user's other devices, and the group ends up holding one of them at random.
+    pub fn new(user_id: &str, device_id: &str) -> Result<Self, String> {
+        if user_id.is_empty() || device_id.is_empty() {
+            return Err("both a user id and a device id are required".into());
+        }
+        let identity = identity(user_id, device_id);
         let provider = OpenMlsRustCrypto::default();
         let signer =
             SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).map_err(err("signer"))?;
         signer.store(provider.storage()).map_err(err("store signer"))?;
-        let credential = BasicCredential::new(identity.to_vec());
+        let credential = BasicCredential::new(identity.clone());
         let credential_with_key = CredentialWithKey {
             credential: credential.into(),
             signature_key: signer.public().into(),
@@ -52,8 +107,13 @@ impl Client {
             provider,
             signer,
             credential_with_key,
-            identity: identity.to_vec(),
+            identity,
         })
+    }
+
+    /// This client's credential identity — `userId:deviceId`.
+    pub fn identity(&self) -> &[u8] {
+        &self.identity
     }
 
     /// A public KeyPackage to publish to the server, for others to add this client
@@ -106,12 +166,21 @@ impl Client {
         bundle.key_package().tls_serialize_detached().map_err(err("serialize kp"))
     }
 
-    /// Creates a new group this client owns. `group_id` is the conversation id.
+    /// Creates a new group. `group_id` is the opaque id the server minted for the
+    /// conversation — NOT the conversation id itself.
+    ///
+    /// That indirection is what makes group establishment safe. The server accepts a
+    /// group id for a conversation exactly once, so two devices racing to set one up
+    /// cannot both win, and a device that loses the race discards its group and joins
+    /// the winner's instead. When the id was the conversation id, `create_group` on a
+    /// second device silently produced a DIFFERENT group under the same name, and the
+    /// two halves of the conversation encrypted past each other forever.
     pub fn create_group(&self, group_id: &[u8]) -> Result<(), String> {
         let config = MlsGroupCreateConfig::builder()
             // Self-contained Welcomes: a joiner needs nothing the server would have
             // to store beyond the Welcome itself.
             .use_ratchet_tree_extension(true)
+            .max_past_epochs(MAX_PAST_EPOCHS)
             .build();
         MlsGroup::new_with_group_id(
             &self.provider,
@@ -124,13 +193,42 @@ impl Client {
         Ok(())
     }
 
-    /// Discards a group entirely, so it can be created again from scratch.
+    /// The config a joiner adopts. It must match the creator's in both respects.
     ///
-    /// Needed to repair a conversation the other member was never able to join: they
-    /// hold a Welcome naming a KeyPackage they no longer have, and from our side the
-    /// group exists, so we would never send another. Creating a group whose id is
-    /// already taken is refused (GroupAlreadyExists), so the old one has to go first.
-    /// Everything encrypted to it stays unreadable — it already was, for them.
+    /// `max_past_epochs`, or a member who joined from a Welcome would lose old messages
+    /// on the first Commit while the creator kept them.
+    ///
+    /// `use_ratchet_tree_extension`, or the Welcomes THIS member later produces carry no
+    /// ratchet tree and nobody can join from them (MissingRatchetTree). That matters
+    /// because adding a member is no longer the creator's privilege: whoever notices a
+    /// device missing from the group is the one who adds it, and most of them will have
+    /// joined from a Welcome themselves.
+    fn join_config() -> MlsGroupJoinConfig {
+        MlsGroupJoinConfig::builder()
+            .use_ratchet_tree_extension(true)
+            .max_past_epochs(MAX_PAST_EPOCHS)
+            .build()
+    }
+
+    /// The group's current epoch. The server compares this against the conversation's
+    /// recorded epoch to serialise Commits, so no two members can fork the group.
+    pub fn epoch(&self, group_id: &[u8]) -> Result<u64, String> {
+        Ok(self.load_group(group_id)?.epoch().as_u64())
+    }
+
+    /// Discards a group this client created but that the server never accepted.
+    ///
+    /// The only legitimate use: two of our devices raced to establish the conversation's
+    /// group, the server took the other one's id, and the group we built locally is now
+    /// an orphan nobody else will ever be a member of. Dropping it lets us join the real
+    /// one instead.
+    ///
+    /// It must NEVER be used to "repair" a group that other people are already in. That
+    /// was the old rejoin path, and it is what destroyed conversations: discarding a live
+    /// group throws away the key material for every message ever sent to it, for
+    /// everyone, and no amount of rebuilding brings those back. A member who cannot
+    /// decrypt gets ADDED to the existing group (see `stage_add`); the group is not torn
+    /// down around them.
     pub fn delete_group(&self, group_id: &[u8]) -> Result<(), String> {
         let mut group = match MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
             .map_err(err("load group"))?
@@ -158,21 +256,26 @@ impl Client {
         )
     }
 
-    /// Adds a member (by their published KeyPackage) to a group we belong to.
-    pub fn add_member(&self, group_id: &[u8], key_package: &[u8]) -> Result<AddResult, String> {
-        self.add_members(group_id, std::slice::from_ref(&key_package.to_vec()))
-    }
-
-    /// Adds several members in a SINGLE Commit, so every newcomer joins at the same
-    /// epoch. Adding them one at a time instead advances the epoch per add, leaving
-    /// earlier joiners a Commit behind and unable to decrypt (WrongEpoch) — the
-    /// reason initial group members must be batched here. Returns one Welcome
-    /// addressed to all of them.
-    pub fn add_members(&self, group_id: &[u8], key_packages: &[Vec<u8>]) -> Result<AddResult, String> {
+    /// STAGES the addition of several devices in a SINGLE Commit, without applying it.
+    ///
+    /// Batched, because adding one at a time advances the epoch per add and leaves the
+    /// earlier joiners a Commit behind, unable to decrypt (WrongEpoch). One Welcome
+    /// covers every newcomer.
+    ///
+    /// Nothing is merged here. The Commit is only real once the SERVER has accepted it
+    /// — see `commit_accepted` / `commit_rejected`. This used to call
+    /// `merge_pending_commit` immediately, which is wrong for the same reason writing to
+    /// a database before the transaction commits is wrong: two members can propose a
+    /// Commit against the same epoch, only one of them can win, and a client that has
+    /// already advanced its own ratchet on a Commit the group never accepted is forked
+    /// from everyone else — permanently, and silently.
+    pub fn stage_add(&self, group_id: &[u8], key_packages: &[Vec<u8>]) -> Result<AddResult, String> {
+        if key_packages.is_empty() {
+            return Err("nothing to add".into());
+        }
         let mut validated = Vec::with_capacity(key_packages.len());
         for kp_bytes in key_packages {
-            let kp_in =
-                KeyPackageIn::tls_deserialize(&mut &**kp_bytes).map_err(err("parse kp"))?;
+            let kp_in = KeyPackageIn::tls_deserialize(&mut &**kp_bytes).map_err(err("parse kp"))?;
             let kp = kp_in
                 .validate(self.provider.crypto(), ProtocolVersion::Mls10)
                 .map_err(err("validate kp"))?;
@@ -183,7 +286,6 @@ impl Client {
         let (commit, welcome, _group_info) = group
             .add_members(&self.provider, &self.signer, &validated)
             .map_err(err("add members"))?;
-        group.merge_pending_commit(&self.provider).map_err(err("merge commit"))?;
 
         Ok(AddResult {
             welcome: welcome.tls_serialize_detached().map_err(err("serialize welcome"))?,
@@ -191,22 +293,114 @@ impl Client {
         })
     }
 
-    /// Removes a member (by their identity bytes — Pheme's user id) and returns the
-    /// Commit to relay to the remaining members. The removed member cannot decrypt
-    /// anything from the new epoch onward (forward secrecy for the removal). The caller
-    /// merges the commit here; remaining members apply it with `apply_commit`.
-    pub fn remove_member(&self, group_id: &[u8], identity: &[u8]) -> Result<Vec<u8>, String> {
+    /// STAGES the removal of EVERY leaf belonging to each of `user_ids`, in one Commit.
+    ///
+    /// Every leaf, not the first one found. A person with a phone and a laptop holds two
+    /// leaves; removing one and leaving the other means the member you just threw out of
+    /// the group carries on reading it. That is a confidentiality failure, not an
+    /// inconvenience, and it is only detectable at all because the device id is in the
+    /// credential.
+    ///
+    /// Users who hold no leaf are ignored rather than refused: a member reconciling the
+    /// group against the conversation's membership will routinely name someone who has
+    /// already been pruned by another member.
+    ///
+    /// This client's own leaves are never removed, whatever is asked. MLS forbids
+    /// committing your own removal (`CannotRemoveSelf`), so leaving a group is not a
+    /// Commit at all — a member drops their server-side membership and destroys their
+    /// local group state, and the members who remain prune the leaves they left behind
+    /// the next time they reconcile.
+    ///
+    /// Not merged — the server decides. See `stage_add`.
+    pub fn stage_remove_users(&self, group_id: &[u8], user_ids: &[String]) -> Result<Vec<u8>, String> {
         let mut group = self.load_group(group_id)?;
-        let leaf = group
+        let me = user_of(&self.identity);
+        let targets: Vec<Vec<u8>> = user_ids
+            .iter()
+            .map(|u| u.as_bytes().to_vec())
+            .filter(|u| *u != me)
+            .collect();
+        if targets.is_empty() {
+            return Err("nothing to remove".to_string());
+        }
+        let leaves: Vec<LeafNodeIndex> = group
             .members()
-            .find(|m| m.credential.serialized_content() == identity)
+            .filter(|m| targets.contains(&user_of(m.credential.serialized_content())))
             .map(|m| m.index)
-            .ok_or_else(|| "member not in group".to_string())?;
+            .collect();
+        if leaves.is_empty() {
+            return Err("none of those users are in the group".to_string());
+        }
         let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &self.signer, &[leaf])
+            .remove_members(&self.provider, &self.signer, &leaves)
             .map_err(err("remove members"))?;
-        group.merge_pending_commit(&self.provider).map_err(err("merge commit"))?;
         commit.tls_serialize_detached().map_err(err("serialize commit"))
+    }
+
+    /// STAGES the removal of specific LEAVES, named by their full `userId:deviceId`.
+    ///
+    /// Distinct from `stage_remove_users`, and the difference matters: that one removes
+    /// every device a person has, which is what you want when you throw them out of a
+    /// group. This one removes exactly the leaves you name, which is what you want when a
+    /// person is staying but one of their devices is a ghost — a browser whose storage was
+    /// evicted, say, leaving a leaf in the tree whose private keys no longer exist
+    /// anywhere. Pruning that by user would take their live phone out with it.
+    ///
+    /// This client's own leaves are never removed. Not merged — the server decides.
+    pub fn stage_remove_devices(
+        &self,
+        group_id: &[u8],
+        identities: &[String],
+    ) -> Result<Vec<u8>, String> {
+        let mut group = self.load_group(group_id)?;
+        let targets: Vec<Vec<u8>> = identities
+            .iter()
+            .map(|i| i.as_bytes().to_vec())
+            .filter(|i| *i != self.identity)
+            .collect();
+        if targets.is_empty() {
+            return Err("nothing to remove".to_string());
+        }
+        let leaves: Vec<LeafNodeIndex> = group
+            .members()
+            .filter(|m| targets.contains(&m.credential.serialized_content().to_vec()))
+            .map(|m| m.index)
+            .collect();
+        if leaves.is_empty() {
+            return Err("none of those devices are in the group".to_string());
+        }
+        let (commit, _welcome, _group_info) = group
+            .remove_members(&self.provider, &self.signer, &leaves)
+            .map_err(err("remove members"))?;
+        commit.tls_serialize_detached().map_err(err("serialize commit"))
+    }
+
+    /// Applies a Commit this client staged, now that the server has accepted it as the
+    /// group's next epoch. Only now does our ratchet advance.
+    pub fn commit_accepted(&self, group_id: &[u8]) -> Result<(), String> {
+        let mut group = self.load_group(group_id)?;
+        group.merge_pending_commit(&self.provider).map_err(err("merge commit"))
+    }
+
+    /// Throws away a Commit the server refused (another member's landed first). The
+    /// group is left exactly as it was, so the caller can catch up on the winning
+    /// Commit and try again.
+    pub fn commit_rejected(&self, group_id: &[u8]) -> Result<(), String> {
+        let mut group = self.load_group(group_id)?;
+        group.clear_pending_commit(self.provider.storage()).map_err(err("clear pending"))
+    }
+
+    /// The credential identity (`userId:deviceId`) of every leaf in the group.
+    ///
+    /// This is what lets a member work out which devices are MISSING from the group —
+    /// diff it against the devices the server says the conversation's members have
+    /// published — and add exactly those.
+    pub fn member_identities(&self, group_id: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+        let group = self.load_group(group_id)?;
+        Ok(group
+            .members()
+            .map(|m| m.credential.serialized_content().to_vec())
+            .collect())
     }
 
     /// Joins a group from a Welcome relayed by the server.
@@ -236,7 +430,7 @@ impl Client {
             _ => return Err("not a Welcome".into()),
         };
         let staged =
-            StagedWelcome::new_from_welcome(&self.provider, &MlsGroupJoinConfig::default(), welcome, None)
+            StagedWelcome::new_from_welcome(&self.provider, &Self::join_config(), welcome, None)
                 .map_err(err("stage welcome"))?;
         if self.has_group(staged.group_context().group_id().as_slice()) {
             return Err("already a member of this group".into());
@@ -430,145 +624,266 @@ mod wasm;
 mod tests {
     use super::*;
 
+    /// A conversation's group id, as the server would mint it: opaque and unrelated to
+    /// the conversation id, so a group can never be silently created twice.
+    const GID: &[u8] = b"grp-0123456789abcdef";
+
+    /// Establishes a group with the given members and hands everyone their state.
+    /// Mirrors what the client does: create, stage one Add for ALL devices, and — since
+    /// the server accepted it — merge.
+    fn establish(owner: &Client, group_id: &[u8], members: &[&Client]) -> AddResult {
+        owner.create_group(group_id).unwrap();
+        let kps: Vec<Vec<u8>> = members.iter().map(|c| c.key_package().unwrap()).collect();
+        let add = owner.stage_add(group_id, &kps).unwrap();
+        owner.commit_accepted(group_id).unwrap();
+        for m in members {
+            m.join_from_welcome(&add.welcome).unwrap();
+        }
+        add
+    }
+
     #[test]
     fn stateful_two_party_round_trip() {
-        let alice = Client::new(b"alice").unwrap();
-        let bob = Client::new(b"bob").unwrap();
-        let group_id = b"conversation-1";
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
 
-        let bob_kp = bob.key_package().unwrap();
-        alice.create_group(group_id).unwrap();
-        let add = alice.add_member(group_id, &bob_kp).unwrap();
-        bob.join_from_welcome(&add.welcome).unwrap();
+        let ct = alice.encrypt(GID, b"the eagle lands at dawn").unwrap();
+        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"the eagle lands at dawn"[..]));
 
-        let ct = alice.encrypt(group_id, b"the eagle lands at dawn").unwrap();
-        let pt = bob.decrypt(group_id, &ct).unwrap();
-        assert_eq!(pt.as_deref(), Some(&b"the eagle lands at dawn"[..]));
+        let ct2 = bob.encrypt(GID, b"acknowledged").unwrap();
+        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"acknowledged"[..]));
+    }
 
-        // Reply the other way.
-        let ct2 = bob.encrypt(group_id, b"acknowledged").unwrap();
-        let pt2 = alice.decrypt(group_id, &ct2).unwrap();
-        assert_eq!(pt2.as_deref(), Some(&b"acknowledged"[..]));
+    // THE BUG. Bob is signed in on two devices. Both must be leaves of the group, and
+    // both must read every message — including the ones Bob's OTHER device sent.
+    //
+    // Before device-aware membership there was one leaf per user, so exactly one of
+    // Bob's devices was in the group and the other showed a conversation full of
+    // blanks. This is the test that would have caught it.
+    #[test]
+    fn every_device_of_a_member_can_read() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob_phone = Client::new("bob", "phone").unwrap();
+        let bob_laptop = Client::new("bob", "laptop").unwrap();
+
+        establish(&alice, GID, &[&bob_phone, &bob_laptop]);
+
+        // Alice speaks: BOTH of Bob's devices read it.
+        let ct = alice.encrypt(GID, b"hello bob").unwrap();
+        assert_eq!(bob_phone.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"hello bob"[..]));
+        assert_eq!(bob_laptop.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"hello bob"[..]));
+
+        // Bob speaks from his phone: Alice reads it, AND so does Bob's own laptop —
+        // a sender cannot decrypt their own message, but a different device of the
+        // same person is a different leaf, so it can.
+        let ct2 = bob_phone.encrypt(GID, b"sent from my phone").unwrap();
+        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"sent from my phone"[..]));
+        assert_eq!(
+            bob_laptop.decrypt(GID, &ct2).unwrap().as_deref(),
+            Some(&b"sent from my phone"[..]),
+            "a user's second device must read what their first device sent",
+        );
+    }
+
+    // A device that joins later is added to the EXISTING group — the group is never
+    // torn down and rebuilt around it. Everyone already in it keeps reading, and the
+    // newcomer reads everything from its epoch onward.
+    #[test]
+    fn a_new_device_is_added_without_destroying_the_group() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob_phone = Client::new("bob", "phone").unwrap();
+        establish(&alice, GID, &[&bob_phone]);
+
+        let early = alice.encrypt(GID, b"before the laptop existed").unwrap();
+        assert_eq!(bob_phone.decrypt(GID, &early).unwrap().as_deref(), Some(&b"before the laptop existed"[..]));
+
+        // Bob signs in on a laptop. Alice notices the device is missing from the group
+        // and adds it — one Commit, one Welcome.
+        let bob_laptop = Client::new("bob", "laptop").unwrap();
+        let add = alice.stage_add(GID, &[bob_laptop.key_package().unwrap()]).unwrap();
+        alice.commit_accepted(GID).unwrap();
+        bob_laptop.join_from_welcome(&add.welcome).unwrap();
+        bob_phone.apply_commit(GID, &add.commit).unwrap();
+
+        // Everyone — old devices and new — reads what comes next.
+        let ct = alice.encrypt(GID, b"now you both see this").unwrap();
+        assert_eq!(bob_phone.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"now you both see this"[..]));
+        assert_eq!(bob_laptop.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"now you both see this"[..]));
+
+        // And the laptop can speak; the phone and Alice both hear it.
+        let ct2 = bob_laptop.encrypt(GID, b"laptop here").unwrap();
+        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"laptop here"[..]));
+        assert_eq!(bob_phone.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"laptop here"[..]));
+    }
+
+    // Removing a member must remove EVERY device they have. Taking out one leaf and
+    // leaving the other means the person you just removed carries on reading the group
+    // from their other device — a confidentiality failure, not a cosmetic one.
+    #[test]
+    fn removing_a_user_removes_all_of_their_devices() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob_phone = Client::new("bob", "phone").unwrap();
+        let bob_laptop = Client::new("bob", "laptop").unwrap();
+        let carol = Client::new("carol", "dev-c").unwrap();
+        establish(&alice, GID, &[&bob_phone, &bob_laptop, &carol]);
+
+        assert_eq!(alice.member_identities(GID).unwrap().len(), 4);
+
+        let commit = alice.stage_remove_users(GID, &["bob".to_string()]).unwrap();
+        alice.commit_accepted(GID).unwrap();
+        carol.apply_commit(GID, &commit).unwrap();
+
+        // Alice and Carol are all that is left.
+        assert_eq!(alice.member_identities(GID).unwrap().len(), 2);
+
+        let ct = alice.encrypt(GID, b"bob is gone").unwrap();
+        assert_eq!(carol.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"bob is gone"[..]));
+        assert!(bob_phone.decrypt(GID, &ct).is_err(), "removed device must not decrypt");
+        assert!(
+            bob_laptop.decrypt(GID, &ct).is_err(),
+            "the removed member's OTHER device must not decrypt either",
+        );
+    }
+
+    // Two members stage a Commit against the same epoch. Only one can win — the server
+    // decides — and the LOSER must come away unforked: it throws its Commit away,
+    // applies the winner's, and can still read the group.
+    //
+    // Merging a Commit before the server has accepted it (which is what add_members used
+    // to do) is what makes this unrecoverable: the loser advances its own ratchet to an
+    // epoch nobody else is in, and is silently cut off for good.
+    #[test]
+    fn a_rejected_commit_leaves_the_loser_able_to_catch_up() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let carol = Client::new("carol", "dev-c").unwrap();
+        let dave = Client::new("dave", "dev-d").unwrap();
+
+        // Both members stage an Add against epoch 1, concurrently.
+        let base = alice.epoch(GID).unwrap();
+        assert_eq!(base, bob.epoch(GID).unwrap());
+        let alice_add = alice.stage_add(GID, &[carol.key_package().unwrap()]).unwrap();
+        let _bob_add = bob.stage_add(GID, &[dave.key_package().unwrap()]).unwrap();
+
+        // The server accepts Alice's (it got there first) and refuses Bob's.
+        alice.commit_accepted(GID).unwrap();
+        bob.commit_rejected(GID).unwrap();
+
+        // Bob discards his and applies the winner. He is back in step with the group.
+        bob.apply_commit(GID, &alice_add.commit).unwrap();
+        carol.join_from_welcome(&alice_add.welcome).unwrap();
+        assert_eq!(alice.epoch(GID).unwrap(), bob.epoch(GID).unwrap());
+        assert_eq!(alice.epoch(GID).unwrap(), base + 1);
+
+        let ct = alice.encrypt(GID, b"still one group").unwrap();
+        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"still one group"[..]));
+        assert_eq!(carol.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"still one group"[..]));
+
+        // And Bob can retry his add against the new epoch.
+        let retry = bob.stage_add(GID, &[dave.key_package().unwrap()]).unwrap();
+        bob.commit_accepted(GID).unwrap();
+        alice.apply_commit(GID, &retry.commit).unwrap();
+        carol.apply_commit(GID, &retry.commit).unwrap();
+        dave.join_from_welcome(&retry.welcome).unwrap();
+
+        let ct2 = dave.encrypt(GID, b"dave made it in").unwrap();
+        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"dave made it in"[..]));
+        assert_eq!(bob.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"dave made it in"[..]));
+    }
+
+    // A message sent BEFORE a membership change must still decrypt AFTER it.
+    //
+    // This is what max_past_epochs buys. Messages do not arrive in order — a Commit can
+    // overtake them on the live stream, and paging back through history replays them
+    // long after. With OpenMLS's default of zero retained epochs, every one of those is
+    // lost, which is a conversation full of blanks after anybody joins.
+    #[test]
+    fn messages_from_a_past_epoch_still_decrypt_after_a_commit() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        // Alice speaks. Bob does not read it yet — it is still in flight.
+        let in_flight = alice.encrypt(GID, b"sent before carol joined").unwrap();
+
+        // Carol joins; Bob applies the Commit and moves to the new epoch.
+        let carol = Client::new("carol", "dev-c").unwrap();
+        let add = alice.stage_add(GID, &[carol.key_package().unwrap()]).unwrap();
+        alice.commit_accepted(GID).unwrap();
+        bob.apply_commit(GID, &add.commit).unwrap();
+        carol.join_from_welcome(&add.welcome).unwrap();
+
+        // Only NOW does the older message reach Bob. He is an epoch past it, and must
+        // still be able to read it.
+        assert_eq!(
+            bob.decrypt(GID, &in_flight).unwrap().as_deref(),
+            Some(&b"sent before carol joined"[..]),
+            "a message from the previous epoch must survive a membership change",
+        );
     }
 
     // The property IndexedDB persistence rests on: a client's whole state survives
     // export → drop → import, and the restored client can still decrypt.
     #[test]
     fn state_survives_persistence_round_trip() {
-        let alice = Client::new(b"alice").unwrap();
-        let bob = Client::new(b"bob").unwrap();
-        let group_id = b"conversation-1";
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
 
-        alice.create_group(group_id).unwrap();
-        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
-        bob.join_from_welcome(&add.welcome).unwrap();
-
-        // Persist Bob, then rebuild him from the blob (a page reload / new session).
         let saved = bob.export_state().unwrap();
         drop(bob);
         let bob = Client::import_state(&saved).unwrap();
 
-        // Alice sends; the restored Bob decrypts.
-        let ct = alice.encrypt(group_id, b"still works after reload").unwrap();
-        assert_eq!(
-            bob.decrypt(group_id, &ct).unwrap().as_deref(),
-            Some(&b"still works after reload"[..]),
-        );
+        let ct = alice.encrypt(GID, b"still works after reload").unwrap();
+        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"still works after reload"[..]));
 
-        // And the restored Bob can still send back (his ratchet state is intact).
-        let ct2 = bob.encrypt(group_id, b"reply from restored bob").unwrap();
-        assert_eq!(
-            alice.decrypt(group_id, &ct2).unwrap().as_deref(),
-            Some(&b"reply from restored bob"[..]),
-        );
+        let ct2 = bob.encrypt(GID, b"reply from restored bob").unwrap();
+        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"reply from restored bob"[..]));
     }
 
-    // A group of three: both members added in ONE Commit must land at the same
-    // epoch, so each can decrypt the owner's first message. Adding them one at a
-    // time would leave the earlier joiner an epoch behind (WrongEpoch).
-    #[test]
-    fn group_of_three_batched_add() {
-        let owner = Client::new(b"owner").unwrap();
-        let bob = Client::new(b"bob").unwrap();
-        let carol = Client::new(b"carol").unwrap();
-        let group_id = b"group-1";
-
-        owner.create_group(group_id).unwrap();
-        let add = owner
-            .add_members(group_id, &[bob.key_package().unwrap(), carol.key_package().unwrap()])
-            .unwrap();
-        bob.join_from_welcome(&add.welcome).unwrap();
-        carol.join_from_welcome(&add.welcome).unwrap();
-
-        let ct = owner.encrypt(group_id, b"hi team").unwrap();
-        assert_eq!(bob.decrypt(group_id, &ct).unwrap().as_deref(), Some(&b"hi team"[..]));
-        assert_eq!(carol.decrypt(group_id, &ct).unwrap().as_deref(), Some(&b"hi team"[..]));
-
-        // A member speaks; the owner and the other member both read it.
-        let ct2 = bob.encrypt(group_id, b"from bob").unwrap();
-        assert_eq!(owner.decrypt(group_id, &ct2).unwrap().as_deref(), Some(&b"from bob"[..]));
-        assert_eq!(carol.decrypt(group_id, &ct2).unwrap().as_deref(), Some(&b"from bob"[..]));
-    }
-
-    // The untrusted Delivery Service can replay an old Welcome. Re-joining would
-    // roll our ratchet back to the Welcome's stale epoch, so it must be refused —
-    // and the live group state must survive the attempt intact.
+    // The untrusted Delivery Service can replay an old Welcome. Re-joining would roll
+    // our ratchet back to the Welcome's stale epoch, so it must be refused — and the
+    // live group state must survive the attempt intact.
     #[test]
     fn replayed_welcome_is_refused_and_state_survives() {
-        let alice = Client::new(b"alice").unwrap();
-        let bob = Client::new(b"bob").unwrap();
-        let group_id = b"conversation-1";
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        let add = establish(&alice, GID, &[&bob]);
 
-        alice.create_group(group_id).unwrap();
-        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
-        bob.join_from_welcome(&add.welcome).unwrap();
+        let ct = alice.encrypt(GID, b"before the replay").unwrap();
+        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"before the replay"[..]));
 
-        // Bob is in the group and exchanging messages.
-        let ct = alice.encrypt(group_id, b"before the replay").unwrap();
-        assert_eq!(bob.decrypt(group_id, &ct).unwrap().as_deref(), Some(&b"before the replay"[..]));
-
-        // The server replays the original Welcome. Bob must refuse it.
         assert!(bob.join_from_welcome(&add.welcome).is_err());
 
-        // And his group state is untouched: he still decrypts the next message.
-        let ct2 = alice.encrypt(group_id, b"after the replay").unwrap();
-        assert_eq!(bob.decrypt(group_id, &ct2).unwrap().as_deref(), Some(&b"after the replay"[..]));
+        let ct2 = alice.encrypt(GID, b"after the replay").unwrap();
+        assert_eq!(bob.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"after the replay"[..]));
     }
 
-    // The safety number is what catches a malicious Delivery Service.
-    //
-    // Both honest members derive it from the group's own ratchet tree, so they agree.
-    // If the server had substituted its own KeyPackage for Bob's, the group would
-    // contain the impostor's key instead — and the number Alice reads out would not
-    // match the one Bob sees, which is exactly the signal the two humans need.
+    // The safety number is what catches a malicious Delivery Service. Both honest
+    // members derive it from the group's own ratchet tree, so they agree; a substituted
+    // KeyPackage changes it, which is the signal the two humans need.
     #[test]
     fn safety_number_agrees_between_members_and_changes_under_substitution() {
-        let alice = Client::new(b"alice").unwrap();
-        let bob = Client::new(b"bob").unwrap();
-        let group_id = b"conversation-1";
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
 
-        alice.create_group(group_id).unwrap();
-        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
-        bob.join_from_welcome(&add.welcome).unwrap();
-
-        // Both members compute the same number from their own view of the group.
-        let from_alice = safety_number(&alice.member_keys(group_id).unwrap());
-        let from_bob = safety_number(&bob.member_keys(group_id).unwrap());
+        let from_alice = safety_number(&alice.member_keys(GID).unwrap());
+        let from_bob = safety_number(&bob.member_keys(GID).unwrap());
         assert_eq!(from_alice, from_bob);
 
-        // 12 groups of 5 digits — every group carries a full 5 bytes of digest.
         let groups: Vec<&str> = from_alice.split(' ').collect();
         assert_eq!(groups.len(), 12);
         assert!(groups.iter().all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
 
-        // Now the same conversation, but the server hands Alice an impostor's
-        // KeyPackage in place of Bob's. Alice's group holds the impostor's key, so her
-        // safety number differs from the one she and Bob would have shared.
-        let mallory = Client::new(b"bob").unwrap(); // claims to be Bob
-        let alice2 = Client::new(b"alice").unwrap();
-        let group2 = b"conversation-2";
-        alice2.create_group(group2).unwrap();
-        alice2.add_member(group2, &mallory.key_package().unwrap()).unwrap();
+        // The server hands Alice an impostor's KeyPackage in place of Bob's.
+        let mallory = Client::new("bob", "dev-b").unwrap(); // claims to be Bob's device
+        let alice2 = Client::new("alice", "dev-a").unwrap();
+        let group2 = b"grp-second";
+        establish(&alice2, group2, &[&mallory]);
         let under_mitm = safety_number(&alice2.member_keys(group2).unwrap());
 
         assert_ne!(
@@ -577,113 +892,91 @@ mod tests {
         );
     }
 
-    // An ORDINARY KeyPackage is single-use: OpenMLS deletes the private init key on
-    // the first join. This is why a user's published stock is exhaustible, and why
-    // marking one "last resort" server-side alone would achieve nothing.
+    // An ORDINARY KeyPackage is single-use: OpenMLS deletes the private init key on the
+    // first join. This is why a user's published stock is exhaustible.
     #[test]
     fn ordinary_key_package_is_single_use() {
-        let bob = Client::new(b"bob").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
         let kp = bob.key_package().unwrap();
 
-        let alice = Client::new(b"alice").unwrap();
+        let alice = Client::new("alice", "dev-a").unwrap();
         alice.create_group(b"group-a").unwrap();
-        let add_a = alice.add_member(b"group-a", &kp).unwrap();
+        let add_a = alice.stage_add(b"group-a", &[kp.clone()]).unwrap();
+        alice.commit_accepted(b"group-a").unwrap();
         bob.join_from_welcome(&add_a.welcome).unwrap();
 
-        let carol = Client::new(b"carol").unwrap();
+        let carol = Client::new("carol", "dev-c").unwrap();
         carol.create_group(b"group-c").unwrap();
-        let add_c = carol.add_member(b"group-c", &kp).unwrap();
-        // Bob's private init key for this KeyPackage is gone: he cannot join again.
+        let add_c = carol.stage_add(b"group-c", &[kp]).unwrap();
+        carol.commit_accepted(b"group-c").unwrap();
         assert!(bob.join_from_welcome(&add_c.welcome).is_err());
     }
 
-    // A LAST-RESORT KeyPackage carries the RFC 9420 extension, so OpenMLS keeps the
-    // private key and the same KeyPackage can be handed out again and again. This is
-    // what actually stops a stranger draining a user's stock and making them
-    // unreachable — the server-side flag is only bookkeeping on top of this.
+    // A LAST-RESORT KeyPackage keeps its private key, so the same one can be handed out
+    // repeatedly and a user can always be reached.
     #[test]
     fn last_resort_key_package_can_be_used_repeatedly() {
-        let bob = Client::new(b"bob").unwrap();
-        let kp = bob.last_resort_key_package().unwrap(); // ONE package, handed out twice
+        let bob = Client::new("bob", "dev-b").unwrap();
+        let kp = bob.last_resort_key_package().unwrap();
 
-        let alice = Client::new(b"alice").unwrap();
+        let alice = Client::new("alice", "dev-a").unwrap();
         alice.create_group(b"group-a").unwrap();
-        let add_a = alice.add_member(b"group-a", &kp).unwrap();
+        let add_a = alice.stage_add(b"group-a", &[kp.clone()]).unwrap();
+        alice.commit_accepted(b"group-a").unwrap();
         bob.join_from_welcome(&add_a.welcome).unwrap();
 
-        let carol = Client::new(b"carol").unwrap();
+        let carol = Client::new("carol", "dev-c").unwrap();
         carol.create_group(b"group-c").unwrap();
-        let add_c = carol.add_member(b"group-c", &kp).unwrap();
+        let add_c = carol.stage_add(b"group-c", &[kp]).unwrap();
+        carol.commit_accepted(b"group-c").unwrap();
         bob.join_from_welcome(&add_c.welcome)
             .expect("a last-resort KeyPackage must still work after being used once");
 
-        // Both groups work, in both directions.
         let ct = carol.encrypt(b"group-c", b"second group works").unwrap();
-        assert_eq!(
-            bob.decrypt(b"group-c", &ct).unwrap().as_deref(),
-            Some(&b"second group works"[..]),
-        );
+        assert_eq!(bob.decrypt(b"group-c", &ct).unwrap().as_deref(), Some(&b"second group works"[..]));
         let ct2 = alice.encrypt(b"group-a", b"first group still works").unwrap();
-        assert_eq!(
-            bob.decrypt(b"group-a", &ct2).unwrap().as_deref(),
-            Some(&b"first group still works"[..]),
-        );
+        assert_eq!(bob.decrypt(b"group-a", &ct2).unwrap().as_deref(), Some(&b"first group still works"[..]));
     }
 
-    // A forged Welcome must not be able to destroy our KeyPackage's private key.
-    //
-    // OpenMLS looks up (and deletes) the private key as soon as it matches the
-    // Welcome's hash_ref — BEFORE it has verified anything about the Welcome. The
-    // untrusted server knows every hash_ref it hands out, so if that deletion happens
-    // on a Welcome that then fails to decrypt, anyone able to inject a message can
-    // silently burn a victim's published KeyPackages and make them unreachable.
+    // A forged Welcome burns the ordinary KeyPackage it names: OpenMLS deletes the
+    // private key as soon as it matches the hash_ref, BEFORE validating anything. Pinned
+    // here because the mitigations (last-resort packages, and only processing Welcomes
+    // from conversation members) exist entirely because of it.
     #[test]
     fn forged_welcome_burns_an_ordinary_key_package() {
-        let bob = Client::new(b"bob").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
         let kp = bob.key_package().unwrap();
 
-        let alice = Client::new(b"alice").unwrap();
+        let alice = Client::new("alice", "dev-a").unwrap();
         alice.create_group(b"group-a").unwrap();
-        let valid = alice.add_member(b"group-a", &kp).unwrap().welcome;
+        let valid = alice.stage_add(b"group-a", &[kp]).unwrap().welcome;
+        alice.commit_accepted(b"group-a").unwrap();
 
-        // Corrupt the tail (the encrypted group secrets / group info), leaving the
-        // structure and the hash_ref that selects Bob's KeyPackage intact.
         let mut forged = valid.clone();
         let n = forged.len();
         for b in forged[n - 24..].iter_mut() {
             *b ^= 0xff;
         }
 
-        // Bob processes the forged Welcome (his client does this automatically).
-        let forged_result = bob.join_from_welcome(&forged);
-        println!("forged join -> {:?}", forged_result);
-
-        assert!(forged_result.is_err());
-
-        // The legitimate Welcome now FAILS: OpenMLS deleted the private key the moment
-        // it matched the hash_ref, before it had validated anything. This is why the
-        // last-resort package matters — see the test below. It is also why the client
-        // must not process a Welcome from just anyone.
+        assert!(bob.join_from_welcome(&forged).is_err());
         assert!(
             bob.join_from_welcome(&valid).is_err(),
             "OpenMLS is expected to have burned the key package here; if this now passes, \
-             upstream changed and the mitigations below can be revisited",
+             upstream changed and the mitigations can be revisited",
         );
     }
 
-    // The last-resort package is immune to the burn: OpenMLS only deletes the private
-    // key when the last_resort extension is absent. So however many forged Welcomes an
-    // attacker injects, the victim keeps ONE package they can always be added with, and
-    // stays reachable. This is what turns a permanent denial of service into a
-    // temporary loss of the single-use stock.
+    // The last-resort package is immune to that burn, which is what turns a permanent
+    // denial of service into a temporary loss of the single-use stock.
     #[test]
     fn forged_welcome_cannot_burn_the_last_resort_key_package() {
-        let bob = Client::new(b"bob").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
         let kp = bob.last_resort_key_package().unwrap();
 
-        let alice = Client::new(b"alice").unwrap();
+        let alice = Client::new("alice", "dev-a").unwrap();
         alice.create_group(b"group-a").unwrap();
-        let valid = alice.add_member(b"group-a", &kp).unwrap().welcome;
+        let valid = alice.stage_add(b"group-a", &[kp]).unwrap().welcome;
+        alice.commit_accepted(b"group-a").unwrap();
 
         let mut forged = valid.clone();
         let n = forged.len();
@@ -691,114 +984,124 @@ mod tests {
             *b ^= 0xff;
         }
 
-        // Bob processes a forged Welcome aimed at his last-resort package. It fails...
         assert!(bob.join_from_welcome(&forged).is_err());
-
-        // ...but the package survives, so the real Welcome still works.
         bob.join_from_welcome(&valid)
             .expect("a forged Welcome must not burn the last-resort key package");
 
         let ct = alice.encrypt(b"group-a", b"still reachable").unwrap();
-        assert_eq!(
-            bob.decrypt(b"group-a", &ct).unwrap().as_deref(),
-            Some(&b"still reachable"[..]),
-        );
-    }
-
-    // Repairing a conversation the other member could never join: discard the group and
-    // build it again, so a fresh Welcome can be sent and they can finally get in.
-    #[test]
-    fn a_group_can_be_discarded_and_rebuilt() {
-        let alice = Client::new(b"alice").unwrap();
-        let bob = Client::new(b"bob").unwrap();
-        let group_id = b"conversation-1";
-
-        alice.create_group(group_id).unwrap();
-        alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
-        // Bob never joins — the Welcome named a KeyPackage he does not hold.
-
-        // Creating over the top is refused, which is why the old group must be discarded.
-        assert!(alice.create_group(group_id).is_err());
-        alice.delete_group(group_id).unwrap();
-        assert!(!alice.has_group(group_id));
-
-        // Rebuilt from scratch, with a fresh KeyPackage. Now Bob can join.
-        alice.create_group(group_id).unwrap();
-        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
-        bob.join_from_welcome(&add.welcome).unwrap();
-
-        let ct = alice.encrypt(group_id, b"second attempt").unwrap();
-        assert_eq!(bob.decrypt(group_id, &ct).unwrap().as_deref(), Some(&b"second attempt"[..]));
-    }
-
-    // Adding a member to an EXISTING group: the adder relays a Welcome to the newcomer
-    // and a Commit to the existing members, who apply it to reach the new epoch. If the
-    // existing member does not apply the commit, they fall an epoch behind and can no
-    // longer decrypt — which is why the commit must be relayed, not just the welcome.
-    #[test]
-    fn add_member_to_existing_group_relays_commit() {
-        let owner = Client::new(b"owner").unwrap();
-        let bob = Client::new(b"bob").unwrap();
-        let carol = Client::new(b"carol").unwrap();
-        let gid = b"group-1";
-
-        owner.create_group(gid).unwrap();
-        let add_bob = owner.add_member(gid, &bob.key_package().unwrap()).unwrap();
-        bob.join_from_welcome(&add_bob.welcome).unwrap();
-
-        // Owner adds Carol to the now-established group.
-        let add_carol = owner.add_member(gid, &carol.key_package().unwrap()).unwrap();
-        carol.join_from_welcome(&add_carol.welcome).unwrap();
-        // Bob (an existing member) applies the Commit to catch up to the new epoch.
-        bob.apply_commit(gid, &add_carol.commit).unwrap();
-
-        // All three now share the epoch and can talk in every direction.
-        let ct = owner.encrypt(gid, b"welcome carol").unwrap();
-        assert_eq!(bob.decrypt(gid, &ct).unwrap().as_deref(), Some(&b"welcome carol"[..]));
-        assert_eq!(carol.decrypt(gid, &ct).unwrap().as_deref(), Some(&b"welcome carol"[..]));
-        let ct2 = carol.encrypt(gid, b"thanks all").unwrap();
-        assert_eq!(owner.decrypt(gid, &ct2).unwrap().as_deref(), Some(&b"thanks all"[..]));
-        assert_eq!(bob.decrypt(gid, &ct2).unwrap().as_deref(), Some(&b"thanks all"[..]));
-    }
-
-    // Removing a member: the remaining members apply the Commit; the removed member is
-    // cut off from the new epoch and can no longer read.
-    #[test]
-    fn remove_member_cuts_them_off() {
-        let owner = Client::new(b"owner").unwrap();
-        let bob = Client::new(b"bob").unwrap();
-        let carol = Client::new(b"carol").unwrap();
-        let gid = b"group-1";
-
-        owner.create_group(gid).unwrap();
-        let ab = owner.add_members(gid, &[bob.key_package().unwrap(), carol.key_package().unwrap()]).unwrap();
-        bob.join_from_welcome(&ab.welcome).unwrap();
-        carol.join_from_welcome(&ab.welcome).unwrap();
-
-        // Owner removes Bob; Carol applies the removal Commit.
-        let commit = owner.remove_member(gid, b"bob").unwrap();
-        carol.apply_commit(gid, &commit).unwrap();
-
-        // Carol still reads the owner; Bob, removed, cannot.
-        let ct = owner.encrypt(gid, b"bob is gone").unwrap();
-        assert_eq!(carol.decrypt(gid, &ct).unwrap().as_deref(), Some(&b"bob is gone"[..]));
-        assert!(bob.decrypt(gid, &ct).is_err());
+        assert_eq!(bob.decrypt(b"group-a", &ct).unwrap().as_deref(), Some(&b"still reachable"[..]));
     }
 
     // A third client not in the group cannot decrypt — the whole point.
     #[test]
     fn outsider_cannot_decrypt() {
-        let alice = Client::new(b"alice").unwrap();
-        let bob = Client::new(b"bob").unwrap();
-        let mallory = Client::new(b"mallory").unwrap();
-        let group_id = b"conversation-1";
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        let mallory = Client::new("mallory", "dev-m").unwrap();
+        establish(&alice, GID, &[&bob]);
 
-        alice.create_group(group_id).unwrap();
-        let add = alice.add_member(group_id, &bob.key_package().unwrap()).unwrap();
-        bob.join_from_welcome(&add.welcome).unwrap();
+        let ct = alice.encrypt(GID, b"secret").unwrap();
+        assert!(mallory.decrypt(GID, &ct).is_err());
+    }
 
-        let ct = alice.encrypt(group_id, b"secret").unwrap();
-        // Mallory has no such group; decryption must fail, not return plaintext.
-        assert!(mallory.decrypt(group_id, &ct).is_err());
+    // MLS forbids committing your own removal, so leaving a group cannot be a Commit.
+    // A member leaves by dropping their membership and destroying their local state; the
+    // members who remain prune the leaves they left behind when they next reconcile. This
+    // pins both halves: the refusal, and the pruning that stands in for it.
+    #[test]
+    fn a_member_cannot_commit_their_own_removal_but_others_can_prune_them() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "phone").unwrap();
+        let bob_laptop = Client::new("bob", "laptop").unwrap();
+        establish(&alice, GID, &[&bob, &bob_laptop]);
+
+        // Bob cannot remove himself, on either device.
+        assert!(bob.stage_remove_users(GID, &["bob".to_string()]).is_err());
+        // Nor can he do it by sneaking his own id into a longer list.
+        assert!(bob.stage_remove_users(GID, &["bob".to_string(), "bob".to_string()]).is_err());
+
+        // Alice prunes him — both of his devices — and Bob is out.
+        let commit = alice.stage_remove_users(GID, &["bob".to_string()]).unwrap();
+        alice.commit_accepted(GID).unwrap();
+        assert_eq!(alice.member_identities(GID).unwrap().len(), 1);
+
+        let ct = alice.encrypt(GID, b"after bob left").unwrap();
+        assert!(bob.decrypt(GID, &ct).is_err());
+        assert!(bob_laptop.decrypt(GID, &ct).is_err());
+        let _ = commit;
+    }
+
+    // Removing somebody who is not in the group is a no-op to be tolerated, not an error
+    // to fail on: two members reconciling at once will both name a leaver, and only one
+    // of them can win.
+    #[test]
+    fn removing_a_user_who_is_not_in_the_group_is_refused_not_fatal() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let err = alice.stage_remove_users(GID, &["nobody".to_string()]).unwrap_err();
+        assert!(err.contains("none of those users"), "got: {err}");
+        // And the group is untouched — Alice can still talk to Bob.
+        let ct = alice.encrypt(GID, b"unharmed").unwrap();
+        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"unharmed"[..]));
+    }
+
+    // Pruning a ghost device must leave that person's LIVE devices alone.
+    //
+    // A browser whose storage is evicted comes back with new key material under a new
+    // device id, leaving a leaf in the tree whose private keys no longer exist anywhere.
+    // That leaf should go. But removing it BY USER would take the same person's working
+    // phone out of the group with it — so the prune has to name the leaf, not the person.
+    #[test]
+    fn pruning_a_ghost_device_leaves_the_persons_other_devices_alone() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob_phone = Client::new("bob", "phone").unwrap();
+        let bob_ghost = Client::new("bob", "evicted-browser").unwrap();
+        establish(&alice, GID, &[&bob_phone, &bob_ghost]);
+        assert_eq!(alice.member_identities(GID).unwrap().len(), 3);
+
+        // Prune only the ghost leaf.
+        let commit = alice
+            .stage_remove_devices(GID, &["bob:evicted-browser".to_string()])
+            .unwrap();
+        alice.commit_accepted(GID).unwrap();
+        bob_phone.apply_commit(GID, &commit).unwrap();
+
+        assert_eq!(alice.member_identities(GID).unwrap().len(), 2);
+
+        // Bob's phone is untouched and still reads the group.
+        let ct = alice.encrypt(GID, b"your phone still works").unwrap();
+        assert_eq!(
+            bob_phone.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"your phone still works"[..]),
+            "pruning a ghost device must not cut off the same person's live device",
+        );
+        // The ghost is out.
+        assert!(bob_ghost.decrypt(GID, &ct).is_err());
+    }
+
+    // The same client must never prune itself, however it is asked.
+    #[test]
+    fn a_client_never_removes_its_own_leaf() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        assert!(alice.stage_remove_devices(GID, &["alice:dev-a".to_string()]).is_err());
+        assert!(alice.stage_remove_users(GID, &["alice".to_string()]).is_err());
+
+        // Still a healthy two-member group.
+        let ct = alice.encrypt(GID, b"intact").unwrap();
+        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"intact"[..]));
+    }
+
+    #[test]
+    fn identity_round_trips_and_splits_on_the_user() {
+        let id = identity("507f1f77bcf86cd799439011", "a-b-c-uuid");
+        assert_eq!(user_of(&id), b"507f1f77bcf86cd799439011".to_vec());
+        // A credential with no device half (nothing mints these any more) still resolves.
+        assert_eq!(user_of(b"bare-user"), b"bare-user".to_vec());
     }
 }
+

@@ -144,8 +144,8 @@ func TestChatPushNotifiesOtherMemberOnly(t *testing.T) {
 	}
 }
 
-// An MLS Welcome is protocol traffic, not a message a human sent: it must not
-// produce a notification.
+// MLS protocol traffic is not a message a human sent: it must never buzz anyone's
+// phone. A Welcome and a Commit both travel through the commit endpoint.
 func TestChatPushSkipsControlMessages(t *testing.T) {
 	f := newFixture(t)
 	pusher := newFakePush()
@@ -156,18 +156,40 @@ func TestChatPushSkipsControlMessages(t *testing.T) {
 	f.device(t, bobID)
 	conv := f.createDirect(t, aliceToken, bobID)
 
-	rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/messages", aliceToken, map[string]any{
-		"ciphertext":  []byte("opaque-welcome"),
-		"contentType": "application/mls-welcome",
+	rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/mls/commit", aliceToken, map[string]any{
+		"groupId":   "grp-1",
+		"baseEpoch": 0,
+		"welcome":   []byte("opaque-welcome"),
+		"commit":    []byte("opaque-commit"),
 	})
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("send welcome: got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("post commit: got %d (%s)", rec.Code, rec.Body.String())
 	}
 
 	if pusher.waitForPush(t) {
-		t.Fatal("a Welcome control message must not notify anyone")
+		t.Fatal("MLS control messages must not notify anyone")
 	}
 	if n := len(pusher.notifications()); n != 0 {
 		t.Fatalf("expected no notifications, got %d", n)
+	}
+}
+
+// A Welcome or Commit posted through the ORDINARY message route would skip the epoch
+// compare-and-set, putting a Commit into the log that the group never agreed to —
+// and forking every member who applied it. The route must refuse them.
+func TestControlMessagesCannotBypassTheCommitEndpoint(t *testing.T) {
+	f := newFixture(t)
+	_, aliceToken := f.user(t, "alice-d@pheme.test")
+	bobID, _ := f.user(t, "bob-d@pheme.test")
+	conv := f.createDirect(t, aliceToken, bobID)
+
+	for _, ct := range []string{"application/mls-welcome", "application/mls-commit"} {
+		rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/messages", aliceToken, map[string]any{
+			"ciphertext":  []byte("opaque"),
+			"contentType": ct,
+		})
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s through the message route: got %d, want 400", ct, rec.Code)
+		}
 	}
 }

@@ -31,6 +31,9 @@ import type {
   Message,
   Meta,
   MessagesPage,
+  MLSClaimedKeyPackage,
+  MLSDeviceRef,
+  MLSGroupState,
   Platform,
   PublicUser,
   Role,
@@ -257,10 +260,66 @@ export const api = {
     request<void>(`/v1/mls/key-packages?deviceId=${encodeURIComponent(deviceId)}`, {
       method: 'DELETE',
     }),
-  claimKeyPackage: (userId: string) =>
-    request<{ keyPackage: string }>(`/v1/mls/key-packages/${userId}/claim`).then(
-      (r) => r.keyPackage,
-    ),
+  /**
+   * Which devices each user has published keys for. Consumes nothing.
+   *
+   * A member needs this to work out which devices are MISSING from a group — every
+   * device of a member is its own MLS leaf, and one that is not in the group cannot read
+   * a word of the conversation. It cannot be answered by claiming, because claiming
+   * destroys what it hands back.
+   */
+  mlsDevices: (conversationId: string) =>
+    request<{ devices: Record<string, string[]> }>(
+      `/v1/conversations/${conversationId}/mls/devices`,
+    ).then((r) => r.devices ?? {}),
+
+  /**
+   * Claims one KeyPackage per named DEVICE, so each can be added to a group as its own
+   * leaf. Devices that have published nothing are simply absent from the result; a 404
+   * means none of them were reachable.
+   */
+  claimKeyPackages: (conversationId: string, devices: MLSDeviceRef[]) =>
+    request<{ keyPackages: MLSClaimedKeyPackage[] }>(
+      `/v1/conversations/${conversationId}/mls/key-packages/claim`,
+      { method: 'POST', body: { devices } },
+    ).then((r) => r.keyPackages ?? []),
+
+  /** The conversation's MLS group id and epoch. `groupId` is empty until it is established. */
+  mlsGroupState: (conversationId: string) =>
+    request<MLSGroupState>(`/v1/conversations/${conversationId}/mls`),
+
+  /**
+   * The Welcomes and Commits that carried the group past `since`, oldest first — what a
+   * member holding an older epoch must apply, in the order it must apply them.
+   */
+  mlsCommitsSince: (conversationId: string, since: number) =>
+    request<{ messages: ChatMessage[] }>(
+      `/v1/conversations/${conversationId}/mls/commits?since=${since}`,
+    ).then((r) => r.messages ?? []),
+
+  /**
+   * Proposes a membership Commit, and relays it if the group is still at `baseEpoch`.
+   *
+   * A 409 means another member's Commit landed first, so this one is built on a history
+   * that never happened. The caller MUST throw its Commit away rather than apply it —
+   * applying a Commit the group refused forks this device off the conversation for good
+   * — then catch up and propose again.
+   */
+  mlsCommit: (
+    conversationId: string,
+    body: {
+      groupId: string
+      baseEpoch: number
+      welcome?: string
+      commit: string
+      /** The users whose leaves this Commit removes — see the server's mayRemove. */
+      removes?: string[]
+    },
+  ) =>
+    request<MLSGroupState>(`/v1/conversations/${conversationId}/mls/commit`, {
+      method: 'POST',
+      body,
+    }),
 
   // Encrypted key backup. All fields are base64 of opaque bytes; the server never
   // sees the passphrase or the plaintext state.
@@ -380,6 +439,18 @@ export const api = {
       method: 'POST',
       body: { ciphertext, contentType },
     }),
+  /**
+   * The conversation's current members, straight from the server.
+   *
+   * Reconciliation must never decide who belongs in an encrypted group from a Conversation
+   * object it happens to be holding: that object was fetched at some point in the past, and
+   * a member added since then looks like a stranger — one the group will promptly remove
+   * again.
+   */
+  listConversationMembers: (conversationId: string) =>
+    request<{ members: ConversationMember[] }>(
+      `/v1/conversations/${conversationId}/members`,
+    ).then((r) => r.members ?? []),
   addConversationMember: (conversationId: string, userId: string) =>
     request<ConversationMember>(`/v1/conversations/${conversationId}/members`, {
       method: 'POST',

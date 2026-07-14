@@ -3,7 +3,7 @@ import { Alert, Button, Code, Group, Stack, Text } from '@mantine/core'
 import { IconAlertTriangle, IconShieldCheck } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
-import { mlsSession } from '../../lib/mls'
+import { conversationSafetyNumber } from '../../lib/mls'
 import { acceptSafetyNumber, checkSafetyNumber, type SafetyState } from '../../lib/safety'
 import { ResponsiveModal } from '../ResponsiveModal'
 
@@ -34,11 +34,15 @@ export function SafetyNumberModal({ conversationId, opened, onClose }: SafetyNum
     let active = true
     const run = async () => {
       try {
-        const session = await mlsSession(userId)
-        const current = await session.safetyNumber(conversationId)
+        const current = await conversationSafetyNumber(conversationId, userId)
+        // No group yet, or this device has not been admitted to it: there is nothing to
+        // compare, and showing a number derived from nothing would be worse than saying so.
+        if (!current) {
+          if (active) setFailed(true)
+          return
+        }
         if (active) setState(checkSafetyNumber(userId, conversationId, current))
       } catch {
-        // No group yet (encryption still being set up), so there is nothing to show.
         if (active) setFailed(true)
       }
     }

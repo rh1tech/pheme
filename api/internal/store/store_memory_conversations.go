@@ -170,11 +170,18 @@ func (m *Memory) DeleteConversation(_ context.Context, conversationID string) er
 func (m *Memory) AppendChatMessage(_ context.Context, msg domain.ChatMessage) (domain.ChatMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.appendChatMessageLocked(msg), nil
+}
+
+// The append itself, for callers that already hold the write lock — CommitMLSGroup
+// relays its control messages inside the same critical section as the epoch
+// compare-and-set, and taking the lock twice would deadlock.
+func (m *Memory) appendChatMessageLocked(msg domain.ChatMessage) domain.ChatMessage {
 	if msg.ID == "" {
 		msg.ID = newID()
 	}
 	m.chatMessages[msg.ID] = msg
-	return msg, nil
+	return msg
 }
 
 func (m *Memory) ChatMessagesByConversation(_ context.Context, conversationID, cursor string, limit int) ([]domain.ChatMessage, error) {

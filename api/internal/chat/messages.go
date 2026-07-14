@@ -72,6 +72,16 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
+	// A Welcome or a Commit may only be posted through the MLS commit endpoint, which
+	// weighs it against the conversation's epoch and refuses it if another member got
+	// there first. Letting one in through the ordinary message path would put a Commit
+	// into the log that the group never agreed to — and every member who applied it would
+	// be forked off the conversation. This route relays whatever it is given, so it must
+	// not be given these.
+	if contentType == contentTypeMLSWelcome || contentType == contentTypeMLSCommit {
+		httpx.Error(w, http.StatusBadRequest, "post MLS commits to /mls/commit")
+		return
+	}
 
 	msg, err := h.Store.AppendChatMessage(r.Context(), domain.ChatMessage{
 		ConversationID: convID,
@@ -187,17 +197,26 @@ func (h *Handler) senderName(ctx context.Context, userID string) string {
 // isControlContent reports whether a content type is MLS protocol traffic rather
 // than a user-visible message.
 func isControlContent(contentType string) bool {
-	return contentType == contentTypeMLSWelcome || contentType == contentTypeMLSRejoin
+	switch contentType {
+	case contentTypeMLSWelcome, contentTypeMLSCommit, contentTypeMLSDevice:
+		return true
+	default:
+		return false
+	}
 }
 
-// The content types clients use for MLS protocol traffic: a relayed Welcome, and a
-// request from a locked-out member that the group be built again. They mirror
-// MLS_WELCOME and MLS_REJOIN in web/src/lib/mls.ts. The server does not interpret the
-// bytes — it only needs to know these are not messages a human sent, so it does not
-// notify anyone about them.
+// The MLS protocol content types, defined once in domain (the store orders a catch-up
+// by them, so they cannot live only here).
+//
+// Note what mls-device replaced: a "rejoin" message that asked the conversation's
+// creator to DESTROY the group and build a new one. That is what made this bug
+// catastrophic rather than merely annoying — every rebuild threw away the key material
+// for every message anyone had ever sent. A device that is missing from the group now
+// gets ADDED to it; the group is not torn down around it.
 const (
-	contentTypeMLSWelcome = "application/mls-welcome"
-	contentTypeMLSRejoin  = "application/mls-rejoin"
+	contentTypeMLSWelcome = domain.ContentTypeMLSWelcome
+	contentTypeMLSCommit  = domain.ContentTypeMLSCommit
+	contentTypeMLSDevice  = domain.ContentTypeMLSDevice
 )
 
 type addMemberRequest struct {

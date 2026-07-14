@@ -1,17 +1,33 @@
 // The web MLS session: end-to-end encryption for conversations.
 //
-// Wraps the pheme-mls WASM client (crates/pheme-mls) with the app-side
-// orchestration: load the module once, restore or create this device's identity,
-// keep the server's KeyPackage directory topped up, and persist all client state
-// (identity + every group's ratchet state) to IndexedDB after each change.
+// Wraps the pheme-mls WASM client (crates/pheme-mls) with the app-side orchestration:
+// load the module once, restore or create this DEVICE's identity, keep the server's
+// KeyPackage directory topped up, and persist all client state (identity + every group's
+// ratchet state) to IndexedDB after each change.
 //
-// The server is the untrusted Delivery Service throughout: it only ever sees the
-// opaque bytes these functions hand it.
+// The server is the untrusted Delivery Service throughout: it only ever sees the opaque
+// bytes these functions hand it. But it is the one party every member agrees on, and two
+// questions can only be settled there — which group a conversation IS, and whose Commit
+// came first. Both are settled by one compare-and-set (api.mlsCommit).
+//
+// ---------------------------------------------------------------------------
+// The rule everything here follows: AN MLS LEAF IS A DEVICE, NOT A PERSON.
+//
+// Two devices of the same user are two independent clients with different private keys.
+// Each must be its own leaf in the group, or it cannot decrypt a single message — which
+// is what a chat full of "…" actually was. So:
+//
+//   * a group is built from one KeyPackage per DEVICE of each member, never one per user;
+//   * a device that is missing from the group gets ADDED to it (reconcileDevices), and the
+//     group is never torn down and rebuilt around it — rebuilding destroys the key
+//     material for every message anyone has ever sent;
+//   * removing someone removes EVERY leaf they have, or they keep reading on their phone.
+// ---------------------------------------------------------------------------
 
 import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/pheme_mls.js'
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { ApiError, api } from './api'
-import { idbClearExcept, idbDelete, idbGet, idbSet, idbSetMany } from './idb'
+import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
 import { clearPreviews } from './chatCache'
 import { clearSafetyPins } from './safety'
 import { loadWebDeviceId, saveWebDeviceId } from './device'
@@ -44,9 +60,9 @@ export class SessionInvalidatedError extends Error {
 }
 
 /**
- * Thrown when the person we are trying to reach has published no KeyPackages — they
- * have not opened Pheme on a device that does encrypted chats, so there is nothing to
- * build a group with. They become reachable the moment they do.
+ * Thrown when the person we are trying to reach has published no KeyPackages on any
+ * device — they have not opened Pheme somewhere that does encrypted chats, so there is
+ * nothing to build a group with. They become reachable the moment they do.
  */
 export class PeerKeysMissingError extends Error {
   constructor() {
@@ -70,30 +86,42 @@ export class NeedsRestoreError extends Error {
     this.name = 'NeedsRestoreError'
   }
 }
+
 // Keep at least this many unclaimed KeyPackages published, so a peer can always
 // start a chat; replenish up to the target when it runs low.
 const MIN_KEY_PACKAGES = 5
 const TARGET_KEY_PACKAGES = 20
 
+// How many times a Commit is re-proposed after the server refuses it. Each round trip
+// means another member committed first; a handful of concurrent membership changes is
+// realistic, an unbounded fight is not.
+const COMMIT_ATTEMPTS = 4
+
 /** Content types on the wire that this layer produces and consumes. */
 export const MLS_APPLICATION = 'application/mls'
 export const MLS_WELCOME = 'application/mls-welcome'
 /**
- * "I am a member of this conversation and I cannot join it."
- *
- * Sent by someone who has a Welcome they could not use — the KeyPackage it names is not
- * one they hold, so they are locked out of their own conversation with no way back in:
- * the creator sees a group and never sends another Welcome. This asks them to build the
- * group again. It is not a Welcome and carries no key material, so it cannot be used to
- * destroy anyone's KeyPackages the way a forged Welcome can.
- */
-export const MLS_REJOIN = 'application/mls-rejoin'
-/**
- * A membership-change Commit — sent when a member is added to or removed from an
- * existing group. Every current member applies it to advance to the new epoch;
- * without it they fall behind and can no longer decrypt.
+ * A membership Commit — every current member applies it to reach the new epoch. Posted
+ * only through api.mlsCommit, which weighs it against the conversation's epoch; the
+ * ordinary message route refuses it.
  */
 export const MLS_COMMIT = 'application/mls-commit'
+/**
+ * "I am a member of this conversation and my device is not in its group."
+ *
+ * Posted by a device that holds no group — a new phone, a browser whose storage was
+ * evicted — so that a member who DOES hold the group adds it. It carries no key material,
+ * so it cannot be used to burn anyone's KeyPackages the way a forged Welcome can.
+ *
+ * It replaces the old "rejoin" message, which asked the conversation's creator to DESTROY
+ * the group and build a new one. That is what turned one locked-out device into a
+ * conversation nobody could read: every rebuild threw away the key material for every
+ * message ever sent to the old group, for everybody.
+ */
+export const MLS_DEVICE = 'application/mls-device'
+
+/** The control types, which carry no user-visible text. */
+export const MLS_CONTROL_TYPES: ReadonlySet<string> = new Set([MLS_WELCOME, MLS_COMMIT, MLS_DEVICE])
 
 let ready: Promise<Session> | null = null
 let readyUserId = ''
@@ -101,12 +129,9 @@ let wasmReady: Promise<void> | null = null
 // Memoized answer to "must this device restore before it can have an identity?" —
 // null until asked. Reset whenever the answer could change.
 let restoreNeeded: boolean | null = null
-// Provisioning runs in flight, by conversation. Two callers ask for it — opening the
-// chat, and sending into one that has no group yet — and they must not both do it.
-const provisioning = new Map<string, Promise<void>>()
-
-/** A Welcome that was created but not yet accepted by the server. */
-const pendingWelcomeKey = (conversationId: string) => `welcome:${conversationId}`
+// ensureGroup runs in flight, by conversation. Several callers ask for it — opening the
+// chat, sending into it, a device announcing itself — and they must not all do it at once.
+const settling = new Map<string, Promise<string | null>>()
 
 /** Loads the WASM module once. Backup/restore need it before any Session exists. */
 function ensureWasm(): Promise<void> {
@@ -130,6 +155,22 @@ function withMlsLock<T>(fn: () => Promise<T>): Promise<T> {
   return navigator.locks.request(MLS_LOCK, fn)
 }
 
+/** The MLS group id as bytes. The server hands it out as an opaque string. */
+function groupBytes(groupId: string): Uint8Array {
+  return new TextEncoder().encode(groupId)
+}
+
+/** One device's MLS identity, as it appears in a group's leaf: `userId:deviceId`. */
+function deviceIdentity(userId: string, deviceId: string): string {
+  return `${userId}:${deviceId}`
+}
+
+/** The device half of a credential identity. */
+function deviceOf(identity: string): string {
+  const sep = identity.indexOf(':')
+  return sep === -1 ? '' : identity.slice(sep + 1)
+}
+
 /**
  * One device's MLS session.
  *
@@ -150,14 +191,27 @@ class Session {
   private client: MlsClient
   private version: number
   /** The key-material epoch this session belongs to. See `assertLive`. */
-  private readonly epoch: number
+  private readonly epochTag: number
+  readonly userId: string
   readonly deviceId: string
 
-  private constructor(client: MlsClient, deviceId: string, version: number, epoch: number) {
+  private constructor(
+    client: MlsClient,
+    userId: string,
+    deviceId: string,
+    version: number,
+    epochTag: number,
+  ) {
     this.client = client
+    this.userId = userId
     this.deviceId = deviceId
     this.version = version
-    this.epoch = epoch
+    this.epochTag = epochTag
+  }
+
+  /** This device's leaf identity, as it appears in a group's member list. */
+  get identity(): string {
+    return deviceIdentity(this.userId, this.deviceId)
   }
 
   /**
@@ -180,11 +234,6 @@ class Session {
     const mustRestore = await needsRestore(userId)
 
     const session = await withMlsLock(async () => {
-      // Under the lock: two tabs opening at once would otherwise each read no device id,
-      // each mint one, and each keep its own — publishing KeyPackages under a device id
-      // the other tab will never look up again.
-      const deviceId = ensureDeviceId()
-
       // State left by a different account (a shared device where the previous user
       // did not log out cleanly) must never be adopted: encrypting under someone
       // else's MLS identity would send their key material out under our name.
@@ -199,22 +248,69 @@ class Session {
       // restore prompt resolve it.
       if (!saved && mustRestore) throw new NeedsRestoreError()
 
-      const client = saved
-        ? MlsClient.fromState(saved)
-        : new MlsClient(new TextEncoder().encode(userId))
-      const s = new Session(client, deviceId, await storedVersion(), await storedEpoch())
-      if (!saved) await s.persist()
+      // The identity carries the DEVICE id, not just the user id. That is the whole fix:
+      // it is what gives this device its own leaf in every group, distinct from the
+      // user's other devices, so all of them can read the conversation.
+      //
+      // For existing state the device id comes from the CLIENT, not from local storage.
+      // The credential is what the groups actually hold a leaf under, and a restored
+      // backup carries the identity of the device it was taken from — so local storage
+      // can be wrong, and the credential cannot.
+      const restored = saved ? MlsClient.fromState(saved) : null
+
+      // State from BEFORE identities carried a device id — its credential is the bare user
+      // id, so it names a person and not a device. It cannot be kept: every group it holds
+      // is one where this user occupies a single leaf shared with all their other devices,
+      // which is the bug itself, and `deviceOf` on it returns nothing, so the client would
+      // publish its KeyPackages under an empty device id and quietly stop being reachable
+      // at all.
+      //
+      // Discard it and mint a proper device identity. Nothing of value is lost that was not
+      // already lost: those old groups are unreadable from the moment the conversation's
+      // group is established afresh, and the plaintext this device has already decrypted
+      // lives in the message cache, which is left alone.
+      const isLegacy = restored !== null && deviceOf(restored.identity) === ''
+      const keep = restored !== null && !isLegacy
+
+      let client: MlsClient
+      let deviceId: string
+      let retiredDeviceId = ''
+      if (keep && restored) {
+        client = restored
+        deviceId = deviceOf(client.identity)
+        saveWebDeviceId(deviceId)
+      } else {
+        // A FRESH identity gets a FRESH device id, even if this browser already had one.
+        //
+        // A new identity means the old private keys are gone — the storage was evicted,
+        // the user logged out, the browser was cleared. But the groups this device used to
+        // be in still hold a leaf under the old name, and that leaf's keys no longer exist
+        // anywhere. Reusing the name would make the new client indistinguishable from the
+        // dead one: every member reconciling the group would see `user:device` already
+        // present, conclude there was nothing to add, and this device would never be let
+        // back in. Locked out permanently, by its own name.
+        //
+        // Under the lock, because two tabs opening at once would otherwise each mint one
+        // and each keep its own.
+        retiredDeviceId = loadWebDeviceId() ?? ''
+        deviceId = crypto.randomUUID()
+        saveWebDeviceId(deviceId)
+        client = new MlsClient(userId, deviceId)
+      }
+
+      const s = new Session(client, userId, deviceId, await storedVersion(), await storedEpoch())
+      if (!keep) await s.persist()
       await idbSet(OWNER_KEY, new TextEncoder().encode(userId))
-      return { s, fresh: !saved }
+      return { s, fresh: !keep, retiredDeviceId }
     })
 
     // Outside the lock (these take it themselves; taking it twice would deadlock).
-    // A fresh identity's device may still have stale public key packages on the server
-    // from a previous identity on this same device — a wipe, a cleared browser. Their
-    // private halves are gone, so anyone claiming one would build a group this device
-    // could never join. Purge them before publishing new ones.
-    if (session.fresh) {
-      await api.deleteKeyPackages(session.s.deviceId).catch(() => {})
+    // The identity this one replaces may still have public KeyPackages on the server. Their
+    // private halves are gone, so anyone claiming one would build a group this device could
+    // never join. Purge them before publishing new ones — and purging them is also what
+    // tells everyone else that leaf is a ghost, so the group can prune it.
+    if (session.retiredDeviceId) {
+      await api.deleteKeyPackages(session.retiredDeviceId).catch(() => {})
     }
     await session.s.replenishKeyPackages()
     return session.s
@@ -231,7 +327,7 @@ class Session {
    * them back to the disk the user just asked us to clear.
    */
   private async assertLive(): Promise<void> {
-    if ((await storedEpoch()) !== this.epoch) {
+    if ((await storedEpoch()) !== this.epochTag) {
       throw new SessionInvalidatedError()
     }
   }
@@ -317,150 +413,220 @@ class Session {
     await api.publishKeyPackages(this.deviceId, packages, lastResort)
   }
 
-  /**
-   * Creates the MLS group for a conversation and returns the Welcome to relay to
-   * the other members (as an MLS_WELCOME control message). The caller creates the
-   * conversation server-side first; groupId is the conversation id.
-   */
-  async startGroup(
-    conversationId: string,
-    memberUserIds: string[],
-    force = false,
-  ): Promise<string[]> {
-    // Claim the KeyPackages before taking the lock — this is network I/O, and the
-    // lock blocks every other tab for as long as it is held.
-    const keyPackages: Uint8Array[] = []
-    for (const userId of memberUserIds) {
-      try {
-        keyPackages.push(base64ToBytes(await api.claimKeyPackage(userId)))
-      } catch (e) {
-        // They have published no KeyPackages, so there is no way to add them to an
-        // encrypted group — nobody can reach them until they open Pheme once. That is
-        // a fact about the other person, not a failure of ours, and the UI has to say
-        // so rather than reporting a generic error the user cannot act on.
-        if (e instanceof ApiError && e.status === 404) throw new PeerKeysMissingError()
-        throw e
-      }
-    }
+  /** True when this client holds the group — encrypt/decrypt will work. */
+  async hasGroup(groupId: string): Promise<boolean> {
+    return this.exclusive(async () => this.client.hasGroup(groupBytes(groupId)))
+  }
 
+  /** The group's current epoch, or 0 when we do not hold it. */
+  async epoch(groupId: string): Promise<number> {
+    return this.exclusive(async () => this.epochUnlocked(groupId))
+  }
+
+  private epochUnlocked(groupId: string): number {
+    const bytes = groupBytes(groupId)
+    if (!this.client.hasGroup(bytes)) return 0
+    return Number(this.client.epoch(bytes))
+  }
+
+  /** The `userId:deviceId` of every leaf in the group. Empty when we do not hold it. */
+  async memberIdentities(groupId: string): Promise<string[]> {
     return this.exclusive(async () => {
-      // Re-checked with the lock held. The in-flight map above stops this tab from
-      // provisioning twice; this stops a SECOND TAB from doing it, which would replace
-      // the group another tab just made and leave the other person joined to a group
-      // nobody encrypts to. The KeyPackages claimed above are wasted in that case —
-      // cheap, and far better than a conversation that can never be read.
-      //
-      // `force` is the deliberate exception: rebuilding a group that the other member
-      // could never join. Replacing it is the point.
-      if (!force && this.holdsGroup(conversationId)) return []
-
-      const groupId = new TextEncoder().encode(conversationId)
-      // A group id can only be created once — creating over the top is refused — so a
-      // rebuild has to discard the old group first. Everything encrypted to it stays
-      // unreadable, which for the person who could never join it always was.
-      if (force) this.client.deleteGroup(groupId)
-      this.client.createGroup(groupId)
-      // All initial members must be added in a single Commit, or earlier joiners
-      // end up an epoch behind and cannot decrypt. The one Welcome covers them all.
-      const welcomes: string[] = []
-      if (keyPackages.length > 0) {
-        const added = this.client.addMembers(groupId, keyPackages)
-        welcomes.push(bytesToBase64(added.welcome))
-      }
-      await this.persist()
-      return welcomes
+      const bytes = groupBytes(groupId)
+      if (!this.client.hasGroup(bytes)) return []
+      return this.client.memberIdentities(bytes) as string[]
     })
   }
 
-  /** Joins a group from a relayed Welcome. Ignores a Welcome not meant for us. */
-  async tryJoin(conversationId: string, welcomeBase64: string): Promise<boolean> {
+  /** Creates the group locally. It is not real until the server accepts our first Commit. */
+  async createGroup(groupId: string): Promise<void> {
     return this.exclusive(async () => {
-      if (this.holdsGroup(conversationId)) return true
+      this.client.createGroup(groupBytes(groupId))
+      await this.persist()
+    })
+  }
+
+  /**
+   * Discards a group we created but the server never accepted — we lost the race to
+   * establish it, and what we built is an orphan nobody else will ever join.
+   *
+   * Never call this on a group other members are in. Discarding a live group throws away
+   * the key material for every message ever sent to it, for everyone.
+   */
+  async discardGroup(groupId: string): Promise<void> {
+    return this.exclusive(async () => {
+      this.client.deleteGroup(groupBytes(groupId))
+      await this.persist()
+    })
+  }
+
+  /**
+   * Proposes a Commit, asks the server to accept it, and applies it ONLY if the server
+   * does. Returns whether it landed.
+   *
+   * The whole round trip is under the lock, network call and all. That is deliberate,
+   * and it is the one place this file holds the lock across I/O: a staged Commit lives in
+   * the persisted client state, so a second tab that staged its own on top of ours would
+   * corrupt both. A membership change is rare — one blocked round trip is a fair price
+   * for a group that cannot fork.
+   *
+   * On refusal the staged Commit is thrown away, never applied. Applying a Commit the
+   * group refused is exactly what forks a device off the conversation for good: it
+   * advances its own ratchet to an epoch nobody else is in, and silently stops being able
+   * to read anything ever again.
+   */
+  private async commit(
+    conversationId: string,
+    groupId: string,
+    stage: (bytes: Uint8Array) => { welcome?: Uint8Array; commit: Uint8Array },
+    removes: string[] = [],
+  ): Promise<'accepted' | 'conflict'> {
+    return this.exclusive(async () => {
+      const bytes = groupBytes(groupId)
+      const baseEpoch = this.epochUnlocked(groupId)
+      const staged = stage(bytes)
+      // Staging writes a pending commit into the client state; it must be persisted, or a
+      // reload would leave the group with a pending commit the server has accepted and
+      // this device has forgotten.
+      await this.persist()
+
+      try {
+        await api.mlsCommit(conversationId, {
+          groupId,
+          baseEpoch,
+          welcome: staged.welcome ? bytesToBase64(staged.welcome) : undefined,
+          commit: bytesToBase64(staged.commit),
+          // Declared so the server can hold a Commit to the same rule as the roster: in a
+          // group, only an admin removes anybody else. It cannot read the Commit to check
+          // (see the server's mayRemove), so this is the honest path declaring itself.
+          removes: removes.length > 0 ? removes : undefined,
+        })
+      } catch (e) {
+        // Refused, or never got there. Either way this Commit is not the group's history,
+        // so it must not become ours.
+        this.client.commitRejected(bytes)
+        await this.persist()
+        if (e instanceof ApiError && e.status === 409) return 'conflict'
+        throw e
+      }
+
+      this.client.commitAccepted(bytes)
+      await this.persist()
+      return 'accepted'
+    })
+  }
+
+  /** Adds devices to the group, as their own leaves, in a single Commit. */
+  async commitAdd(
+    conversationId: string,
+    groupId: string,
+    keyPackages: Uint8Array[],
+  ): Promise<'accepted' | 'conflict'> {
+    return this.commit(conversationId, groupId, (bytes) => {
+      const added = this.client.stageAdd(bytes, keyPackages)
+      return { welcome: added.welcome, commit: added.commit }
+    })
+  }
+
+  /**
+   * Removes every leaf belonging to each user, in a single Commit — for throwing someone
+   * out of the group. Every device they have, not whichever one the tree found first.
+   */
+  async commitRemoveUsers(
+    conversationId: string,
+    groupId: string,
+    userIds: string[],
+  ): Promise<'accepted' | 'conflict'> {
+    return this.commit(
+      conversationId,
+      groupId,
+      (bytes) => ({ commit: this.client.stageRemoveUsers(bytes, userIds) }),
+      userIds,
+    )
+  }
+
+  /**
+   * Removes the exact leaves named, in a single Commit — for pruning a ghost device while
+   * leaving that same person's live devices alone.
+   */
+  async commitRemoveDevices(
+    conversationId: string,
+    groupId: string,
+    identities: string[],
+  ): Promise<'accepted' | 'conflict'> {
+    return this.commit(
+      conversationId,
+      groupId,
+      (bytes) => ({ commit: this.client.stageRemoveDevices(bytes, identities) }),
+      [...new Set(identities.map((i) => i.slice(0, i.indexOf(':'))))],
+    )
+  }
+
+  /**
+   * Joins from a relayed Welcome. Returns false for a Welcome that is not ours — one
+   * addressed to a different device, or to a group we already hold.
+   */
+  async tryJoin(groupId: string, welcomeBase64: string): Promise<boolean> {
+    return this.exclusive(async () => {
+      const bytes = groupBytes(groupId)
+      if (this.client.hasGroup(bytes)) return true
       try {
         this.client.joinFromWelcome(base64ToBytes(welcomeBase64))
         await this.persist()
-        return true
+        return this.client.hasGroup(bytes)
       } catch {
-        // Not addressed to this device (e.g. we are the group's creator, who sent
-        // it), or already joined. Either way, nothing to do.
+        // Addressed to another device (every device gets its own Welcome), or already
+        // used. Neither is an error worth surfacing.
         return false
       }
     })
   }
 
-  /** True when this client already holds the group — encrypt/decrypt will work. */
-  async hasGroup(conversationId: string): Promise<boolean> {
-    return this.exclusive(async () => this.holdsGroup(conversationId))
-  }
-
-  /** The unlocked check, for use by methods that already hold the lock. */
-  private holdsGroup(conversationId: string): boolean {
-    return this.client.hasGroup(new TextEncoder().encode(conversationId))
-  }
-
   /**
-   * The safety number for a conversation: the digits two people compare, out of
-   * band, to prove no one is in the middle. Computed from the group's own ratchet
-   * tree, so a KeyPackage the server swapped in shows up as a different number.
+   * Applies a Commit another member produced, if we are actually behind it.
+   *
+   * `atEpoch` is the epoch the Commit produced. Applying one we are already past is not
+   * just wasted work — OpenMLS rejects it, and treating that as a failure would make a
+   * routine replay (the SSE echo of a Commit we already have) look like a broken group.
    */
-  async safetyNumber(conversationId: string): Promise<string> {
-    return this.exclusive(async () =>
-      this.client.safetyNumber(new TextEncoder().encode(conversationId)),
-    )
+  async applyCommit(groupId: string, commitBase64: string, atEpoch: number): Promise<void> {
+    return this.exclusive(async () => {
+      const bytes = groupBytes(groupId)
+      if (!this.client.hasGroup(bytes)) return
+      if (atEpoch > 0 && atEpoch <= this.epochUnlocked(groupId)) return // already applied
+      this.client.applyCommit(bytes, base64ToBytes(commitBase64))
+      await this.persist()
+    })
   }
 
-  async encrypt(conversationId: string, plaintext: Uint8Array): Promise<string> {
+  async encrypt(groupId: string, plaintext: Uint8Array): Promise<string> {
     return this.exclusive(async () => {
-      const groupId = new TextEncoder().encode(conversationId)
-      const ciphertext = this.client.encrypt(groupId, plaintext)
+      const ciphertext = this.client.encrypt(groupBytes(groupId), plaintext)
       await this.persist()
       return bytesToBase64(ciphertext)
     })
   }
 
   /** Decrypts an application message, or returns null for a control message. */
-  async decrypt(conversationId: string, ciphertextBase64: string): Promise<Uint8Array | null> {
+  async decrypt(groupId: string, ciphertextBase64: string): Promise<Uint8Array | null> {
     return this.exclusive(async () => {
-      const groupId = new TextEncoder().encode(conversationId)
-      const out = this.client.decrypt(groupId, base64ToBytes(ciphertextBase64))
+      const out = this.client.decrypt(groupBytes(groupId), base64ToBytes(ciphertextBase64))
       await this.persist()
       return out ?? null
     })
   }
 
   /**
-   * Adds members to an EXISTING group and returns the Welcome (for the newcomers) and
-   * the Commit (for the members already in it) to relay. Distinct from startGroup,
-   * which builds the group from nothing.
+   * The safety number for a conversation: the digits two people compare, out of band, to
+   * prove no one is in the middle. Computed from the group's own ratchet tree, so a
+   * KeyPackage the server swapped in shows up as a different number.
+   *
+   * It changes when a member adds or removes a device, because the set of keys in the
+   * group really has changed. That is not noise — a device nobody recognises appearing in
+   * the group is exactly what this is for.
    */
-  async addMembers(
-    conversationId: string,
-    keyPackages: Uint8Array[],
-  ): Promise<{ welcome: string; commit: string }> {
-    return this.exclusive(async () => {
-      const groupId = new TextEncoder().encode(conversationId)
-      const added = this.client.addMembers(groupId, keyPackages)
-      await this.persist()
-      return { welcome: bytesToBase64(added.welcome), commit: bytesToBase64(added.commit) }
-    })
-  }
-
-  /** Removes a member (by their user id) and returns the Commit to relay. */
-  async removeMember(conversationId: string, memberUserId: string): Promise<string> {
-    return this.exclusive(async () => {
-      const groupId = new TextEncoder().encode(conversationId)
-      const commit = this.client.removeMember(groupId, new TextEncoder().encode(memberUserId))
-      await this.persist()
-      return bytesToBase64(commit)
-    })
-  }
-
-  /** Applies a membership-change Commit another member produced. Own commits are a no-op. */
-  async applyCommit(conversationId: string, commitBase64: string): Promise<void> {
-    return this.exclusive(async () => {
-      this.client.applyCommit(new TextEncoder().encode(conversationId), base64ToBytes(commitBase64))
-      await this.persist()
-    })
+  async safetyNumber(groupId: string): Promise<string> {
+    return this.exclusive(async () => this.client.safetyNumber(groupBytes(groupId)))
   }
 }
 
@@ -483,6 +649,401 @@ export function mlsSession(userId: string): Promise<Session> {
     })
   }
   return ready
+}
+
+// --- group lifecycle ------------------------------------------------------
+//
+// Everything below answers one question: "is this device a leaf of this conversation's
+// MLS group, and is every other member's device a leaf too?"
+
+/**
+ * Makes sure this device is in the conversation's group, and that every device of every
+ * member is too. Returns the group id once this device can encrypt to it, or null while
+ * it cannot yet.
+ *
+ * Null is a normal state, not a failure: a device that has just been added to a group has
+ * to wait for a member to notice and admit it. It is not stuck — it has said so
+ * (announceDevice), and it will be let in.
+ *
+ * Deduplicated per conversation. Two callers ask — opening the chat, and sending into one
+ * — and if both ran, both would claim KeyPackages and both would try to establish the
+ * group.
+ */
+export function ensureGroup(
+  conversation: Conversation,
+  myUserId: string,
+): Promise<string | null> {
+  const inFlight = settling.get(conversation.id)
+  if (inFlight) return inFlight
+
+  const run = settleGroup(conversation, myUserId).finally(() => settling.delete(conversation.id))
+  settling.set(conversation.id, run)
+  return run
+}
+
+async function settleGroup(
+  conversation: Conversation,
+  myUserId: string,
+): Promise<string | null> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversation.id)
+
+  // Nobody has established a group yet.
+  if (!state.groupId) {
+    // Only the creator builds it. The compare-and-set would make a race safe anyway —
+    // one of them would simply lose — but a loser has burned the KeyPackages it claimed,
+    // and there is no reason to spend them.
+    if (conversation.createdBy !== myUserId) return null
+    return establishGroup(session, conversation, myUserId)
+  }
+
+  // A group exists. Catch up on anything we missed — that may be the very Welcome that
+  // lets this device in.
+  await catchUp(session, conversation.id, state.groupId)
+
+  if (!(await session.hasGroup(state.groupId))) {
+    // The group exists and this device is not in it: a new phone, a browser whose storage
+    // was evicted, a member added while we were offline. A device cannot add itself —
+    // only a member of the group can Commit — so say so, and a member will admit us.
+    //
+    // This is where the old code destroyed the group and rebuilt it. That is why a single
+    // second device could make a whole conversation unreadable for everyone in it.
+    await announceDevice(conversation.id)
+    return null
+  }
+
+  await reconcileDevices(session, conversation.id, state.groupId)
+  return state.groupId
+}
+
+/**
+ * Builds the conversation's group: one leaf per DEVICE of every member, all in a single
+ * Commit so nobody lands an epoch behind.
+ *
+ * The group id is minted here and claimed through the server's compare-and-set, so it can
+ * only ever be set once. If we lose that race — the user's other device got there first —
+ * the group we just built is an orphan: we throw it away and join the real one.
+ */
+async function establishGroup(
+  session: Session,
+  conversation: Conversation,
+  myUserId: string,
+): Promise<string | null> {
+  const published = await api.mlsDevices(conversation.id)
+  const targets = missingDevices(session, published, [])
+
+  // Nobody else is reachable. For a direct chat that is the whole conversation, and the
+  // user needs to be told plainly rather than watching a message fail to send. (In a
+  // group, the members who ARE reachable still get a working group; the stragglers are
+  // added by reconciliation the moment they publish keys.)
+  const reachableOthers = targets.some((d) => d.userId !== myUserId)
+  if (conversation.kind === 'direct' && !reachableOthers) throw new PeerKeysMissingError()
+  if (targets.length === 0) {
+    // Not even another device of our own to add. There is no Commit to make, so there is
+    // nothing to establish yet — a group of one has no one to talk to.
+    throw new PeerKeysMissingError()
+  }
+
+  const keyPackages = await claimFor(conversation.id, targets)
+  const groupId = crypto.randomUUID()
+
+  await session.createGroup(groupId)
+  const result = await session.commitAdd(conversation.id, groupId, keyPackages)
+  if (result === 'conflict') {
+    // Another device of ours established the group first. What we built is an orphan that
+    // nobody will ever join — drop it and settle again, this time joining theirs.
+    await session.discardGroup(groupId)
+    return settleGroup(conversation, myUserId)
+  }
+  return groupId
+}
+
+/**
+ * Brings the group's leaves into line with who is actually in the conversation and what
+ * devices they actually have: adds the devices that are missing, prunes the ones that
+ * should not be there.
+ *
+ * This is the heart of it. A group's leaves and the conversation's membership drift apart
+ * constantly — someone signs in on a laptop, someone is added, someone's browser storage
+ * is evicted — and reconciling them is what keeps every device able to read. It is safe to
+ * run from any member and as often as we like: the server's compare-and-set picks one
+ * winner, and a loser simply finds nothing left to do.
+ *
+ * The membership is re-read from the SERVER, never taken from a Conversation the caller
+ * happens to be holding. That is not defensiveness, it is the fix for a real bug: when a
+ * member was added, every other member's live-event handler ran this with the conversation
+ * it had fetched BEFORE the add — so the newcomer looked like a stranger, and the first
+ * member to react promptly removed them again.
+ */
+async function reconcileDevices(
+  session: Session,
+  conversationId: string,
+  groupId: string,
+): Promise<void> {
+  // Leaves we would prune but are not allowed to (we are not an admin). Remembered so the
+  // loop does not keep retrying the same refusal instead of getting on with the adds.
+  const pruned: string[] = []
+
+  for (let attempt = 0; attempt < COMMIT_ATTEMPTS; attempt++) {
+    const members = await api.listConversationMembers(conversationId)
+    const memberIds = members.map((m) => m.userId)
+    const published = await api.mlsDevices(conversationId)
+    const leaves = await session.memberIdentities(groupId)
+
+    // Prune first — a leaf that should not be there must not still be in the group when we
+    // go and encrypt to it.
+    //
+    // Unless we are not allowed to: in a group, only an admin removes anybody. A non-admin
+    // is refused, and that is fine — pruning a departed member or a ghost device is
+    // hygiene, and it waits for an admin. What must NOT happen is the refusal stopping us
+    // from ADDING the devices that are missing, which is the part somebody is waiting on.
+    const stale = pruned.length > 0 ? [] : staleLeaves(session, leaves, memberIds, published)
+    if (stale.length > 0) {
+      let result: 'accepted' | 'conflict'
+      try {
+        result = await session.commitRemoveDevices(conversationId, groupId, stale)
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 403)) throw e
+        pruned.push(...stale) // not ours to remove; get on with the adds
+        continue
+      }
+      if (result === 'conflict') await catchUp(session, conversationId, groupId)
+      continue // look again either way: the group has changed shape
+    }
+
+    const missing = missingDevices(session, published, leaves)
+    if (missing.length === 0) return
+
+    const keyPackages = await claimFor(conversationId, missing)
+    if (keyPackages.length === 0) return // they published nothing after all
+    const result = await session.commitAdd(conversationId, groupId, keyPackages)
+    if (result === 'accepted') return
+    // Refused: another member committed first. Apply their Commit and look again — the
+    // device we were adding may already be in, in which case there is nothing left to do.
+    await catchUp(session, conversationId, groupId)
+  }
+}
+
+/**
+ * Leaves that have no business being in the group: `{identities, users}`.
+ *
+ * Two kinds, and they must be pruned differently.
+ *
+ *   * A DEPARTED MEMBER — every leaf they hold goes, so removing them removes their phone
+ *     and their laptop, not whichever one the group found first.
+ *   * A GHOST DEVICE — a member who is staying, but one of whose devices no longer exists:
+ *     its KeyPackages are gone from the directory because that browser was cleared and came
+ *     back with a new identity. Only that leaf goes. Pruning it by user would take the
+ *     person's live phone out with it.
+ *
+ * A user with no published devices at all is left alone: that is what a member who has
+ * never opened Pheme looks like, and also what one looks like for the instant between
+ * purging a dead identity's KeyPackages and publishing the new one's.
+ */
+function staleLeaves(
+  session: Session,
+  leaves: string[],
+  memberIds: string[],
+  published: Record<string, string[]>,
+): string[] {
+  const members = new Set(memberIds)
+  const out: string[] = []
+  for (const leaf of leaves) {
+    if (leaf === session.identity) continue // never prune ourselves
+    const userId = leaf.slice(0, leaf.indexOf(':'))
+    if (!userId) continue
+    if (!members.has(userId)) {
+      out.push(leaf) // departed member
+      continue
+    }
+    const devices = published[userId] ?? []
+    if (devices.length === 0) continue // cannot tell; leave them be
+    if (!devices.includes(deviceOf(leaf))) out.push(leaf) // ghost device
+  }
+  return out
+}
+
+/** The published devices that are not already leaves of the group, excluding our own. */
+function missingDevices(
+  session: Session,
+  published: Record<string, string[]>,
+  leaves: string[],
+): { userId: string; deviceId: string }[] {
+  const have = new Set(leaves)
+  const out: { userId: string; deviceId: string }[] = []
+  for (const [userId, deviceIds] of Object.entries(published)) {
+    for (const deviceId of deviceIds) {
+      // Our own device is never claimed for: it holds the group (or is creating it), and
+      // claiming our own KeyPackage would burn one for nothing.
+      if (deviceIdentity(userId, deviceId) === session.identity) continue
+      if (have.has(deviceIdentity(userId, deviceId))) continue
+      out.push({ userId, deviceId })
+    }
+  }
+  return out
+}
+
+/** Claims one KeyPackage per device. A device that has published none is skipped. */
+async function claimFor(
+  conversationId: string,
+  devices: { userId: string; deviceId: string }[],
+): Promise<Uint8Array[]> {
+  try {
+    const claimed = await api.claimKeyPackages(conversationId, devices)
+    return claimed.map((c) => base64ToBytes(c.keyPackage))
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return []
+    throw e
+  }
+}
+
+/**
+ * Applies every Commit the group has made since this device last looked, in order.
+ *
+ * Without this a device that was closed while the group changed can never decrypt again:
+ * MLS will not let it read the new epoch until it has applied the Commit that created it,
+ * and that Commit may be far outside the page of history the chat view loads. Asking the
+ * server for the Commits past our epoch makes catching up exact and bounded.
+ */
+export async function catchUp(
+  session: Session,
+  conversationId: string,
+  groupId: string,
+): Promise<void> {
+  const from = await session.epoch(groupId)
+  const messages = await api.mlsCommitsSince(conversationId, from)
+
+  for (const msg of messages) {
+    if (msg.contentType === MLS_WELCOME) {
+      // Only one of these is addressed to this device; the rest fail harmlessly, without
+      // touching our KeyPackages (a Welcome names the exact package it is for).
+      if (!(await session.hasGroup(groupId))) {
+        await session.tryJoin(groupId, msg.ciphertext)
+      }
+      continue
+    }
+    if (msg.contentType === MLS_COMMIT) {
+      await session.applyCommit(groupId, msg.ciphertext, msg.mlsEpoch ?? 0).catch(() => {
+        // A Commit we cannot apply is one from a branch we are not on, or one we already
+        // have. Neither is recoverable by retrying, and neither should stop us applying
+        // the rest.
+      })
+    }
+  }
+}
+
+/**
+ * Tells the conversation that this device holds no group and needs to be let in.
+ *
+ * Carries no key material — it is a request to be added, not a Welcome — so, unlike the
+ * message it replaces, it cannot be used to destroy anybody's KeyPackages.
+ */
+async function announceDevice(conversationId: string): Promise<void> {
+  await api
+    .sendChatMessage(conversationId, bytesToBase64(new Uint8Array([1])), MLS_DEVICE)
+    .catch(() => {
+      // Best effort. The next time this chat is opened it announces again, and any member
+      // who opens it will reconcile and find this device missing regardless.
+    })
+}
+
+/**
+ * Responds to another device announcing itself: add it, if we hold the group.
+ *
+ * Every member who has the conversation open does this. They will race, and that is fine
+ * — the server's compare-and-set lets exactly one Commit through, and the others find the
+ * device already added and stop.
+ */
+export async function admitAnnouncedDevice(
+  conversation: Conversation,
+  myUserId: string,
+): Promise<void> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversation.id)
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) return
+  await reconcileDevices(session, conversation.id, state.groupId)
+}
+
+/**
+ * Adds a user to a group conversation: server-side membership first (so they are
+ * authorised to read the Welcome relayed to them), then every one of their devices is
+ * added to the MLS group as its own leaf.
+ */
+export async function addGroupMember(
+  conversationId: string,
+  myUserId: string,
+  newUserId: string,
+): Promise<void> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) {
+    throw new Error('this device is not in the conversation\'s encrypted group yet')
+  }
+
+  // Membership first, then the group. It has to be that way round now that the key
+  // directory is scoped to a conversation: we cannot ask which devices someone has until
+  // they are in it. If it turns out they have none — they have never opened Pheme — take
+  // them back off the roster, so an admin is told they could not be reached rather than
+  // being left with a member who can never read anything.
+  await api.addConversationMember(conversationId, newUserId)
+  const devices = await api.mlsDevices(conversationId)
+  if ((devices[newUserId] ?? []).length === 0) {
+    await api.removeConversationMember(conversationId, newUserId).catch(() => {})
+    throw new PeerKeysMissingError()
+  }
+
+  await reconcileDevices(session, conversationId, state.groupId)
+}
+
+/**
+ * Removes a user from a group conversation. The MLS Commit goes first — that is what
+ * actually cuts them off — and it removes EVERY device they have, not just the one the
+ * group happened to find. Then their server-side membership is dropped.
+ */
+export async function removeGroupMember(
+  conversationId: string,
+  myUserId: string,
+  memberUserId: string,
+): Promise<void> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversationId)
+
+  if (memberUserId === myUserId) {
+    // Leaving. MLS forbids committing your own removal (CannotRemoveSelf), so this is not
+    // a Commit at all: drop the membership, and destroy the group state on this device so
+    // nothing here can read the conversation any more. The members who remain prune the
+    // leaves we leave behind the next time they reconcile.
+    await api.removeConversationMember(conversationId, memberUserId)
+    if (state.groupId) await session.discardGroup(state.groupId)
+    return
+  }
+
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) {
+    throw new Error('this device is not in the conversation\'s encrypted group yet')
+  }
+
+  for (let attempt = 0; attempt < COMMIT_ATTEMPTS; attempt++) {
+    const result = await session.commitRemoveUsers(conversationId, state.groupId, [memberUserId])
+    if (result === 'accepted') break
+    // Somebody else moved the group. Catch up and remove them from the epoch that
+    // actually happened — they must not be left in it.
+    await catchUp(session, conversationId, state.groupId)
+    if (attempt === COMMIT_ATTEMPTS - 1) {
+      throw new Error('could not remove that member — the group changed underneath us')
+    }
+  }
+  await api.removeConversationMember(conversationId, memberUserId)
+}
+
+/** The safety number for a conversation, or '' before its group exists. */
+export async function conversationSafetyNumber(
+  conversationId: string,
+  myUserId: string,
+): Promise<string> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) return ''
+  return session.safetyNumber(state.groupId)
 }
 
 /**
@@ -584,121 +1145,7 @@ async function wipeUnlocked(): Promise<void> {
   await idbClearExcept([[EPOCH_KEY, encodeVersion(next)]])
   clearPreviews()
   clearSafetyPins()
-}
-
-/**
- * Ensures the conversation's MLS group exists and its members can join.
- *
- * Only the creator establishes the group — otherwise two peers racing to create
- * the same direct chat would build incompatible groups for the one conversation.
- * The creator claims each other member's KeyPackage, adds them, and relays the
- * resulting Welcome as an MLS_WELCOME control message; each member joins from the
- * Welcome addressed to them. Safe to call repeatedly: a no-op once the group is set
- * up, and for anyone who is not the creator.
- */
-export async function provisionGroup(
-  conversation: Conversation,
-  myUserId: string,
-  force = false,
-): Promise<void> {
-  if (conversation.createdBy !== myUserId) return
-
-  // Provisioning a conversation happens exactly once, however many callers ask for it.
-  //
-  // Two do: the route asks when the chat is opened, and sending asks if no group exists
-  // yet. Left to race, both see "no group", both claim a KeyPackage from the other
-  // person, both create a group — and the second createGroup REPLACES the first, since
-  // MLS stores a group by its id. Two Welcomes then go out for two different groups.
-  // The recipient joins from the first and can never decrypt a word, because everything
-  // is encrypted to the second. That is not a rare interleaving; it is what happens when
-  // someone opens a chat and immediately types, which is what people do.
-  const inFlight = provisioning.get(conversation.id)
-  if (inFlight) return inFlight
-
-  const run = (async () => {
-    const session = await mlsSession(myUserId)
-
-    // A Welcome we created but never managed to post: finish that rather than build a
-    // second group. Without this, a failed post leaves the group on this device and the
-    // other person with no way in, forever — every later attempt sees the group and
-    // returns early.
-    const pending = force ? undefined : await idbGet(pendingWelcomeKey(conversation.id))
-    if (pending) {
-      await api.sendChatMessage(conversation.id, bytesToBase64(pending), MLS_WELCOME)
-      await idbDelete(pendingWelcomeKey(conversation.id))
-      return
-    }
-
-    if (!force && (await session.hasGroup(conversation.id))) return
-
-    const others = conversation.members.map((m) => m.userId).filter((uid) => uid !== myUserId)
-    const welcomes = await session.startGroup(conversation.id, others, force)
-    for (const welcome of welcomes) {
-      // Recorded before it is sent, so a failure here is recoverable on the next attempt
-      // instead of stranding the other member.
-      await idbSet(pendingWelcomeKey(conversation.id), base64ToBytes(welcome))
-      await api.sendChatMessage(conversation.id, welcome, MLS_WELCOME)
-      await idbDelete(pendingWelcomeKey(conversation.id))
-    }
-  })().finally(() => provisioning.delete(conversation.id))
-
-  provisioning.set(conversation.id, run)
-  return run
-}
-
-/**
- * Asks the conversation's creator to build the group again, because we hold a Welcome
- * we cannot use and are therefore locked out of our own conversation.
- */
-export async function requestRejoin(conversationId: string): Promise<void> {
-  // One byte: the server rejects an empty body, and there is nothing to say beyond the
-  // fact that this was sent.
-  await api.sendChatMessage(conversationId, bytesToBase64(new Uint8Array([1])), MLS_REJOIN)
-}
-
-/**
- * Adds a user to an existing group conversation.
- *
- * Order matters: the newcomer is added to server-side membership first (so they are
- * authorised to read the Welcome relayed to them), then the MLS group is extended and
- * the Welcome + Commit are posted. The Commit carries the epoch every current member
- * must advance to; the Welcome lets the newcomer join. Throws PeerKeysMissingError if
- * the target has published no KeyPackages.
- */
-export async function addGroupMember(
-  conversationId: string,
-  myUserId: string,
-  newUserId: string,
-): Promise<void> {
-  const session = await mlsSession(myUserId)
-  await api.addConversationMember(conversationId, newUserId)
-
-  let keyPackage: Uint8Array
-  try {
-    keyPackage = base64ToBytes(await api.claimKeyPackage(newUserId))
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) throw new PeerKeysMissingError()
-    throw e
-  }
-  const { welcome, commit } = await session.addMembers(conversationId, [keyPackage])
-  await api.sendChatMessage(conversationId, welcome, MLS_WELCOME)
-  await api.sendChatMessage(conversationId, commit, MLS_COMMIT)
-}
-
-/**
- * Removes a user from a group conversation. The MLS Commit is produced and relayed
- * first — that is what cuts the removed member off from future messages — then their
- * server-side membership is dropped.
- */
-export async function removeGroupMember(
-  conversationId: string,
-  myUserId: string,
-  memberUserId: string,
-): Promise<void> {
-  const session = await mlsSession(myUserId)
-  const commit = await session.removeMember(conversationId, memberUserId)
-  await api.sendChatMessage(conversationId, commit, MLS_COMMIT)
-  await api.removeConversationMember(conversationId, memberUserId)
+  settling.clear()
 }
 
 // --- encrypted key backup -------------------------------------------------
@@ -749,8 +1196,10 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
     base64ToBytes(backup.nonce),
     base64ToBytes(backup.ciphertext),
   )
-  // Validate the recovered blob really is a client state before committing it.
-  MlsClient.fromState(state)
+  // Validate the recovered blob really is a client state before committing it — and read
+  // back WHICH DEVICE it belongs to.
+  const restored = MlsClient.fromState(state)
+  const restoredDevice = deviceOf(restored.identity)
 
   return withMlsLock(async () => {
     // Another tab may have set up an identity while this prompt sat open (the user chose
@@ -775,20 +1224,19 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
       // another — must not write over what we just recovered.
       [EPOCH_KEY, encodeVersion(nextEpoch)],
     ])
+    // Adopt the identity we just restored. The groups inside that state hold leaves under
+    // the ORIGINAL device's name, and its published KeyPackages are filed under it — so
+    // this browser has to answer to that device id, not to one of its own. Keeping a
+    // local id here would leave the restored client unable to be added to anything: it
+    // would publish keys as one device and hold leaves as another.
+    if (restoredDevice) saveWebDeviceId(restoredDevice)
+
     restoreNeeded = false
     ready = null
     readyUserId = ''
+    settling.clear()
     return true
   })
-}
-
-function ensureDeviceId(): string {
-  let id = loadWebDeviceId()
-  if (!id) {
-    id = crypto.randomUUID()
-    saveWebDeviceId(id)
-  }
-  return id
 }
 
 // --- base64 helpers (the JSON transport carries bytes as base64) ---

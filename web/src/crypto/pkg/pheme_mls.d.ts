@@ -27,16 +27,16 @@ export class BackupBlob {
 export class MlsClient {
     free(): void;
     [Symbol.dispose](): void;
-    /**
-     * Adds a member; returns their Welcome and the group's Commit.
-     */
-    addMember(group_id: Uint8Array, key_package: Uint8Array): AddOutput;
-    /**
-     * Adds several members in one Commit (all newcomers land at the same epoch).
-     * `key_packages` is a JS array of Uint8Array. Returns a single Welcome for all.
-     */
-    addMembers(group_id: Uint8Array, key_packages: Array<any>): AddOutput;
     applyCommit(group_id: Uint8Array, commit: Uint8Array): void;
+    /**
+     * Applies the Commit we staged, now that the server has accepted it.
+     */
+    commitAccepted(group_id: Uint8Array): void;
+    /**
+     * Throws away a Commit the server refused, leaving the group untouched so we can
+     * catch up on the winning Commit and try again.
+     */
+    commitRejected(group_id: Uint8Array): void;
     createGroup(group_id: Uint8Array): void;
     /**
      * Decrypts an application message; returns undefined for a control message.
@@ -47,6 +47,10 @@ export class MlsClient {
      */
     deleteGroup(group_id: Uint8Array): void;
     encrypt(group_id: Uint8Array, plaintext: Uint8Array): Uint8Array;
+    /**
+     * The group's current epoch — what a Commit is proposed against.
+     */
+    epoch(group_id: Uint8Array): bigint;
     /**
      * The full client state to persist (IndexedDB).
      */
@@ -74,19 +78,58 @@ export class MlsClient {
      */
     lastResortKeyPackage(): Uint8Array;
     /**
-     * Creates a fresh identity. `identity` is the user/device id bytes.
+     * Every leaf's `userId:deviceId`, so the caller can spot member devices that are
+     * missing from the group and add exactly those.
      */
-    constructor(identity: Uint8Array);
+    memberIdentities(group_id: Uint8Array): Array<any>;
     /**
-     * Removes a member by their identity bytes; returns the Commit to relay.
+     * Creates a fresh identity for one DEVICE of one user. Both ids are required —
+     * an MLS leaf is a device, and a client that cannot say which device it is ends up
+     * sharing a leaf with the user's other devices, which then cannot decrypt.
      */
-    removeMember(group_id: Uint8Array, identity: Uint8Array): Uint8Array;
+    constructor(user_id: string, device_id: string);
     /**
      * The safety number for a group: the digits two people compare, out of band, to
      * prove the server did not substitute a key and put itself in the middle.
      * Derived from the group's own ratchet tree, not from anything the server says.
      */
     safetyNumber(group_id: Uint8Array): string;
+    /**
+     * STAGES the addition of several devices in one Commit (all newcomers land at the
+     * same epoch). `key_packages` is a JS array of Uint8Array; one Welcome covers all.
+     *
+     * The Commit is NOT applied. Call `commitAccepted` once the server has taken it as
+     * the group's next epoch, or `commitRejected` if another member's Commit landed
+     * first. Applying it before the server agrees is what forks a client off the group
+     * for good.
+     */
+    stageAdd(group_id: Uint8Array, key_packages: Array<any>): AddOutput;
+    /**
+     * STAGES the removal of the exact leaves named by `identities` (`userId:deviceId`).
+     *
+     * For pruning a ghost device — one whose key material no longer exists anywhere —
+     * while leaving that person's live devices alone. Removing by USER would take their
+     * working phone out along with the ghost.
+     */
+    stageRemoveDevices(group_id: Uint8Array, identities: Array<any>): Uint8Array;
+    /**
+     * STAGES the removal of every device belonging to each of `user_ids` (a JS array of
+     * strings). Not applied until `commitAccepted`. Removing only one leaf would leave
+     * the removed member reading the group from their other device.
+     *
+     * This client's own leaves are never removed: MLS forbids committing your own
+     * removal, so leaving is not a Commit — see the crate docs.
+     */
+    stageRemoveUsers(group_id: Uint8Array, user_ids: Array<any>): Uint8Array;
+    /**
+     * This client's credential identity, `userId:deviceId`.
+     *
+     * It is the authoritative answer to "which device am I?". A restored backup carries
+     * the identity of the device it was taken FROM, and the groups in that state hold
+     * leaves under that name — so the browser it is restored into has to answer to it,
+     * whatever its own local storage happens to say.
+     */
+    readonly identity: string;
 }
 
 /**
@@ -114,31 +157,37 @@ export interface InitOutput {
     readonly __wbg_set_backupblob_ciphertext: (a: number, b: number, c: number) => void;
     readonly decryptBackup: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly encryptBackup: (a: number, b: number, c: number, d: number) => [number, number, number];
-    readonly mlsclient_addMember: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
-    readonly mlsclient_addMembers: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly mlsclient_applyCommit: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly mlsclient_commitAccepted: (a: number, b: number, c: number) => [number, number];
+    readonly mlsclient_commitRejected: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_createGroup: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_decrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly mlsclient_deleteGroup: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_encrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly mlsclient_epoch: (a: number, b: number, c: number) => [bigint, number, number];
     readonly mlsclient_exportState: (a: number) => [number, number, number, number];
     readonly mlsclient_fromState: (a: number, b: number) => [number, number, number];
     readonly mlsclient_hasGroup: (a: number, b: number, c: number) => number;
+    readonly mlsclient_identity: (a: number) => [number, number];
     readonly mlsclient_identityKey: (a: number) => [number, number];
     readonly mlsclient_joinFromWelcome: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_keyPackage: (a: number) => [number, number, number, number];
     readonly mlsclient_lastResortKeyPackage: (a: number) => [number, number, number, number];
-    readonly mlsclient_new: (a: number, b: number) => [number, number, number];
-    readonly mlsclient_removeMember: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly mlsclient_memberIdentities: (a: number, b: number, c: number) => [number, number, number];
+    readonly mlsclient_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly mlsclient_safetyNumber: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly mlsclient_stageAdd: (a: number, b: number, c: number, d: any) => [number, number, number];
+    readonly mlsclient_stageRemoveDevices: (a: number, b: number, c: number, d: any) => [number, number, number, number];
+    readonly mlsclient_stageRemoveUsers: (a: number, b: number, c: number, d: any) => [number, number, number, number];
     readonly __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;
     readonly __wbg_set_backupblob_salt: (a: number, b: number, c: number) => void;
     readonly __wbg_get_backupblob_nonce: (a: number) => [number, number];
     readonly __wbg_get_backupblob_salt: (a: number) => [number, number];
+    readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;

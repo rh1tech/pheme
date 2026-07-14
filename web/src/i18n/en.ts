@@ -210,6 +210,9 @@ const en = {
     notJoined: 'Setting up encryption — try again in a moment',
     peerNotReady:
       'This person hasn’t set up encrypted chats yet. They need to open Pheme once — then your messages will go through.',
+    notAvailableOnThisDevice: 'Not available on this device',
+    joiningOnThisDevice:
+      'Setting up encryption on this device. Messages sent from now on will appear here; anything said before won’t.',
     encryptedPreview: 'Encrypted message',
     conversationMenu: 'Conversation menu',
     deleteChat: 'Delete chat',

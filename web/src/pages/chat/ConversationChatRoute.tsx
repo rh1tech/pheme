@@ -10,15 +10,14 @@ import { notifyError } from '../../lib/notify'
 import { deserializeContent, serializeContent } from '../../lib/chatContent'
 import {
   MLS_APPLICATION,
-  MLS_COMMIT,
-  MLS_REJOIN,
-  MLS_WELCOME,
+  MLS_CONTROL_TYPES,
+  MLS_DEVICE,
   PeerKeysMissingError,
+  admitAnnouncedDevice,
   base64ToBytes,
+  ensureGroup,
   mlsSession,
-  provisionGroup,
   removeGroupMember,
-  requestRejoin,
 } from '../../lib/mls'
 import { cacheBody, loadCachedBodies, setPreview } from '../../lib/chatCache'
 import { conversationAvatarKey, conversationTitle, otherMember } from '../../lib/conversation'
@@ -89,8 +88,19 @@ export function ConversationChatRoute() {
   // have already handled — so the one-shot decrypt never runs twice for a message.
   const bodiesRef = useRef<Record<string, string>>({})
   const processedRef = useRef<Set<string>>(new Set())
-  // Asked the creator to rebuild the group — at most once per mount.
-  const rejoinAskedRef = useRef(false)
+  // The conversation's MLS group, once this device is a member of it. Empty while it is
+  // not — a device that has just signed in has to wait for a member to admit it, and
+  // until then there is nothing to encrypt to and nothing it can read.
+  //
+  // Keyed by conversation and derived at render, like `peerNotReadyId` and `header`: the
+  // component is reused across chats, and a group id left over from the previous one would
+  // be a group this conversation's messages were never encrypted to.
+  const [settled, setSettled] = useState({ conversationId: '', groupId: '' })
+  const groupId = settled.conversationId === id ? settled.groupId : ''
+  const setGroupId = useCallback(
+    (gid: string) => setSettled({ conversationId: id, groupId: gid }),
+    [id],
+  )
 
   const markNewestRead = useCallback(() => {
     const newest = messages[messages.length - 1]
@@ -121,20 +131,29 @@ export function ConversationChatRoute() {
       .then((c) => {
         if (!active) return
         setConversation(c)
-        // The creator sets up the group and relays Welcomes so members can join. If the
-        // other person has not published keys yet, say so plainly rather than letting
-        // the user discover it by having a message fail to send.
-        if (userId) {
-          provisionGroup(c, userId).catch((e: unknown) => {
+        if (!userId) return
+        // Settle the group: establish it if it does not exist and we created the
+        // conversation, add any member device that is missing from it, and — if this
+        // device is not in it — ask to be let in. A null group id is not a failure; it
+        // means "not admitted yet", and a member will admit us.
+        ensureGroup(c, userId)
+          .then((gid) => {
+            if (!active) return
+            setGroupId(gid ?? '')
+            setPeerNotReadyId('')
+          })
+          .catch((e: unknown) => {
+            // The other person has published no keys on any device, so nothing can be
+            // encrypted to them. Say so plainly, where the user is about to type, rather
+            // than letting them discover it by having a message fail to send.
             if (active) setPeerNotReadyId(e instanceof PeerKeysMissingError ? id : '')
           })
-        }
       })
       .catch(() => active && setConversation(null))
     return () => {
       active = false
     }
-  }, [id, userId])
+  }, [id, userId, setGroupId])
 
   // Preload this conversation's already-decrypted bodies from the local cache
   // before any message processing, so cached messages are never re-decrypted.
@@ -142,7 +161,6 @@ export function ConversationChatRoute() {
     let active = true
     bodiesRef.current = {}
     processedRef.current = new Set()
-    rejoinAskedRef.current = false
     loadCachedBodies(id).then((cached) => {
       if (!active) return
       bodiesRef.current = cached
@@ -155,12 +173,16 @@ export function ConversationChatRoute() {
     }
   }, [id])
 
-  // Decrypt/join any message not yet handled, in order. Runs whenever the message
-  // list grows (initial load, pagination, live arrival) once the cache is loaded.
+  // Decrypt every message not yet handled, in order. Runs whenever the message list
+  // grows (initial load, pagination, live arrival) once the cache is loaded and this
+  // device is actually in the group.
+  //
+  // Control messages are NOT handled here any more. Joining and applying Commits is the
+  // group's business, not the view's: it has to happen in epoch order, it has to happen
+  // even for conversations nobody has open, and getting it wrong forks the device off the
+  // group. lib/mls owns all of it (ensureGroup → catchUp).
   useEffect(() => {
-    // Wait for the conversation: deciding whether a Welcome is legitimate needs to
-    // know who created it, and a message marked processed is never revisited.
-    if (readyId !== id || !userId || !conversation || messages.length === 0) return
+    if (readyId !== id || !userId || !conversation || !groupId || messages.length === 0) return
     let active = true
     const run = async () => {
       let session: Awaited<ReturnType<typeof mlsSession>>
@@ -174,37 +196,12 @@ export function ConversationChatRoute() {
       }
       const next = { ...bodiesRef.current }
       let changed = false
-      let sawWelcome = false
       for (const m of messages) {
-        if (processedRef.current.has(m.id)) continue
+        if (processedRef.current.has(m.id) || MLS_CONTROL_TYPES.has(m.contentType)) continue
         processedRef.current.add(m.id)
         try {
-          if (m.contentType === MLS_REJOIN) {
-            // Someone in this conversation is locked out: they hold a Welcome they
-            // cannot use. Only the creator can put that right, by building the group
-            // again. Ignore our own.
-            if (conversation.createdBy === userId && m.senderId !== userId) {
-              await provisionGroup(conversation, userId, true).catch(() => {})
-            }
-          } else if (m.contentType === MLS_COMMIT) {
-            // A membership change: apply it to advance to the new epoch. Skipping it
-            // would leave us a Commit behind and unable to decrypt anything after. Our
-            // own commit is a no-op (already merged when we produced it).
-            if (m.senderId !== userId) await session.applyCommit(id, m.ciphertext)
-          } else if (m.contentType === MLS_WELCOME) {
-            sawWelcome = true
-            // Only ever act on a Welcome from the person who created the conversation.
-            //
-            // Processing a Welcome CONSUMES the KeyPackage it names — OpenMLS deletes
-            // the private key as soon as it matches, before it has checked whether the
-            // Welcome is even valid. So a Welcome from anyone else is a way to destroy
-            // our published KeyPackages and make us unreachable, and it costs the
-            // sender nothing. Nobody but the creator has any reason to send one.
-            if (conversation && m.senderId === conversation.createdBy) {
-              await session.tryJoin(id, m.ciphertext)
-            }
-          } else if (m.contentType === MLS_APPLICATION) {
-            const bytes = await session.decrypt(id, m.ciphertext)
+          if (m.contentType === MLS_APPLICATION) {
+            const bytes = await session.decrypt(groupId, m.ciphertext)
             const content = bytes && deserializeContent(bytes)
             if (content) {
               next[m.id] = content.body
@@ -221,31 +218,18 @@ export function ConversationChatRoute() {
             }
           }
         } catch {
-          // Decryption can legitimately fail here: it is our own message (a sender
-          // can never decrypt their own), we have not joined the group yet, or
-          // another tab decrypted it first — MLS lets exactly one of them succeed.
-          // In the last case the other tab cached the plaintext, so read that rather
-          // than leaving a placeholder. Never retry the decrypt itself.
+          // Decryption can legitimately fail: it is our own message (a sender can never
+          // decrypt their own), it predates this device joining the group (MLS gives a
+          // new member no access to what was said before it arrived), or another tab
+          // decrypted it first — MLS lets exactly one of them succeed. In the last two
+          // cases the plaintext may be in the local cache, so read that rather than
+          // leaving a blank. Never retry the decrypt itself.
           const cached = await loadCachedBodies(id)
           if (cached[m.id]) {
             next[m.id] = cached[m.id]
             changed = true
           }
         }
-      }
-      // A Welcome went by and we still have no group: the KeyPackage it names is not one
-      // we hold, so we are locked out of our own conversation — and the creator will
-      // never send another, because from where they sit the group exists. Ask them to
-      // build it again. Once per mount, so a failure cannot turn into a loop.
-      if (
-        active &&
-        sawWelcome &&
-        !rejoinAskedRef.current &&
-        conversation.createdBy !== userId &&
-        !(await session.hasGroup(id))
-      ) {
-        rejoinAskedRef.current = true
-        await requestRejoin(id).catch(() => {})
       }
 
       if (active && changed) {
@@ -257,7 +241,7 @@ export function ConversationChatRoute() {
     return () => {
       active = false
     }
-  }, [messages, readyId, userId, id, conversation])
+  }, [messages, readyId, userId, id, conversation, groupId])
 
   useEffect(() => {
     let active = true
@@ -320,6 +304,28 @@ export function ConversationChatRoute() {
     }
     if (!e.chatMessage) return
     const msg = e.chatMessage
+
+    // MLS protocol traffic. It is not a message, and it never reaches the transcript —
+    // but it is how the group changes shape, so it has to be acted on the moment it
+    // arrives rather than the next time somebody reloads.
+    if (MLS_CONTROL_TYPES.has(msg.contentType)) {
+      if (!userId || !conversation) return
+      if (msg.contentType === MLS_DEVICE && msg.senderId !== userId) {
+        // Another member signed in somewhere new and cannot read the conversation. Add
+        // their device. Everyone with the chat open will try; the server lets exactly one
+        // Commit through and the rest find nothing left to do.
+        void admitAnnouncedDevice(conversation, userId).catch(() => {})
+        return
+      }
+      // A Welcome or a Commit: catch up on it. If it is the Welcome that admits THIS
+      // device, settling now is what turns the conversation from unreadable to readable
+      // without the user having to reload.
+      void ensureGroup(conversation, userId)
+        .then((gid) => setGroupId(gid ?? ''))
+        .catch(() => {})
+      return
+    }
+
     setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
     if (atBottomRef.current) {
       conversations.markRead(id, msg.createdAt)
@@ -371,16 +377,19 @@ export function ConversationChatRoute() {
   const canSend = draft.trim().length > 0
 
   async function send() {
-    if (!canSend || sending || !userId) return
+    if (!canSend || sending || !userId || !conversation) return
     const body = draft.trim()
     setSending(true)
     try {
       const session = await mlsSession(userId)
-      // Make sure we hold the group before encrypting (creator sets it up lazily).
-      if (!(await session.hasGroup(id)) && conversation) await provisionGroup(conversation, userId)
-      if (!(await session.hasGroup(id))) throw new Error(t('chat.notJoined'))
+      // Settle the group before encrypting: it may not exist yet (we created the
+      // conversation and this is the first message), or a member may have signed in on a
+      // new device that has to be added before it can read what we are about to send.
+      const gid = groupId || (await ensureGroup(conversation, userId))
+      if (!gid) throw new Error(t('chat.notJoined'))
+      setGroupId(gid)
 
-      const ciphertext = await session.encrypt(id, serializeContent({ body }))
+      const ciphertext = await session.encrypt(gid, serializeContent({ body }))
       const msg = await api.sendChatMessage(id, ciphertext, MLS_APPLICATION)
 
       // We can never decrypt our own MLS message, so record its plaintext now and
@@ -413,9 +422,8 @@ export function ConversationChatRoute() {
     void send()
   }
 
-  // Welcome/Commit control messages carry no user-visible text.
-  const controlTypes = new Set([MLS_WELCOME, MLS_REJOIN, MLS_COMMIT])
-  const visibleMessages = messages.filter((m) => !controlTypes.has(m.contentType))
+  // MLS control messages carry no user-visible text.
+  const visibleMessages = messages.filter((m) => !MLS_CONTROL_TYPES.has(m.contentType))
 
   const title = header ? conversationTitle(header, userId ?? '') : ''
   const avatarId =
@@ -522,6 +530,9 @@ export function ConversationChatRoute() {
         onConfirm={leaveGroup}
         loading={actionBusy}
         title={t('group.leave')}
+        // Without this the button reads "Delete" — ConfirmModal's default, which is right
+        // for the two dialogs above it and wrong here. Leaving a group deletes nothing.
+        confirmLabel={t('group.leave')}
       >
         <Text size="sm">{t('group.leaveConfirm')}</Text>
       </ConfirmModal>
@@ -558,9 +569,25 @@ export function ConversationChatRoute() {
                           {senderName.displayName || senderName.username || 'User'}
                         </Text>
                       )}
-                      <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                        {body ?? '…'}
-                      </Text>
+                      {body !== undefined ? (
+                        <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                          {body}
+                        </Text>
+                      ) : (
+                        // Not a loading state: this device cannot read this message and
+                        // never will. MLS gives a device no access to what was said before
+                        // it joined the group, so a message from before this browser or
+                        // phone signed in stays sealed here even though it is perfectly
+                        // readable on the device that received it.
+                        //
+                        // Saying that is the whole point. The old placeholder was an
+                        // ellipsis, which reads as "still loading" — so a conversation that
+                        // was permanently broken looked like one that was about to arrive,
+                        // and nobody could tell the difference.
+                        <Text size="sm" c="dimmed" fs="italic" data-testid="chat-message-sealed">
+                          {t('chat.notAvailableOnThisDevice')}
+                        </Text>
+                      )}
                       <div className="pheme-bubble-footer">
                         <Text size="xs" c="dimmed">
                           {messageTime(m.createdAt, i18n.language)}
@@ -575,7 +602,11 @@ export function ConversationChatRoute() {
         <JumpToBottom visible={!atBottom} count={unseen} onClick={() => scrollToBottom('smooth')} />
       </div>
 
-      <div className="pheme-composer" data-testid="composer">
+      {/* data-joined is the honest answer to "can this device read and write this
+          conversation yet?" — it is true only once the device holds the MLS group. The UI
+          uses it for the banner below; tests use it to wait for a device to actually be
+          admitted rather than for a spinner to stop. */}
+      <div className="pheme-composer" data-testid="composer" data-joined={Boolean(groupId)}>
         {/* Nothing can be encrypted to someone who has published no keys. Say that here,
             where the user is about to type, rather than after their message fails. */}
         {peerNotReady && (
@@ -588,6 +619,22 @@ export function ConversationChatRoute() {
             data-testid="peer-not-ready"
           >
             <Text size="xs">{t('chat.peerNotReady')}</Text>
+          </Alert>
+        )}
+        {/* This device is a member of the conversation but not yet of its encrypted group
+            — it has just signed in, and a member has to admit it. It is not stuck, and it
+            is not loading; it is waiting, and it will not be able to read what was said
+            before it arrives. Saying so beats a composer that silently refuses to send. */}
+        {!peerNotReady && !loading && !groupId && (
+          <Alert
+            variant="light"
+            color="blue"
+            icon={<IconLock size={16} />}
+            p="xs"
+            mb="xs"
+            data-testid="device-joining"
+          >
+            <Text size="xs">{t('chat.joiningOnThisDevice')}</Text>
           </Alert>
         )}
         <Group gap="xs" align="flex-end" wrap="nowrap">

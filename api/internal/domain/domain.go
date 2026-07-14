@@ -309,6 +309,10 @@ type Conversation struct {
 	// who starts it. Empty for groups. Uniquely indexed (partial) in Mongo.
 	DirectKey string    `bson:"directKey,omitempty" json:"-"`
 	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
+	// The conversation's MLS group, once a member has established one. Inline, so the
+	// compare-and-set that serialises Commits is a single atomic update on this one
+	// document. See domain.MLSGroupState.
+	MLS MLSGroupState `bson:",inline" json:"-"`
 }
 
 // ConversationMember is a user's membership in a conversation. Role reuses the
@@ -328,14 +332,59 @@ type ConversationMember struct {
 // ContentType lets clients tell an application message from an MLS control
 // message (Commit/Welcome) that rides the same ordered log.
 type ChatMessage struct {
-	ID             string    `bson:"_id,omitempty" json:"id"`
-	ConversationID string    `bson:"conversationId" json:"conversationId"`
-	SenderID       string    `bson:"senderId" json:"senderId"`
+	ID             string `bson:"_id,omitempty" json:"id"`
+	ConversationID string `bson:"conversationId" json:"conversationId"`
+	SenderID       string `bson:"senderId" json:"senderId"`
 	// Ciphertext is opaque bytes: MLS ciphertext once E2EE is on, plaintext-JSON
 	// in the interim. The server stores and relays it without interpretation.
 	Ciphertext  []byte    `bson:"ciphertext" json:"ciphertext"`
 	ContentType string    `bson:"contentType" json:"contentType"`
 	CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
+	// MLSEpoch is the group epoch a control message (Welcome, Commit) produced. Zero on
+	// ordinary messages, which have no epoch of their own.
+	//
+	// It is what lets a member that has fallen behind — a phone that was off, a browser
+	// that has not been opened in a week — ask for exactly the Commits it is missing and
+	// no others. Without it, catching up means trawling the message log and hoping the
+	// Commits are still inside the last page; a member that misses one can never decrypt
+	// anything again.
+	MLSEpoch int64 `bson:"mlsEpoch,omitempty" json:"mlsEpoch,omitempty"`
+}
+
+// The content types clients use for MLS protocol traffic. They mirror the MLS_*
+// constants in web/src/lib/mls.ts. The server never interprets the bytes — it only
+// needs to tell protocol traffic from something a human sent, so that it does not push
+// a notification for it and can order a catch-up correctly.
+const (
+	// ContentTypeMLSWelcome admits new devices to the group.
+	ContentTypeMLSWelcome = "application/mls-welcome"
+	// ContentTypeMLSCommit advances every current member to the new epoch.
+	ContentTypeMLSCommit = "application/mls-commit"
+	// ContentTypeMLSDevice is "I am a member of this conversation and my device is not in
+	// its group" — posted by a device that holds no group, so that a member who does hold
+	// it adds this device. It carries no key material.
+	ContentTypeMLSDevice = "application/mls-device"
+)
+
+// MLSGroupState is a conversation's MLS group: which group it is, and how far
+// along that group's history the server has accepted.
+//
+// The server is an untrusted Delivery Service and reads none of the key material —
+// but it is the only party every member agrees on, so it is the only thing that can
+// answer "which group is this conversation, and whose Commit came first?". Without
+// an answer to the first, two devices of the same person each create their own group
+// under the conversation's name and encrypt past each other. Without an answer to the
+// second, two members Commit against the same epoch and the group forks in two.
+type MLSGroupState struct {
+	// GroupID is the opaque MLS group id, minted by whoever established the group.
+	// Empty until then. It is set exactly once and never changes: a conversation's
+	// group cannot be replaced, because replacing it destroys the key material for
+	// every message ever sent to it.
+	GroupID string `bson:"mlsGroupId,omitempty" json:"groupId"`
+	// Epoch is the MLS epoch of the last Commit the server accepted. A member proposing
+	// a Commit says which epoch it is based on; if that is not this one, they are behind
+	// and their Commit is refused.
+	Epoch int64 `bson:"mlsEpoch,omitempty" json:"epoch"`
 }
 
 // MLSKeyPackage is a single-use public MLS KeyPackage a user's device has

@@ -149,39 +149,6 @@ export class MlsClient {
         wasm.__wbg_mlsclient_free(ptr, 0);
     }
     /**
-     * Adds a member; returns their Welcome and the group's Commit.
-     * @param {Uint8Array} group_id
-     * @param {Uint8Array} key_package
-     * @returns {AddOutput}
-     */
-    addMember(group_id, key_package) {
-        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passArray8ToWasm0(key_package, wasm.__wbindgen_malloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.mlsclient_addMember(this.__wbg_ptr, ptr0, len0, ptr1, len1);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return AddOutput.__wrap(ret[0]);
-    }
-    /**
-     * Adds several members in one Commit (all newcomers land at the same epoch).
-     * `key_packages` is a JS array of Uint8Array. Returns a single Welcome for all.
-     * @param {Uint8Array} group_id
-     * @param {Array<any>} key_packages
-     * @returns {AddOutput}
-     */
-    addMembers(group_id, key_packages) {
-        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.mlsclient_addMembers(this.__wbg_ptr, ptr0, len0, key_packages);
-        if (ret[2]) {
-            throw takeFromExternrefTable0(ret[1]);
-        }
-        return AddOutput.__wrap(ret[0]);
-    }
-    /**
      * @param {Uint8Array} group_id
      * @param {Uint8Array} commit
      */
@@ -191,6 +158,31 @@ export class MlsClient {
         const ptr1 = passArray8ToWasm0(commit, wasm.__wbindgen_malloc);
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.mlsclient_applyCommit(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Applies the Commit we staged, now that the server has accepted it.
+     * @param {Uint8Array} group_id
+     */
+    commitAccepted(group_id) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_commitAccepted(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Throws away a Commit the server refused, leaving the group untouched so we can
+     * catch up on the winning Commit and try again.
+     * @param {Uint8Array} group_id
+     */
+    commitRejected(group_id) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_commitRejected(this.__wbg_ptr, ptr0, len0);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
@@ -259,6 +251,20 @@ export class MlsClient {
         return v3;
     }
     /**
+     * The group's current epoch — what a Commit is proposed against.
+     * @param {Uint8Array} group_id
+     * @returns {bigint}
+     */
+    epoch(group_id) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_epoch(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return BigInt.asUintN(64, ret[0]);
+    }
+    /**
      * The full client state to persist (IndexedDB).
      * @returns {Uint8Array}
      */
@@ -295,6 +301,27 @@ export class MlsClient {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.mlsclient_hasGroup(this.__wbg_ptr, ptr0, len0);
         return ret !== 0;
+    }
+    /**
+     * This client's credential identity, `userId:deviceId`.
+     *
+     * It is the authoritative answer to "which device am I?". A restored backup carries
+     * the identity of the device it was taken FROM, and the groups in that state hold
+     * leaves under that name — so the browser it is restored into has to answer to it,
+     * whatever its own local storage happens to say.
+     * @returns {string}
+     */
+    get identity() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.mlsclient_identity(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * This client's own long-term signature public key.
@@ -345,38 +372,39 @@ export class MlsClient {
         return v1;
     }
     /**
-     * Creates a fresh identity. `identity` is the user/device id bytes.
-     * @param {Uint8Array} identity
+     * Every leaf's `userId:deviceId`, so the caller can spot member devices that are
+     * missing from the group and add exactly those.
+     * @param {Uint8Array} group_id
+     * @returns {Array<any>}
      */
-    constructor(identity) {
-        const ptr0 = passArray8ToWasm0(identity, wasm.__wbindgen_malloc);
+    memberIdentities(group_id) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.mlsclient_new(ptr0, len0);
+        const ret = wasm.mlsclient_memberIdentities(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * Creates a fresh identity for one DEVICE of one user. Both ids are required —
+     * an MLS leaf is a device, and a client that cannot say which device it is ends up
+     * sharing a leaf with the user's other devices, which then cannot decrypt.
+     * @param {string} user_id
+     * @param {string} device_id
+     */
+    constructor(user_id, device_id) {
+        const ptr0 = passStringToWasm0(user_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(device_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_new(ptr0, len0, ptr1, len1);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
         this.__wbg_ptr = ret[0];
         MlsClientFinalization.register(this, this.__wbg_ptr, this);
         return this;
-    }
-    /**
-     * Removes a member by their identity bytes; returns the Commit to relay.
-     * @param {Uint8Array} group_id
-     * @param {Uint8Array} identity
-     * @returns {Uint8Array}
-     */
-    removeMember(group_id, identity) {
-        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passArray8ToWasm0(identity, wasm.__wbindgen_malloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.mlsclient_removeMember(this.__wbg_ptr, ptr0, len0, ptr1, len1);
-        if (ret[3]) {
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-        return v3;
     }
     /**
      * The safety number for a group: the digits two people compare, out of band, to
@@ -404,6 +432,70 @@ export class MlsClient {
         } finally {
             wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
         }
+    }
+    /**
+     * STAGES the addition of several devices in one Commit (all newcomers land at the
+     * same epoch). `key_packages` is a JS array of Uint8Array; one Welcome covers all.
+     *
+     * The Commit is NOT applied. Call `commitAccepted` once the server has taken it as
+     * the group's next epoch, or `commitRejected` if another member's Commit landed
+     * first. Applying it before the server agrees is what forks a client off the group
+     * for good.
+     * @param {Uint8Array} group_id
+     * @param {Array<any>} key_packages
+     * @returns {AddOutput}
+     */
+    stageAdd(group_id, key_packages) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_stageAdd(this.__wbg_ptr, ptr0, len0, key_packages);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return AddOutput.__wrap(ret[0]);
+    }
+    /**
+     * STAGES the removal of the exact leaves named by `identities` (`userId:deviceId`).
+     *
+     * For pruning a ghost device — one whose key material no longer exists anywhere —
+     * while leaving that person's live devices alone. Removing by USER would take their
+     * working phone out along with the ghost.
+     * @param {Uint8Array} group_id
+     * @param {Array<any>} identities
+     * @returns {Uint8Array}
+     */
+    stageRemoveDevices(group_id, identities) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_stageRemoveDevices(this.__wbg_ptr, ptr0, len0, identities);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+    /**
+     * STAGES the removal of every device belonging to each of `user_ids` (a JS array of
+     * strings). Not applied until `commitAccepted`. Removing only one leaf would leave
+     * the removed member reading the group from their other device.
+     *
+     * This client's own leaves are never removed: MLS forbids committing your own
+     * removal, so leaving is not a Commit — see the crate docs.
+     * @param {Uint8Array} group_id
+     * @param {Array<any>} user_ids
+     * @returns {Uint8Array}
+     */
+    stageRemoveUsers(group_id, user_ids) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_stageRemoveUsers(this.__wbg_ptr, ptr0, len0, user_ids);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
     }
 }
 if (Symbol.dispose) MlsClient.prototype[Symbol.dispose] = MlsClient.prototype.free;
@@ -475,6 +567,14 @@ function __wbg_get_imports() {
             const ret = arg0 === undefined;
             return ret;
         },
+        __wbg___wbindgen_string_get_b0ca35b86a603356: function(arg0, arg1) {
+            const obj = arg1;
+            const ret = typeof(obj) === 'string' ? obj : undefined;
+            var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            var len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
         __wbg___wbindgen_throw_344f42d3211c4765: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
@@ -505,6 +605,10 @@ function __wbg_get_imports() {
             const ret = arg0.msCrypto;
             return ret;
         },
+        __wbg_new_32b398fb48b6d94a: function() {
+            const ret = new Array();
+            return ret;
+        },
         __wbg_new_cd45aabdf6073e84: function(arg0) {
             const ret = new Uint8Array(arg0);
             return ret;
@@ -527,6 +631,10 @@ function __wbg_get_imports() {
         },
         __wbg_prototypesetcall_4770620bbe4688a0: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
+        },
+        __wbg_push_d2ae3af0c1217ae6: function(arg0, arg1) {
+            const ret = arg0.push(arg1);
+            return ret;
         },
         __wbg_randomFillSync_6c25eac9869eb53c: function() { return handleError(function (arg0, arg1) {
             arg0.randomFillSync(arg1);
@@ -606,6 +714,14 @@ function getArrayU8FromWasm0(ptr, len) {
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
+let cachedDataViewMemory0 = null;
+function getDataViewMemory0() {
+    if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
+        cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
+    }
+    return cachedDataViewMemory0;
+}
+
 function getStringFromWasm0(ptr, len) {
     return decodeText(ptr >>> 0, len);
 }
@@ -638,6 +754,43 @@ function passArray8ToWasm0(arg, malloc) {
     return ptr;
 }
 
+function passStringToWasm0(arg, malloc, realloc) {
+    if (realloc === undefined) {
+        const buf = cachedTextEncoder.encode(arg);
+        const ptr = malloc(buf.length, 1) >>> 0;
+        getUint8ArrayMemory0().subarray(ptr, ptr + buf.length).set(buf);
+        WASM_VECTOR_LEN = buf.length;
+        return ptr;
+    }
+
+    let len = arg.length;
+    let ptr = malloc(len, 1) >>> 0;
+
+    const mem = getUint8ArrayMemory0();
+
+    let offset = 0;
+
+    for (; offset < len; offset++) {
+        const code = arg.charCodeAt(offset);
+        if (code > 0x7F) break;
+        mem[ptr + offset] = code;
+    }
+    if (offset !== len) {
+        if (offset !== 0) {
+            arg = arg.slice(offset);
+        }
+        ptr = realloc(ptr, len, len = offset + arg.length * 3, 1) >>> 0;
+        const view = getUint8ArrayMemory0().subarray(ptr + offset, ptr + len);
+        const ret = cachedTextEncoder.encodeInto(arg, view);
+
+        offset += ret.written;
+        ptr = realloc(ptr, len, offset, 1) >>> 0;
+    }
+
+    WASM_VECTOR_LEN = offset;
+    return ptr;
+}
+
 function takeFromExternrefTable0(idx) {
     const value = wasm.__wbindgen_externrefs.get(idx);
     wasm.__externref_table_dealloc(idx);
@@ -658,6 +811,19 @@ function decodeText(ptr, len) {
     return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len));
 }
 
+const cachedTextEncoder = new TextEncoder();
+
+if (!('encodeInto' in cachedTextEncoder)) {
+    cachedTextEncoder.encodeInto = function (arg, view) {
+        const buf = cachedTextEncoder.encode(arg);
+        view.set(buf);
+        return {
+            read: arg.length,
+            written: buf.length
+        };
+    };
+}
+
 let WASM_VECTOR_LEN = 0;
 
 let wasmModule, wasmInstance, wasm;
@@ -665,6 +831,7 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedDataViewMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

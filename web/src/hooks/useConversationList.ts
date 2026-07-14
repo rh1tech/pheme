@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { deserializeContent } from '../lib/chatContent'
 import { getPreview } from '../lib/chatCache'
-import { MLS_APPLICATION, MLS_WELCOME, base64ToBytes } from '../lib/mls'
+import { MLS_APPLICATION, MLS_CONTROL_TYPES, base64ToBytes } from '../lib/mls'
 import { loadLastSeen, markSeen } from '../lib/lastSeen'
 import { useAuth } from '../auth/context'
 import { useEventStream } from './useEventStream'
@@ -37,7 +37,9 @@ function previewOf(conv: Conversation, encryptedLabel: string): string {
   const msg = conv.lastMessage
   if (!msg) return ''
   if (msg.contentType === MLS_APPLICATION) return encryptedLabel
-  if (msg.contentType === MLS_WELCOME) return ''
+  // Protocol traffic — a Welcome, a Commit, a device announcing itself. None of it is
+  // something a human said, so none of it belongs in the list.
+  if (MLS_CONTROL_TYPES.has(msg.contentType)) return ''
   // Legacy plaintext content (pre-encryption) still decodes directly.
   return deserializeContent(base64ToBytes(msg.ciphertext))?.body ?? ''
 }

@@ -69,6 +69,36 @@ export interface ChatMessage {
   ciphertext: string
   contentType: string
   createdAt: string
+  /**
+   * The MLS epoch a control message (Welcome, Commit) produced. Absent on ordinary
+   * messages. It is what lets a device that has fallen behind ask for exactly the
+   * Commits it is missing, and apply them in order.
+   */
+  mlsEpoch?: number
+}
+
+/**
+ * A conversation's MLS group, as the server records it.
+ *
+ * `groupId` is empty until a member establishes the group. It is set once and never
+ * replaced — replacing a group destroys the key material for every message ever sent to
+ * it. `epoch` is the last Commit the server accepted; a member proposes a Commit against
+ * it, and is refused if somebody else got there first.
+ */
+export interface MLSGroupState {
+  groupId: string
+  epoch: number
+}
+
+/** One device of one user — the unit of MLS group membership. */
+export interface MLSDeviceRef {
+  userId: string
+  deviceId: string
+}
+
+/** A claimed KeyPackage, addressed to the device it belongs to. */
+export interface MLSClaimedKeyPackage extends MLSDeviceRef {
+  keyPackage: string
 }
 
 // A conversation's newest message, for chat-list ordering and preview.
