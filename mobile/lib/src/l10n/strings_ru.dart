@@ -262,6 +262,8 @@ const Map<String, String> ruStrings = {
   'profile.loadFailed': 'Не удалось загрузить профиль',
 
   // chat — из web/src/i18n/ru.ts, чтобы оба клиента говорили одинаково
+  'chat.search': 'Поиск',
+  'chat.noResults': 'Ничего не найдено',
   'chat.title': 'Чаты',
   'chat.tabChats': 'Чаты',
   'chat.tabChannels': 'Каналы',

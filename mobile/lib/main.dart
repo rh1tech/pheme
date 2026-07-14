@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 import 'src/app.dart';
 import 'src/calls/call_service.dart';
@@ -17,6 +18,14 @@ Future<void> main() async {
   // Loads the Rust MLS library. Everything encrypted goes through it, so a failure here is fatal
   // rather than degraded: without it the app cannot read a single message.
   await RustLib.init();
+
+  // Date/time symbols for every locale the app ships.
+  //
+  // intl throws LocaleDataException the moment a DateFormat is built with an EXPLICIT locale that has
+  // not been initialised — and the chat builds one for every timestamp it draws. Without this, opening
+  // a conversation in Russian throws on the first message. English happens to work by accident,
+  // because it is the fallback baked into intl, which is exactly why this was easy to miss.
+  await initializeDateFormatting();
 
   // Load persisted state before the first frame so controllers seed
   // synchronously (auth identity, theme/locale, server URL, push device).

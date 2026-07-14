@@ -26,6 +26,9 @@ class MessageBubble extends StatelessWidget {
     required this.createdAt,
     required this.isOwn,
     this.senderName,
+    this.startsRun = true,
+    this.endsRun = true,
+    this.onLongPress,
   });
 
   /// The decrypted body, or null when this device cannot read the message.
@@ -37,6 +40,21 @@ class MessageBubble extends StatelessWidget {
   /// person and their name is in the header.
   final String? senderName;
 
+  /// Whether this message begins a run from the same sender, and whether it ends one.
+  ///
+  /// A RUN is consecutive messages from one person, close together in time — and treating it as one
+  /// visual block is the thing that makes a chat read like a conversation rather than a list. Telegram
+  /// does it; the web client here does not (every message is a full standalone bubble), and on a phone
+  /// that reads as shouty and wastes a lot of vertical space, which is scarce.
+  ///
+  /// So: the name appears once, at the top of the run. The time appears once, at the bottom. And only
+  /// the LAST bubble in the run gets the squared-off tail corner, which is what makes the run look like
+  /// one utterance with a single tail rather than a stack of identical blocks.
+  final bool startsRun;
+  final bool endsRun;
+
+  final VoidCallback? onLongPress;
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -47,58 +65,76 @@ class MessageBubble extends StatelessWidget {
         ? (dark ? const Color(0x38A888F5) : const Color(0x1F7740EE))
         : (dark ? const Color(0xFF1F2126) : Colors.white);
 
+    // The tail corner belongs to the last bubble of the run. Mid-run bubbles keep it rounded, so the
+    // run reads as one block.
+    final tailCorner = endsRun ? _tail : _round;
+
     return Align(
       alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 544), // --pheme-bubble-max
-        margin: const EdgeInsets.symmetric(vertical: 3),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: background,
-          borderRadius: BorderRadius.only(
-            topLeft: _round,
-            topRight: _round,
-            bottomLeft: isOwn ? _round : _tail,
-            bottomRight: isOwn ? _tail : _round,
+      child: GestureDetector(
+        onLongPress: onLongPress,
+        child: Container(
+          constraints: const BoxConstraints(
+            maxWidth: 544,
+          ), // --pheme-bubble-max
+          // Tight inside a run, loose between runs. This spacing IS the grouping.
+          margin: EdgeInsets.only(
+            top: startsRun ? 6 : 1,
+            bottom: endsRun ? 6 : 1,
           ),
-          boxShadow: dark
-              ? null
-              : const [
-                  BoxShadow(
-                    color: Color(0x0F141028),
-                    blurRadius: 2,
-                    offset: Offset(0, 1),
-                  ),
-                ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (senderName != null && !isOwn)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(
-                  senderName!,
-                  style: theme.textTheme.labelMedium?.copyWith(
-                    color: dark ? const Color(0xFFA888F5) : kIris,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            _Body(body: body, l10n: l10n),
-            const SizedBox(height: 2),
-            Align(
-              alignment: Alignment.centerRight,
-              child: Text(
-                bubbleTime(l10n, createdAt),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  fontSize: 11,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: background,
+            borderRadius: BorderRadius.only(
+              topLeft: _round,
+              topRight: _round,
+              bottomLeft: isOwn ? _round : tailCorner,
+              bottomRight: isOwn ? tailCorner : _round,
             ),
-          ],
+            boxShadow: dark
+                ? null
+                : const [
+                    BoxShadow(
+                      color: Color(0x0F141028),
+                      blurRadius: 2,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Once per run, not once per message.
+              if (senderName != null && !isOwn && startsRun)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    senderName!,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: dark ? const Color(0xFFA888F5) : kIris,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              _Body(body: body, l10n: l10n),
+              // Likewise the timestamp: a run of five messages sent in the same minute does not need
+              // five identical clocks down its side.
+              if (endsRun) ...[
+                const SizedBox(height: 2),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    bubbleTime(l10n, createdAt),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 11,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

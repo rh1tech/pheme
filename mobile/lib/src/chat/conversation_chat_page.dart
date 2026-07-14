@@ -5,6 +5,7 @@
 // an older page is prepended, all without the manual scroll-anchoring the web has to do.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -59,10 +60,24 @@ class _ChatView extends ConsumerStatefulWidget {
   ConsumerState<_ChatView> createState() => _ChatViewState();
 }
 
+/// Past this far back in the history, a new message must NOT yank the view down.
+///
+/// Somebody reading a month of scrollback does not want to be dragged to the bottom because a message
+/// arrived. Telegram's answer — and this one — is to leave them where they are and put a button on
+/// screen instead, with a count of what they have not seen.
+const _stickToBottom = 120.0;
+
 class _ChatViewState extends ConsumerState<_ChatView> {
   final _composer = TextEditingController();
   final _scroll = ScrollController();
   bool _sending = false;
+
+  /// Whether the view is pinned to the newest message. The list is reversed, so "at the bottom" is
+  /// offset zero.
+  bool _atBottom = true;
+
+  /// Messages that have arrived while the user was reading back through history.
+  int _unseen = 0;
 
   String get _conversationId => widget.conversation.id;
 
@@ -80,11 +95,45 @@ class _ChatViewState extends ConsumerState<_ChatView> {
     super.dispose();
   }
 
-  /// The feed is reversed, so "scrolled near the end" means "scrolled back into history".
+  /// The feed is REVERSED. Two consequences, and both are easy to get backwards:
+  ///   * offset 0 is the NEWEST message, not the oldest;
+  ///   * scrolling toward maxScrollExtent goes BACK in time, which is where older pages load.
   void _onScroll() {
+    if (!_scroll.hasClients) return;
+
     if (_scroll.position.pixels > _scroll.position.maxScrollExtent - 300) {
       ref.read(messageFeedProvider(_conversationId).notifier).loadOlder();
     }
+
+    final atBottom = _scroll.position.pixels <= _stickToBottom;
+    if (atBottom == _atBottom) return;
+
+    setState(() {
+      _atBottom = atBottom;
+      if (atBottom) _unseen = 0; // they have caught up
+    });
+  }
+
+  void _scrollToBottom() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
+    setState(() => _unseen = 0);
+  }
+
+  /// A message arrived. Follow it only if the user was already at the bottom; otherwise count it.
+  void _onNewMessage() {
+    if (_atBottom) {
+      // After the frame, so the list has actually grown.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
+      });
+      return;
+    }
+    setState(() => _unseen++);
   }
 
   Future<void> _send() async {
@@ -97,7 +146,12 @@ class _ChatViewState extends ConsumerState<_ChatView> {
           .read(messageFeedProvider(_conversationId).notifier)
           .send(widget.conversation, body);
       if (!mounted) return;
+
       _composer.clear();
+      HapticFeedback.lightImpact();
+      // Sending always follows your own message down. You wrote it; you want to see it land.
+      _atBottom = true;
+      _scrollToBottom();
     } on Object catch (e) {
       if (!mounted) return;
       final l10n = AppLocalizations.of(context);
@@ -130,6 +184,24 @@ class _ChatViewState extends ConsumerState<_ChatView> {
     final myUserId = ref.watch(myUserIdProvider);
     final feed = ref.watch(messageFeedProvider(_conversationId));
     final title = conversationTitle(conversation, myUserId, l10n);
+
+    // A message arrived (or an older page landed). Only a message at the NEWEST end counts as
+    // something the reader has not seen — an older page growing the list is them, scrolling.
+    ref.listen(messageFeedProvider(_conversationId), (previous, next) {
+      final before = previous?.messages.length ?? 0;
+      final after = next.messages.length;
+      if (after <= before) return;
+
+      final newest = next.messages.isEmpty ? null : next.messages.last;
+      final wasNewest = previous?.messages.isEmpty ?? true
+          ? null
+          : previous!.messages.last;
+      if (newest == null || newest.id == wasNewest?.id) return;
+
+      // Our own message is already handled by _send, which always follows it down.
+      if (newest.senderId == myUserId) return;
+      _onNewMessage();
+    });
 
     // The server answers 503 when it has no TURN, and that is not a transient failure — it is how the
     // client learns not to offer a call button at all.
@@ -196,10 +268,24 @@ class _ChatViewState extends ConsumerState<_ChatView> {
       body: Column(
         children: [
           Expanded(
-            child: _Feed(
-              feed: feed,
-              conversation: conversation,
-              myUserId: myUserId,
+            child: Stack(
+              children: [
+                _Feed(
+                  feed: feed,
+                  conversation: conversation,
+                  myUserId: myUserId,
+                  scroll: _scroll,
+                ),
+                Positioned(
+                  right: 12,
+                  bottom: 12,
+                  child: _JumpToBottom(
+                    visible: !_atBottom,
+                    unseen: _unseen,
+                    onPressed: _scrollToBottom,
+                  ),
+                ),
+              ],
             ),
           ),
           _Composer(
@@ -222,25 +308,109 @@ class _ChatViewState extends ConsumerState<_ChatView> {
   }
 }
 
+/// The button that appears when the reader has scrolled back into history, carrying a count of what
+/// has arrived since. Fades and lifts rather than popping, so it does not snatch at the eye.
+class _JumpToBottom extends StatelessWidget {
+  const _JumpToBottom({
+    required this.visible,
+    required this.unseen,
+    required this.onPressed,
+  });
+
+  final bool visible;
+  final int unseen;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedSlide(
+        offset: visible ? Offset.zero : const Offset(0, 0.3),
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        child: AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: const Duration(milliseconds: 160),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Material(
+                elevation: 3,
+                shape: const CircleBorder(),
+                color: theme.colorScheme.surfaceContainerHigh,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: onPressed,
+                  child: const SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: Icon(Icons.arrow_downward, size: 20),
+                  ),
+                ),
+              ),
+              if (unseen > 0)
+                Positioned(
+                  top: -4,
+                  right: -4,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    constraints: const BoxConstraints(minWidth: 20),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      unseen > 99 ? '99+' : '$unseen',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// How far apart two messages from the same person can be and still read as one utterance.
+///
+/// Telegram's number is around five minutes, and it is about right: two lines typed in the same breath
+/// are one thought, and two lines an hour apart are two — even from the same person, on the same day.
+const _runGap = Duration(minutes: 5);
+
 class _Feed extends ConsumerWidget {
   const _Feed({
     required this.feed,
     required this.conversation,
     required this.myUserId,
+    required this.scroll,
   });
 
   final MessageFeedState feed;
   final Conversation conversation;
   final String myUserId;
+  final ScrollController scroll;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
 
-    if (feed.loading && feed.messages.isEmpty) {
-      return const Center(child: AdaptiveProgress());
-    }
+    // A bubble-shaped skeleton rather than a spinner. It says "messages are coming" instead of
+    // "something is happening", and the feed does not jolt when they land.
+    if (feed.loading && feed.messages.isEmpty) return const _FeedSkeleton();
+
     if (feed.messages.isEmpty) {
       return Center(
         child: Text(
@@ -256,6 +426,7 @@ class _Feed extends ConsumerWidget {
     final items = feed.messages.reversed.toList(growable: false);
 
     return ListView.builder(
+      controller: scroll,
       reverse: true,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       itemCount: items.length + (feed.loadingOlder ? 1 : 0),
@@ -268,8 +439,11 @@ class _Feed extends ConsumerWidget {
         }
 
         final message = items[i];
-        // The list runs newest-first, so the message BELOW this one on screen is the next index.
+        // The list runs newest-first, so index+1 is the message ABOVE this one on screen (older) and
+        // index-1 is the one below (newer). Getting this backwards is the classic reversed-list bug.
         final older = i + 1 < items.length ? items[i + 1] : null;
+        final newer = i > 0 ? items[i - 1] : null;
+
         final day = messageDay(message.createdAt);
         final olderDay = older == null ? null : messageDay(older.createdAt);
         final startsDay = day != null && (olderDay == null || day != olderDay);
@@ -282,8 +456,67 @@ class _Feed extends ConsumerWidget {
               conversation: conversation,
               myUserId: myUserId,
               body: feed.bodies[message.id],
+              // A new day always begins a new run, whatever the clock says.
+              startsRun: startsDay || !_sameRun(older, message),
+              endsRun: !_sameRun(message, newer),
             ),
           ],
+        );
+      },
+    );
+  }
+
+  /// Whether [next] continues [previous]'s run: same sender, both ordinary messages, close in time.
+  ///
+  /// A call event is never part of a run — it is a system aside, not something anybody said.
+  static bool _sameRun(ChatMessage? previous, ChatMessage? next) {
+    if (previous == null || next == null) return false;
+    if (previous.senderId != next.senderId) return false;
+    if (previous.contentType == ContentType.callEvent) return false;
+    if (next.contentType == ContentType.callEvent) return false;
+
+    final a = DateTime.tryParse(previous.createdAt);
+    final b = DateTime.tryParse(next.createdAt);
+    if (a == null || b == null) return false;
+
+    return b.difference(a).abs() <= _runGap;
+  }
+}
+
+/// Bubble-shaped placeholders, alternating sides and widths so the feed looks like a conversation
+/// before it is one.
+class _FeedSkeleton extends StatelessWidget {
+  const _FeedSkeleton();
+
+  static const _widths = [0.55, 0.4, 0.68, 0.35, 0.5, 0.6];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final width = MediaQuery.sizeOf(context).width;
+
+    return ListView.builder(
+      reverse: true,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      itemCount: _widths.length,
+      itemBuilder: (context, i) {
+        final own = i.isEven;
+        return Align(
+          alignment: own ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            width: width * _widths[i],
+            height: 40,
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(16),
+                topRight: const Radius.circular(16),
+                bottomLeft: Radius.circular(own ? 16 : 2),
+                bottomRight: Radius.circular(own ? 2 : 16),
+              ),
+            ),
+          ),
         );
       },
     );
@@ -296,12 +529,16 @@ class _Message extends StatelessWidget {
     required this.conversation,
     required this.myUserId,
     required this.body,
+    required this.startsRun,
+    required this.endsRun,
   });
 
   final ChatMessage message;
   final Conversation conversation;
   final String myUserId;
   final String? body;
+  final bool startsRun;
+  final bool endsRun;
 
   @override
   Widget build(BuildContext context) {
@@ -329,6 +566,34 @@ class _Message extends StatelessWidget {
       createdAt: message.createdAt,
       isOwn: isOwn,
       senderName: senderName,
+      startsRun: startsRun,
+      endsRun: endsRun,
+      onLongPress: body == null ? null : () => _showActions(context, body!),
+    );
+  }
+
+  /// Long-press a message to copy it. The one action there is, because it is the only one the server
+  /// can support: there is no reply field, no reactions, and a message cannot be edited or deleted
+  /// once it is sealed.
+  void _showActions(BuildContext context, String text) {
+    final l10n = AppLocalizations.of(context);
+    HapticFeedback.mediumImpact();
+
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: ListTile(
+          leading: const Icon(Icons.copy_outlined),
+          title: Text(l10n.t('common.copy')),
+          onTap: () async {
+            await Clipboard.setData(ClipboardData(text: text));
+            if (!sheet.mounted) return;
+            Navigator.of(sheet).pop();
+            notifySuccess(context, l10n.t('common.copied'));
+          },
+        ),
+      ),
     );
   }
 }

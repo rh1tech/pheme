@@ -9,6 +9,7 @@ import '../models/chat_models.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
 import '../widgets/adaptive/adaptive_refresh.dart';
 import '../widgets/adaptive/adaptive_scaffold.dart';
+import '../widgets/adaptive/adaptive_search_field.dart';
 import '../widgets/adaptive/platform.dart';
 import '../widgets/error_view.dart';
 import 'chat_providers.dart';
@@ -17,13 +18,52 @@ import 'conversation_title.dart';
 import 'new_chat_sheet.dart';
 import 'widgets/conversation_avatar.dart';
 
-class ConversationsPage extends ConsumerWidget {
+class ConversationsPage extends ConsumerStatefulWidget {
   const ConversationsPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ConversationsPage> createState() => _ConversationsPageState();
+}
+
+class _ConversationsPageState extends ConsumerState<ConversationsPage> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Filters on the title, which is the only thing the list can search.
+  ///
+  /// Not the messages. The server holds nothing but ciphertext, so it cannot search them for us, and
+  /// this device can only read the bodies it has decrypted itself — so a message search would silently
+  /// cover a different slice of history on every device the user owns. Better to search what is
+  /// honestly searchable than to offer a search that quietly lies about its scope.
+  List<Conversation> _filter(
+    List<Conversation> all,
+    String myUserId,
+    AppLocalizations l10n,
+  ) {
+    if (_query.isEmpty) return all;
+    final needle = _query.toLowerCase();
+    return all
+        .where(
+          (c) => conversationTitle(
+            c,
+            myUserId,
+            l10n,
+          ).toLowerCase().contains(needle),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final conversations = ref.watch(conversationListProvider);
+    final myUserId = ref.watch(myUserIdProvider);
 
     return AdaptiveScaffold(
       title: Text(l10n.t('chat.title')),
@@ -34,41 +74,68 @@ class ConversationsPage extends ConsumerWidget {
           onPressed: () => showNewChatSheet(context),
         ),
       ],
-      body: conversations.when(
-        loading: () => const Center(child: AdaptiveProgress()),
-        error: (e, _) => ErrorView(
-          message: e.toString(),
-          onRetry: () => ref.read(conversationListProvider.notifier).refresh(),
-        ),
-        data: (list) => AdaptiveRefreshableScrollView(
-          onRefresh: () =>
-              ref.read(conversationListProvider.notifier).refresh(),
-          slivers: [
-            if (list.isEmpty)
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: _EmptyState(l10n: l10n),
-              )
-            else
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                sliver: SliverList.builder(
-                  itemCount: list.length,
-                  itemBuilder: (context, i) =>
-                      _ConversationRow(conversation: list[i]),
-                ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: AdaptiveSearchField(
+              controller: _search,
+              placeholder: l10n.t('chat.search'),
+              onChanged: (v) => setState(() => _query = v.trim()),
+            ),
+          ),
+          Expanded(
+            child: conversations.when(
+              loading: () => const Center(child: AdaptiveProgress()),
+              error: (e, _) => ErrorView(
+                message: e.toString(),
+                onRetry: () =>
+                    ref.read(conversationListProvider.notifier).refresh(),
               ),
-          ],
-        ),
+              data: (all) {
+                final list = _filter(all, myUserId, l10n);
+
+                return AdaptiveRefreshableScrollView(
+                  onRefresh: () =>
+                      ref.read(conversationListProvider.notifier).refresh(),
+                  slivers: [
+                    if (list.isEmpty)
+                      SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: _EmptyState(
+                          l10n: l10n,
+                          // "Nothing found" is a different thing from "no chats yet", and telling a
+                          // user to start a chat when they have twenty and mistyped a name is noise.
+                          searching: _query.isNotEmpty,
+                        ),
+                      )
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        sliver: SliverList.builder(
+                          itemCount: list.length,
+                          itemBuilder: (context, i) =>
+                              _ConversationRow(conversation: list[i]),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.l10n});
+  const _EmptyState({required this.l10n, this.searching = false});
 
   final AppLocalizations l10n;
+
+  /// Whether the list is empty because a search matched nothing, rather than because there is nothing.
+  final bool searching;
 
   @override
   Widget build(BuildContext context) {
@@ -84,25 +151,27 @@ class _EmptyState extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              Icons.forum_outlined,
+              searching ? Icons.search_off : Icons.forum_outlined,
               size: 44,
               color: theme.colorScheme.onSurfaceVariant,
             ),
             const SizedBox(height: 12),
             Text(
-              l10n.t('chat.noChats'),
+              l10n.t(searching ? 'chat.noResults' : 'chat.noChats'),
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              l10n.t('chat.pickChatHint'),
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            if (!searching) ...[
+              const SizedBox(height: 4),
+              Text(
+                l10n.t('chat.pickChatHint'),
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),

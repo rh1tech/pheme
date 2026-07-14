@@ -262,6 +262,8 @@ const Map<String, String> enStrings = {
   'profile.loadFailed': 'Could not load your profile',
 
   // chat — taken from web/src/i18n/en.ts so both clients say the same thing
+  'chat.search': 'Search',
+  'chat.noResults': 'Nothing found',
   'chat.title': 'Chats',
   'chat.tabChats': 'Chats',
   'chat.tabChannels': 'Channels',
