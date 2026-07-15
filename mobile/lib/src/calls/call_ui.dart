@@ -23,7 +23,9 @@ class CallOverlay extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final call = ref.watch(callProvider);
+    // Only whether a call EXISTS, so the Overlay is added when one starts and removed when it ends.
+    // The call's changing DETAILS (mute, route, status) are watched inside _CallLayer, not here.
+    final hasCall = ref.watch(callProvider.select((c) => c != null));
 
     return Stack(
       children: [
@@ -31,25 +33,40 @@ class CallOverlay extends ConsumerWidget {
         // The call UI is a sibling of the router's Navigator, so it has no Overlay of its own — and
         // the Material buttons inside it (tooltips, ink) need one. Give it a private Overlay, or a
         // tap on a call control throws "No Overlay widget found" and no call UI shows at all.
-        if (call != null)
+        //
+        // The Overlay's entry is built ONCE, so it must not capture the call state — a static snapshot
+        // is why mute and speaker stopped doing anything: they changed the state, but the frozen entry
+        // never rebuilt. _CallLayer watches the call itself, so it rebuilds on every change.
+        if (hasCall)
           Positioned.fill(
             child: Overlay(
               initialEntries: [
-                OverlayEntry(
-                  builder: (context) => call.isIncomingRing
-                      ? _IncomingCall(call: call)
-                      : Positioned(
-                          top: MediaQuery.paddingOf(context).top + 8,
-                          left: 16,
-                          right: 16,
-                          child: _CallBar(call: call),
-                        ),
-                ),
+                OverlayEntry(builder: (_) => const _CallLayer()),
               ],
             ),
           ),
       ],
     );
+  }
+}
+
+/// The live call surface, WATCHING the call so it rebuilds as mute, route and status change. It lives
+/// inside the Overlay's entry, which is built once — so the reactivity has to be here, not above.
+class _CallLayer extends ConsumerWidget {
+  const _CallLayer();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final call = ref.watch(callProvider);
+    if (call == null) return const SizedBox.shrink();
+    return call.isIncomingRing
+        ? _IncomingCall(call: call)
+        : Positioned(
+            top: MediaQuery.paddingOf(context).top + 8,
+            left: 16,
+            right: 16,
+            child: _CallBar(call: call),
+          );
   }
 }
 
