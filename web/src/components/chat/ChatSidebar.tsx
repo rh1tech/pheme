@@ -4,14 +4,19 @@ import { IconSearch } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { usePullToRefresh } from '../../hooks/usePullToRefresh'
+import { useUserSearch } from '../../hooks/useUserSearch'
 import { ChatSidebarMenu } from './ChatSidebarMenu'
 import { NewChannelMenu } from './NewChannelMenu'
 import { ChatListItem } from './ChatListItem'
 import { ConversationListItem } from './ConversationListItem'
+import { ChannelAvatar } from './ChannelAvatar'
 import { NotificationsBanner } from '../NotificationsBanner'
 import { CardListSkeleton } from '../Skeletons'
-import { conversationTitle } from '../../lib/conversation'
+import { api } from '../../lib/api'
+import { notifyError } from '../../lib/notify'
+import { conversationTitle, userLabel } from '../../lib/conversation'
 import { useAuth } from '../../auth/context'
+import type { PublicUser } from '../../lib/types'
 import type { ChannelListApi } from '../../hooks/useChannelList'
 import type { ConversationListApi } from '../../hooks/useConversationList'
 
@@ -66,7 +71,6 @@ export function ChatSidebar({ list, conversations, activeId, onSelectChannel }: 
   const loading = list.loading || conversations.loading
   const total = list.channels.length + conversations.conversations.length
   const empty = !loading && total === 0
-  const noMatches = !loading && total > 0 && rows.length === 0
 
   const channelById = useMemo(() => new Map(list.channels.map((c) => [c.id, c])), [list.channels])
   const convById = useMemo(
@@ -78,6 +82,54 @@ export function ChatSidebar({ list, conversations, activeId, onSelectChannel }: 
     onSelectChannel()
     navigate(kind === 'channel' ? `/channels/${id}` : `/chats/${id}`)
   }
+
+  // A query turns the list into a search: the matching chats and channels above, then
+  // people to start a NEW chat with (createDirectChat is idempotent — picking someone
+  // you already talk to just opens that chat). The results fill the whole list area.
+  const searching = query.trim().length > 0
+  const { results: people, searching: peopleSearching, active: peopleActive } = useUserSearch(query)
+
+  async function startChatWith(user: PublicUser) {
+    try {
+      const conv = await api.createDirectChat(user.id)
+      await conversations.refresh()
+      setQuery('')
+      onSelectChannel()
+      navigate(`/chats/${conv.id}`)
+    } catch (e) {
+      notifyError(t('chat.startFailed'), e)
+    }
+  }
+
+  function renderRow(row: Row) {
+    if (row.kind === 'channel') {
+      const channel = channelById.get(row.id)
+      if (!channel) return null
+      return (
+        <ChatListItem
+          key={`ch-${row.id}`}
+          channel={channel}
+          active={row.id === activeId}
+          onSelect={(id) => select('channel', id)}
+        />
+      )
+    }
+    const item = convById.get(row.id)
+    if (!item) return null
+    return (
+      <ConversationListItem
+        key={`co-${row.id}`}
+        item={item}
+        active={row.id === activeId}
+        onSelect={(id) => select('conversation', id)}
+      />
+    )
+  }
+
+  // Nothing at all matched the query — no chat, and (once people were searched) no
+  // person either. Only then is the search genuinely empty.
+  const nothingFound =
+    searching && rows.length === 0 && (!peopleActive || (!peopleSearching && people.length === 0))
 
   // Pull down from the top of the list to re-fetch both halves — the same refresh the
   // stream runs on reconnect, now on demand. A phone gesture, so it is off on desktop
@@ -130,42 +182,68 @@ export function ChatSidebar({ list, conversations, activeId, onSelectChannel }: 
             <Loader size="sm" />
           </div>
         )}
-        <NotificationsBanner />
+        {!searching && <NotificationsBanner />}
 
         {loading && <CardListSkeleton rows={5} />}
 
-        {(empty || noMatches) && (
+        {/* Not searching: the whole merged list, with its own empty state. */}
+        {!searching && empty && (
           <Stack align="center" py="xl">
             <Text c="dimmed" size="sm">
-              {empty ? t('chat.noChannels') : t('chat.noResults')}
+              {t('chat.noChannels')}
             </Text>
           </Stack>
         )}
+        {!searching && rows.map(renderRow)}
 
-        {rows.map((row) => {
-          if (row.kind === 'channel') {
-            const channel = channelById.get(row.id)
-            if (!channel) return null
-            return (
-              <ChatListItem
-                key={`ch-${row.id}`}
-                channel={channel}
-                active={row.id === activeId}
-                onSelect={(id) => select('channel', id)}
-              />
-            )
-          }
-          const item = convById.get(row.id)
-          if (!item) return null
-          return (
-            <ConversationListItem
-              key={`co-${row.id}`}
-              item={item}
-              active={row.id === activeId}
-              onSelect={(id) => select('conversation', id)}
-            />
-          )
-        })}
+        {/* Searching: matched chats and channels, then people to start a chat with —
+            filling the list, which is the whole screen on a phone. */}
+        {searching && rows.length > 0 && (
+          <div className="pheme-list-section">{t('chat.searchChatsSection')}</div>
+        )}
+        {searching && rows.map(renderRow)}
+
+        {searching && peopleActive && (
+          <div className="pheme-list-section">{t('chat.peopleSection')}</div>
+        )}
+        {searching && peopleActive && peopleSearching && people.length === 0 && (
+          <Group justify="center" py="sm">
+            <Loader size="sm" />
+          </Group>
+        )}
+        {searching &&
+          people.map((u) => (
+            <button
+              key={`pe-${u.id}`}
+              type="button"
+              className="pheme-chat-row"
+              onClick={() => void startChatWith(u)}
+            >
+              <ChannelAvatar id={u.id} name={userLabel(u)} avatarId={u.avatarId} size={44} />
+              <div style={{ minWidth: 0 }}>
+                <Text fw={600} size="sm" truncate>
+                  {userLabel(u)}
+                </Text>
+                {u.username && (
+                  <Text size="xs" c="dimmed" truncate>
+                    @{u.username}
+                  </Text>
+                )}
+              </div>
+            </button>
+          ))}
+
+        {/* Typed too little to search people, and no chat matched either. */}
+        {searching && !peopleActive && rows.length === 0 && (
+          <Text c="dimmed" size="sm" ta="center" py="xl">
+            {t('chat.searchKeepTyping')}
+          </Text>
+        )}
+        {nothingFound && peopleActive && (
+          <Text c="dimmed" size="sm" ta="center" py="xl">
+            {t('chat.noResults')}
+          </Text>
+        )}
       </div>
     </aside>
   )

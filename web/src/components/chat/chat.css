@@ -137,6 +137,16 @@
   pointer-events: none;
 }
 
+/* A heading between the search's result groups (chats & channels, then people). */
+.pheme-list-section {
+  padding: 0.625rem 0.5rem 0.25rem;
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--mantine-color-dimmed);
+}
+
 /* --- Chat list row ------------------------------------------------------ */
 
 .pheme-chat-row {
