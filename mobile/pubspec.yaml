@@ -20,6 +20,9 @@ version: 1.0.0+1
 
 environment:
   sdk: ^3.12.0
+  # Pinned so CI's flutter-action can resolve a version from this file (flutter-version-file).
+  # Without it the Mobile job fails at setup with "Unable to determine Flutter version".
+  flutter: 3.44.0
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
