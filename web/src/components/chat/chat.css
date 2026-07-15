@@ -886,6 +886,10 @@
   background: var(--pheme-chip-bg);
   color: var(--mantine-color-dimmed);
   overflow: hidden;
+  /* A single photo carries an explicit pixel width (see PhotoGrid); this clamps it on a screen
+     narrower than the photo without disturbing the reserved, aspect-ratio height. Harmless on a grid
+     photo, whose width already comes from its 1fr column. */
+  max-width: 100%;
 }
 
 .pheme-photo[data-clickable='true'] {

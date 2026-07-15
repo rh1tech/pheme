@@ -82,12 +82,19 @@ function Photo({
 
   // The box's shape AND size come from the message, so it reserves the right space before the bytes
   // arrive. A grid photo takes its width from the 1fr column (a definite width); a single photo is a
-  // block, so it needs an explicit width — its own, capped at the bubble — for aspect-ratio to resolve
-  // to a real height rather than collapsing to nothing until the image loads and shoves the feed.
+  // block whose width must be definite too, or aspect-ratio has nothing to make a height from and the
+  // box collapses until the image loads and shoves the feed.
+  //
+  // The width is a PLAIN pixel value, not min(...px, 100%). The bubble is shrink-to-fit (align-self:
+  // flex-start, max-width only), and during its intrinsic sizing a percentage inside the width counts
+  // as zero — so `min(Xpx, 100%)` collapsed the box to nothing. A bare px width is definite for that
+  // sizing; `max-width: 100%` (in CSS) then clamps it on a screen narrower than the photo, and
+  // aspect-ratio still yields a real, reserved height at every width. Verified: image load shifts the
+  // text below it by 0px, wide or clamped.
   const ratio = square || photo.w <= 0 || photo.h <= 0 ? 1 : photo.w / photo.h
   const boxStyle = square
     ? { aspectRatio: '1' }
-    : { width: photo.w > 0 ? `min(${photo.w}px, 100%)` : '100%', aspectRatio: String(ratio) }
+    : { width: `${photo.w > 0 ? photo.w : 320}px`, aspectRatio: String(ratio) }
 
   return (
     <>
