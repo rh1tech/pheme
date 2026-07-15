@@ -77,20 +77,29 @@ class MessageBubble extends StatelessWidget {
     // run reads as one block.
     final tailCorner = endsRun ? _tail : _round;
 
+    // A bubble caps at a FRACTION of the screen, not a fixed pixel width. The web's 544px cap never
+    // constrained anything on a phone — a phone is only ~400 logical pixels wide — so every longer
+    // message filled the whole row and there was no left/right distinction left to see. 78% leaves a
+    // clear gutter on the other side, which is what makes "mine on the right, theirs on the left"
+    // actually read as that.
+    final maxBubbleWidth = MediaQuery.of(context).size.width * 0.78;
+
     return Align(
       alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
         onLongPress: onLongPress,
         child: Container(
-          constraints: const BoxConstraints(
-            maxWidth: 544,
-          ), // --pheme-bubble-max
+          constraints: BoxConstraints(maxWidth: maxBubbleWidth),
           // Tight inside a run, loose between runs. This spacing IS the grouping.
           margin: EdgeInsets.only(
             top: startsRun ? 6 : 1,
             bottom: endsRun ? 6 : 1,
           ),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          // IntrinsicWidth so the bubble HUGS its content instead of stretching to the max. The
+          // timestamp below is right-aligned with an Align, and an Align expands to fill its parent —
+          // which dragged every bubble that shows a clock out to the full cap. Intrinsic width pins the
+          // column to its widest real child (the text), and the timestamp right-aligns within that.
           decoration: BoxDecoration(
             color: background,
             borderRadius: BorderRadius.only(
@@ -109,53 +118,56 @@ class MessageBubble extends StatelessWidget {
                     ),
                   ],
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Once per run, not once per message.
-              if (senderName != null && !isOwn && startsRun)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 2),
-                  child: Text(
-                    senderName!,
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: dark ? const Color(0xFFA888F5) : kIris,
-                      fontWeight: FontWeight.w600,
+          child: IntrinsicWidth(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Once per run, not once per message.
+                if (senderName != null && !isOwn && startsRun)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(
+                      senderName!,
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: dark ? const Color(0xFFA888F5) : kIris,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ),
-              // The quote sits above everything, the way a reply reads: context first, then the reply.
-              if (quote != null) quote!,
+                // The quote sits above everything, the way a reply reads: context first, then the reply.
+                if (quote != null) quote!,
 
-              if (photos != null) ...[
-                photos!,
-                // A caption gets air above it. A photo with no caption gets none — the gap would be
-                // the only thing in the bubble.
-                if (body != null && body!.isNotEmpty) const SizedBox(height: 6),
-              ],
+                if (photos != null) ...[
+                  photos!,
+                  // A caption gets air above it. A photo with no caption gets none — the gap would be
+                  // the only thing in the bubble.
+                  if (body != null && body!.isNotEmpty)
+                    const SizedBox(height: 6),
+                ],
 
-              // A photo with no caption has no body line at all. An empty Text still takes a row of
-              // leading and leaves a strip of dead space under the picture.
-              if (photos == null || body == null || body!.isNotEmpty)
-                _Body(body: body, l10n: l10n),
+                // A photo with no caption has no body line at all. An empty Text still takes a row of
+                // leading and leaves a strip of dead space under the picture.
+                if (photos == null || body == null || body!.isNotEmpty)
+                  _Body(body: body, l10n: l10n),
 
-              // Likewise the timestamp: a run of five messages sent in the same minute does not need
-              // five identical clocks down its side.
-              if (endsRun) ...[
-                const SizedBox(height: 2),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    bubbleTime(l10n, createdAt),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontSize: 11,
-                      color: theme.colorScheme.onSurfaceVariant,
+                // Likewise the timestamp: a run of five messages sent in the same minute does not need
+                // five identical clocks down its side.
+                if (endsRun) ...[
+                  const SizedBox(height: 2),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      bubbleTime(l10n, createdAt),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

@@ -288,8 +288,23 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     // The echo of a message we sent and already appended.
     if (state.messages.any((m) => m.id == message.id)) return;
 
-    state = state.copyWith(messages: [...state.messages, message]);
-    await _decrypt([message]);
+    // Decrypt BEFORE appending, so we can skip an unreadable echo of our OWN outgoing message rather
+    // than flash it as "Not available" until the send path fills it in. A sender can never decrypt its
+    // own message — its plaintext lives only in the local cache the send path writes — so an echo that
+    // is ours AND unreadable is exactly that message, arriving faster than send() returned. Let send()
+    // render it. A message from our OTHER device decrypts fine here (a different leaf), so it is not
+    // skipped.
+    final content = await mls.decryptMessage(
+      _conversationId,
+      myUserId,
+      message,
+    );
+    if (content == null && message.senderId == myUserId) return;
+
+    state = state.copyWith(
+      messages: [...state.messages, message],
+      contents: {...state.contents, message.id: content},
+    );
     await _markRead(message);
   }
 
@@ -357,8 +372,13 @@ class MessageFeedController extends Notifier<MessageFeedState> {
         ref.read(chatCacheProvider).content(conversation.id, message.id) ??
         ChatContent(body: body, replyTo: replyTo);
 
+    // The live echo of this very message can arrive — and append it — BEFORE sendMessage returns here,
+    // because the server round-trips faster than the local await resolves. So dedup: if it is already
+    // in the list, do not add a second copy. Only _onLiveMessage checked this before, and send did not,
+    // which is exactly how a sent message showed up twice.
+    final alreadyThere = state.messages.any((m) => m.id == message.id);
     state = state.copyWith(
-      messages: [...state.messages, message],
+      messages: alreadyThere ? state.messages : [...state.messages, message],
       contents: {...state.contents, message.id: content},
       joined: true,
       peerNotReady: false,
