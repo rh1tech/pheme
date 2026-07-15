@@ -224,7 +224,9 @@ class MlsService {
           if (groupId != null) _rememberReadable(conversation.id, groupId);
           return groupId;
         })
-        .whenComplete(() => _settling.remove(conversation.id));
+        .whenComplete(() {
+          _settling.remove(conversation.id);
+        });
 
     _settling[conversation.id] = run;
     return run;
@@ -285,8 +287,11 @@ class MlsService {
           .catchError((_) {});
     }
 
-    if (!state.isEstablished) return null;
-    return await session.hasGroup(state.groupId) ? state.groupId : null;
+    if (!state.isEstablished) {
+      return null;
+    }
+    final holds = await session.hasGroup(state.groupId);
+    return holds ? state.groupId : null;
   }
 
   Future<String?> _settleGroup(
@@ -374,13 +379,15 @@ class MlsService {
     ).catchError((_) {});
 
     // Leave fresh GroupInfo behind, so the NEXT new device to open this chat can external-join at the
-    // current epoch instead of waiting to be admitted. Best effort: a member holds the group, so it is
-    // the one party that can produce this, and the more members that refresh it the fresher it stays.
-    await _publishGroupInfo(
-      session,
-      conversation.id,
-      state.groupId,
-    ).catchError((_) {});
+    // current epoch instead of waiting to be admitted. FIRE AND FORGET: it is best-effort housekeeping
+    // for someone else's future, and awaiting a network call here once hung the user's own send.
+    unawaited(
+      _publishGroupInfo(
+        session,
+        conversation.id,
+        state.groupId,
+      ).catchError((_) {}),
+    );
     return state.groupId;
   }
 
@@ -428,12 +435,10 @@ class MlsService {
     }
 
     // Publish GroupInfo straight away, so a member added here who is not online to take the Welcome
-    // can external-join the moment they open the chat instead of waiting.
-    await _publishGroupInfo(
-      session,
-      conversation.id,
-      groupId,
-    ).catchError((_) {});
+    // can external-join the moment they open the chat instead of waiting. Fire and forget.
+    unawaited(
+      _publishGroupInfo(session, conversation.id, groupId).catchError((_) {}),
+    );
     return groupId;
   }
 
@@ -715,17 +720,19 @@ class MlsService {
         );
         if (outcome == CommitOutcome.accepted) {
           _rememberReadable(conversation.id, groupId);
-          // The epoch just moved; leave fresh GroupInfo for the next joiner.
-          await _publishGroupInfo(
-            session,
-            conversation.id,
-            groupId,
-          ).catchError((_) {});
+          // The epoch just moved; leave fresh GroupInfo for the next joiner. Fire and forget.
+          unawaited(
+            _publishGroupInfo(
+              session,
+              conversation.id,
+              groupId,
+            ).catchError((_) {}),
+          );
           return groupId;
         }
         // Conflict: a Commit landed between fetching the GroupInfo and offering ours. Refetch newer
         // GroupInfo and try again.
-      } on Object {
+      } on Object catch (e) {
         // Building or offering the external commit failed for a reason a retry will not fix.
         return null;
       }

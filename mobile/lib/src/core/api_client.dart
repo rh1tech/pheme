@@ -21,6 +21,12 @@ Dio buildDio({
     BaseOptions(
       baseUrl: baseUrl,
       headers: {'Content-Type': 'application/json'},
+      // Without these a stalled connection hangs the caller forever — which is what turned a slow
+      // network into a Send button that spun and never stopped. A request that has not connected in
+      // 15s, or gone quiet for 30s mid-response, is failed so the caller's error handling can run.
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 30),
+      sendTimeout: const Duration(seconds: 30),
       // We translate non-2xx into ApiException ourselves.
       validateStatus: (_) => true,
     ),
