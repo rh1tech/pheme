@@ -28,15 +28,26 @@ class CallOverlay extends ConsumerWidget {
     return Stack(
       children: [
         child,
+        // The call UI is a sibling of the router's Navigator, so it has no Overlay of its own — and
+        // the Material buttons inside it (tooltips, ink) need one. Give it a private Overlay, or a
+        // tap on a call control throws "No Overlay widget found" and no call UI shows at all.
         if (call != null)
-          call.isIncomingRing
-              ? _IncomingCall(call: call)
-              : Positioned(
-                  top: MediaQuery.paddingOf(context).top + 8,
-                  left: 16,
-                  right: 16,
-                  child: _CallBar(call: call),
+          Positioned.fill(
+            child: Overlay(
+              initialEntries: [
+                OverlayEntry(
+                  builder: (context) => call.isIncomingRing
+                      ? _IncomingCall(call: call)
+                      : Positioned(
+                          top: MediaQuery.paddingOf(context).top + 8,
+                          left: 16,
+                          right: 16,
+                          child: _CallBar(call: call),
+                        ),
                 ),
+              ],
+            ),
+          ),
       ],
     );
   }
