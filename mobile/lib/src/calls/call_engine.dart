@@ -26,6 +26,7 @@ import '../crypto/mls_session.dart';
 import '../data/pheme_repository.dart';
 import 'call_envelope.dart';
 import 'call_state.dart';
+import 'proximity_lock.dart';
 
 /// How long a call rings before it gives up.
 const ringTimeout = Duration(seconds: 35);
@@ -186,6 +187,16 @@ class CallEngine {
       return; // an ended call does not change its mind
     _status = status;
     _reason = reason;
+
+    // Darken the screen when the phone is at the ear for as long as the call is live, and let it go
+    // when the call ends. Anchored to status so it covers every way in and out — answered, declined,
+    // timed out, dropped. Best effort and fire-and-forget: it must never gate the call.
+    if (status == CallStatus.ended) {
+      unawaited(ProximityLock.release());
+    } else {
+      unawaited(ProximityLock.acquire());
+    }
+
     _emit();
   }
 
