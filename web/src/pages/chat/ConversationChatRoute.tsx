@@ -95,6 +95,20 @@ const MAX_PHOTOS = 10
  * not reach, and the top-of-feed loader pages back to fill any gap between them. The
  * result is sorted oldest-first.
  */
+/**
+ * Unions two message lists by id and sorts oldest-first. Used by load-older: the cached transcript
+ * can already hold messages the older page returns (the envelope cache shows up to 200, but the
+ * load-older cursor tracks the newest page), so a blind prepend would duplicate them and shove the
+ * feed. Merging by id drops the overlap and keeps everything ordered, while still pulling in the
+ * genuinely-older messages — and the gap of messages that arrived while away — that the page adds.
+ */
+function mergeSorted(a: ChatMessage[], b: ChatMessage[]): ChatMessage[] {
+  const byId = new Map<string, ChatMessage>()
+  for (const m of a) byId.set(m.id, m)
+  for (const m of b) byId.set(m.id, m)
+  return [...byId.values()].sort((x, y) => x.createdAt.localeCompare(y.createdAt))
+}
+
 function reconcile(cached: ChatMessage[], fetched: ChatMessage[]): ChatMessage[] {
   // Only ever called with the newest page (no cursor), so an empty result is authoritative:
   // the whole history is gone — every message cleared (here or on another device) or deleted —
@@ -591,7 +605,10 @@ export function ConversationChatRoute() {
     captureAnchor()
     try {
       const page = await api.listChatMessages(id, cursor, PAGE_SIZE, true)
-      setMessages((prev) => [...page.messages.slice().reverse(), ...prev])
+      const older = page.messages.slice().reverse()
+      // Merge, not prepend: the older page can overlap what the envelope cache already shows, and a
+      // blind prepend would duplicate those messages and jump the feed. See mergeSorted.
+      setMessages((prev) => mergeSorted(prev, older))
       setCursor(page.nextCursor)
     } catch (e) {
       notifyError(t('dashboard.loadFailed'), e)
