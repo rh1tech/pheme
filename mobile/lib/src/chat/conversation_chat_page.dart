@@ -107,11 +107,21 @@ class _ChatViewState extends ConsumerState<_ChatView> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    // The send button's enabled state is derived from the composer's text, so it has to rebuild when
+    // that text changes. The composer is stateless and does not watch its own controller, so without
+    // this the button only re-enables when the view happens to rebuild for another reason — and typing
+    // a message would leave Send stubbornly greyed.
+    _composer.addListener(_onComposerChanged);
+  }
+
+  void _onComposerChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _scroll.removeListener(_onScroll);
+    _composer.removeListener(_onComposerChanged);
     _scroll.dispose();
     _composer.dispose();
     super.dispose();
@@ -936,8 +946,23 @@ class _Composer extends StatelessWidget {
                 const SizedBox(width: 6),
                 IconButton.filled(
                   onPressed: canSend ? onSend : null,
+                  // The default filled button paints its icon in onPrimary, but on this theme the
+                  // arrow came out near-black on the purple fill — unreadable. Pin it to onPrimary so
+                  // both the arrow and the sending spinner stay legible against the fill.
+                  style: IconButton.styleFrom(
+                    foregroundColor: theme.colorScheme.onPrimary,
+                    disabledForegroundColor: theme.colorScheme.onSurfaceVariant
+                        .withValues(alpha: 0.5),
+                  ),
                   icon: sending
-                      ? const AdaptiveProgress(size: 16)
+                      ? SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: theme.colorScheme.onPrimary,
+                          ),
+                        )
                       : const Icon(Icons.arrow_upward, size: 20),
                   tooltip: l10n.t('chat.send'),
                 ),
@@ -1009,7 +1034,9 @@ Future<void> _confirmDeleteConversation(
   if (!confirmed || !context.mounted) return;
 
   try {
-    await ref.read(repositoryProvider).deleteConversation(conversation.id);
+    // Goes through the list controller, not the repo directly: it deletes server-side AND drops the
+    // conversation from the list state and the local caches, so it does not linger in the list.
+    await ref.read(conversationListProvider.notifier).delete(conversation.id);
     if (!context.mounted) return;
     notifySuccess(context, l10n.t('chat.chatDeleted'));
     context.go('/');
