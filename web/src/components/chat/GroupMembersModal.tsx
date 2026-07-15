@@ -8,6 +8,7 @@ import { notifyError, notifySuccess } from '../../lib/notify'
 import { userLabel } from '../../lib/conversation'
 import { useAuth } from '../../auth/context'
 import { ResponsiveModal } from '../ResponsiveModal'
+import { UserInfoModal } from './UserInfoModal'
 import type { Conversation, PublicUser } from '../../lib/types'
 
 interface GroupMembersModalProps {
@@ -29,6 +30,8 @@ export function GroupMembersModal({ conversation, opened, onClose, onChanged }: 
   const { userId } = useAuth()
   const [busy, setBusy] = useState<string | null>(null) // userId being acted on
   const [adding, setAdding] = useState(false)
+  // The member whose contact card is open, tapped from their avatar in the roster.
+  const [viewing, setViewing] = useState<PublicUser | null>(null)
 
   const me = conversation.members.find((m) => m.userId === userId)
   const iAmAdmin = me?.role === 'admin'
@@ -78,14 +81,20 @@ export function GroupMembersModal({ conversation, opened, onClose, onChanged }: 
             const isOwner = m.userId === conversation.createdBy
             return (
               <Group key={m.userId} gap="sm" wrap="nowrap" py={4}>
-                <Avatar
-                  src={m.user.avatarId ? imageUrl(m.user.avatarId) : undefined}
-                  radius="xl"
-                  size={34}
-                  color="iris"
+                <UnstyledButton
+                  onClick={() => setViewing(m.user)}
+                  aria-label={t('chat.openInfo')}
+                  style={{ borderRadius: 9999, flex: '0 0 auto', display: 'inline-flex' }}
                 >
-                  {userLabel(m.user).slice(0, 2).toUpperCase()}
-                </Avatar>
+                  <Avatar
+                    src={m.user.avatarId ? imageUrl(m.user.avatarId) : undefined}
+                    radius="xl"
+                    size={34}
+                    color="iris"
+                  >
+                    {userLabel(m.user).slice(0, 2).toUpperCase()}
+                  </Avatar>
+                </UnstyledButton>
                 <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
                   <Text size="sm" truncate>
                     {userLabel(m.user)}
@@ -142,6 +151,14 @@ export function GroupMembersModal({ conversation, opened, onClose, onChanged }: 
           })}
         </Stack>
       </Stack>
+
+      {/* A member's contact card, opened from their avatar. Rendered here so it
+          stacks above the roster sheet. */}
+      <UserInfoModal
+        user={viewing}
+        opened={viewing !== null}
+        onClose={() => setViewing(null)}
+      />
     </ResponsiveModal>
   )
 }

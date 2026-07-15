@@ -162,7 +162,7 @@ export function Composer({ channelId, focusSignal, onSent }: ComposerProps) {
       <Stack gap="xs">
         <ComposerAttachments files={images} onRemove={removeImage} />
 
-        <Group gap="xs" align="flex-end" wrap="nowrap">
+        <Group gap="xs" align="flex-start" wrap="nowrap">
           <Tooltip label={t('channel.attachImages')} withArrow>
             <ActionIcon
               aria-label={t('channel.attachImages')}

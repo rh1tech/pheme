@@ -91,7 +91,14 @@ export function ChatHeader({
           />
         ) : (
           <>
-            <ChannelAvatar id={channelId} name={name} avatarId={channel?.avatarId ?? hintAvatarId} size={38} />
+            <ChannelAvatar
+              id={channelId}
+              name={name}
+              avatarId={channel?.avatarId ?? hintAvatarId}
+              size={38}
+              label={t('channel.info')}
+              onClick={onToggleInfo}
+            />
             <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
               <Text fw={600} size="sm" truncate>
                 {name}

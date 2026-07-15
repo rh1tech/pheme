@@ -8,6 +8,7 @@ import {
   IconLogout,
   IconPhone,
   IconPhoto,
+  IconRefresh,
   IconSend,
   IconShieldLock,
   IconTrash,
@@ -52,6 +53,7 @@ import { JumpToBottom } from '../../components/chat/JumpToBottom'
 import { ChatSkeleton } from '../../components/chat/ChatSkeleton'
 import { SafetyNumberModal } from '../../components/chat/SafetyNumber'
 import { GroupMembersModal } from '../../components/chat/GroupMembersModal'
+import { UserInfoModal } from '../../components/chat/UserInfoModal'
 import { ConfirmModal } from '../../components/ConfirmModal'
 import { useCalls } from '../../components/call/context'
 import { useCallingAvailable } from '../../hooks/useCallingAvailable'
@@ -110,6 +112,7 @@ export function ConversationChatRoute() {
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
   const [safetyOpen, setSafetyOpen] = useState(false)
   const [membersOpen, setMembersOpen] = useState(false)
+  const [userInfoOpen, setUserInfoOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
@@ -152,6 +155,15 @@ export function ConversationChatRoute() {
   // have already handled — so the one-shot decrypt never runs twice for a message.
   const bodiesRef = useRef<Record<string, ChatContent>>({})
   const processedRef = useRef<Set<string>>(new Set())
+  // Messages that could not be read on the last pass — sealed to an MLS epoch this
+  // device has not applied yet (a new member's first message rides in with the Commit
+  // that admits them). They are parked here, not retired, and retried when the epoch
+  // advances, so they decrypt in place instead of only after leaving and reopening.
+  const failedRef = useRef<Set<string>>(new Set())
+  // Bumped when a Welcome/Commit is applied while this chat is open; a change nudges
+  // the decrypt effect to re-attempt the parked messages against the new epoch.
+  const [catchUpTick, setCatchUpTick] = useState(0)
+  const lastTickRef = useRef(0)
   // The conversation's MLS group, once this device is a member of it. Empty while it is
   // not — a device that has just signed in has to wait for a member to admit it, and
   // until then there is nothing to encrypt to and nothing it can read.
@@ -296,6 +308,7 @@ export function ConversationChatRoute() {
     let active = true
     bodiesRef.current = {}
     processedRef.current = new Set()
+    failedRef.current = new Set()
     loadCachedContents(id).then((cached) => {
       if (!active) return
       bodiesRef.current = cached
@@ -331,11 +344,17 @@ export function ConversationChatRoute() {
         // restore prompt is what resolves it.
         return
       }
+      // A new epoch was applied since the last pass: un-park the messages that could
+      // not be read before, so they get another attempt now the ratchet may reach them.
+      if (catchUpTick !== lastTickRef.current) {
+        lastTickRef.current = catchUpTick
+        for (const mid of failedRef.current) processedRef.current.delete(mid)
+        failedRef.current.clear()
+      }
       const next: Record<string, ChatContent> = { ...bodiesRef.current }
       let changed = false
       for (const m of messages) {
         if (processedRef.current.has(m.id) || MLS_CONTROL_TYPES.has(m.contentType)) continue
-        processedRef.current.add(m.id)
         try {
           // A call's record is encrypted exactly like a message, because it IS one — the
           // difference is only what the body means, which the bubble decides. The one thing it
@@ -395,6 +414,18 @@ export function ConversationChatRoute() {
             changed = true
           }
         }
+        // Retire a message only once its body actually resolved (decrypted, or read
+        // back from the local cache). If it did not, park it: it is added to the
+        // processed set so ordinary re-renders skip it, but recorded in failedRef so the
+        // next epoch catch-up above releases it for another try. This is what turns a
+        // new member's first message from "reopen to see it" into "it just appears".
+        if (next[m.id] !== undefined) {
+          processedRef.current.add(m.id)
+          failedRef.current.delete(m.id)
+        } else {
+          processedRef.current.add(m.id)
+          failedRef.current.add(m.id)
+        }
       }
 
       if (active && changed) {
@@ -406,7 +437,7 @@ export function ConversationChatRoute() {
     return () => {
       active = false
     }
-  }, [messages, readyId, userId, id, conversation, groupId, readable])
+  }, [messages, readyId, userId, id, conversation, groupId, readable, catchUpTick])
 
   useEffect(() => {
     let active = true
@@ -485,7 +516,13 @@ export function ConversationChatRoute() {
       // device, settling now is what turns the conversation from unreadable to readable
       // without the user having to reload.
       void ensureGroup(conversation, userId)
-        .then((gid) => setGroupId(gid ?? ''))
+        .then((gid) => {
+          setGroupId(gid ?? '')
+          // The epoch may have advanced (a member added, a device admitted). Nudge the
+          // decrypt effect so a message sealed to the new epoch — a newly joined user's
+          // first words — is read now, not only after leaving and coming back.
+          setCatchUpTick((n) => n + 1)
+        })
         .catch(() => {})
       return
     }
@@ -501,6 +538,24 @@ export function ConversationChatRoute() {
   async function reloadConversation() {
     const c = await api.getConversation(id)
     setConversation(c)
+  }
+
+  // A manual pull of the conversation's current state — its metadata and its newest
+  // page — for when the live stream has missed something and the chat looks stale.
+  // Re-attempting decryption (catchUpTick) picks up anything that was still sealed.
+  async function refreshChat() {
+    try {
+      const [c, page] = await Promise.all([
+        api.getConversation(id),
+        api.listChatMessages(id, '', PAGE_SIZE),
+      ])
+      setConversation(c)
+      setMessages(page.messages.slice().reverse())
+      setCursor(page.nextCursor)
+      setCatchUpTick((n) => n + 1)
+    } catch (e) {
+      notifyError(t('dashboard.loadFailed'), e)
+    }
   }
 
   async function deleteChat() {
@@ -685,7 +740,16 @@ export function ConversationChatRoute() {
           >
             <IconArrowLeft size={20} />
           </ActionIcon>
-          <ChannelAvatar id={avatarKey} name={title || '·'} avatarId={avatarId} size={38} />
+          {/* Tapping the avatar opens who this chat is with: a group's roster, or a
+              direct peer's contact card. */}
+          <ChannelAvatar
+            id={avatarKey}
+            name={title || '·'}
+            avatarId={avatarId}
+            size={38}
+            label={t('chat.openInfo')}
+            onClick={() => (isGroup ? setMembersOpen(true) : setUserInfoOpen(true))}
+          />
           <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
             <Text fw={600} size="sm" truncate>
               {title}
@@ -726,6 +790,12 @@ export function ConversationChatRoute() {
               </ActionIcon>
             </Menu.Target>
             <Menu.Dropdown>
+              <Menu.Item
+                leftSection={<IconRefresh size={18} />}
+                onClick={() => void refreshChat()}
+              >
+                {t('chat.refresh')}
+              </Menu.Item>
               {isGroup && (
                 <Menu.Item
                   leftSection={<IconUsers size={18} />}
@@ -769,6 +839,14 @@ export function ConversationChatRoute() {
           opened={membersOpen}
           onClose={() => setMembersOpen(false)}
           onChanged={reloadConversation}
+        />
+      )}
+
+      {header && !isGroup && (
+        <UserInfoModal
+          user={otherMember(header, userId ?? '') ?? null}
+          opened={userInfoOpen}
+          onClose={() => setUserInfoOpen(false)}
         />
       )}
 
@@ -985,7 +1063,7 @@ export function ConversationChatRoute() {
           </div>
         )}
 
-        <Group gap="xs" align="flex-end" wrap="nowrap">
+        <Group gap="xs" align="flex-start" wrap="nowrap">
           <FileButton
             multiple
             accept="image/*"

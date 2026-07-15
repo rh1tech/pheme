@@ -27,6 +27,12 @@ import type { LiveEvent } from '../lib/types'
 type Listener = (e: LiveEvent) => void
 
 const listeners = new Set<Listener>()
+// Fired when the stream RE-connects (not the first connect of the tab's life). A
+// gap in the stream can drop one-shot events — a conversation deleted on another
+// device, say — with no catch-up of their own. So a reconnect is the cue for the
+// list hooks to re-fetch and reconcile whatever they missed while it was down.
+const reconnectListeners = new Set<() => void>()
+let everOpened = false
 let source: EventSource | null = null
 let reopenTimer: ReturnType<typeof setTimeout> | null = null
 let attempt = 0
@@ -91,6 +97,10 @@ async function open(): Promise<void> {
   source = es
   es.addEventListener('open', () => {
     attempt = 0
+    // The first connect is covered by each subscriber's own mount fetch; only a
+    // RE-connect needs a reconcile, so the initial open does not fire this.
+    if (everOpened) for (const cb of reconnectListeners) cb()
+    everOpened = true
   })
   es.addEventListener('message', handleMessage)
   es.addEventListener('error', () => {
@@ -153,4 +163,25 @@ export function useEventStream(onEvent: Listener): void {
   })
 
   useEffect(() => subscribe((e) => handler.current(e)), [])
+}
+
+/**
+ * Runs `onReconnect` whenever the live stream re-connects after a drop or a
+ * background suspension — the moment to re-fetch and reconcile any one-shot event
+ * (a remote deletion) that the gap may have swallowed. Held in a ref so a fresh
+ * inline callback each render does not re-register.
+ */
+export function useStreamReconnect(onReconnect: () => void): void {
+  const handler = useRef(onReconnect)
+  useEffect(() => {
+    handler.current = onReconnect
+  })
+
+  useEffect(() => {
+    const cb = () => handler.current()
+    reconnectListeners.add(cb)
+    return () => {
+      reconnectListeners.delete(cb)
+    }
+  }, [])
 }

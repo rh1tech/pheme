@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
 import { loadLastSeen, markSeen } from '../lib/lastSeen'
-import { useEventStream } from './useEventStream'
+import { useEventStream, useStreamReconnect } from './useEventStream'
 import type {
   Channel,
   ChannelRole,
@@ -130,6 +130,10 @@ export function useChannelList(): ChannelListApi {
       prev.map((c) => (c.id === e.channelId ? { ...c, lastMessage: toLastMessage(msg) } : c)),
     )
   })
+
+  // Reconcile after a stream gap: refetch on reconnect so a channel left or removed
+  // elsewhere drops from the list without a reload.
+  useStreamReconnect(refresh)
 
   const markRead = useCallback((channelId: string, iso: string) => {
     markSeen(channelId, iso)

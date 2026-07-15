@@ -11,7 +11,7 @@ import { useChannelList } from '../../hooks/useChannelList'
 import { useConversationList } from '../../hooks/useConversationList'
 import { useDeviceAdmission } from '../../hooks/useDeviceAdmission'
 import { useColdLaunchToList } from '../../hooks/useColdLaunchToList'
-import { useVisualViewportHeight } from '../../hooks/useVisualViewport'
+import { useKeyboardOpen, useVisualViewportHeight } from '../../hooks/useVisualViewport'
 import type { ChatOutletContext } from './context'
 import './chat.css'
 
@@ -35,6 +35,7 @@ export function ChatShell() {
   const chatMatch = useMatch({ path: '/chats/:id', end: false })
   const activeId = channelMatch?.params.id ?? chatMatch?.params.id
   const viewportHeight = useVisualViewportHeight()
+  const keyboardOpen = useKeyboardOpen()
   // Read synchronously on the first render (not deferred to an effect): the cold-launch
   // redirect below decides once, at mount, and a first-render "false" that only flips to
   // true afterwards would make it miss the very launch it exists to catch.
@@ -87,6 +88,7 @@ export function ChatShell() {
       <div
         className="pheme-shell"
         data-view={activeId ? 'chat' : 'list'}
+        data-keyboard={keyboardOpen ? 'open' : undefined}
         style={
           viewportHeight === null
             ? undefined

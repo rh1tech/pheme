@@ -264,6 +264,13 @@ const en = {
     chatsSection: 'Chats',
     channelsSection: 'Channels',
     addMenu: 'Create or subscribe to a channel',
+    userInfo: 'Contact info',
+    openInfo: 'View info',
+    refresh: 'Refresh',
+    pullToRefresh: 'Pull to refresh',
+    phemeId: 'Pheme ID',
+    phemeIdCopied: 'Pheme ID copied',
+    noUsername: 'No username set',
   },
   channel: {
     fallbackName: 'Channel',

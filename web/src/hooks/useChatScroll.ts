@@ -156,6 +156,12 @@ export function useChatScroll(resetKey: string, onReachBottom?: () => void): Cha
     // the distance from the bottom survives the list growing by an unknown height
     // above the reader, which a saved scrollTop does not.
     anchor.current = el.scrollHeight - el.scrollTop
+    // Turn native scroll anchoring OFF for the prepend only. The feed keeps
+    // `overflow-anchor: auto` the rest of the time so the browser holds a reader in
+    // the backlog steady when an image decodes above them — but during a prepend the
+    // manual restore below does that job, and letting the browser also compensate for
+    // the same inserted height doubles the jump. Cleared once the restore has run.
+    el.dataset.prepending = 'true'
   }, [])
 
   const [seenKey, setSeenKey] = useState(resetKey)
@@ -185,6 +191,9 @@ export function useChatScroll(resetKey: string, onReachBottom?: () => void): Cha
       if (anchor.current !== null) {
         setScrollTop(el.scrollHeight - anchor.current)
         anchor.current = null
+        // The prepend is placed; hand scroll anchoring back to the browser for the
+        // ordinary case (an image decoding above a reader in the backlog).
+        delete el.dataset.prepending
         return
       }
       applyMode()

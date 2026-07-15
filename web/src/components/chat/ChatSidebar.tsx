@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
-import { Group, Stack, Text, TextInput } from '@mantine/core'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { Group, Loader, Stack, Text, TextInput } from '@mantine/core'
 import { IconSearch } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { usePullToRefresh } from '../../hooks/usePullToRefresh'
 import { ChatSidebarMenu } from './ChatSidebarMenu'
 import { NewChannelMenu } from './NewChannelMenu'
 import { ChatListItem } from './ChatListItem'
@@ -78,6 +79,16 @@ export function ChatSidebar({ list, conversations, activeId, onSelectChannel }: 
     navigate(kind === 'channel' ? `/channels/${id}` : `/chats/${id}`)
   }
 
+  // Pull down from the top of the list to re-fetch both halves — the same refresh the
+  // stream runs on reconnect, now on demand. A phone gesture, so it is off on desktop
+  // where the pointer cannot express it.
+  const listRef = useRef<HTMLDivElement>(null)
+  const refreshAll = useCallback(
+    () => Promise.all([list.refresh(), conversations.refresh()]).then(() => undefined),
+    [list, conversations],
+  )
+  const { pull, refreshing } = usePullToRefresh(listRef, refreshAll)
+
   return (
     <aside className="pheme-sidebar" data-testid="chat-sidebar">
       <div className="pheme-sidebar-header">
@@ -100,7 +111,16 @@ export function ChatSidebar({ list, conversations, activeId, onSelectChannel }: 
         </Group>
       </div>
 
-      <div className="pheme-sidebar-list">
+      <div className="pheme-sidebar-list" ref={listRef}>
+        {(pull > 0 || refreshing) && (
+          <div
+            className="pheme-ptr"
+            style={{ transform: `translateY(${pull}px)` }}
+            aria-hidden={!refreshing}
+          >
+            <Loader size="sm" />
+          </div>
+        )}
         <NotificationsBanner />
 
         {loading && <CardListSkeleton rows={5} />}

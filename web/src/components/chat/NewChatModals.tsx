@@ -58,7 +58,10 @@ function UserSearch({ onPick, exclude }: UserSearchProps) {
         leftSection={<IconSearch size={16} stroke={1.8} />}
         rightSection={searching ? <Loader size="xs" /> : null}
       />
-      <Stack gap={2} style={{ maxHeight: 260, overflowY: 'auto' }}>
+      {/* No inner maxHeight/scroller: the results flow inside the modal body, which
+          already scrolls and is bounded to the visible viewport (ResponsiveModal). A
+          fixed 260px box nested a second scrollbar and cropped the list short. */}
+      <Stack gap={2}>
         {shownResults.map((u) => (
           <UnstyledButton
             key={u.id}

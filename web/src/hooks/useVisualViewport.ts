@@ -49,6 +49,42 @@ export function useVisualViewportRect(): ViewportRect | null {
   return rect
 }
 
+/**
+ * Whether the software keyboard is currently covering the bottom of the screen.
+ *
+ * The shell height is already the visual viewport, so its bottom edge sits flush
+ * with the top of the keyboard. But the composer keeps `env(safe-area-inset-bottom)`
+ * of padding to clear the home indicator — and iOS keeps reporting that inset even
+ * while the keyboard physically covers the indicator, leaving a dead strip between
+ * the text field and the keys. Knowing the keyboard is up lets that padding collapse.
+ *
+ * Derived by how much the layout viewport shrank to the visual one: the dynamic
+ * Safari toolbar accounts for well under 120px, a keyboard for far more.
+ */
+const KEYBOARD_MIN_PX = 120
+
+export function useKeyboardOpen(): boolean {
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => {
+      const covered = window.innerHeight - vv.height - vv.offsetTop
+      setOpen(covered > KEYBOARD_MIN_PX)
+    }
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
+  }, [])
+
+  return open
+}
+
 export function useVisualViewportHeight(): number | null {
   const [height, setHeight] = useState<number | null>(
     () => window.visualViewport?.height ?? null,

@@ -6,7 +6,7 @@ import { getPreview } from '../lib/chatCache'
 import { MLS_APPLICATION, MLS_CONTROL_TYPES, base64ToBytes } from '../lib/mls'
 import { loadLastSeen, markSeen } from '../lib/lastSeen'
 import { useAuth } from '../auth/context'
-import { useEventStream } from './useEventStream'
+import { useEventStream, useStreamReconnect } from './useEventStream'
 import type { ChatMessage, Conversation } from '../lib/types'
 
 /** A conversation as the chat list renders it, next to channel rows. */
@@ -96,10 +96,21 @@ export function useConversationList(): ConversationListApi {
     }
     if (!e.conversationId || !e.chatMessage) return
     const msg = e.chatMessage
+    // MLS protocol traffic (a device announcing itself, a Welcome, a Commit) is not
+    // something a human said. Opening a chat generates it — announceDevice re-fires on
+    // every open until this device is admitted — so letting it patch lastMessage would
+    // bump the row to the top of the list with a blank preview just for being opened.
+    // Only a real message reorders a conversation. previewOf already excludes these.
+    if (MLS_CONTROL_TYPES.has(msg.contentType)) return
     setConversations((prev) =>
       prev.map((c) => (c.id === e.conversationId ? patchLast(c, msg) : c)),
     )
   })
+
+  // A dropped stream can miss a one-shot deletion, leaving a ghost row that only a
+  // reload clears. Re-fetching on reconnect reconciles it: a conversation gone on the
+  // server drops from the list without the user having to reload.
+  useStreamReconnect(refresh)
 
   const markRead = useCallback((conversationId: string, iso: string) => {
     markSeen(conversationId, iso)

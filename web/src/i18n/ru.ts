@@ -266,6 +266,13 @@ const ru: Resources = {
     chatsSection: 'Чаты',
     channelsSection: 'Каналы',
     addMenu: 'Создать канал или подписаться',
+    userInfo: 'Профиль контакта',
+    openInfo: 'Открыть профиль',
+    refresh: 'Обновить',
+    pullToRefresh: 'Потяните, чтобы обновить',
+    phemeId: 'Pheme ID',
+    phemeIdCopied: 'Pheme ID скопирован',
+    noUsername: 'Имя пользователя не задано',
   },
   channel: {
     fallbackName: 'Канал',
