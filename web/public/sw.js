@@ -37,6 +37,11 @@ self.addEventListener('push', (event) => {
   }
 
   const isCall = data.kind === 'call'
+
+  // Suppress a message notification for a chat the user is already looking at. If a
+  // focused, visible window is open on this conversation (or channel), the message is
+  // already on screen over the live stream, so a second buzz on the lock screen is just
+  // noise. Calls are exempt — a ringing call must always surface, even in the chat.
   const title = payload.title || 'Pheme'
   const options = {
     body: payload.body || '',
@@ -55,8 +60,34 @@ self.addEventListener('push', (event) => {
     data,
   }
 
-  event.waitUntil(self.registration.showNotification(title, options))
+  event.waitUntil(
+    (async () => {
+      if (!isCall && (await isViewing(data))) return
+      await self.registration.showNotification(title, options)
+    })(),
+  )
 })
+
+// Whether a focused, visible window is currently on the chat (or channel) this push
+// is about. Only a client that is BOTH focused and visible counts: a background tab
+// left open on the chat should still notify. Checked only for messages — never calls.
+async function isViewing(data) {
+  const target = data.conversationId
+    ? `/chats/${data.conversationId}`
+    : data.channelId
+      ? `/channels/${data.channelId}`
+      : null
+  if (!target) return false
+
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  return clients.some((client) => {
+    if (!client.focused || client.visibilityState !== 'visible') return false
+    if (new URL(client.url).origin !== self.location.origin) return false
+    const path = new URL(client.url).pathname
+    // Exact match, or a nested route under it (a channel's /messages/:id deep link).
+    return path === target || path.startsWith(`${target}/`)
+  })
+}
 
 // Where a notification lands when tapped. A chat notification carries only a
 // conversation id: its body is encrypted, so there is nothing to show until the app

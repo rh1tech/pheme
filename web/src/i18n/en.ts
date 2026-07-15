@@ -261,6 +261,9 @@ const en = {
     conversationMenu: 'Conversation menu',
     deleteChat: 'Delete chat',
     deleteChatConfirm: 'This deletes the chat and its messages for both of you. This cannot be undone.',
+    clearHistory: 'Clear history',
+    clearHistoryConfirm:
+      'This permanently deletes every message in this chat and cannot be undone. The conversation stays; only its history is cleared.',
     chatsSection: 'Chats',
     channelsSection: 'Channels',
     addMenu: 'Create or subscribe to a channel',

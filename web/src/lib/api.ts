@@ -535,6 +535,14 @@ export const api = {
   listConversations: () =>
     request<{ conversations: Conversation[] }>('/v1/conversations').then((r) => r.conversations ?? []),
   getConversation: (id: string) => request<Conversation>(`/v1/conversations/${id}`),
+  /**
+   * Like getConversation, but a gone conversation resolves to null instead of
+   * throwing — for the on-open existence probe. The server answers 404 both when a
+   * conversation was deleted and when this device is no longer a member (it never
+   * leaks which), and either way the answer is the same: it is not ours to show.
+   */
+  getConversationMaybe: (id: string) =>
+    request<Conversation | null>(`/v1/conversations/${id}`, { allow404: true }),
   createDirectChat: (otherUserId: string) =>
     request<Conversation>('/v1/conversations', {
       method: 'POST',
@@ -609,6 +617,14 @@ export const api = {
     }),
   deleteConversation: (conversationId: string) =>
     request<void>(`/v1/conversations/${conversationId}`, { method: 'DELETE' }),
+  /**
+   * Purges every stored message of a conversation server-side while keeping the
+   * conversation itself. The ciphertext is opaque and, with MLS forward secrecy,
+   * unreadable to the server anyway — this frees the storage and stops the history
+   * re-syncing to a fresh device. The caller clears the local plaintext caches too.
+   */
+  clearChatHistory: (conversationId: string) =>
+    request<void>(`/v1/conversations/${conversationId}/messages`, { method: 'DELETE' }),
 
   // Messages
   getMessage: (channelId: string, messageId: string) =>

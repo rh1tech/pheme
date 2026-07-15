@@ -263,6 +263,9 @@ const ru: Resources = {
     conversationMenu: 'Меню разговора',
     deleteChat: 'Удалить чат',
     deleteChatConfirm: 'Чат и его сообщения будут удалены у вас обоих. Это действие необратимо.',
+    clearHistory: 'Очистить историю',
+    clearHistoryConfirm:
+      'Все сообщения в этом чате будут удалены безвозвратно. Сам разговор останется — очищается только его история.',
     chatsSection: 'Чаты',
     channelsSection: 'Каналы',
     addMenu: 'Создать канал или подписаться',

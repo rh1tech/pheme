@@ -11,7 +11,7 @@
 // hold it, exactly as the messages themselves are.
 
 import { deserializeContent, serializeContent, type ChatContent } from './chatContent'
-import { idbGet, idbSet } from './idb'
+import { idbDelete, idbGet, idbSet } from './idb'
 
 // One IndexedDB entry holds the whole per-conversation body map, which keeps
 // reads and writes simple; conversations are not large enough to need per-message
@@ -74,6 +74,16 @@ export async function cacheContent(
   await idbSet(cacheKey(conversationId), encoder.encode(JSON.stringify(map)))
 }
 
+/**
+ * Drops one conversation's cached bodies — on delete, on clear-history, or when the
+ * server reports it gone (404). The plaintext is destroyed here: MLS keys are
+ * single-use, so a body forgotten from this cache can never be read again on this
+ * device. That is the point — clearing history has to mean it.
+ */
+export async function forgetBodies(conversationId: string): Promise<void> {
+  await idbDelete(cacheKey(conversationId))
+}
+
 // The sidebar preview is stored separately in localStorage: it is tiny, read
 // synchronously while rendering the list, and updated whenever a newer message is
 // decrypted. Without it the list could not show a preview at all, since the last
@@ -91,6 +101,15 @@ export function getPreview(conversationId: string): string {
     return localStorage.getItem(previewKey(conversationId)) ?? ''
   } catch {
     return ''
+  }
+}
+
+/** Drops one conversation's cached preview — alongside its bodies and envelope. */
+export function clearPreview(conversationId: string): void {
+  try {
+    localStorage.removeItem(previewKey(conversationId))
+  } catch {
+    // Storage unavailable: nothing cached to clear.
   }
 }
 

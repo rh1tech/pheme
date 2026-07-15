@@ -4,6 +4,7 @@ import {
   IconArrowBackUp,
   IconArrowLeft,
   IconDots,
+  IconEraser,
   IconLock,
   IconLogout,
   IconPhone,
@@ -38,7 +39,15 @@ import {
   primeGroup,
   removeGroupMember,
 } from '../../lib/mls'
-import { cacheContent, loadCachedContents, setPreview } from '../../lib/chatCache'
+import {
+  cacheContent,
+  clearPreview,
+  forgetBodies,
+  loadCachedContents,
+  setPreview,
+} from '../../lib/chatCache'
+import { forgetEnvelope, loadEnvelope, saveEnvelope } from '../../lib/chatEnvelope'
+import { forgetSeen } from '../../lib/lastSeen'
 import { conversationAvatarKey, conversationTitle, otherMember } from '../../lib/conversation'
 import { groupByDay, messageTime } from '../../lib/time'
 import { useAuth } from '../../auth/context'
@@ -76,6 +85,42 @@ const PAGE_SIZE = 50
  */
 /** How many photos may ride on one message. Telegram's album is ten; so is this. */
 const MAX_PHOTOS = 10
+
+/**
+ * Reconciles the cached transcript with the server's newest page. Within the page's
+ * time window the server is authoritative — a cached message the page does not include
+ * was cleared or deleted (perhaps on another of this user's devices), so it is dropped.
+ * Cached messages OLDER than the window are kept: they are history the page simply did
+ * not reach, and the top-of-feed loader pages back to fill any gap between them. The
+ * result is sorted oldest-first.
+ */
+function reconcile(cached: ChatMessage[], fetched: ChatMessage[]): ChatMessage[] {
+  // Only ever called with the newest page (no cursor), so an empty result is authoritative:
+  // the whole history is gone — every message cleared (here or on another device) or deleted —
+  // and the cached transcript must be dropped, not kept. Returning `cached` here would resurrect
+  // exactly the messages a clear was meant to remove. A transient network failure never reaches
+  // this function (it throws and the caller keeps the cache), so this is not that case.
+  if (fetched.length === 0) return []
+  const windowStart = fetched[0].createdAt // oldest of the newest page (fetched is oldest-first)
+  const byId = new Map<string, ChatMessage>()
+  for (const m of fetched) byId.set(m.id, m)
+  for (const m of cached) {
+    if (m.createdAt.localeCompare(windowStart) < 0) byId.set(m.id, m)
+  }
+  return [...byId.values()].sort((x, y) => x.createdAt.localeCompare(y.createdAt))
+}
+
+/**
+ * Purges every local trace of a conversation on this device — decrypted bodies,
+ * the message envelope, the list preview, and the read watermark. Called when the
+ * conversation is deleted, cleared, or found gone on the server. The bodies cannot
+ * be recovered afterwards (MLS keys are single-use); that is the intent.
+ */
+async function evictLocal(conversationId: string): Promise<void> {
+  await Promise.all([forgetBodies(conversationId), forgetEnvelope(conversationId)])
+  clearPreview(conversationId)
+  forgetSeen(conversationId)
+}
 
 export function ConversationChatRoute() {
   const { id = '' } = useParams()
@@ -115,6 +160,7 @@ export function ConversationChatRoute() {
   const [userInfoOpen, setUserInfoOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
   // The conversation whose peer has published no keys (so we cannot encrypt to them).
   // Keyed by id and derived, so switching chats clears the banner without a reset.
@@ -155,6 +201,10 @@ export function ConversationChatRoute() {
   // have already handled — so the one-shot decrypt never runs twice for a message.
   const bodiesRef = useRef<Record<string, ChatContent>>({})
   const processedRef = useRef<Set<string>>(new Set())
+  // Whether the network reconcile has landed for the current chat. The cache hydrate
+  // and the network fetch race; if the network wins, the cache must not clobber its
+  // (authoritative) result by re-showing messages the fetch deliberately dropped.
+  const reconciledRef = useRef(false)
   // Messages that could not be read on the last pass — sealed to an MLS epoch this
   // device has not applied yet (a new member's first message rides in with the Commit
   // that admits them). They are parked here, not retired, and retried when the epoch
@@ -177,6 +227,19 @@ export function ConversationChatRoute() {
     (gid: string) => setSettled({ conversationId: id, groupId: gid }),
     [id],
   )
+
+  // Reset the transcript the instant the open conversation changes. This is the
+  // render-phase "adjust state when a prop changes" pattern React endorses (not an
+  // effect), so the previous chat's messages never flash before this one's cache
+  // loads: the reset lands in the same render as the id change, and the skeleton shows
+  // until the preload effect below hydrates from cache or the network reconcile lands.
+  const [shownId, setShownId] = useState(id)
+  if (shownId !== id) {
+    setShownId(id)
+    setMessages([])
+    setCursor('')
+    setLoading(true)
+  }
 
   const markNewestRead = useCallback(() => {
     const newest = messages[messages.length - 1]
@@ -245,12 +308,24 @@ export function ConversationChatRoute() {
     }
   }, [id, userId, setGroupId])
 
+  // Fetch the conversation on open — and use the same round trip to confirm it still
+  // exists. A 404 (getConversationMaybe returns null) means it was deleted, or this
+  // device was removed, while we were away and offline enough to miss the live
+  // `conversationDeleted` event. Treat it exactly as that event would: purge the local
+  // caches and drop back to the list. A transient error (network, 500) is caught
+  // separately and leaves the chat up, since it is not evidence the chat is gone.
   useEffect(() => {
     let active = true
     api
-      .getConversation(id)
+      .getConversationMaybe(id)
       .then((c) => {
         if (!active) return
+        if (!c) {
+          void evictLocal(id)
+          conversations.refresh()
+          navigate('/')
+          return
+        }
         setConversation(c)
         if (!userId) return
         // Settle the group: establish it if it does not exist and we created the
@@ -277,6 +352,9 @@ export function ConversationChatRoute() {
     return () => {
       active = false
     }
+    // navigate is stable; conversations.refresh is a stable useCallback. Re-running on
+    // their identity would refetch needlessly, so they are intentionally omitted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userId, setGroupId])
 
   // Keep asking, while this device is waiting to be let into the group.
@@ -302,19 +380,35 @@ export function ConversationChatRoute() {
     }
   }, [id, userId, conversation, groupId, setGroupId])
 
-  // Preload this conversation's already-decrypted bodies from the local cache
-  // before any message processing, so cached messages are never re-decrypted.
+  // Preload this conversation's already-decrypted bodies AND its cached message
+  // envelope before any message processing — so cached messages are never
+  // re-decrypted, and the transcript that was last on screen paints instantly from
+  // disk instead of behind a skeleton while the network is asked for the newest page.
+  //
+  // The old chat's list is cleared first: without it, switching chats would flash the
+  // previous conversation's messages until this resolves. Hydrating from cache then
+  // replaces the skeleton with the real transcript in the same tick.
   useEffect(() => {
     let active = true
     bodiesRef.current = {}
     processedRef.current = new Set()
     failedRef.current = new Set()
-    loadCachedContents(id).then((cached) => {
+    reconciledRef.current = false
+    void Promise.all([loadCachedContents(id), loadEnvelope(id)]).then(([cached, envelope]) => {
       if (!active) return
       bodiesRef.current = cached
       for (const messageId of Object.keys(cached)) processedRef.current.add(messageId)
       setBodies(cached)
       setReadyId(id)
+      // Paint the cached transcript for an instant first frame — unless the network
+      // reconcile already landed, in which case its authoritative result stands and the
+      // cache must not re-show messages the server dropped (a clear on another device).
+      if (envelope.length > 0 && !reconciledRef.current) {
+        setMessages(envelope)
+        // We have a transcript to show; the network fetch refines it in place rather
+        // than gating first paint.
+        setLoading(false)
+      }
     })
     return () => {
       active = false
@@ -439,15 +533,31 @@ export function ConversationChatRoute() {
     }
   }, [messages, readyId, userId, id, conversation, groupId, readable, catchUpTick])
 
+  // Reconcile the cached transcript with the server's newest page. `loading` is not
+  // forced true here — the preload effect above owns the skeleton and has already
+  // cleared it when the cache had something to show, so a warm open never flashes one.
+  // The fetched page is UNION-merged with whatever is on screen (cache or a prior
+  // fetch), keyed by immutable id, so nothing already shown disappears and new
+  // messages slot into place. A transient failure leaves the cached transcript up.
   useEffect(() => {
     let active = true
     const run = async () => {
-      setLoading(true)
       try {
         const page = await api.listChatMessages(id, '', PAGE_SIZE)
         if (!active) return
-        setMessages(page.messages.slice().reverse())
+        const fetched = page.messages.slice().reverse()
+        // Mark reconciled before the state update so a cache hydrate resolving in the
+        // same tick defers to this result rather than unioning dropped messages back.
+        reconciledRef.current = true
+        setMessages((prev) => {
+          const base = prev.length > 0 && prev[0].conversationId === id ? prev : []
+          return reconcile(base, fetched)
+        })
         setCursor(page.nextCursor)
+        // The whole history is gone (cleared here or elsewhere). Drop the on-disk envelope too —
+        // the save effect skips empty writes, so without this the stale file would survive and
+        // re-flash the cleared transcript on every future open.
+        if (fetched.length === 0) void forgetEnvelope(id)
         const newest = page.messages[0]
         if (newest) conversations.markRead(id, newest.createdAt)
       } catch (e) {
@@ -462,6 +572,16 @@ export function ConversationChatRoute() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
+
+  // Persist the on-screen transcript's newest window whenever it settles — after the
+  // reconcile above, pagination, a live arrival, or a send — so the next open of this
+  // chat paints from it. Guarded on the conversation id so a mid-switch render, where
+  // `messages` still holds the previous chat for a tick, cannot write it under the new
+  // id's key.
+  useEffect(() => {
+    if (messages.length === 0 || messages[0].conversationId !== id) return
+    void saveEnvelope(id, messages)
+  }, [messages, id])
 
   async function loadOlder() {
     if (!cursor || loadingOlder) return
@@ -562,6 +682,7 @@ export function ConversationChatRoute() {
     setActionBusy(true)
     try {
       await api.deleteConversation(id)
+      await evictLocal(id)
       navigate('/')
     } catch (e) {
       notifyError(t('group.actionFailed'), e)
@@ -574,9 +695,35 @@ export function ConversationChatRoute() {
     setActionBusy(true)
     try {
       await removeGroupMember(id, userId, userId)
+      await evictLocal(id)
       navigate('/')
     } catch (e) {
       notifyError(t('group.actionFailed'), e)
+      setActionBusy(false)
+    }
+  }
+
+  // Clear the conversation's history: purge it server-side (the ciphertext, which no
+  // one can read anyway) and wipe the local plaintext caches, keeping the conversation
+  // itself. Then empty the on-screen transcript in place so the now-clear chat shows
+  // without a reload. The bodies are gone for good — MLS keys are single-use — which is
+  // exactly what "clear history" has to mean.
+  async function clearHistory() {
+    setActionBusy(true)
+    try {
+      await api.clearChatHistory(id)
+      await evictLocal(id)
+      processedRef.current = new Set()
+      failedRef.current = new Set()
+      bodiesRef.current = {}
+      setBodies({})
+      setMessages([])
+      setCursor('')
+      setConfirmClear(false)
+      conversations.refresh()
+    } catch (e) {
+      notifyError(t('group.actionFailed'), e)
+    } finally {
       setActionBusy(false)
     }
   }
@@ -804,6 +951,12 @@ export function ConversationChatRoute() {
                   {t('group.membersTitle')}
                 </Menu.Item>
               )}
+              <Menu.Item
+                leftSection={<IconEraser size={18} />}
+                onClick={() => setConfirmClear(true)}
+              >
+                {t('chat.clearHistory')}
+              </Menu.Item>
               {isGroup && (
                 <Menu.Item
                   leftSection={<IconLogout size={18} />}
@@ -860,6 +1013,17 @@ export function ConversationChatRoute() {
         <Text size="sm">
           {isGroup ? t('group.deleteGroupConfirm') : t('chat.deleteChatConfirm')}
         </Text>
+      </ConfirmModal>
+
+      <ConfirmModal
+        opened={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        onConfirm={clearHistory}
+        loading={actionBusy}
+        title={t('chat.clearHistory')}
+        confirmLabel={t('chat.clearHistory')}
+      >
+        <Text size="sm">{t('chat.clearHistoryConfirm')}</Text>
       </ConfirmModal>
 
       <ConfirmModal
