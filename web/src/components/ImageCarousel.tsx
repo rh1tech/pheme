@@ -49,8 +49,16 @@ export function ImageCarousel({ images, onOpen }: ImageCarouselProps) {
     slide?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
   }
 
+  // A DEFINITE pixel width, so each slide is a definite width and the browser reserves every image's
+  // height from its width/height attributes BEFORE it lazy-loads. Without it the strip lived in a
+  // shrink-to-fit bubble whose width is indefinite, so `width: 100%; height: auto` reserved nothing and
+  // each image shoved the feed as it scrolled into view. `max-width: 100%` (below) clamps it on a
+  // narrow screen; capped at the bubble's max so a huge image does not blow past it.
+  const widest = Math.max(...images.map((img) => img.width || 0))
+  const displayWidth = Math.min(widest > 0 ? widest : 320, 544)
+
   return (
-    <Box>
+    <Box style={{ width: displayWidth, maxWidth: '100%' }}>
       <div className="pheme-carousel" ref={trackRef}>
         {images.map((img, i) => (
           <div className="pheme-carousel-slide" data-slide={i} key={img.id}>
