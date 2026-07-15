@@ -88,6 +88,14 @@ export function ChatHeader({
             }}
             leftSection={<IconSearch size={16} stroke={1.8} />}
             style={{ flex: 1 }}
+            // See ChatSidebar: a bare input floats iOS's AutoFill dropdown, clipped
+            // above the keyboard. Declaring it a search field suppresses it.
+            type="search"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            enterKeyHint="search"
           />
         ) : (
           <>

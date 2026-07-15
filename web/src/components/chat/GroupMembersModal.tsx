@@ -201,6 +201,12 @@ function AddMemberSearch({ exclude, busy, onPick }: AddMemberSearchProps) {
         leftSection={<IconSearch size={16} stroke={1.8} />}
         rightSection={searching || busy ? <Loader size="xs" /> : null}
         disabled={busy}
+        type="search"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="none"
+        spellCheck={false}
+        enterKeyHint="search"
       />
       {shown.map((u) => (
         <UnstyledButton

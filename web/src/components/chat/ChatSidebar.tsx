@@ -102,6 +102,15 @@ export function ChatSidebar({ list, conversations, activeId, onSelectChannel }: 
             leftSection={<IconSearch size={16} stroke={1.8} />}
             radius="xl"
             style={{ flex: 1 }}
+            // Declare it a search field and turn off autofill/autocorrect: without
+            // these, iOS floats its native AutoFill/autocomplete dropdown over the
+            // field — clipped above the keyboard — the moment it is focused.
+            type="search"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            enterKeyHint="search"
           />
           <NewChannelMenu
             onChanged={async () => {

@@ -57,6 +57,12 @@ function UserSearch({ onPick, exclude }: UserSearchProps) {
         onChange={(e) => setQuery(e.currentTarget.value)}
         leftSection={<IconSearch size={16} stroke={1.8} />}
         rightSection={searching ? <Loader size="xs" /> : null}
+        type="search"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="none"
+        spellCheck={false}
+        enterKeyHint="search"
       />
       {/* No inner maxHeight/scroller: the results flow inside the modal body, which
           already scrolls and is bounded to the visible viewport (ResponsiveModal). A
