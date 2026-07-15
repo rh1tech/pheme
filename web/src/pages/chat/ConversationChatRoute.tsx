@@ -47,9 +47,10 @@ import {
   setPreview,
 } from '../../lib/chatCache'
 import { forgetEnvelope, loadEnvelope, saveEnvelope } from '../../lib/chatEnvelope'
+import { forgetPhotos } from '../../lib/photoCache'
 import { forgetSeen } from '../../lib/lastSeen'
 import { conversationAvatarKey, conversationTitle, otherMember } from '../../lib/conversation'
-import { groupByDay, messageTime } from '../../lib/time'
+import { dayKey, groupByDay, messageTime } from '../../lib/time'
 import { useAuth } from '../../auth/context'
 import { useEventStream } from '../../hooks/useEventStream'
 import { useChatScroll } from '../../hooks/useChatScroll'
@@ -120,6 +121,7 @@ async function evictLocal(conversationId: string): Promise<void> {
   await Promise.all([forgetBodies(conversationId), forgetEnvelope(conversationId)])
   clearPreview(conversationId)
   forgetSeen(conversationId)
+  forgetPhotos(conversationId)
 }
 
 export function ConversationChatRoute() {
@@ -1053,7 +1055,7 @@ export function ConversationChatRoute() {
               groupByDay(visibleMessages).map((day) => (
                 // One section per day, so the day's sticky pill pins within its own day and is
                 // carried off by it. See groupByDay.
-                <section className="pheme-day" key={day[0].id}>
+                <section className="pheme-day" key={dayKey(day[0].createdAt)}>
                   <DateSeparator iso={day[0].createdAt} />
                   {day.map((m) => {
                     const own = m.senderId === userId

@@ -20,6 +20,16 @@ export function isSameDay(a: string, b: string): boolean {
 }
 
 /**
+ * A stable per-day key for the feed's day sections. Every message in a day yields the same value, so
+ * it does not change when an older page prepends a message to a day already on screen — unlike keying
+ * a section by its first message's id, which flips and remounts the whole section (re-fetching every
+ * photo in it) the moment the day gains an earlier message.
+ */
+export function dayKey(iso: string): string {
+  return String(startOfDay(new Date(iso)))
+}
+
+/**
  * Splits messages into consecutive runs that fall on the same calendar day.
  *
  * The feed renders one run per day, as its own section, and that is not merely tidy: the day

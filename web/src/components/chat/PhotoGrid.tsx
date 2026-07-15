@@ -15,8 +15,7 @@ import { useDisclosure } from '@mantine/hooks'
 import { IconPhotoOff } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 
-import { api } from '../../lib/api'
-import { openPhoto } from '../../lib/photo'
+import { loadPhotoUrl } from '../../lib/photoCache'
 import type { ChatPhoto } from '../../lib/chatContent'
 
 interface PhotoGridProps {
@@ -61,30 +60,23 @@ function Photo({
 
   useEffect(() => {
     let active = true
-    let objectUrl: string | null = null
-
-    async function load() {
-      try {
-        const sealed = await api.attachmentBytes(conversationId, photo.id)
-        const bytes = await openPhoto(photo.key, sealed)
-        if (!active) return
-
-        objectUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: photo.mime }))
-        setUrl(objectUrl)
-      } catch {
+    // The decrypted bytes are cached (lib/photoCache), so a photo scrolled back into view — or the
+    // whole chat reopened — shows instantly from cache instead of re-fetching and blinking. The cache
+    // owns the object URL's lifetime and bounds how many are kept, so this effect must NOT revoke on
+    // unmount: revoking a URL another mounted <img> is still pointing at would blank it.
+    loadPhotoUrl(conversationId, photo.id, photo.key, photo.mime)
+      .then((objectUrl) => {
+        if (active) setUrl(objectUrl)
+      })
+      .catch(() => {
         // A photo that will not open is not the photo that was sent, and showing something else would
         // be worse than saying so. It is also permanent — the key is in a message this device cannot
         // read — so this must not look like a retry is coming.
         if (active) setFailed(true)
-      }
-    }
-    void load()
+      })
 
     return () => {
       active = false
-      // The object URL pins the decrypted bytes in memory until it is revoked. Leaving it would keep
-      // the plaintext of every photo ever scrolled past alive for the life of the tab.
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
   }, [conversationId, photo.id, photo.key, photo.mime])
 
