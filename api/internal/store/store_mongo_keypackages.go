@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sort"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
@@ -147,6 +148,63 @@ func (m *Mongo) MLSGroupState(ctx context.Context, conversationID string) (domai
 		return domain.MLSGroupState{}, err
 	}
 	return conv.MLS, nil
+}
+
+// SetMLSGroupInfo keeps the latest GroupInfo for the current group, in its own collection so a
+// group-state read never drags the bytes along. One document per conversation.
+//
+// The read-then-write is deliberately not one atomic step: GroupInfo is derived and self-correcting,
+// so the worst a lost race does is store a slightly older snapshot, which a joiner's compare-and-set
+// refuses and refetches. Not worth a transaction.
+func (m *Mongo) SetMLSGroupInfo(
+	ctx context.Context, conversationID, groupID string, epoch int64, groupInfo []byte,
+) error {
+	state, err := m.MLSGroupState(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+	if state.GroupID != groupID {
+		return nil // not the current group; ignore
+	}
+	var existing struct {
+		GroupID string `bson:"groupId"`
+		Epoch   int64  `bson:"epoch"`
+	}
+	err = m.db.Collection("mlsGroupInfo").
+		FindOne(ctx, bson.M{"_id": conversationID}).Decode(&existing)
+	if err == nil && existing.GroupID == groupID && existing.Epoch >= epoch {
+		return nil // already have something at least as new
+	}
+	_, err = m.db.Collection("mlsGroupInfo").UpdateOne(
+		ctx,
+		bson.M{"_id": conversationID},
+		bson.M{"$set": bson.M{"groupId": groupID, "epoch": epoch, "groupInfo": groupInfo}},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
+// MLSGroupInfo returns the latest GroupInfo, or ErrNotFound if none is published for the current
+// group.
+func (m *Mongo) MLSGroupInfo(ctx context.Context, conversationID string) (domain.MLSGroupInfo, error) {
+	var doc struct {
+		GroupID   string `bson:"groupId"`
+		Epoch     int64  `bson:"epoch"`
+		GroupInfo []byte `bson:"groupInfo"`
+	}
+	err := m.db.Collection("mlsGroupInfo").
+		FindOne(ctx, bson.M{"_id": conversationID}).Decode(&doc)
+	if errors.Is(err, mongo.ErrNoDocuments) || len(doc.GroupInfo) == 0 {
+		return domain.MLSGroupInfo{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.MLSGroupInfo{}, err
+	}
+	// Stale if the group has since been retired.
+	if state, err := m.MLSGroupState(ctx, conversationID); err == nil && state.GroupID != doc.GroupID {
+		return domain.MLSGroupInfo{}, ErrNotFound
+	}
+	return domain.MLSGroupInfo{GroupID: doc.GroupID, Epoch: doc.Epoch, GroupInfo: doc.GroupInfo}, nil
 }
 
 // CommitMLSGroup is the compare-and-set that keeps every member on one group history,

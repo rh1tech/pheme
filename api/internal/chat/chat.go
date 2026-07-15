@@ -95,6 +95,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/conversations/{id}/mls", h.getMLSGroup)
 	mux.HandleFunc("GET /v1/conversations/{id}/mls/commits", h.listMLSCommits)
 	mux.HandleFunc("POST /v1/conversations/{id}/mls/commit", h.postMLSCommit)
+	mux.HandleFunc("GET /v1/conversations/{id}/mls/group-info", h.getMLSGroupInfo)
+	mux.HandleFunc("POST /v1/conversations/{id}/mls/group-info", h.postMLSGroupInfo)
 	// The way out of a group nobody holds any more. Retires it (remembering it, so nothing
 	// anyone still has is lost) so a fresh one can be established.
 	mux.HandleFunc("POST /v1/conversations/{id}/mls/reset", h.postMLSReset)

@@ -256,6 +256,14 @@ type Store interface {
 	// loads. Asking by epoch makes catching up exact and bounded instead of a trawl.
 	MLSControlMessagesSince(ctx context.Context, conversationID string, sinceEpoch int64) ([]domain.ChatMessage, error)
 
+	// SetMLSGroupInfo records the latest GroupInfo (RFC 9420 §11.2.1) a joiner can external-join
+	// against. Kept only for the CURRENT group and only if at least as new as what is stored, so a
+	// late or retired export never overwrites fresher material. See domain.MLSGroupInfo.
+	SetMLSGroupInfo(ctx context.Context, conversationID, groupID string, epoch int64, groupInfo []byte) error
+	// MLSGroupInfo returns the latest stored GroupInfo, or ErrNotFound if none has been published for
+	// the current group — a real answer that tells the caller to fall back to announcing itself.
+	MLSGroupInfo(ctx context.Context, conversationID string) (domain.MLSGroupInfo, error)
+
 	// MLS key directory (public KeyPackages). The server only relays these.
 	AddKeyPackages(ctx context.Context, packages []domain.MLSKeyPackage) error
 	// DevicesWithKeyPackages lists, per user, the devices that have published

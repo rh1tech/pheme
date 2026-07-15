@@ -442,6 +442,20 @@ type MLSGroupState struct {
 	PriorGroupIDs []string `bson:"mlsPriorGroupIds,omitempty" json:"priorGroupIds,omitempty"`
 }
 
+// MLSGroupInfo is the signed snapshot a NON-MEMBER needs to join a group by external commit
+// (RFC 9420 §11.2.1) — without a Welcome and without any member having to admit it.
+//
+// It is derived state, not history: a member re-exports it after every Commit, and the server keeps
+// only the latest. A joiner builds its external commit against it; if a newer Commit has landed since,
+// the ordinary compare-and-set refuses the join and the joiner refetches. So a stale GroupInfo is
+// self-correcting, never wrong. It is kept OUT of MLSGroupState because it is large and only the
+// handful of devices actually joining ever need it — every group-state read must not carry it.
+type MLSGroupInfo struct {
+	GroupID   string `bson:"mlsGroupInfoGroupId,omitempty"`
+	Epoch     int64  `bson:"mlsGroupInfoEpoch,omitempty"`
+	GroupInfo []byte `bson:"mlsGroupInfo,omitempty"`
+}
+
 // MLSKeyPackage is a single-use public MLS KeyPackage a user's device has
 // published, for others to add that user to an encrypted group. The server is
 // the MLS Delivery Service's key directory: it stores these public bytes and

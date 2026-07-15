@@ -158,6 +158,48 @@ func (m *Memory) MLSGroupState(_ context.Context, conversationID string) (domain
 	return c.MLS, nil
 }
 
+// SetMLSGroupInfo records the latest GroupInfo a joiner can external-join against.
+//
+// Only kept if it is for the CURRENT group and at least as new as what is stored — an older export
+// arriving late (or one for a group since retired) must never overwrite fresher material.
+func (m *Memory) SetMLSGroupInfo(
+	_ context.Context, conversationID, groupID string, epoch int64, groupInfo []byte,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.conversations[conversationID]
+	if !ok {
+		return ErrNotFound
+	}
+	if c.MLS.GroupID != groupID {
+		return nil // for a group that is not current; ignore rather than store the wrong material
+	}
+	if cur, ok := m.mlsGroupInfo[conversationID]; ok && cur.GroupID == groupID && cur.Epoch >= epoch {
+		return nil
+	}
+	m.mlsGroupInfo[conversationID] = domain.MLSGroupInfo{
+		GroupID: groupID, Epoch: epoch, GroupInfo: groupInfo,
+	}
+	return nil
+}
+
+// MLSGroupInfo returns the latest stored GroupInfo, or ErrNotFound if none — which is a real answer:
+// a group whose members have not published one yet cannot be external-joined, and the caller falls
+// back to announcing itself.
+func (m *Memory) MLSGroupInfo(_ context.Context, conversationID string) (domain.MLSGroupInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	gi, ok := m.mlsGroupInfo[conversationID]
+	if !ok || len(gi.GroupInfo) == 0 {
+		return domain.MLSGroupInfo{}, ErrNotFound
+	}
+	// If the group has since been retired, the stored info is stale and useless.
+	if c, ok := m.conversations[conversationID]; ok && c.MLS.GroupID != gi.GroupID {
+		return domain.MLSGroupInfo{}, ErrNotFound
+	}
+	return gi, nil
+}
+
 // CommitMLSGroup is the compare-and-set that keeps every member on one group history,
 // and relays the Commit in the same step. See the Store interface for why the two
 // cannot be separated.

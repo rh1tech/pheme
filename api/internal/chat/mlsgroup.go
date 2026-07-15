@@ -43,6 +43,68 @@ func (h *Handler) getMLSGroup(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, state)
 }
 
+type mlsGroupInfoRequest struct {
+	GroupID   string `json:"groupId"`
+	Epoch     int64  `json:"epoch"`
+	GroupInfo []byte `json:"groupInfo"`
+}
+
+// postMLSGroupInfo records the GroupInfo a member exported after a Commit, so a new device can join
+// the group by external commit without waiting to be admitted. Members only (requireMember), which is
+// the whole safety of external join: only someone entitled to be in the group can supply — or later
+// fetch — the material to join it.
+func (h *Handler) postMLSGroupInfo(w http.ResponseWriter, r *http.Request) {
+	_, convID, _, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	var req mlsGroupInfoRequest
+	if !httpx.DecodeLimited(w, r, &req, 2*maxCiphertextBytes) {
+		return
+	}
+	if req.GroupID == "" {
+		httpx.Error(w, http.StatusBadRequest, "groupId is required")
+		return
+	}
+	if len(req.GroupInfo) == 0 || len(req.GroupInfo) > maxCiphertextBytes {
+		httpx.Error(w, http.StatusBadRequest, "groupInfo is required")
+		return
+	}
+	if req.Epoch < 0 {
+		httpx.Error(w, http.StatusBadRequest, "epoch must not be negative")
+		return
+	}
+	if err := h.Store.SetMLSGroupInfo(r.Context(), convID, req.GroupID, req.Epoch, req.GroupInfo); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not store group info")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// getMLSGroupInfo returns the latest GroupInfo for the conversation's current group, for a member
+// that holds no leaf yet and wants to external-join. 404 when none has been published — a real
+// answer that tells the client to fall back to announcing itself and waiting.
+func (h *Handler) getMLSGroupInfo(w http.ResponseWriter, r *http.Request) {
+	_, convID, _, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	gi, err := h.Store.MLSGroupInfo(r.Context(), convID)
+	if errors.Is(err, store.ErrNotFound) {
+		httpx.Error(w, http.StatusNotFound, "no group info published yet")
+		return
+	}
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not load group info")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"groupId":   gi.GroupID,
+		"epoch":     gi.Epoch,
+		"groupInfo": gi.GroupInfo,
+	})
+}
+
 // listMLSCommits returns the control messages (Welcomes and Commits) that carried the
 // group past `since`, oldest first — exactly what a member holding an older epoch needs
 // to apply, in the order it must apply them.
