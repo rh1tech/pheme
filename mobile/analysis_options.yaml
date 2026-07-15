@@ -14,6 +14,10 @@ analyzer:
     - build/**
     - "**/*.g.dart"
     - "**/*.freezed.dart"
+    # cargokit's own build tooling, vendored under the rust_builder plugin. It is third-party Dart
+    # with its own dependencies (ed25519_edwards, github, …) that our pubspec does not resolve, so
+    # analyzing it fails on a fresh checkout — as CI's Mobile job does. It is not our code to lint.
+    - rust_builder/**
 
 linter:
   # The lint rules applied to this project can be customized in the
