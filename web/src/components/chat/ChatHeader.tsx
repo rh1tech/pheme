@@ -104,7 +104,7 @@ export function ChatHeader({
               name={name}
               avatarId={channel?.avatarId ?? hintAvatarId}
               size={38}
-              label={t('channel.info')}
+              label={t('channel.viewInfo', { name })}
               onClick={onToggleInfo}
             />
             <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>

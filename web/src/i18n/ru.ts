@@ -281,6 +281,7 @@ const ru: Resources = {
     fallbackName: 'Канал',
     triggerId: 'Идентификатор триггера:',
     info: 'О канале',
+    viewInfo: 'Подробнее: {{name}}',
     closeInfo: 'Закрыть',
     searchMessages: 'Поиск сообщений',
     closeSearch: 'Закрыть поиск',

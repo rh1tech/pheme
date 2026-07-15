@@ -279,6 +279,7 @@ const en = {
     fallbackName: 'Channel',
     triggerId: 'Trigger ID:',
     info: 'Channel info',
+    viewInfo: 'View info: {{name}}',
     closeInfo: 'Close',
     searchMessages: 'Search messages',
     closeSearch: 'Close search',
