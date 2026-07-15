@@ -298,6 +298,8 @@ const Map<String, String> ruStrings = {
   'chat.deleteChat': 'Удалить чат',
   'chat.deleteChatConfirm':
       'Чат и его сообщения будут удалены у вас обоих. Это действие необратимо.',
+  'chat.chatDeleted': 'Чат удалён',
+  'chat.deleteFailed': 'Не удалось удалить чат',
   'chat.notAvailableOnThisDevice': 'Недоступно на этом устройстве',
   'chat.peerNotReady':
       'Этот человек ещё не настроил зашифрованные чаты. Ему нужно один раз открыть Pheme — тогда ваши сообщения дойдут.',

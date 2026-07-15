@@ -21,6 +21,7 @@ import '../l10n/app_localizations.dart';
 import '../models/chat_models.dart';
 import '../calls/call_controller.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
+import '../widgets/adaptive/adaptive_feedback.dart';
 import '../widgets/adaptive/adaptive_scaffold.dart';
 import '../widgets/error_view.dart';
 import 'chat_providers.dart';
@@ -332,6 +333,35 @@ class _ChatViewState extends ConsumerState<_ChatView> {
             semanticLabel: l10n.t('group.membersTitle'),
             onPressed: () => showGroupMembersSheet(context, conversation),
           ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          tooltip: l10n.t('chat.conversationMenu'),
+          onSelected: (value) {
+            if (value == 'delete') {
+              _confirmDeleteConversation(context, ref, conversation);
+            } else if (value == 'leave') {
+              _confirmLeaveGroup(context, ref, conversation, myUserId);
+            }
+          },
+          itemBuilder: (context) => [
+            // A direct chat: either party may delete it. A group: only an admin deletes it for
+            // everyone; a plain member can leave instead.
+            if (!conversation.isGroup || conversation.isAdmin(myUserId))
+              PopupMenuItem<String>(
+                value: 'delete',
+                child: Text(
+                  conversation.isGroup
+                      ? l10n.t('group.deleteGroup')
+                      : l10n.t('chat.deleteChat'),
+                ),
+              )
+            else
+              PopupMenuItem<String>(
+                value: 'leave',
+                child: Text(l10n.t('group.leave')),
+              ),
+          ],
+        ),
       ],
       body: Column(
         children: [
@@ -951,5 +981,70 @@ class _PickedPhoto extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// Confirms and deletes a conversation, then returns to the chat list.
+///
+/// A direct chat is deleted for both people; a group, by an admin, for everyone. The server enforces
+/// who may do this — the menu only offers it where it is allowed — and the delete is irreversible, so
+/// it is always behind a confirm.
+Future<void> _confirmDeleteConversation(
+  BuildContext context,
+  WidgetRef ref,
+  Conversation conversation,
+) async {
+  final l10n = context.l10n;
+  final isGroup = conversation.isGroup;
+  final confirmed = await showAdaptiveConfirm(
+    context,
+    title: l10n.t(isGroup ? 'group.deleteGroup' : 'chat.deleteChat'),
+    message: l10n.t(
+      isGroup ? 'group.deleteGroupConfirm' : 'chat.deleteChatConfirm',
+    ),
+    confirmLabel: l10n.t('common.delete'),
+    cancelLabel: l10n.t('common.cancel'),
+    isDestructive: true,
+  );
+  if (!confirmed || !context.mounted) return;
+
+  try {
+    await ref.read(repositoryProvider).deleteConversation(conversation.id);
+    if (!context.mounted) return;
+    notifySuccess(context, l10n.t('chat.chatDeleted'));
+    context.go('/');
+  } on Object catch (e) {
+    if (context.mounted) notifyError(context, l10n.t('chat.deleteFailed'), e);
+  }
+}
+
+/// Confirms and leaves a group as a plain member: drops this device's membership and returns to the
+/// chat list. Leaving is not an MLS Commit — the members who remain prune the leaf on their next
+/// reconcile (see MlsService) — so all this does is the server-side membership drop.
+Future<void> _confirmLeaveGroup(
+  BuildContext context,
+  WidgetRef ref,
+  Conversation conversation,
+  String myUserId,
+) async {
+  final l10n = context.l10n;
+  final confirmed = await showAdaptiveConfirm(
+    context,
+    title: l10n.t('group.leave'),
+    message: l10n.t('group.leaveConfirm'),
+    confirmLabel: l10n.t('group.leave'),
+    cancelLabel: l10n.t('common.cancel'),
+    isDestructive: true,
+  );
+  if (!confirmed || !context.mounted) return;
+
+  try {
+    await ref
+        .read(repositoryProvider)
+        .removeConversationMember(conversation.id, myUserId);
+    if (!context.mounted) return;
+    context.go('/');
+  } on Object catch (e) {
+    if (context.mounted) notifyError(context, l10n.t('chat.deleteFailed'), e);
   }
 }

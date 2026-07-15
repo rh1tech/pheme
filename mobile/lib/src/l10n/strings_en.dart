@@ -298,6 +298,8 @@ const Map<String, String> enStrings = {
   'chat.deleteChat': 'Delete chat',
   'chat.deleteChatConfirm':
       'This deletes the chat and its messages for both of you. This cannot be undone.',
+  'chat.chatDeleted': 'Chat deleted',
+  'chat.deleteFailed': 'Could not delete the chat',
   // The one string that explains why a message is blank. Deliberately not a loading state: it is
   // permanent. MLS gives a device no access to what was said before it joined.
   'chat.notAvailableOnThisDevice': 'Not available on this device',
