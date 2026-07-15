@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -172677608;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 250619023;
 
 // Section: executor
 
@@ -480,6 +480,41 @@ fn wire__crate__api__mls__mls_epoch_impl(
         },
     )
 }
+fn wire__crate__api__mls__mls_export_group_info_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "mls_export_group_info",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_group_id = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok = crate::api::mls::mls_export_group_info(api_group_id)?;
+                        Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__mls__mls_export_secret_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -654,6 +689,42 @@ fn wire__crate__api__mls__mls_is_loaded_impl(
                     let output_ok = Result::<_, ()>::Ok(crate::api::mls::mls_is_loaded())?;
                     Ok(output_ok)
                 })())
+            }
+        },
+    )
+}
+fn wire__crate__api__mls__mls_join_by_external_commit_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "mls_join_by_external_commit",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_group_info = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || {
+                        let output_ok =
+                            crate::api::mls::mls_join_by_external_commit(api_group_info)?;
+                        Ok(output_ok)
+                    })(),
+                )
             }
         },
     )
@@ -1311,31 +1382,38 @@ fn pde_ffi_dispatcher_primary_impl(
         10 => wire__crate__api__mls__mls_delete_group_impl(port, ptr, rust_vec_len, data_len),
         11 => wire__crate__api__mls__mls_encrypt_impl(port, ptr, rust_vec_len, data_len),
         12 => wire__crate__api__mls__mls_epoch_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__mls__mls_export_secret_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__mls__mls_has_group_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__mls__mls_identity_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__mls__mls_identity_key_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__mls__mls_is_loaded_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__mls__mls_join_from_welcome_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__mls__mls_key_package_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__mls__mls_last_resort_key_package_impl(
+        13 => wire__crate__api__mls__mls_export_group_info_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__mls__mls_export_secret_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__mls__mls_has_group_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__mls__mls_identity_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__mls__mls_identity_key_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__mls__mls_is_loaded_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__mls__mls_join_by_external_commit_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        21 => wire__crate__api__mls__mls_load_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__mls__mls_member_identities_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__mls__mls_safety_number_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__mls__mls_stage_add_impl(port, ptr, rust_vec_len, data_len),
-        25 => {
+        20 => wire__crate__api__mls__mls_join_from_welcome_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__mls__mls_key_package_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__mls__mls_last_resort_key_package_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        23 => wire__crate__api__mls__mls_load_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__mls__mls_member_identities_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__mls__mls_safety_number_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__mls__mls_stage_add_impl(port, ptr, rust_vec_len, data_len),
+        27 => {
             wire__crate__api__mls__mls_stage_remove_devices_impl(port, ptr, rust_vec_len, data_len)
         }
-        26 => wire__crate__api__mls__mls_stage_remove_users_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__mls__mls_unload_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__vault__random_bytes_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__vault__vault_open_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__vault__vault_seal_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__mls__mls_stage_remove_users_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__mls__mls_unload_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__vault__random_bytes_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__vault__vault_open_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__vault__vault_seal_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

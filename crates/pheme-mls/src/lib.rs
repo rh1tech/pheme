@@ -439,6 +439,57 @@ impl Client {
         Ok(())
     }
 
+    /// Exports the GroupInfo a NON-MEMBER needs to join this group by external commit.
+    ///
+    /// `with_ratchet_tree = true` makes it self-contained — the joiner needs nothing else. It is a
+    /// signed snapshot of the current epoch that carries the `external_pub` key an external commit
+    /// initialises against. Nothing is written: GroupInfo is derived state, not part of the ratchet.
+    pub fn export_group_info(&self, group_id: &[u8]) -> Result<Vec<u8>, String> {
+        let group = self.load_group(group_id)?;
+        let msg = group
+            .export_group_info(self.provider.crypto(), &self.signer, true)
+            .map_err(err("export group info"))?;
+        msg.tls_serialize_detached().map_err(err("serialize group info"))
+    }
+
+    /// Joins an existing group by EXTERNAL COMMIT: adds this client's own leaf, with no Welcome and
+    /// no member's help, from the GroupInfo a member exported.
+    ///
+    /// This is the answer to "a new device opens a chat whose group already exists". The alternatives
+    /// are to wait for a member to be online to admit it, or to tear the group down and rebuild it —
+    /// the first strands the device when nobody is around, the second strands everyone else when they
+    /// do not all migrate. An external commit does neither: it adds one leaf to the existing group.
+    ///
+    /// Returns the external commit to offer the server through the ordinary compare-and-set. The new
+    /// group is created here with that commit PENDING — and UNLIKE a staged commit it cannot be
+    /// cleared: on acceptance call [`Client::commit_accepted`] to merge it; on refusal (someone else
+    /// committed first) call [`Client::delete_group`] and start over from fresh GroupInfo.
+    pub fn join_by_external_commit(&self, group_info: &[u8]) -> Result<Vec<u8>, String> {
+        let msg =
+            MlsMessageIn::tls_deserialize(&mut &*group_info).map_err(err("parse group info"))?;
+        let verifiable = match msg.extract() {
+            MlsMessageBodyIn::GroupInfo(gi) => gi,
+            _ => return Err("not a GroupInfo".into()),
+        };
+        #[allow(deprecated)]
+        let (_group, commit, _group_info) = MlsGroup::join_by_external_commit(
+            &self.provider,
+            &self.signer,
+            // None: the GroupInfo was exported with the ratchet tree, so it is self-contained.
+            None,
+            verifiable,
+            &Self::join_config(),
+            None,
+            None,
+            &[],
+            self.credential_with_key.clone(),
+        )
+        .map_err(err("external join"))?;
+        commit
+            .tls_serialize_detached()
+            .map_err(err("serialize external commit"))
+    }
+
     /// Applies a Commit (membership change) another member produced. Idempotent
     /// enough to skip our own already-merged commits.
     pub fn apply_commit(&self, group_id: &[u8], commit: &[u8]) -> Result<(), String> {
@@ -836,6 +887,87 @@ mod tests {
         let ct2 = dave.encrypt(GID, b"dave made it in").unwrap();
         assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"dave made it in"[..]));
         assert_eq!(bob.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"dave made it in"[..]));
+    }
+
+    // A new device joins an existing group with NOBODY'S help: no Welcome, no member admitting it.
+    //
+    // This is the mechanism that lets a freshly installed phone open a chat whose group already
+    // exists and just work — instead of waiting to be admitted, or tearing the group down. A member
+    // exports the GroupInfo; the newcomer turns it into an external commit that adds its own leaf; the
+    // existing members apply it. Non-destructive: everyone keeps their keys, and the newcomer still
+    // cannot read a word from before it joined.
+    #[test]
+    fn a_new_device_joins_by_external_commit_without_a_welcome() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        // Said before the newcomer existed — it must never be able to read this.
+        let before = alice.encrypt(GID, b"before carol").unwrap();
+
+        // Carol is not in the group. Alice, who is, exports the GroupInfo; Carol external-joins from it.
+        let carol = Client::new("carol", "dev-c").unwrap();
+        let group_info = alice.export_group_info(GID).unwrap();
+        let commit = carol.join_by_external_commit(&group_info).unwrap();
+
+        // The server accepts the external commit. Carol merges it; the existing members apply it.
+        carol.commit_accepted(GID).unwrap();
+        alice.apply_commit(GID, &commit).unwrap();
+        bob.apply_commit(GID, &commit).unwrap();
+
+        // One group, one epoch, three members.
+        assert_eq!(alice.epoch(GID).unwrap(), carol.epoch(GID).unwrap());
+        assert_eq!(bob.epoch(GID).unwrap(), carol.epoch(GID).unwrap());
+        assert_eq!(alice.member_identities(GID).unwrap().len(), 3);
+
+        // Carol reads what comes after, and the others read Carol.
+        let after = alice.encrypt(GID, b"after carol").unwrap();
+        assert_eq!(carol.decrypt(GID, &after).unwrap().as_deref(), Some(&b"after carol"[..]));
+        let from_carol = carol.encrypt(GID, b"carol is in").unwrap();
+        assert_eq!(alice.decrypt(GID, &from_carol).unwrap().as_deref(), Some(&b"carol is in"[..]));
+        assert_eq!(bob.decrypt(GID, &from_carol).unwrap().as_deref(), Some(&b"carol is in"[..]));
+
+        // But not what was said before she arrived.
+        assert!(carol.decrypt(GID, &before).is_err(), "a newcomer must not read pre-join history");
+    }
+
+    // Two newcomers external-join against the same epoch. Like any commit, only one can win the
+    // server's compare-and-set; the loser must recover — discard its group and rejoin from fresh
+    // GroupInfo — rather than fork off.
+    #[test]
+    fn a_rejected_external_join_recovers_from_fresh_group_info() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let carol = Client::new("carol", "dev-c").unwrap();
+        let dave = Client::new("dave", "dev-d").unwrap();
+
+        // Both external-join against the same epoch, concurrently.
+        let gi = alice.export_group_info(GID).unwrap();
+        let carol_commit = carol.join_by_external_commit(&gi).unwrap();
+        let _dave_commit = dave.join_by_external_commit(&gi).unwrap();
+
+        // The server accepts Carol's and refuses Dave's. Carol merges; the members apply.
+        carol.commit_accepted(GID).unwrap();
+        alice.apply_commit(GID, &carol_commit).unwrap();
+        bob.apply_commit(GID, &carol_commit).unwrap();
+
+        // Dave lost. An external commit cannot be cleared, so he discards the whole group and rejoins
+        // from GroupInfo exported at the NEW epoch.
+        dave.delete_group(GID).unwrap();
+        let gi2 = alice.export_group_info(GID).unwrap();
+        let dave_commit = dave.join_by_external_commit(&gi2).unwrap();
+        dave.commit_accepted(GID).unwrap();
+        alice.apply_commit(GID, &dave_commit).unwrap();
+        bob.apply_commit(GID, &dave_commit).unwrap();
+        carol.apply_commit(GID, &dave_commit).unwrap();
+
+        // All four in one group.
+        assert_eq!(alice.member_identities(GID).unwrap().len(), 4);
+        let ct = dave.encrypt(GID, b"dave made it in too").unwrap();
+        assert_eq!(alice.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"dave made it in too"[..]));
+        assert_eq!(carol.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"dave made it in too"[..]));
     }
 
     // A message sent BEFORE a membership change must still decrypt AFTER it.

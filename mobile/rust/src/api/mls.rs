@@ -176,6 +176,22 @@ pub fn mls_join_from_welcome(welcome: Vec<u8>) -> Result<Applied> {
     applied(mutate(|c| c.join_from_welcome(&welcome)))
 }
 
+/// Exports the GroupInfo a NON-MEMBER needs to join by external commit. A pure read: GroupInfo is a
+/// signed snapshot of the current epoch, and producing it changes nothing.
+pub fn mls_export_group_info(group_id: Vec<u8>) -> Result<Vec<u8>> {
+    read(|c| c.export_group_info(&group_id))
+}
+
+/// Joins an existing group by EXTERNAL COMMIT — adds this device's own leaf from a member's exported
+/// GroupInfo, with no Welcome and no member's help. Returns the external commit to offer the server.
+///
+/// The group is created here with that commit PENDING. On acceptance call `mlsCommitAccepted` to merge
+/// it; on refusal call `mlsDeleteGroup` (NOT `mlsCommitRejected` — an external commit cannot be
+/// cleared) and rejoin from fresh GroupInfo.
+pub fn mls_join_by_external_commit(group_info: Vec<u8>) -> Result<Bytes> {
+    bytes(mutate(|c| c.join_by_external_commit(&group_info)))
+}
+
 pub fn mls_apply_commit(group_id: Vec<u8>, commit: Vec<u8>) -> Result<Applied> {
     applied(mutate(|c| c.apply_commit(&group_id, &commit)))
 }

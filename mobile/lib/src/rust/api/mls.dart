@@ -63,6 +63,22 @@ Future<bool> mlsHasGroup({required List<int> groupId}) =>
 Future<Applied> mlsJoinFromWelcome({required List<int> welcome}) =>
     RustLib.instance.api.crateApiMlsMlsJoinFromWelcome(welcome: welcome);
 
+/// Exports the GroupInfo a NON-MEMBER needs to join by external commit. A pure read: GroupInfo is a
+/// signed snapshot of the current epoch, and producing it changes nothing.
+Future<Uint8List> mlsExportGroupInfo({required List<int> groupId}) =>
+    RustLib.instance.api.crateApiMlsMlsExportGroupInfo(groupId: groupId);
+
+/// Joins an existing group by EXTERNAL COMMIT — adds this device's own leaf from a member's exported
+/// GroupInfo, with no Welcome and no member's help. Returns the external commit to offer the server.
+///
+/// The group is created here with that commit PENDING. On acceptance call `mlsCommitAccepted` to merge
+/// it; on refusal call `mlsDeleteGroup` (NOT `mlsCommitRejected` — an external commit cannot be
+/// cleared) and rejoin from fresh GroupInfo.
+Future<Bytes> mlsJoinByExternalCommit({required List<int> groupInfo}) => RustLib
+    .instance
+    .api
+    .crateApiMlsMlsJoinByExternalCommit(groupInfo: groupInfo);
+
 Future<Applied> mlsApplyCommit({
   required List<int> groupId,
   required List<int> commit,
