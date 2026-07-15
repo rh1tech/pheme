@@ -56,6 +56,23 @@ class ChatPhoto {
 
   double get aspectRatio => height > 0 ? width / height : 1;
 
+  // Value equality, keyed on the fields that identify the blob. photoProvider is a
+  // FutureProvider.family keyed by the photo, and parsing a message's content creates a
+  // fresh ChatPhoto each time; without this, an equal photo from a re-parse (reopening a
+  // chat, a re-decrypt) is a different cache key, so every photo re-downloads and blinks.
+  @override
+  bool operator ==(Object other) =>
+      other is ChatPhoto &&
+      other.id == id &&
+      other.key == key &&
+      other.width == width &&
+      other.height == height &&
+      other.mime == mime &&
+      other.size == size;
+
+  @override
+  int get hashCode => Object.hash(id, key, width, height, mime, size);
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'key': key,

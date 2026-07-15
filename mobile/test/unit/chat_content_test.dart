@@ -21,6 +21,30 @@ List<int> _unhex(String hex) => [
 ];
 
 void main() {
+  group('ChatPhoto equality', () {
+    // The photo cache (photoProvider, keyed by the ChatPhoto) relies on value equality: two photos
+    // with the same fields must be equal and share a hash, or a re-parsed message re-downloads every
+    // photo and the feed blinks.
+    ChatPhoto photo({String id = 'blob-1', int width = 100}) => ChatPhoto(
+      id: id,
+      key: 'a2V5',
+      width: width,
+      height: 50,
+      mime: 'image/webp',
+      size: 1234,
+    );
+
+    test('two photos with identical fields are equal and share a hash', () {
+      expect(photo(), photo());
+      expect(photo().hashCode, photo().hashCode);
+    });
+
+    test('a differing field breaks equality', () {
+      expect(photo(), isNot(photo(id: 'blob-2')));
+      expect(photo(), isNot(photo(width: 200)));
+    });
+  });
+
   group('content codec', () {
     test('a plain message serialises exactly as the web serialises it', () {
       const content = ChatContent(body: 'hello');
