@@ -613,7 +613,12 @@
     display: none;
   }
 
-  .pheme-shell[data-view='list'] .pheme-conversation {
+  /* Hide the whole main column, not just the conversation inside it. The shell is a
+     grid whose rows stretch to fill its height; an empty-but-present .pheme-main
+     stays a second row and takes half that free height, leaving the list pane short
+     with dead space below it (which reads as the list being "cut" above the keyboard).
+     Removing it from the grid lets the sidebar be the single row and fill the shell. */
+  .pheme-shell[data-view='list'] .pheme-main {
     display: none;
   }
 
