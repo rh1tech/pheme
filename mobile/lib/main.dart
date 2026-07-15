@@ -41,9 +41,19 @@ Future<void> main() async {
     deviceId: await settingsStore.loadDeviceId(),
   );
 
-  // Best-effort push init; never blocks startup if Firebase isn't configured.
+  // Best-effort push init. It must never hold up the first frame — not just when Firebase is
+  // unconfigured (that path already returns), but when it is configured and its backend is
+  // UNREACHABLE. Firebase.initializeApp() and getInitialMessage() await the messaging service, and on
+  // a device launched with no connectivity — airplane mode, a dead zone, a broken emulator — that
+  // wait does not fail, it hangs, and a hang is not something the try/catch inside init() can catch.
+  // Awaited unguarded, it strands the app on the splash screen with no way forward.
+  //
+  // So cap it. If push is not ready in a few seconds, start without it; init() keeps running in the
+  // background and its result is picked up when it arrives. The one thing lost by not waiting is the
+  // notification that cold-started the app, and a user launching offline did not arrive by tapping a
+  // push.
   final push = PushService();
-  await push.init();
+  await push.init().timeout(const Duration(seconds: 5), onTimeout: () {});
 
   final container = ProviderContainer(
     overrides: [
