@@ -359,6 +359,66 @@ class MlsSession {
     });
   }
 
+  // --- external join ---------------------------------------------------------------------------
+
+  /// The GroupInfo a NON-MEMBER needs to join this group by external commit. A pure read.
+  ///
+  /// Only a member holds the group, so only a member can produce it — which is exactly the property
+  /// that keeps external join to people entitled to the group.
+  Future<Uint8List> exportGroupInfo(String groupId) =>
+      _exclusive(() => rust.mlsExportGroupInfo(groupId: _gid(groupId)));
+
+  /// Joins an existing group by EXTERNAL COMMIT and offers it to the server — adds this device's own
+  /// leaf, with no Welcome and no member's help.
+  ///
+  /// [baseEpoch] is the epoch the GroupInfo was exported at; the server advances to baseEpoch+1, the
+  /// epoch this external commit produces. On acceptance we merge and hold the group. On refusal — some
+  /// other Commit landed first — we DELETE the group rather than clear the commit (an external commit
+  /// cannot be cleared) so the caller can refetch fresher GroupInfo and try again.
+  Future<CommitOutcome> joinByExternalCommit(
+    String groupId,
+    Uint8List groupInfo,
+    int baseEpoch,
+    Future<bool> Function({
+      required int baseEpoch,
+      required Uint8List commit,
+      Uint8List? welcome,
+    })
+    offer,
+  ) {
+    return _exclusive(() async {
+      final gid = _gid(groupId);
+      // Already in — a concurrent settle got us here first. Nothing to do.
+      if (await rust.mlsHasGroup(groupId: gid)) return CommitOutcome.accepted;
+
+      final built = await rust.mlsJoinByExternalCommit(groupInfo: groupInfo);
+      await _persist(built.state);
+
+      bool accepted;
+      try {
+        accepted = await offer(
+          baseEpoch: baseEpoch,
+          commit: built.bytes,
+          welcome: null,
+        );
+      } on Object {
+        final out = await rust.mlsDeleteGroup(groupId: gid);
+        await _persist(out.state);
+        rethrow;
+      }
+
+      if (!accepted) {
+        final out = await rust.mlsDeleteGroup(groupId: gid);
+        await _persist(out.state);
+        return CommitOutcome.conflict;
+      }
+
+      final out = await rust.mlsCommitAccepted(groupId: gid);
+      await _persist(out.state);
+      return CommitOutcome.accepted;
+    });
+  }
+
   // --- commits ---------------------------------------------------------------------------------
 
   /// Stages a Commit, offers it to the server, and applies it ONLY if the server takes it.

@@ -55,6 +55,11 @@ const _commitAttempts = 4;
 /// enough that a person staring at "setting up encryption" is not left there.
 const _stuckAfter = Duration(seconds: 90);
 
+/// How many times an external join is retried when it keeps losing the compare-and-set. Each loss
+/// means another member committed between fetching the GroupInfo and offering the external commit — a
+/// live conversation, not a fight, so a few retries is plenty before falling back.
+const _externalJoinAttempts = 3;
+
 /// The exporter label for call keys. Changing it changes every derived key, so it is versioned.
 const callKeyLabel = 'pheme-call-v1';
 
@@ -314,24 +319,32 @@ class MlsService {
 
     if (!await session.hasGroup(state.groupId)) {
       // The group exists and this device is not in it: a new phone, storage evicted, a member added
-      // while we were offline. A device cannot add itself — only a member can Commit — so say so, and
-      // a member will admit us.
+      // while we were offline.
       //
-      // This is where the old web code destroyed the group and rebuilt it, which is how a single
-      // second device could make a whole conversation unreadable for everyone in it.
+      // JOIN IT BY EXTERNAL COMMIT — add our own leaf, with no Welcome and no member's help. This is
+      // the whole point of the mechanism: a new device opens a chat whose group already exists and is
+      // in it a round trip later, non-destructively, whether or not anyone else is online. See
+      // docs/external-join.md.
+      final joined = await _tryExternalJoin(
+        session,
+        conversation,
+        state.groupId,
+      );
+      if (joined != null) {
+        _waitingSince.remove(conversation.id);
+        return joined;
+      }
+
+      // External join was not possible — nobody has published GroupInfo for this group yet (an old
+      // group from before this feature, or one whose only members are offline and never refreshed it).
+      // Fall back to the original path: announce, and rebuild only as a genuine last resort.
       await _announceDevice(conversation.id);
 
-      // ...unless nobody is coming.
-      //
-      // Every device that held this group can have lost its key material, and nothing says that cannot
-      // happen to both people in the same week. Then no member is left who can admit anybody, every
-      // device sits here announcing itself, and the conversation is dead forever.
-      //
-      // So after waiting long enough that a member who WAS coming would have come, retire the group
-      // and start a new one. Safe to do without being certain, because it destroys nothing: the old
-      // group is remembered, not deleted, and anyone still holding it can still read every message
-      // ever sent to it. The worst a premature reset does is make everyone rejoin. Being permanently
-      // unable to talk is worse than that.
+      // ...unless nobody is coming. Every device that held this group can have lost its key material,
+      // and nothing says that cannot happen to both people in the same week. Then no member is left who
+      // can admit anybody. So after long enough that a member who WAS coming would have, retire the
+      // group and start a new one — safe because it destroys nothing: the old group is remembered, not
+      // deleted, and anyone still holding it can still read every message ever sent to it.
       if (_stuckFor(conversation.id) > _stuckAfter) {
         _waitingSince.remove(conversation.id);
         await _repo.mlsResetGroup(conversation.id).catchError((_) {
@@ -355,6 +368,15 @@ class MlsService {
     // unavailable, refused to send, and reported that encryption was still being set up — while
     // holding perfectly good keys the whole time. A failure to tidy up bricked a working conversation.
     await _reconcileDevices(
+      session,
+      conversation.id,
+      state.groupId,
+    ).catchError((_) {});
+
+    // Leave fresh GroupInfo behind, so the NEXT new device to open this chat can external-join at the
+    // current epoch instead of waiting to be admitted. Best effort: a member holds the group, so it is
+    // the one party that can produce this, and the more members that refresh it the fresher it stays.
+    await _publishGroupInfo(
       session,
       conversation.id,
       state.groupId,
@@ -404,6 +426,14 @@ class MlsService {
       await session.discardGroup(groupId);
       return _settleGroup(conversation, myUserId);
     }
+
+    // Publish GroupInfo straight away, so a member added here who is not online to take the Welcome
+    // can external-join the moment they open the chat instead of waiting.
+    await _publishGroupInfo(
+      session,
+      conversation.id,
+      groupId,
+    ).catchError((_) {});
     return groupId;
   }
 
@@ -658,6 +688,66 @@ class MlsService {
       return Duration.zero;
     }
     return DateTime.now().difference(since);
+  }
+
+  /// Joins the current group by external commit. Returns the group id on success, or null when it is
+  /// not possible — no GroupInfo has been published, or the GroupInfo is for a group that is no longer
+  /// current — in which case the caller falls back to announcing itself.
+  Future<String?> _tryExternalJoin(
+    MlsSession session,
+    Conversation conversation,
+    String groupId,
+  ) async {
+    for (var attempt = 0; attempt < _externalJoinAttempts; attempt++) {
+      final info = await _repo
+          .mlsGroupInfo(conversation.id)
+          .catchError((_) => null);
+      // No material to join against, or it is for a group that has since been replaced. Either way,
+      // external join cannot help here.
+      if (info == null || info.groupId != groupId) return null;
+
+      try {
+        final outcome = await session.joinByExternalCommit(
+          groupId,
+          info.groupInfo,
+          info.epoch,
+          _offer(conversation.id, groupId),
+        );
+        if (outcome == CommitOutcome.accepted) {
+          _rememberReadable(conversation.id, groupId);
+          // The epoch just moved; leave fresh GroupInfo for the next joiner.
+          await _publishGroupInfo(
+            session,
+            conversation.id,
+            groupId,
+          ).catchError((_) {});
+          return groupId;
+        }
+        // Conflict: a Commit landed between fetching the GroupInfo and offering ours. Refetch newer
+        // GroupInfo and try again.
+      } on Object {
+        // Building or offering the external commit failed for a reason a retry will not fix.
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /// Exports fresh GroupInfo for a group this device holds and uploads it, so a future new device can
+  /// external-join at the current epoch.
+  Future<void> _publishGroupInfo(
+    MlsSession session,
+    String conversationId,
+    String groupId,
+  ) async {
+    final groupInfo = await session.exportGroupInfo(groupId);
+    final epoch = await session.epoch(groupId);
+    await _repo.publishGroupInfo(
+      conversationId,
+      groupId: groupId,
+      epoch: epoch,
+      groupInfo: groupInfo,
+    );
   }
 
   void _rememberReadable(String conversationId, String groupId) {

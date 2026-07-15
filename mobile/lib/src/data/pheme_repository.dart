@@ -584,6 +584,37 @@ class PhemeRepository {
     '/v1/conversations/$conversationId/mls',
   ).then((d) => MLSGroupState.fromJson(d));
 
+  /// The latest GroupInfo a new device can external-join against, or null when none has been published
+  /// for the current group (404) — in which case the caller falls back to announcing itself.
+  Future<({String groupId, int epoch, Uint8List groupInfo})?> mlsGroupInfo(
+    String conversationId,
+  ) async {
+    try {
+      final d = await _get('/v1/conversations/$conversationId/mls/group-info');
+      return (
+        groupId: d['groupId'] as String,
+        epoch: (d['epoch'] as num).toInt(),
+        groupInfo: base64Decode(d['groupInfo'] as String),
+      );
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  /// Publishes the GroupInfo a member exported after a Commit, so a future joiner can external-join.
+  /// Best effort: a stale or missing one only costs a joiner a fall back to announcing itself.
+  Future<void> publishGroupInfo(
+    String conversationId, {
+    required String groupId,
+    required int epoch,
+    required Uint8List groupInfo,
+  }) => _post('/v1/conversations/$conversationId/mls/group-info', {
+    'groupId': groupId,
+    'epoch': epoch,
+    'groupInfo': base64Encode(groupInfo),
+  });
+
   /// Every Welcome and Commit after [since], oldest-first, so a device can catch up in order.
   Future<List<ChatMessage>> mlsCommitsSince(String conversationId, int since) =>
       _get(

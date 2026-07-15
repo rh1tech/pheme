@@ -330,6 +330,56 @@ void main() {
             'not a bug to fix, it is what forward secrecy means',
       );
     });
+
+    // External join: a new device joins an EXISTING group with nobody online to admit it, and does so
+    // WITHOUT resetting — so the offline party is not stranded on a group nobody else is in. This is
+    // the scenario that broke in the field, and the reason external join exists. See docs/external-join.md.
+    testWidgets('external-joins with no one online, and strands nobody', (
+      _,
+    ) async {
+      final bobEmail = _email('bob');
+      final alice = await Device.signUp('alice', _email('alice'));
+      final bobPhone = await Device.signUp('bobphone', bobEmail);
+      await alice.publishKeys();
+      await bobPhone.publishKeys();
+
+      final conversation = await alice.repo.createDirectChat(bobPhone.userId);
+      // Alice establishes the group and, in doing so, publishes GroupInfo. Then everyone goes quiet.
+      await alice.mls.sendMessage(conversation, alice.userId, 'the group exists');
+
+      // Bob's laptop: a brand new device, not in the group. It opens the chat — and NOTHING admits it.
+      // Alice never reconciles; bobPhone does nothing. It joins entirely on its own.
+      final bobLaptop = await Device.signIn('boblaptop', bobEmail);
+      await bobLaptop.publishKeys();
+
+      final groupId = await bobLaptop.mls.ensureGroup(
+        await bobLaptop.repo.getConversation(conversation.id),
+        bobLaptop.userId,
+      );
+      expect(
+        groupId,
+        isNotNull,
+        reason:
+            'a new device must external-join the existing group with nobody online, not wait to be '
+            'admitted',
+      );
+
+      // The laptop is really in: it sends, and Alice — still on the SAME group, never reset out from
+      // under her — reads it once she opens the chat. This is what a reset would have broken.
+      final sent = await bobLaptop.mls.sendMessage(
+        await bobLaptop.repo.getConversation(conversation.id),
+        bobLaptop.userId,
+        'joined without help, and without stranding you',
+      );
+      final aliceRead = await alice.read(conversation.id);
+      expect(
+        aliceRead[sent.id],
+        'joined without help, and without stranding you',
+        reason:
+            'the external join added a leaf to the existing group; Alice must still be in it and able '
+            'to read the newcomer',
+      );
+    });
   });
 
   group('a group that was reset underneath us', () {
