@@ -410,6 +410,12 @@ class PhemeRepository {
   Future<void> deleteConversation(String id) =>
       _delete('/v1/conversations/$id');
 
+  /// Clears the caller's own history of a conversation, keeping the conversation. The
+  /// server sets a per-member watermark rather than deleting the shared message log, so
+  /// it hides this user's history on all their devices without touching anyone else's.
+  Future<void> clearChatHistory(String id) =>
+      _delete('/v1/conversations/$id/messages');
+
   /// One page of history, newest-first, walking backwards. [cursor] is the previous page's
   /// [ChatMessagesPage.nextCursor].
   Future<ChatMessagesPage> listChatMessages(

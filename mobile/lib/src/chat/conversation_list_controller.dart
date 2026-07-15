@@ -37,6 +37,7 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
         current.where((c) => c.id != conversationId).toList(growable: false),
       );
       ref.read(chatCacheProvider).forget(conversationId);
+      ref.read(chatEnvelopeCacheProvider).forget(conversationId);
       ref.read(lastSeenStoreProvider).forget(conversationId);
       return;
     }
@@ -109,7 +110,7 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
 
   Future<void> delete(String conversationId) async {
     await ref.read(repositoryProvider).deleteConversation(conversationId);
-    await ref.read(chatCacheProvider).forget(conversationId);
+    await _forgetLocal(conversationId);
     await ref.read(lastSeenStoreProvider).forget(conversationId);
 
     final current = state.value;
@@ -118,6 +119,22 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
         current.where((c) => c.id != conversationId).toList(growable: false),
       );
     }
+  }
+
+  /// Clears a conversation's history server-side and locally, keeping the conversation
+  /// in the list. The server hides the caller's messages (a per-member watermark); here
+  /// we forget the local plaintext bodies and cached envelope so nothing stale lingers.
+  /// The open chat's feed is emptied by the page via MessageFeedController.clearHistory.
+  Future<void> clearHistory(String conversationId) async {
+    await ref.read(repositoryProvider).clearChatHistory(conversationId);
+    await _forgetLocal(conversationId);
+  }
+
+  /// Forgets the local plaintext bodies and cached envelope for a conversation. The
+  /// bodies cannot be recovered afterwards (MLS keys are single-use) — the point of it.
+  Future<void> _forgetLocal(String conversationId) async {
+    await ref.read(chatCacheProvider).forget(conversationId);
+    await ref.read(chatEnvelopeCacheProvider).forget(conversationId);
   }
 
   /// Newest activity first.

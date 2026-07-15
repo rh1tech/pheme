@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'chat/chat_providers.dart';
 import 'core/providers.dart';
 import 'l10n/app_localizations.dart';
 import 'push/push_service.dart';
@@ -53,6 +54,12 @@ class _PhemeAppState extends ConsumerState<PhemeApp> {
   @override
   Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
+    // Keep the push service's "which chat is open" in step with the app, so it can suppress a
+    // notification for a conversation already on screen. A plain field on the service, updated here
+    // where a Ref is available, rather than the service reaching into Riverpod itself.
+    ref.listen(activeConversationIdProvider, (_, next) {
+      ref.read(pushServiceProvider).activeConversationId = next;
+    });
     final themeMode = ref.watch(
       settingsControllerProvider.select((s) => s.themeMode),
     );

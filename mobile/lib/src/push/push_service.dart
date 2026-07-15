@@ -107,6 +107,12 @@ class PushService {
   bool _initialized = false;
   MessageRef? _initial;
 
+  /// The conversation the user is currently looking at, kept in sync by the app from
+  /// [activeConversationIdProvider]. A foreground message for this conversation is
+  /// suppressed: it is already in the open feed over the live stream, so a second buzz
+  /// on the lock screen is just noise. Null when no chat is open.
+  String? activeConversationId;
+
   bool get available => _available;
 
   /// Emits when the user taps a notification while the app is running.
@@ -166,6 +172,15 @@ class PushService {
   void _showForeground(RemoteMessage message) {
     final n = message.notification;
     if (n == null) return;
+    // Suppress a message notification for the chat that is already on screen — the message is in the
+    // open feed over the live stream, so a duplicate banner is only noise. Calls are exempt: they
+    // arrive data-only (no notification payload) and never reach here, so they always ring.
+    final convId = message.data['conversationId'];
+    if (convId is String &&
+        convId.isNotEmpty &&
+        convId == activeConversationId) {
+      return;
+    }
     _local.show(
       id: n.hashCode,
       title: n.title,

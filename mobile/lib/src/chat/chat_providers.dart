@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/jwt.dart';
 import '../core/providers.dart';
 import '../crypto/chat_cache.dart';
+import '../crypto/chat_envelope_cache.dart';
 import '../crypto/mls_service.dart';
 import '../models/chat_models.dart';
 import 'conversation_list_controller.dart';
@@ -15,6 +16,27 @@ import 'last_seen_store.dart';
 final chatCacheProvider = Provider<ChatCache>(
   (ref) => ChatCache(ref.watch(secureStorageProvider)),
 );
+
+/// The message-envelope store: the ordered list of message metadata per conversation, so a chat
+/// paints its last-seen transcript from disk the instant it opens, before the network answers.
+final chatEnvelopeCacheProvider = Provider<ChatEnvelopeCache>(
+  (ref) => ChatEnvelopeCache(ref.watch(secureStorageProvider)),
+);
+
+/// The conversation the user is currently looking at, or null when none is open. Set by
+/// ConversationChatPage on open and cleared on leave; read by the push service to suppress a
+/// notification for a chat that is already on screen.
+class ActiveConversationController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? conversationId) => state = conversationId;
+}
+
+final activeConversationIdProvider =
+    NotifierProvider<ActiveConversationController, String?>(
+      ActiveConversationController.new,
+    );
 
 /// The MLS orchestration. One per session: the group state, the in-flight settles and the call
 /// freeze are all shared by everything that touches a conversation, so there can only be one.

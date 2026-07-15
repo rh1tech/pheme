@@ -4,6 +4,8 @@
 // bottom-align when there are few of them, keeps the newest in view, and holds scroll position when
 // an older page is prepended, all without the manual scroll-anchoring the web has to do.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +14,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../crypto/chat_content.dart';
 
+import '../core/api_exception.dart';
 import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../crypto/mls_errors.dart';
@@ -46,15 +49,55 @@ class ConversationChatPage extends ConsumerWidget {
     return conversation.when(
       loading: () =>
           const AdaptiveScaffold(body: Center(child: AdaptiveProgress())),
-      error: (e, _) => AdaptiveScaffold(
-        body: ErrorView(
-          message: e.toString(),
-          onRetry: () => ref.invalidate(conversationProvider(conversationId)),
-        ),
-      ),
+      // A 404 is not an error to retry: the conversation was deleted, or we were removed, while we
+      // were away. Clean up and return to the list instead of offering a "try again" that never will.
+      error: (e, _) => e is ApiException && e.statusCode == 404
+          ? _DeletedConversationRedirect(conversationId: conversationId)
+          : AdaptiveScaffold(
+              body: ErrorView(
+                message: e.toString(),
+                onRetry: () =>
+                    ref.invalidate(conversationProvider(conversationId)),
+              ),
+            ),
       data: (c) => _ChatView(conversation: c),
     );
   }
+}
+
+/// Handles the case where a conversation is gone on open (404). It forgets the local caches, drops
+/// the row from the list, and returns to the list — the same cleanup the live `conversationDeleted`
+/// event does, for when we were offline and missed it. Shows a spinner for the frame it takes.
+class _DeletedConversationRedirect extends ConsumerStatefulWidget {
+  const _DeletedConversationRedirect({required this.conversationId});
+
+  final String conversationId;
+
+  @override
+  ConsumerState<_DeletedConversationRedirect> createState() =>
+      _DeletedConversationRedirectState();
+}
+
+class _DeletedConversationRedirectState
+    extends ConsumerState<_DeletedConversationRedirect> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final id = widget.conversationId;
+      await ref.read(chatCacheProvider).forget(id);
+      await ref.read(chatEnvelopeCacheProvider).forget(id);
+      await ref.read(lastSeenStoreProvider).forget(id);
+      // Reconcile the list with the server, which no longer has it, rather than a targeted delete
+      // that would 404 again.
+      unawaited(ref.read(conversationListProvider.notifier).refresh());
+      if (mounted) context.go('/');
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      const AdaptiveScaffold(body: Center(child: AdaptiveProgress()));
 }
 
 class _ChatView extends ConsumerStatefulWidget {
@@ -110,6 +153,9 @@ class _ChatViewState extends ConsumerState<_ChatView> {
     // this the button only re-enables when the view happens to rebuild for another reason — and typing
     // a message would leave Send stubbornly greyed.
     _composer.addListener(_onComposerChanged);
+    // Mark this chat as the one on screen, so the push service suppresses notifications for it —
+    // a message that is already in the open feed does not also need to buzz the lock screen.
+    ref.read(activeConversationIdProvider.notifier).set(_conversationId);
   }
 
   void _onComposerChanged() {
@@ -120,6 +166,12 @@ class _ChatViewState extends ConsumerState<_ChatView> {
   void dispose() {
     _scroll.removeListener(_onScroll);
     _composer.removeListener(_onComposerChanged);
+    // Stop suppressing notifications for this chat — but only if it is still the one marked open. A
+    // push that navigated to another chat has already claimed the slot, and clearing it here would
+    // wrongly re-enable notifications for the chat now on screen.
+    if (ref.read(activeConversationIdProvider) == _conversationId) {
+      ref.read(activeConversationIdProvider.notifier).set(null);
+    }
     _scroll.dispose();
     _composer.dispose();
     super.dispose();
@@ -345,13 +397,20 @@ class _ChatViewState extends ConsumerState<_ChatView> {
           icon: const Icon(Icons.more_vert),
           tooltip: l10n.t('chat.conversationMenu'),
           onSelected: (value) {
-            if (value == 'delete') {
+            if (value == 'clear') {
+              _confirmClearHistory(context, ref, conversation);
+            } else if (value == 'delete') {
               _confirmDeleteConversation(context, ref, conversation);
             } else if (value == 'leave') {
               _confirmLeaveGroup(context, ref, conversation, myUserId);
             }
           },
           itemBuilder: (context) => [
+            // Anyone may clear their OWN history — it is per-member and touches no one else.
+            PopupMenuItem<String>(
+              value: 'clear',
+              child: Text(l10n.t('chat.clearHistory')),
+            ),
             // A direct chat: either party may delete it. A group: only an admin deletes it for
             // everyone; a plain member can leave instead.
             if (!conversation.isGroup || conversation.isAdmin(myUserId))
@@ -1038,6 +1097,37 @@ Future<void> _confirmDeleteConversation(
     if (!context.mounted) return;
     notifySuccess(context, l10n.t('chat.chatDeleted'));
     context.go('/');
+  } on Object catch (e) {
+    if (context.mounted) notifyError(context, l10n.t('chat.deleteFailed'), e);
+  }
+}
+
+/// Confirms and clears the conversation's history: purges it server-side (a per-member watermark,
+/// so no one else's view is touched) and wipes the local plaintext, keeping the conversation. The
+/// open feed is emptied in place so the now-clear chat shows without leaving it. Irreversible — the
+/// bodies are gone for good under MLS — so it is always behind a confirm.
+Future<void> _confirmClearHistory(
+  BuildContext context,
+  WidgetRef ref,
+  Conversation conversation,
+) async {
+  final l10n = context.l10n;
+  final confirmed = await showAdaptiveConfirm(
+    context,
+    title: l10n.t('chat.clearHistory'),
+    message: l10n.t('chat.clearHistoryConfirm'),
+    confirmLabel: l10n.t('chat.clearHistory'),
+    cancelLabel: l10n.t('common.cancel'),
+    isDestructive: true,
+  );
+  if (!confirmed || !context.mounted) return;
+
+  try {
+    await ref
+        .read(conversationListProvider.notifier)
+        .clearHistory(conversation.id);
+    ref.read(messageFeedProvider(conversation.id).notifier).clearHistory();
+    if (context.mounted) notifySuccess(context, l10n.t('chat.historyCleared'));
   } on Object catch (e) {
     if (context.mounted) notifyError(context, l10n.t('chat.deleteFailed'), e);
   }

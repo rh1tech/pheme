@@ -3,6 +3,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/providers.dart';
+import 'dart:async';
 import 'dart:typed_data';
 
 import '../crypto/chat_content.dart';
@@ -138,6 +139,17 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     // MlsService.primeGroup. That distinction is the whole safety of this fast path.
     await mls.primeGroup(_conversationId).catchError((_) {});
 
+    // Paint the transcript that was last on screen straight from disk, before the network answers.
+    // The bodies for these already live in the ChatCache loaded above, so decrypting them resolves
+    // from cache without consuming any key.
+    final cached = await ref
+        .read(chatEnvelopeCacheProvider)
+        .load(_conversationId);
+    if (cached.isNotEmpty) {
+      state = state.copyWith(messages: cached, loading: false);
+      await _decrypt(cached);
+    }
+
     // The two things we need from the network, asked for AT THE SAME TIME:
     //   * the messages;
     //   * which group is current, and whether we are in it.
@@ -153,10 +165,11 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     try {
       final page = await messagesFuture;
       // The server returns newest-first; we hold oldest-first.
-      final messages = page.messages.reversed
+      final fetched = page.messages.reversed
           .where((m) => !m.isControl)
           .toList(growable: false);
 
+      final messages = _reconcile(state.messages, fetched);
       state = state.copyWith(
         messages: messages,
         loading: false,
@@ -164,6 +177,7 @@ class MessageFeedController extends Notifier<MessageFeedState> {
         clearCursor: page.nextCursor == null,
       );
       await _decrypt(messages);
+      unawaited(_persistEnvelope());
     } on Object {
       state = state.copyWith(loading: false);
     }
@@ -251,6 +265,7 @@ class MessageFeedController extends Notifier<MessageFeedState> {
         clearCursor: page.nextCursor == null,
       );
       await _decrypt(older);
+      unawaited(_persistEnvelope());
     } on Object {
       state = state.copyWith(loadingOlder: false);
     }
@@ -304,6 +319,7 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       messages: [...state.messages, message],
       contents: {...state.contents, message.id: content},
     );
+    unawaited(_persistEnvelope());
     await _markRead(message);
   }
 
@@ -347,6 +363,37 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       .read(lastSeenProvider.notifier)
       .markRead(_conversationId, message.createdAt);
 
+  /// Reconciles the cached transcript with the server's newest page. Within the page's
+  /// time window the server is authoritative — a cached message the page does not
+  /// include was cleared or deleted (perhaps on another of this user's devices), so it
+  /// is dropped. Cached messages OLDER than the window are kept: they are history the
+  /// page simply did not reach, and load-older pages back to fill any gap between them.
+  List<ChatMessage> _reconcile(
+    List<ChatMessage> cached,
+    List<ChatMessage> fetched,
+  ) {
+    // Only ever called with the newest page (no cursor), so an empty result is authoritative: the
+    // whole history is gone — every message cleared (here or on another device) or deleted — and the
+    // cached transcript must be dropped, not kept. A transient network failure never reaches here (it
+    // throws and the caller keeps the cache), so this is not that case. _persistEnvelope then writes
+    // the now-empty list, so the next open is clean rather than re-flashing the cleared transcript.
+    if (fetched.isEmpty) return const [];
+    final windowStart = fetched.first.createdAt; // oldest of the newest page
+    final byId = <String, ChatMessage>{for (final m in fetched) m.id: m};
+    for (final m in cached) {
+      if (m.createdAt.compareTo(windowStart) < 0) byId[m.id] = m;
+    }
+    final out = byId.values.toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return out;
+  }
+
+  /// Persists the on-screen transcript's newest window, so the next open paints from it.
+  /// Fire-and-forget: the read of state and the cache happen synchronously here, only the
+  /// disk write is deferred, so it is safe even as the controller is torn down.
+  Future<void> _persistEnvelope() =>
+      ref.read(chatEnvelopeCacheProvider).save(_conversationId, state.messages);
+
   /// Sends a message. The content goes into the local store at send time — MLS destroys the key on
   /// encrypt, so this is the only chance we will ever have to read back what we just said.
   Future<void> send(
@@ -382,7 +429,21 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       joined: true,
       peerNotReady: false,
     );
+    unawaited(_persistEnvelope());
     await _markRead(message);
+  }
+
+  /// Clears this conversation's history from the on-screen feed after a server-side clear.
+  /// The bodies and the envelope are forgotten elsewhere (the list controller); here we
+  /// empty the live state so the now-clear chat shows without leaving and re-entering.
+  void clearHistory() {
+    state = state.copyWith(
+      messages: const [],
+      contents: const {},
+      cursor: null,
+      clearCursor: true,
+      loading: false,
+    );
   }
 }
 

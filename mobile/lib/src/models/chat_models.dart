@@ -199,6 +199,19 @@ class ChatMessage {
     createdAt: j['createdAt'] as String? ?? '',
     mlsEpoch: (j['mlsEpoch'] as num?)?.toInt(),
   );
+
+  /// Round-trips through [ChatMessage.fromJson] — ciphertext as base64, matching the
+  /// wire shape — so the message envelope can be cached to disk and read back. Used by
+  /// the envelope cache, never sent to the server (the server assigns ids and times).
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'conversationId': conversationId,
+    'senderId': senderId,
+    'ciphertext': base64Encode(ciphertext),
+    'contentType': contentType,
+    'createdAt': createdAt,
+    if (mlsEpoch != null) 'mlsEpoch': mlsEpoch,
+  };
 }
 
 /// One page of conversation history, walked backwards in time.

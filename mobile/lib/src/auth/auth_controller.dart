@@ -79,6 +79,9 @@ class AuthController extends Notifier<AuthState> {
   /// clear a token logs you out anyway, whereas a failure to wipe leaves the messages readable.
   Future<void> logout() async {
     await ref.read(mlsServiceProvider).wipeLocalKeys();
+    // The message envelopes are chat data too — wiped alongside the keys and bodies (which
+    // wipeLocalKeys takes) so nothing readable about the conversations is left on the device.
+    await ref.read(chatEnvelopeCacheProvider).wipe();
     await ref.read(safetyPinStoreProvider).wipe();
     await ref.read(lastSeenStoreProvider).wipe();
     await ref.read(tokenStoreProvider).clear();
