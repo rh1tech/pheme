@@ -52,14 +52,16 @@ export function useVisualViewportRect(): ViewportRect | null {
 /**
  * Whether the software keyboard is currently covering the bottom of the screen.
  *
- * The shell height is already the visual viewport, so its bottom edge sits flush
- * with the top of the keyboard. But the composer keeps `env(safe-area-inset-bottom)`
- * of padding to clear the home indicator — and iOS keeps reporting that inset even
- * while the keyboard physically covers the indicator, leaving a dead strip between
- * the text field and the keys. Knowing the keyboard is up lets that padding collapse.
+ * The composer keeps `env(safe-area-inset-bottom)` of padding to clear the home
+ * indicator — and iOS keeps reporting that inset even while the keyboard physically
+ * covers the indicator, leaving a dead strip between the text field and the keys.
+ * Knowing the keyboard is up lets that padding collapse.
  *
- * Derived by how much the layout viewport shrank to the visual one: the dynamic
- * Safari toolbar accounts for well under 120px, a keyboard for far more.
+ * Detected by comparing the visual viewport to the TALLEST it has been (the
+ * keyboard-closed state), NOT to `window.innerHeight`: the page's
+ * `interactive-widget=resizes-content` shrinks the layout viewport — and so
+ * `innerHeight` — along with the visual one, so their difference is ~0 with the
+ * keyboard open. Its own high-water mark is the only stable reference.
  */
 const KEYBOARD_MIN_PX = 120
 
@@ -69,9 +71,10 @@ export function useKeyboardOpen(): boolean {
   useEffect(() => {
     const vv = window.visualViewport
     if (!vv) return
+    let tallest = vv.height
     const update = () => {
-      const covered = window.innerHeight - vv.height - vv.offsetTop
-      setOpen(covered > KEYBOARD_MIN_PX)
+      tallest = Math.max(tallest, vv.height)
+      setOpen(tallest - vv.height > KEYBOARD_MIN_PX)
     }
     update()
     vv.addEventListener('resize', update)
@@ -83,31 +86,4 @@ export function useKeyboardOpen(): boolean {
   }, [])
 
   return open
-}
-
-export function useVisualViewportHeight(): number | null {
-  const [height, setHeight] = useState<number | null>(
-    () => window.visualViewport?.height ?? null,
-  )
-
-  useEffect(() => {
-    const vv = window.visualViewport
-    if (!vv) return
-
-    const update = () => {
-      setHeight(vv.height)
-      // iOS scrolls the layout viewport out from under a fixed-height root when
-      // the keyboard opens. Pinning it back keeps the shell aligned to the window.
-      window.scrollTo(0, 0)
-    }
-
-    vv.addEventListener('resize', update)
-    vv.addEventListener('scroll', update)
-    return () => {
-      vv.removeEventListener('resize', update)
-      vv.removeEventListener('scroll', update)
-    }
-  }, [])
-
-  return height
 }

@@ -51,9 +51,14 @@
   display: grid;
   grid-template-columns: var(--pheme-sidebar-w) minmax(0, 1fr);
   /* The shell is fixed-height, so its panes scroll internally rather than the
-     document. Height comes from visualViewport where available (see
-     useVisualViewportHeight) so the iOS keyboard and dynamic toolbar do not
-     push the composer out of sight; 100dvh is the fallback. */
+     document. ChatShell pins it to the VISUAL viewport (position:fixed with an
+     inline top/height from useVisualViewportRect) so the iOS keyboard and dynamic
+     toolbar cannot push the composer out of sight. This static + 100dvh pair is only
+     the fallback for a browser with no visualViewport. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
   height: var(--pheme-viewport-h, 100dvh);
   overflow: hidden;
   padding-left: env(safe-area-inset-left);

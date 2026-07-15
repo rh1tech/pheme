@@ -11,7 +11,7 @@ import { useChannelList } from '../../hooks/useChannelList'
 import { useConversationList } from '../../hooks/useConversationList'
 import { useDeviceAdmission } from '../../hooks/useDeviceAdmission'
 import { useColdLaunchToList } from '../../hooks/useColdLaunchToList'
-import { useKeyboardOpen, useVisualViewportHeight } from '../../hooks/useVisualViewport'
+import { useKeyboardOpen, useVisualViewportRect } from '../../hooks/useVisualViewport'
 import type { ChatOutletContext } from './context'
 import './chat.css'
 
@@ -34,7 +34,12 @@ export function ChatShell() {
   const channelMatch = useMatch({ path: '/channels/:id', end: false })
   const chatMatch = useMatch({ path: '/chats/:id', end: false })
   const activeId = channelMatch?.params.id ?? chatMatch?.params.id
-  const viewportHeight = useVisualViewportHeight()
+  // Pin the shell to the VISUAL viewport — its top (offsetTop) and its height —
+  // rather than sizing by height alone at the document's top. iOS moves the layout
+  // viewport out from under a fixed-height root when the keyboard opens; sizing by
+  // height without following offsetTop left the shell's bottom short of the keyboard,
+  // so the composer floated above it. This is the same anchoring the bottom sheets use.
+  const viewport = useVisualViewportRect()
   const keyboardOpen = useKeyboardOpen()
   // Read synchronously on the first render (not deferred to an effect): the cold-launch
   // redirect below decides once, at mount, and a first-render "false" that only flips to
@@ -90,10 +95,16 @@ export function ChatShell() {
         data-view={activeId ? 'chat' : 'list'}
         data-keyboard={keyboardOpen ? 'open' : undefined}
         style={
-          viewportHeight === null
+          viewport === null
             ? undefined
             : ({
-                '--pheme-viewport-h': `${viewportHeight}px`,
+                position: 'fixed',
+                top: `${viewport.offsetTop}px`,
+                left: 0,
+                right: 0,
+                height: `${viewport.height}px`,
+                // The mobile info sheet still sizes to this.
+                '--pheme-viewport-h': `${viewport.height}px`,
               } as React.CSSProperties)
         }
       >
