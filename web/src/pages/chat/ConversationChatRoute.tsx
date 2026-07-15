@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ActionIcon, Alert, CloseButton, FileButton, Group, Menu, Stack, Text, Textarea } from '@mantine/core'
 import {
   IconArrowBackUp,
@@ -262,7 +262,7 @@ export function ConversationChatRoute() {
     if (newest) conversations.markRead(id, newest.createdAt)
   }, [messages, id, conversations])
 
-  const { scrollerRef, contentRef, atBottom, scrollToBottom, captureAnchor } = useChatScroll(
+  const { scrollerRef, contentRef, atBottom, scrollToBottom } = useChatScroll(
     id,
     () => {
       setUnseen(0)
@@ -272,6 +272,30 @@ export function ConversationChatRoute() {
   useEffect(() => {
     atBottomRef.current = atBottom
   })
+
+  // Anchoring a load-older prepend so it does not jump the feed. Done here, synchronously, rather
+  // than through the scroll hook's ResizeObserver: that fires on the NEXT size change, which a
+  // net-zero prepend (an older page fully covered by the envelope cache) never produces — so the
+  // anchor dangled and a later resize consumed it against the wrong height, and a fast second
+  // scroll-to-top clobbered it. Capturing the distance-from-bottom right before the prepend and
+  // restoring it in a layout effect (before paint) is deterministic and immune to that race.
+  //
+  // prependPending both marks a restore is due and locks loadOlder out until it runs.
+  const prependAnchor = useRef<number | null>(null)
+  const prependPending = useRef(false)
+
+  useLayoutEffect(() => {
+    if (!prependPending.current) return
+    const el = scrollerRef.current
+    if (el && prependAnchor.current !== null) {
+      // Keep the same distance from the bottom: the prepend added height above the reader, so this
+      // holds whatever they were looking at exactly in place. A no-op when nothing was added.
+      el.scrollTop = el.scrollHeight - prependAnchor.current
+      delete el.dataset.prepending
+    }
+    prependAnchor.current = null
+    prependPending.current = false
+  }, [messages, scrollerRef])
 
   useEdgeSwipeBack(
     Boolean(isMobile),
@@ -600,12 +624,23 @@ export function ConversationChatRoute() {
   }, [messages, id])
 
   async function loadOlder() {
-    if (!cursor || loadingOlder) return
+    // prependPending stays true from a prior load-older until its restore has run, so a fast second
+    // scroll-to-top cannot start here and clobber the pending anchor.
+    if (!cursor || loadingOlder || prependPending.current) return
     setLoadingOlder(true)
-    captureAnchor()
     try {
       const page = await api.listChatMessages(id, cursor, PAGE_SIZE, true)
       const older = page.messages.slice().reverse()
+      // Capture the anchor RIGHT BEFORE the prepend, from the live scroll position, and hold the
+      // browser's own anchoring off (data-prepending) until the layout effect restores — so the
+      // two do not both compensate for the same inserted height. Both are synchronous with the
+      // state update below, so nothing can race between capture and restore.
+      const el = scrollerRef.current
+      if (el) {
+        prependAnchor.current = el.scrollHeight - el.scrollTop
+        el.dataset.prepending = 'true'
+        prependPending.current = true
+      }
       // Merge, not prepend: the older page can overlap what the envelope cache already shows, and a
       // blind prepend would duplicate those messages and jump the feed. See mergeSorted.
       setMessages((prev) => mergeSorted(prev, older))
