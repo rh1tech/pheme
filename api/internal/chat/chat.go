@@ -66,6 +66,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/conversations/{id}", h.getConversation)
 	mux.HandleFunc("DELETE /v1/conversations/{id}", h.deleteConversation)
 	mux.HandleFunc("GET /v1/conversations/{id}/messages", h.listMessages)
+	mux.HandleFunc("DELETE /v1/conversations/{id}/messages", h.clearMessages)
 	mux.HandleFunc("POST /v1/conversations/{id}/attachments", h.uploadAttachment)
 	mux.HandleFunc("GET /v1/conversations/{id}/attachments/{attachmentId}", h.getAttachment)
 	mux.HandleFunc("POST /v1/conversations/{id}/messages", h.postMessage)

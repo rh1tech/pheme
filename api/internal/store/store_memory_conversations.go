@@ -185,14 +185,32 @@ func (m *Memory) appendChatMessageLocked(msg domain.ChatMessage) domain.ChatMess
 	return msg
 }
 
-func (m *Memory) ChatMessagesByConversation(_ context.Context, conversationID, cursor string, limit int) ([]domain.ChatMessage, error) {
+func (m *Memory) ClearConversationHistory(_ context.Context, conversationID, userID string, before time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, mem := range m.convMembers {
+		if mem.ConversationID == conversationID && mem.UserID == userID {
+			mem.ClearedAt = before
+			m.convMembers[id] = mem
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *Memory) ChatMessagesByConversation(_ context.Context, conversationID, cursor string, limit int, after time.Time) ([]domain.ChatMessage, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []domain.ChatMessage
 	for _, msg := range m.chatMessages {
-		if msg.ConversationID == conversationID {
-			out = append(out, msg)
+		if msg.ConversationID != conversationID {
+			continue
 		}
+		// Respect the caller's clear-history watermark: hide messages at or before it.
+		if !after.IsZero() && !msg.CreatedAt.After(after) {
+			continue
+		}
+		out = append(out, msg)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	if cursor != "" {

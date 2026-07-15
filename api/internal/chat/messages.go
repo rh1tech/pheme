@@ -17,7 +17,7 @@ import (
 const maxCiphertextBytes = 256 * 1024
 
 func (h *Handler) listMessages(w http.ResponseWriter, r *http.Request) {
-	_, convID, _, ok := h.requireMember(w, r)
+	_, convID, member, ok := h.requireMember(w, r)
 	if !ok {
 		return
 	}
@@ -28,7 +28,10 @@ func (h *Handler) listMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cursor := r.URL.Query().Get("cursor")
-	msgs, err := h.Store.ChatMessagesByConversation(r.Context(), convID, cursor, limit)
+	// member.ClearedAt is this member's private clear-history watermark: the store
+	// returns only messages newer than it, so cleared history stays hidden on every
+	// device this user signs in on, without touching anyone else's view.
+	msgs, err := h.Store.ChatMessagesByConversation(r.Context(), convID, cursor, limit, member.ClearedAt)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not load messages")
 		return
@@ -321,6 +324,24 @@ func (h *Handler) setMemberRole(w http.ResponseWriter, r *http.Request) {
 	target := r.PathValue("userId")
 	if err := h.Store.SetConversationMemberRole(r.Context(), convID, target, req.Role); err != nil {
 		httpx.Error(w, http.StatusNotFound, "member not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// clearMessages clears the caller's own history of a conversation, keeping the
+// conversation itself. It sets a per-member watermark rather than deleting the shared
+// message log: a chat message is a single MLS-encrypted row read by every member, so
+// deleting rows would erase the history for everyone. The watermark hides everything
+// up to now from THIS member, on all their devices, and leaves other members untouched.
+// Any member may clear their own history — direct or group, no special role needed.
+func (h *Handler) clearMessages(w http.ResponseWriter, r *http.Request) {
+	uid, convID, _, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	if err := h.Store.ClearConversationHistory(r.Context(), convID, uid, time.Now().UTC()); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not clear history")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

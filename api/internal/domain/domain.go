@@ -336,6 +336,13 @@ type ConversationMember struct {
 	UserID         string    `bson:"userId" json:"userId"`
 	Role           Role      `bson:"role" json:"role"`
 	JoinedAt       time.Time `bson:"joinedAt" json:"joinedAt"`
+	// ClearedAt is this member's private "clear history" watermark: messages at or
+	// before it are hidden from THIS member's fetches, on all their devices, while
+	// leaving the shared log — and every other member's view of it — untouched. Zero
+	// means nothing cleared. It is per-member on purpose: the ciphertext is a single
+	// shared row per message (one MLS group message), so deleting rows would erase the
+	// conversation for everyone; a watermark clears only the caller's own history.
+	ClearedAt time.Time `bson:"clearedAt,omitempty" json:"clearedAt,omitempty"`
 }
 
 // ChatMessage is one message in a conversation. Unlike the broadcast Message, it

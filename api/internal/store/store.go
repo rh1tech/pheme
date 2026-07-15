@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/domain"
@@ -193,8 +194,15 @@ type Store interface {
 	AppendChatMessage(ctx context.Context, m domain.ChatMessage) (domain.ChatMessage, error)
 	// ChatMessagesByConversation returns messages newest-first with cursor
 	// pagination (cursor is an exclusive anchor message id), mirroring
-	// MessagesByChannel. There is no query parameter — content is opaque.
-	ChatMessagesByConversation(ctx context.Context, conversationID, cursor string, limit int) ([]domain.ChatMessage, error)
+	// MessagesByChannel. There is no query parameter — content is opaque. `after`
+	// applies the caller's clear-history watermark: only messages strictly newer than
+	// it are returned (zero returns everything).
+	ChatMessagesByConversation(ctx context.Context, conversationID, cursor string, limit int, after time.Time) ([]domain.ChatMessage, error)
+	// ClearConversationHistory sets a member's clear-history watermark to `before`,
+	// hiding that member's messages up to and including it. Per-member: it never
+	// touches the shared message log or another member's view. ErrNotFound if the
+	// user is not a member.
+	ClearConversationHistory(ctx context.Context, conversationID, userID string, before time.Time) error
 	// LastChatMessagesByConversations returns the newest message of each given
 	// conversation, keyed by conversation id, for chat-list ordering/preview.
 	LastChatMessagesByConversations(ctx context.Context, conversationIDs []string) (map[string]domain.ChatMessage, error)

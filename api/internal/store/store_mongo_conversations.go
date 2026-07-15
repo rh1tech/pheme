@@ -186,13 +186,36 @@ func (m *Mongo) AppendChatMessage(ctx context.Context, msg domain.ChatMessage) (
 	return msg, err
 }
 
-func (m *Mongo) ChatMessagesByConversation(ctx context.Context, conversationID, cursor string, limit int) ([]domain.ChatMessage, error) {
+func (m *Mongo) ClearConversationHistory(ctx context.Context, conversationID, userID string, before time.Time) error {
+	res, err := m.db.Collection("conversationMembers").UpdateOne(ctx,
+		bson.M{"conversationId": conversationID, "userId": userID},
+		bson.M{"$set": bson.M{"clearedAt": before}},
+	)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *Mongo) ChatMessagesByConversation(ctx context.Context, conversationID, cursor string, limit int, after time.Time) ([]domain.ChatMessage, error) {
 	filter := bson.M{"conversationId": conversationID}
+	// The caller's clear-history watermark and the load-older cursor both bound
+	// createdAt, so they combine into one range condition rather than overwriting.
+	created := bson.M{}
+	if !after.IsZero() {
+		created["$gt"] = after
+	}
 	if cursor != "" {
 		var anchor domain.ChatMessage
 		if err := m.db.Collection("chatMessages").FindOne(ctx, bson.M{"_id": cursor}).Decode(&anchor); err == nil {
-			filter["createdAt"] = bson.M{"$lt": anchor.CreatedAt}
+			created["$lt"] = anchor.CreatedAt
 		}
+	}
+	if len(created) > 0 {
+		filter["createdAt"] = created
 	}
 	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
 	if limit > 0 {
