@@ -258,8 +258,11 @@ class MessageFeedController extends Notifier<MessageFeedState> {
           .where((m) => !m.isControl)
           .toList(growable: false);
 
+      // Merge, not prepend: the older page can overlap what the envelope cache already shows (the
+      // cache holds up to 200, but this cursor tracks the newest page), so a blind prepend would
+      // duplicate those messages and jump the feed. See _mergeSorted.
       state = state.copyWith(
-        messages: [...older, ...state.messages],
+        messages: _mergeSorted(state.messages, older),
         loadingOlder: false,
         cursor: page.nextCursor,
         clearCursor: page.nextCursor == null,
@@ -386,6 +389,21 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     final out = byId.values.toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return out;
+  }
+
+  /// Unions two message lists by id and sorts oldest-first. Used by load-older, where the older page
+  /// can overlap the cached transcript already on screen; merging drops the overlap and keeps order,
+  /// while still pulling in the genuinely-older messages the page adds.
+  List<ChatMessage> _mergeSorted(List<ChatMessage> a, List<ChatMessage> b) {
+    final byId = <String, ChatMessage>{};
+    for (final m in a) {
+      byId[m.id] = m;
+    }
+    for (final m in b) {
+      byId[m.id] = m;
+    }
+    return byId.values.toList()
+      ..sort((x, y) => x.createdAt.compareTo(y.createdAt));
   }
 
   /// Persists the on-screen transcript's newest window, so the next open paints from it.
