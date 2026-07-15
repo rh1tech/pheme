@@ -80,14 +80,20 @@ function Photo({
     }
   }, [conversationId, photo.id, photo.key, photo.mime])
 
-  // The aspect ratio comes from the message, so the box is the right shape before the bytes arrive.
-  const ratio = square ? 1 : photo.h > 0 ? photo.w / photo.h : 1
+  // The box's shape AND size come from the message, so it reserves the right space before the bytes
+  // arrive. A grid photo takes its width from the 1fr column (a definite width); a single photo is a
+  // block, so it needs an explicit width — its own, capped at the bubble — for aspect-ratio to resolve
+  // to a real height rather than collapsing to nothing until the image loads and shoves the feed.
+  const ratio = square || photo.w <= 0 || photo.h <= 0 ? 1 : photo.w / photo.h
+  const boxStyle = square
+    ? { aspectRatio: '1' }
+    : { width: photo.w > 0 ? `min(${photo.w}px, 100%)` : '100%', aspectRatio: String(ratio) }
 
   return (
     <>
       <Box
         className="pheme-photo"
-        style={{ aspectRatio: String(ratio) }}
+        style={boxStyle}
         onClick={url ? open : undefined}
         data-clickable={Boolean(url)}
       >

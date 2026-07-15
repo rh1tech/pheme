@@ -860,15 +860,22 @@
    point an <img> at until that is done. The box is sized from the dimensions carried
    inside the message, which is what stops the feed jumping when the bytes land. */
 
+/* A single photo is a plain block, so the box below can take a DEFINITE width from
+   the message's dimensions and reserve its height with aspect-ratio before the bytes
+   arrive. As a one-item grid the column was `auto` — sized to content, which is zero
+   until the image loads, so the box grew when the picture landed and shoved the feed,
+   worst of all mid-way through loading an older page. Only the multi-photo case is a
+   grid, where 1fr columns are already definite. */
 .pheme-photo-grid {
-  display: grid;
-  gap: 2px;
+  display: block;
   margin: 0 -0.125rem 0.25rem;
   border-radius: var(--mantine-radius-md);
   overflow: hidden;
 }
 
 .pheme-photo-grid[data-grid='true'] {
+  display: grid;
+  gap: 2px;
   grid-template-columns: 1fr 1fr;
 }
 
