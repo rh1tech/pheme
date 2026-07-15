@@ -51,14 +51,11 @@ class CallEngine {
     required this.conversationId,
     required this.callId,
     required this.outgoing,
-    required String userId,
+    required this._userId,
     required PhemeRepository repository,
-    required MlsService mls,
-    required void Function(CallState) onChange,
-  }) : _userId = userId,
-       _repo = repository,
-       _mls = mls,
-       _onChange = onChange,
+    required this._mls,
+    required this._onChange,
+  }) : _repo = repository,
        _status = outgoing ? CallStatus.calling : CallStatus.ringing;
 
   final String conversationId;
@@ -183,8 +180,9 @@ class CallEngine {
   void _emit() => _onChange(state);
 
   void _setStatus(CallStatus status, [CallEndReason? reason]) {
-    if (_status == CallStatus.ended)
+    if (_status == CallStatus.ended) {
       return; // an ended call does not change its mind
+    }
     _status = status;
     _reason = reason;
 
@@ -472,8 +470,9 @@ class CallEngine {
 
   Future<void> _handle(Uint8List wire) async {
     final header = openHeader(wire);
-    if (header == null)
+    if (header == null) {
       return; // not a call signal; the server relays what it is handed
+    }
     if (header.callId != callId) return;
     if (header.from == _identity) return; // our own signal, echoed back
 
@@ -493,8 +492,9 @@ class CallEngine {
     // before we can say a word to each other.
     if (header.epoch != _epoch) {
       await _reconcileEpoch(header.epoch);
-      if (header.epoch != _epoch)
+      if (header.epoch != _epoch) {
         return; // handled: we told them, or we gave up
+      }
     }
 
     final secret = await _peerSecret(header.from);

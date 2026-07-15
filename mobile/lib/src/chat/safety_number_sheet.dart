@@ -10,7 +10,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../l10n/app_localizations.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
-import 'chat_providers.dart';
 import 'safety_pin_store.dart';
 
 Future<void> showSafetyNumberSheet(

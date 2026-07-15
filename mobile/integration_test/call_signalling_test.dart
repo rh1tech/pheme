@@ -129,7 +129,7 @@ void main() {
   setUpAll(() async => RustLib.init());
 
   /// Stands up two devices already sharing an established group. Returns them plus the conversation.
-  Future<(Device, Device, String)> _pair() async {
+  Future<(Device, Device, String)> pair() async {
     final alice = await Device.signUp('alice', _email('alice'));
     final bob = await Device.signUp('bob', _email('bob'));
     await alice.publishKeys();
@@ -146,7 +146,7 @@ void main() {
 
   group('a call invite', () {
     testWidgets('is sealed by the caller and opened by the callee', (_) async {
-      final (alice, bob, convo) = await _pair();
+      final (alice, bob, convo) = await pair();
 
       // Caller: catch up to the current epoch FIRST — the exporter only exports from the epoch the
       // group is actually at — then derive the key for this call, sealed to Alice's own identity.
@@ -206,7 +206,7 @@ void main() {
     });
 
     testWidgets('is answered, and the caller opens the answer', (_) async {
-      final (alice, bob, convo) = await _pair();
+      final (alice, bob, convo) = await pair();
 
       // Alice invites (abbreviated — the previous test proves the invite path).
       await alice.mls.catchUpToLatest(convo, alice.userId);
@@ -278,7 +278,7 @@ void main() {
     testWidgets('cannot be opened with a key derived for the wrong sender', (
       _,
     ) async {
-      final (alice, bob, convo) = await _pair();
+      final (alice, bob, convo) = await pair();
 
       await alice.mls.catchUpToLatest(convo, alice.userId);
       final key = (await alice.mls.callKeyFor(

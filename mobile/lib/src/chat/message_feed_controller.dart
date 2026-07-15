@@ -9,7 +9,6 @@ import '../crypto/chat_content.dart';
 import '../crypto/mls_errors.dart';
 import '../data/app_providers.dart';
 import '../models/chat_models.dart';
-import '../models/models.dart';
 import 'chat_providers.dart';
 
 const _pageSize = 50;

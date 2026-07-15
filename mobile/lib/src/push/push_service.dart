@@ -232,7 +232,7 @@ class PushService {
     if (!Platform.isIOS) return null;
     try {
       final token = await FlutterCallkitIncoming.getDevicePushTokenVoIP();
-      return (token == null || token.isEmpty) ? null : token as String;
+      return (token == null || token.isEmpty) ? null : token;
     } on Object {
       return null;
     }

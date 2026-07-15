@@ -136,7 +136,7 @@ class MessageBubble extends StatelessWidget {
                     ),
                   ),
                 // The quote sits above everything, the way a reply reads: context first, then the reply.
-                if (quote != null) quote!,
+                ?quote,
 
                 if (photos != null) ...[
                   photos!,

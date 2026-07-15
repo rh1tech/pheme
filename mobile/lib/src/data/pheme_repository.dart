@@ -284,8 +284,9 @@ class PhemeRepository {
   }) {
     final body = <String, dynamic>{'platform': platform};
     if (fcmToken != null) body['fcmToken'] = fcmToken;
-    if (voipToken != null && voipToken.isNotEmpty)
+    if (voipToken != null && voipToken.isNotEmpty) {
       body['voipToken'] = voipToken;
+    }
     return _post('/v1/devices', body).then((d) => Device.fromJson(d));
   }
 

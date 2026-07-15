@@ -6,7 +6,6 @@ import '../core/jwt.dart';
 import '../core/providers.dart';
 import '../crypto/chat_cache.dart';
 import '../crypto/mls_service.dart';
-import '../data/app_providers.dart';
 import '../models/chat_models.dart';
 import 'conversation_list_controller.dart';
 import 'last_seen_store.dart';

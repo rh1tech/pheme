@@ -4,8 +4,6 @@
 // bottom-align when there are few of them, keeps the newest in view, and holds scroll position when
 // an older page is prepended, all without the manual scroll-anchoring the web has to do.
 
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

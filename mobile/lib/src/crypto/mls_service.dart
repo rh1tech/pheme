@@ -732,7 +732,7 @@ class MlsService {
         }
         // Conflict: a Commit landed between fetching the GroupInfo and offering ours. Refetch newer
         // GroupInfo and try again.
-      } on Object catch (e) {
+      } on Object {
         // Building or offering the external commit failed for a reason a retry will not fix.
         return null;
       }
