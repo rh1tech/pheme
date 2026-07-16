@@ -253,10 +253,19 @@ export function ConversationChatRoute() {
   const reconciledRef = useRef(false)
   // Messages waiting out SEALED_GRACE_MS before the bubble gives up on them, by id.
   const sealedTimers = useRef<Map<string, number>>(new Map())
+  // The conversation currently on screen, for async work that may outlive a switch. Kept
+  // current by the preload effect below, which is what resets the per-conversation refs anyway.
+  const liveIdRef = useRef(id)
 
   /**
    * Starts a message's grace. When it runs out, the message is marked unreadable (null) — unless it
    * decrypted in the meantime, which is the whole point of waiting.
+   *
+   * Before giving up it looks at the DISK cache one last time. The plaintext can be there without
+   * ever having reached this tab's state: another tab won the race for the message's one-shot key
+   * and cached what it read, or a superseded pass of the decrypt effect did. Its write is
+   * asynchronous, so even a pass that checked the cache can have looked a moment too early — this
+   * is the look that cannot be too early.
    */
   const scheduleSealed = useCallback((messageId: string) => {
     if (sealedTimers.current.has(messageId)) return
@@ -264,11 +273,15 @@ export function ConversationChatRoute() {
       sealedTimers.current.delete(messageId)
       // It arrived after all: an epoch caught up and the decrypt succeeded. Nothing to say.
       if (bodiesRef.current[messageId] != null) return
-      bodiesRef.current = { ...bodiesRef.current, [messageId]: null }
-      setBodies(bodiesRef.current)
+      void loadCachedContents(id).then((cached) => {
+        // The chat switched, or the body landed, while the cache was being read.
+        if (liveIdRef.current !== id || bodiesRef.current[messageId] != null) return
+        bodiesRef.current = { ...bodiesRef.current, [messageId]: cached[messageId] ?? null }
+        setBodies(bodiesRef.current)
+      })
     }, SEALED_GRACE_MS)
     sealedTimers.current.set(messageId, timer)
-  }, [])
+  }, [id])
 
   // Leaving the chat entirely: nothing is left to tell, and a timer that outlives the component
   // would setState on it.
@@ -468,6 +481,7 @@ export function ConversationChatRoute() {
   // replaces the skeleton with the real transcript in the same tick.
   useEffect(() => {
     let active = true
+    liveIdRef.current = id
     bodiesRef.current = {}
     processedRef.current = new Set()
     failedRef.current = new Set()
@@ -510,7 +524,6 @@ export function ConversationChatRoute() {
     // must not wait for the server to confirm which one is current — that is a question about sending.
     if (readyId !== id || !userId || !conversation || (!groupId && !readable) || messages.length === 0)
       return
-    let active = true
     const run = async () => {
       try {
         await mlsSession(userId)
@@ -527,100 +540,83 @@ export function ConversationChatRoute() {
         for (const mid of failedRef.current) processedRef.current.delete(mid)
         failedRef.current.clear()
       }
-      const next: Record<string, ChatContent | null> = { ...bodiesRef.current }
-      let changed = false
+      // The disk cache, read at most once per pass. A message whose decrypt comes back empty may
+      // still be readable from here: it is our own (a sender can never decrypt what it sent), it
+      // predates this device joining the group, or another tab won the race for its one-shot key —
+      // MLS lets exactly one succeed — and cached the plaintext for both of them.
+      let disk: Record<string, ChatContent> | null = null
+      const fromDisk = async (messageId: string): Promise<ChatContent | null> => {
+        disk ??= await loadCachedContents(id)
+        return disk[messageId] ?? null
+      }
       for (const m of messages) {
         if (processedRef.current.has(m.id) || MLS_CONTROL_TYPES.has(m.contentType)) continue
+        // Claimed BEFORE the decrypt, not after. This effect can overlap itself — any dep change
+        // starts a new pass while an old one is still awaiting — and two passes reaching the same
+        // message is not duplicated work but destruction: the first decrypt destroys the key, the
+        // second comes back empty, and whichever result is kept had better be the full one.
+        processedRef.current.add(m.id)
+        let content: ChatContent | null
         try {
-          // A call's record is encrypted exactly like a message, because it IS one — the
-          // difference is only what the body means, which the bubble decides. The one thing it
-          // must not do is become the chat list's preview: "{"outcome":"missed"}" is not a
-          // sentence, and a missed call has no words to preview.
-          if (m.contentType === CALL_EVENT) {
-            const bytes = await decryptChatMessage(id, userId, m.ciphertext)
-            const content = bytes && deserializeContent(bytes)
-            if (content) {
-              next[m.id] = content
-              changed = true
-              void cacheContent(id, m.id, content)
-            } else if (m.senderId === userId) {
-              // OUR OWN missed call, echoed back to us. MLS forward secrecy means a sender can
-              // never decrypt what it sent — the message key is destroyed on encrypt — so the
-              // caller, of all people, could not read the record of its own unanswered call.
-              // It wrote the body down when it sent it; read it back from there.
-              const cached = await loadCachedContents(id)
-              if (cached[m.id] !== undefined) {
-                next[m.id] = cached[m.id]
-                changed = true
-              }
-            }
-          } else if (m.contentType === MLS_APPLICATION) {
+          if (m.contentType === CALL_EVENT || m.contentType === MLS_APPLICATION) {
             // Against whichever of the conversation's groups this message belongs to. A
             // conversation can have had more than one — if every device holding a group lost
             // its keys, the only way to talk again was to start a fresh one — and the old
             // groups are kept, so what was said to them is still readable here.
             const bytes = await decryptChatMessage(id, userId, m.ciphertext)
-            const content = bytes && deserializeContent(bytes)
+            content = (bytes && deserializeContent(bytes)) || null
             if (content) {
-              next[m.id] = content
-              changed = true
               void cacheContent(id, m.id, content)
-              // A photo with no caption still has to say something in the list — an empty row reads
-              // as a bug rather than as a picture.
-              setPreview(id, content.body || (content.photos?.length ? '__photo__' : ''))
+              // A call's record is encrypted exactly like a message, because it IS one — the
+              // difference is only what the body means, which the bubble decides. The one thing
+              // it must not do is become the chat list's preview: "{"outcome":"missed"}" is not
+              // a sentence, and a missed call has no words to preview. A photo with no caption,
+              // though, still has to say something there — an empty row reads as a bug rather
+              // than as a picture.
+              if (m.contentType === MLS_APPLICATION) {
+                setPreview(id, content.body || (content.photos?.length ? '__photo__' : ''))
+              }
+            } else {
+              // Empty-handed, not thrown: decryptChatMessage never throws for a message it
+              // cannot read. This is the path an already-consumed key comes back on, so this —
+              // not the catch below — is where the cached plaintext rescues it.
+              content = await fromDisk(m.id)
             }
           } else {
             // Legacy plaintext (pre-encryption messages on the wire).
-            const content = deserializeContent(base64ToBytes(m.ciphertext))
-            if (content) {
-              next[m.id] = content
-              changed = true
-            }
+            content = deserializeContent(base64ToBytes(m.ciphertext)) || null
           }
         } catch {
-          // Decryption can legitimately fail: it is our own message (a sender can never
-          // decrypt their own), it predates this device joining the group (MLS gives a
-          // new member no access to what was said before it arrived), or another tab
-          // decrypted it first — MLS lets exactly one of them succeed. In the last two
-          // cases the plaintext may be in the local cache, so read that rather than
-          // leaving a blank. Never retry the decrypt itself.
-          const cached = await loadCachedContents(id)
-          if (cached[m.id]) {
-            next[m.id] = cached[m.id]
-            changed = true
-          }
+          // Something on the way to decrypting failed (the session died mid-pass). The cache may
+          // still hold the body. Never retry the decrypt itself.
+          content = await fromDisk(m.id)
         }
-        // Retire a message only once its body actually resolved (decrypted, or read
-        // back from the local cache). If it did not, park it: it is added to the
-        // processed set so ordinary re-renders skip it, but recorded in failedRef so the
-        // next epoch catch-up above releases it for another try. This is what turns a
-        // new member's first message from "reopen to see it" into "it just appears".
-        //
-        // `!= null` on purpose: a resolved body is an OBJECT. null means we tried and came back
-        // with nothing, which must not read as resolved here.
-        const resolved = next[m.id] != null
-        processedRef.current.add(m.id)
-        if (resolved) {
+        // The chat switched under this pass. Nothing decrypted is lost — it was cached above —
+        // but it must not be written into another conversation's state.
+        if (liveIdRef.current !== id) return
+        if (content) {
+          // Written through immediately, not batched to the end of the pass. A pass being
+          // superseded is routine (a receipt landing re-runs the effect), and a decrypted body
+          // dropped on the floor can never be decrypted again — only the disk cache would hold
+          // it, and only a reload would look there.
+          bodiesRef.current = { ...bodiesRef.current, [m.id]: content }
+          setBodies(bodiesRef.current)
           failedRef.current.delete(m.id)
         } else {
+          // Parked, not retired: it is in the processed set so ordinary re-renders skip it, but
+          // recorded in failedRef so the next epoch catch-up releases it for another try — a new
+          // member's first message "just appears" instead of needing a reopen. The bubble stays
+          // quiet while the grace runs, because the catch-up that would make this readable is
+          // very often already in flight; the grace timer also gives the disk cache a last look
+          // before calling it unreadable. See scheduleSealed / SEALED_GRACE_MS.
           failedRef.current.add(m.id)
-          // Not "unavailable" — not yet. The bubble stays quiet while the grace runs, because the
-          // catch-up that would make this readable is very often already in flight. See
-          // scheduleSealed / SEALED_GRACE_MS.
           scheduleSealed(m.id)
         }
       }
-
-      if (active && changed) {
-        bodiesRef.current = next
-        setBodies(next)
-      }
     }
     void run()
-    return () => {
-      active = false
-    }
-    // scheduleSealed is a stable useCallback, so listing it costs no extra runs.
+    // scheduleSealed only changes with the conversation id, which is already a dep — listing it
+    // costs no extra runs.
   }, [messages, readyId, userId, id, conversation, groupId, readable, catchUpTick, scheduleSealed])
 
   // Reconcile the cached transcript with the server's newest page. `loading` is not
