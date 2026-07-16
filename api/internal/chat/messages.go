@@ -329,6 +329,51 @@ func (h *Handler) setMemberRole(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type receiptRequest struct {
+	// Watermarks, not message ids: the client says how far it has got, and an omitted
+	// (zero) field leaves that watermark where it is.
+	Delivered time.Time `json:"delivered"`
+	Read      time.Time `json:"read"`
+}
+
+// reportReceipt advances the caller's delivered/read watermarks in a conversation.
+//
+// The caller reports its own position and nobody else's, which is the only thing it is in a
+// position to know. Neither watermark ever moves backwards (the store enforces it), so a
+// duplicate or out-of-order report — two devices, a retry, a catch-up after being offline —
+// is harmless.
+//
+// A read implies delivery: you cannot read what never arrived. Reporting only `read` would
+// otherwise leave a message double-ticked but not single-ticked, which is nonsense, so read
+// carries delivered up with it.
+func (h *Handler) reportReceipt(w http.ResponseWriter, r *http.Request) {
+	uid, convID, _, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	var req receiptRequest
+	if !httpx.DecodeLimited(w, r, &req, maxSmallBodyBytes) {
+		return
+	}
+	if req.Delivered.IsZero() && req.Read.IsZero() {
+		httpx.Error(w, http.StatusBadRequest, "delivered or read is required")
+		return
+	}
+	delivered := req.Delivered
+	if req.Read.After(delivered) {
+		delivered = req.Read
+	}
+
+	receipt, err := h.Store.SetConversationReceipt(r.Context(), convID, uid, delivered, req.Read)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not record receipt")
+		return
+	}
+	// Tell the conversation, so the sender's ticks move now rather than on their next fetch.
+	h.Live.Publish(live.Event{ConversationID: convID, Receipt: &receipt})
+	httpx.JSON(w, http.StatusOK, receipt)
+}
+
 // clearMessages clears the caller's own history of a conversation, keeping the
 // conversation itself. It sets a per-member watermark rather than deleting the shared
 // message log: a chat message is a single MLS-encrypted row read by every member, so

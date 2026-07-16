@@ -35,6 +35,25 @@ var ErrUsernameTaken = errors.New("username taken")
 // deleteBlobs best-effort removes image blobs for cascade deletes. A nil store or
 // a per-id failure is ignored: the history rows are already gone, so a leftover
 // blob is at worst harmless garbage to be reclaimed later.
+// withReceiptFloor starts a member's receipt watermarks at the moment they joined.
+//
+// Without it, a member who joins today holds back the ticks on everything said before they
+// arrived: a message is read once every member's ReadAt has passed it, and a fresh member's
+// would sit at zero forever. Those are messages MLS gives them no way to read in the first
+// place — a member gets no access to what came before them — so waiting on them would be
+// waiting for something that cannot happen.
+//
+// Applied in the store, not at the call sites, so no future caller can forget it.
+func withReceiptFloor(m domain.ConversationMember) domain.ConversationMember {
+	if m.DeliveredAt.IsZero() {
+		m.DeliveredAt = m.JoinedAt
+	}
+	if m.ReadAt.IsZero() {
+		m.ReadAt = m.JoinedAt
+	}
+	return m
+}
+
 func deleteBlobs(ctx context.Context, blobs blob.Store, ids []string) {
 	if blobs == nil || len(ids) == 0 {
 		return
@@ -207,6 +226,13 @@ type Store interface {
 	// touches the shared message log or another member's view. ErrNotFound if the
 	// user is not a member.
 	ClearConversationHistory(ctx context.Context, conversationID, userID string, before time.Time) error
+	// SetConversationReceipt advances a member's delivered/read watermarks. A zero time
+	// leaves that watermark alone, and neither ever moves BACKWARDS — receipts arrive out
+	// of order (two devices, a retry, a catch-up after being offline), and a later report
+	// of an earlier position must not un-read what was read. Returns the member's
+	// watermarks as they stand after the write, so the caller can publish what actually
+	// happened rather than what it asked for. ErrNotFound if the user is not a member.
+	SetConversationReceipt(ctx context.Context, conversationID, userID string, delivered, read time.Time) (domain.ConversationReceipt, error)
 	// LastChatMessagesByConversations returns the newest message of each given
 	// conversation, keyed by conversation id, for chat-list ordering/preview.
 	//

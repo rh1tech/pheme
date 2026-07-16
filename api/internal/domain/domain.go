@@ -343,6 +343,31 @@ type ConversationMember struct {
 	// shared row per message (one MLS group message), so deleting rows would erase the
 	// conversation for everyone; a watermark clears only the caller's own history.
 	ClearedAt time.Time `bson:"clearedAt,omitempty" json:"clearedAt,omitempty"`
+
+	// DeliveredAt and ReadAt are this member's receipt watermarks: they have RECEIVED
+	// every message up to DeliveredAt, and READ every message up to ReadAt. Both only
+	// ever move forward.
+	//
+	// Watermarks rather than a row per message per member: messages are ordered by
+	// createdAt, so "read up to T" already says everything about every message at or
+	// before T. A sender's ticks are then a comparison — their message is delivered when
+	// every OTHER member's DeliveredAt has reached it, and read when every other member's
+	// ReadAt has. That is the "everyone has read it" rule, and it costs one number per
+	// member instead of a table the size of the conversation times its membership.
+	//
+	// They start at JoinedAt, which is what keeps a new group member from holding back the
+	// ticks on everything said before they arrived — messages they cannot decrypt anyway,
+	// MLS giving a member no access to what came before them.
+	DeliveredAt time.Time `bson:"deliveredAt,omitempty" json:"deliveredAt,omitempty"`
+	ReadAt      time.Time `bson:"readAt,omitempty" json:"readAt,omitempty"`
+}
+
+// ConversationReceipt is one member's receipt watermarks moving, carried on the live
+// stream so a sender's ticks change under their eyes rather than on the next fetch.
+type ConversationReceipt struct {
+	UserID      string    `json:"userId"`
+	DeliveredAt time.Time `json:"deliveredAt,omitempty"`
+	ReadAt      time.Time `json:"readAt,omitempty"`
 }
 
 // ChatMessage is one message in a conversation. Unlike the broadcast Message, it

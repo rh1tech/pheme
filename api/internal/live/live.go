@@ -24,6 +24,11 @@ type Event struct {
 	// ConversationDeleted marks a conversation that has been removed, so members drop
 	// it from their list without a refetch. Carries ConversationID.
 	ConversationDeleted bool `json:"conversationDeleted,omitempty"`
+	// Receipt is a member's delivered/read watermarks moving. It carries ConversationID,
+	// and goes to the conversation's members like any other event — so a sender's ticks
+	// fill in under their eyes rather than on the next fetch. It says nothing about what
+	// was read; only how far.
+	Receipt *domain.ConversationReceipt `json:"receipt,omitempty"`
 	// Recipients authorises delivery of an event whose usual membership check no longer
 	// holds — a deletion, whose membership rows are already gone by the time anyone can
 	// be told about it.

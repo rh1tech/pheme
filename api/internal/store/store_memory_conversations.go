@@ -20,7 +20,7 @@ func (m *Memory) CreateConversation(_ context.Context, c domain.Conversation, me
 			mem.ID = newID()
 		}
 		mem.ConversationID = c.ID
-		m.convMembers[mem.ID] = mem
+		m.convMembers[mem.ID] = withReceiptFloor(mem)
 	}
 	return c, nil
 }
@@ -122,6 +122,7 @@ func (m *Memory) AddConversationMember(_ context.Context, mem domain.Conversatio
 	if mem.ID == "" {
 		mem.ID = newID()
 	}
+	mem = withReceiptFloor(mem)
 	m.convMembers[mem.ID] = mem
 	return mem, nil
 }
@@ -196,6 +197,30 @@ func (m *Memory) ClearConversationHistory(_ context.Context, conversationID, use
 		}
 	}
 	return ErrNotFound
+}
+
+func (m *Memory) SetConversationReceipt(_ context.Context, conversationID, userID string, delivered, read time.Time) (domain.ConversationReceipt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, mem := range m.convMembers {
+		if mem.ConversationID != conversationID || mem.UserID != userID {
+			continue
+		}
+		// Forward only: an out-of-order report must not un-read what was read.
+		if delivered.After(mem.DeliveredAt) {
+			mem.DeliveredAt = delivered
+		}
+		if read.After(mem.ReadAt) {
+			mem.ReadAt = read
+		}
+		m.convMembers[id] = mem
+		return domain.ConversationReceipt{
+			UserID:      userID,
+			DeliveredAt: mem.DeliveredAt,
+			ReadAt:      mem.ReadAt,
+		}, nil
+	}
+	return domain.ConversationReceipt{}, ErrNotFound
 }
 
 func (m *Memory) ChatMessagesByConversation(_ context.Context, conversationID, cursor string, limit int, after time.Time) ([]domain.ChatMessage, error) {

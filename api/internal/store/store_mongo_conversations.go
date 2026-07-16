@@ -43,7 +43,7 @@ func (m *Mongo) CreateConversation(ctx context.Context, c domain.Conversation, m
 			mem.ID = mongoID()
 		}
 		mem.ConversationID = c.ID
-		docs = append(docs, mem)
+		docs = append(docs, withReceiptFloor(mem))
 	}
 	if len(docs) > 0 {
 		if _, err := m.db.Collection("conversationMembers").InsertMany(ctx, docs); err != nil {
@@ -130,6 +130,7 @@ func (m *Mongo) AddConversationMember(ctx context.Context, mem domain.Conversati
 	if mem.ID == "" {
 		mem.ID = mongoID()
 	}
+	mem = withReceiptFloor(mem)
 	if _, err := m.db.Collection("conversationMembers").InsertOne(ctx, mem); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			return m.ConversationMembership(ctx, mem.ConversationID, mem.UserID)
@@ -198,6 +199,41 @@ func (m *Mongo) ClearConversationHistory(ctx context.Context, conversationID, us
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (m *Mongo) SetConversationReceipt(ctx context.Context, conversationID, userID string, delivered, read time.Time) (domain.ConversationReceipt, error) {
+	// $max, not $set: a watermark only ever moves forward. Receipts arrive out of order —
+	// two devices, a retry, a catch-up after being offline — and $max makes the write
+	// idempotent and order-independent, so an older report cannot un-read what was read.
+	// (In Mongo, $max against a missing field simply sets it.)
+	advance := bson.M{}
+	if !delivered.IsZero() {
+		advance["deliveredAt"] = delivered
+	}
+	if !read.IsZero() {
+		advance["readAt"] = read
+	}
+	filter := bson.M{"conversationId": conversationID, "userId": userID}
+	if len(advance) > 0 {
+		res, err := m.db.Collection("conversationMembers").
+			UpdateOne(ctx, filter, bson.M{"$max": advance})
+		if err != nil {
+			return domain.ConversationReceipt{}, err
+		}
+		if res.MatchedCount == 0 {
+			return domain.ConversationReceipt{}, ErrNotFound
+		}
+	}
+
+	var mem domain.ConversationMember
+	if err := m.db.Collection("conversationMembers").FindOne(ctx, filter).Decode(&mem); err != nil {
+		return domain.ConversationReceipt{}, mapErr(err)
+	}
+	return domain.ConversationReceipt{
+		UserID:      userID,
+		DeliveredAt: mem.DeliveredAt,
+		ReadAt:      mem.ReadAt,
+	}, nil
 }
 
 func (m *Mongo) ChatMessagesByConversation(ctx context.Context, conversationID, cursor string, limit int, after time.Time) ([]domain.ChatMessage, error) {
