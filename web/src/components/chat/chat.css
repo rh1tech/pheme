@@ -30,11 +30,8 @@
      bubbles stay clean and the surface gains some depth. This one is the brand's own iris/magenta
      rather than a copy of anyone's artwork. */
   --pheme-chat-wallpaper-bg: #f5f2fc;
-  --pheme-chat-wallpaper: radial-gradient(
-      900px 600px at 12% 0%,
-      rgba(119, 64, 238, 0.11),
-      transparent 60%
-    ),
+  --pheme-chat-wallpaper: url('/chat-pattern-light.svg'),
+    radial-gradient(900px 600px at 12% 0%, rgba(119, 64, 238, 0.11), transparent 60%),
     radial-gradient(760px 520px at 100% 100%, rgba(190, 75, 219, 0.1), transparent 55%);
 }
 
@@ -52,11 +49,8 @@
   --pheme-unread-fg: var(--mantine-color-iris-2);
   --pheme-own-bubble-bg: #3a2f5e;
   --pheme-chat-wallpaper-bg: #15161a;
-  --pheme-chat-wallpaper: radial-gradient(
-      900px 600px at 12% 0%,
-      rgba(119, 64, 238, 0.22),
-      transparent 60%
-    ),
+  --pheme-chat-wallpaper: url('/chat-pattern-dark.svg'),
+    radial-gradient(900px 600px at 12% 0%, rgba(119, 64, 238, 0.22), transparent 60%),
     radial-gradient(760px 520px at 100% 100%, rgba(190, 75, 219, 0.16), transparent 55%);
 }
 
@@ -502,7 +496,9 @@
   display: flex;
   min-height: 0;
   background-color: var(--pheme-chat-wallpaper-bg);
+  /* Three layers, in order: the doodle tile, then the two gradient washes under it. */
   background-image: var(--pheme-chat-wallpaper);
+  background-repeat: repeat, no-repeat, no-repeat;
 }
 
 /* --- Composer ----------------------------------------------------------- */
