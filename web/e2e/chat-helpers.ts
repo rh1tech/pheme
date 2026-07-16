@@ -169,3 +169,66 @@ export async function openChatAndJoin(page: Page, conversationId: string): Promi
 export function renderedMessages(page: Page): Promise<string[]> {
   return page.getByTestId('chat-message').allInnerTexts()
 }
+
+/** The published-package stock of an EXPLICIT device of the signed-in user — not this browser's. */
+export function keyPackageCountFor(
+  page: Page,
+  deviceId: string,
+): Promise<{ count: number; hasLastResort: boolean }> {
+  return page.evaluate(
+    async ([base, device]) => {
+      const res = await fetch(`${base}/v1/mls/key-packages/count?deviceId=${encodeURIComponent(device)}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}` },
+      })
+      if (!res.ok) return { count: 0, hasLastResort: false }
+      return (await res.json()) as { count: number; hasLastResort: boolean }
+    },
+    [API_URL, deviceId] as const,
+  )
+}
+
+/** Publishes a raw key-package payload as the signed-in user — the test's way to poison the directory. */
+export function publishKeyPackagesRaw(page: Page, body: unknown): Promise<number> {
+  return page.evaluate(
+    async ([base, payload]) => {
+      const res = await fetch(`${base}/v1/mls/key-packages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}`,
+        },
+        body: payload as string,
+      })
+      return res.status
+    },
+    [API_URL, JSON.stringify(body)] as const,
+  )
+}
+
+/** Purges a device's published key packages (owner only), as a retiring client would. */
+export function deleteKeyPackagesFor(page: Page, deviceId: string): Promise<number> {
+  return page.evaluate(
+    async ([base, device]) => {
+      const res = await fetch(`${base}/v1/mls/key-packages?deviceId=${encodeURIComponent(device)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}` },
+      })
+      return res.status
+    },
+    [API_URL, deviceId] as const,
+  )
+}
+
+/** Retires the conversation's current MLS group, exactly as a stuck client would. */
+export function resetGroup(page: Page, conversationId: string): Promise<number> {
+  return page.evaluate(
+    async ([base, conv]) => {
+      const res = await fetch(`${base}/v1/conversations/${conv}/mls/reset`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}` },
+      })
+      return res.status
+    },
+    [API_URL, conversationId] as const,
+  )
+}

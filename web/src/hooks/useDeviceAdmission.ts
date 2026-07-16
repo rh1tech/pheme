@@ -27,8 +27,13 @@ export function useDeviceAdmission(userId: string | null): void {
   useEventStream((e) => {
     if (!userId || !e.conversationId || !e.chatMessage) return
     if (e.chatMessage.contentType !== MLS_DEVICE) return
-    // Our own announcement. We are the one waiting to be let in; we cannot let ourselves in.
-    if (e.chatMessage.senderId === userId) return
+    // No sender check — deliberately. The announcement may carry OUR user id, and it must
+    // still be acted on: it is our own OTHER device asking to be let in, and the device most
+    // likely to be around to admit somebody's new phone is that same person's old one. The
+    // announcing device itself also receives its own announce, and that is harmless —
+    // admitAnnouncedDevice no-ops on a device that does not hold the group. Skipping "our
+    // own" events here meant a second device could only ever be admitted by the OTHER
+    // participant, and a person alone in the app could never bring a new device in at all.
 
     const key = `${e.conversationId}:${e.chatMessage.id}`
     if (handled.current.has(key)) return
