@@ -56,6 +56,8 @@ import { useEventStream } from '../../hooks/useEventStream'
 import { useChatScroll } from '../../hooks/useChatScroll'
 import { usePrependAnchor } from '../../hooks/usePrependAnchor'
 import { useEdgeSwipeBack } from '../../hooks/useEdgeSwipeBack'
+import { applyReceipt, messageReceipt } from '../../lib/receipts'
+import { MessageTicks } from '../../components/chat/MessageTicks'
 import { ChannelAvatar } from '../../components/chat/ChannelAvatar'
 import { DateSeparator } from '../../components/chat/DateSeparator'
 import { CallEventBubble } from '../../components/chat/CallEventBubble'
@@ -663,6 +665,16 @@ export function ConversationChatRoute() {
       navigate('/')
       return
     }
+    // Someone got further through the conversation: move their watermark, and our own ticks with
+    // it. Patched onto the FETCHED conversation because that is what the header and the ticks read
+    // once it has loaded — the list's copy (patched in useConversationList) is only the fallback.
+    if (e.receipt) {
+      const receipt = e.receipt
+      setConversation((prev) =>
+        prev && prev.id === id ? { ...prev, members: applyReceipt(prev.members, receipt) } : prev,
+      )
+      return
+    }
     if (!e.chatMessage) return
     const msg = e.chatMessage
 
@@ -1198,6 +1210,12 @@ export function ConversationChatRoute() {
                           <Text size="xs" c="dimmed">
                             {messageTime(m.createdAt, i18n.language)}
                           </Text>
+                          {/* Ticks on our own messages only — see MessageTicks. */}
+                          {own && (
+                            <MessageTicks
+                              receipt={messageReceipt(m.createdAt, header?.members ?? [], userId ?? '')}
+                            />
+                          )}
                         </div>
                       </div>
                     )

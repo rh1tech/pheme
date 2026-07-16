@@ -275,6 +275,16 @@
   outline-offset: 2px;
 }
 
+/* One tick delivered, two read. Read is the accent — the one state worth catching the eye, and the
+   only way to tell the two apart at a glance without counting strokes. */
+.pheme-ticks {
+  flex: 0 0 auto;
+  color: var(--mantine-color-dimmed);
+}
+.pheme-ticks[data-read='true'] {
+  color: var(--mantine-color-iris-6);
+}
+
 .pheme-chat-unread {
   flex: 0 0 auto;
   width: 0.5rem;

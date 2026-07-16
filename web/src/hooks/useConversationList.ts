@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
 import { deserializeContent } from '../lib/chatContent'
 import { getPreview } from '../lib/chatCache'
+import { applyReceipt } from '../lib/receipts'
 import { MLS_APPLICATION, MLS_CONTROL_TYPES, base64ToBytes } from '../lib/mls'
 import { loadLastSeen, markSeen } from '../lib/lastSeen'
 import { useAuth } from '../auth/context'
@@ -105,6 +106,29 @@ export function useConversationList(): ConversationListApi {
     setConversations((prev) =>
       prev.map((c) => (c.id === e.conversationId ? patchLast(c, msg) : c)),
     )
+
+    // It has reached this device — which is what one tick means. Reported from HERE, the app-wide
+    // stream, rather than from the open chat: delivery is not about looking at the conversation, and
+    // most messages arrive while its window is somewhere else entirely. Never for our own echo:
+    // a sender does not deliver to themselves, and the tick already ignores their own watermark.
+    const conversationId = e.conversationId
+    if (msg.senderId === userId) return
+    if ((reportedDelivered.current[conversationId] ?? '') >= msg.createdAt) return
+    reportedDelivered.current[conversationId] = msg.createdAt
+    void api.reportReceipt(conversationId, { delivered: msg.createdAt }).catch(() => {
+      // See markRead: a lost receipt costs a tick, never a message.
+    })
+  })
+
+  // A receipt from someone else: patch the member it belongs to, so an open chat's ticks move.
+  useEventStream((e) => {
+    if (!e.conversationId || !e.receipt) return
+    const receipt = e.receipt
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === e.conversationId ? { ...c, members: applyReceipt(c.members, receipt) } : c,
+      ),
+    )
   })
 
   // A dropped stream can miss a one-shot deletion, leaving a ghost row that only a
@@ -112,9 +136,25 @@ export function useConversationList(): ConversationListApi {
   // server drops from the list without the user having to reload.
   useStreamReconnect(refresh)
 
+  // The furthest point already reported to the server, per conversation, so a receipt goes once per
+  // advance rather than on every scroll to the bottom. Refs, not state: nothing renders from them,
+  // and they must be readable inside callbacks without going stale.
+  const reportedRead = useRef<Record<string, string>>({})
+  const reportedDelivered = useRef<Record<string, string>>({})
+
   const markRead = useCallback((conversationId: string, iso: string) => {
     markSeen(conversationId, iso)
     setSeen((prev) => ((prev[conversationId] ?? '') >= iso ? prev : { ...prev, [conversationId]: iso }))
+
+    // Tell the sender their message has been read. Only ever forwards, and only when it actually
+    // moves — this is called every time the feed touches the bottom.
+    if ((reportedRead.current[conversationId] ?? '') >= iso) return
+    reportedRead.current[conversationId] = iso
+    void api.reportReceipt(conversationId, { read: iso }).catch(() => {
+      // A receipt is a courtesy: a lost one costs a tick until the next advance, never a message.
+      // Left un-rolled-back on purpose — retrying every failure would hammer a server that is
+      // already struggling.
+    })
   }, [])
 
   const encryptedLabel = t('chat.encryptedPreview')

@@ -57,6 +57,16 @@ export interface ConversationMember {
   joinedAt: string
   // Hydrated public profile of the member, for labelling and avatars.
   user: PublicUser
+  /**
+   * How far this member has got: they have RECEIVED every message up to deliveredAt and READ
+   * every message up to readAt. Watermarks, not per-message state — messages are ordered by
+   * createdAt, so "read up to T" already covers every message at or before T, and the ticks on
+   * your own message are a comparison against the other members' (see messageReceipt).
+   *
+   * Absent on a member who has not reported since joining.
+   */
+  deliveredAt?: string
+  readAt?: string
 }
 
 // A chat message as it comes off the wire. `ciphertext` is base64 of opaque
@@ -263,6 +273,15 @@ export interface LiveEvent {
   chatMessage?: ChatMessage
   /** The conversation was deleted; drop it from the list and leave it if open. */
   conversationDeleted?: boolean
+  /**
+   * A member's receipt watermarks moved: they have received (or read) up to here. Carries
+   * conversationId. It says how far someone has got, never what they read.
+   */
+  receipt?: {
+    userId: string
+    deliveredAt?: string
+    readAt?: string
+  }
   /**
    * A voice call has a new signal — a NUDGE, not the signal itself.
    *

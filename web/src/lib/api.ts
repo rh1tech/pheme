@@ -561,6 +561,19 @@ export const api = {
       { quiet },
     ).then((r) => ({ messages: r.messages ?? [], nextCursor: r.nextCursor ?? '' }))
   },
+  /**
+   * Reports how far this user has got in a conversation, so the sender's ticks can fill in.
+   *
+   * Watermarks, not message ids — "I have read up to this instant". Both only ever move forward
+   * server-side, so a duplicate or out-of-order report is harmless, and `quiet` keeps it off the
+   * progress bar: nobody asked for it.
+   */
+  reportReceipt: (conversationId: string, at: { delivered?: string; read?: string }) =>
+    request<void>(`/v1/conversations/${conversationId}/receipts`, {
+      method: 'POST',
+      body: at,
+      quiet: true,
+    }),
   sendChatMessage: (conversationId: string, ciphertext: string, contentType: string) =>
     request<ChatMessage>(`/v1/conversations/${conversationId}/messages`, {
       method: 'POST',
