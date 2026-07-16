@@ -430,6 +430,13 @@ export function ConversationChatRoute() {
             setGroupId(gid ?? '')
             setPeerNotReadyId('')
             setSettledFor(id)
+            // The settle may have APPLIED COMMITS (catchUp runs inside it), and the first
+            // decrypt pass has usually already run — at the epoch this device woke up with —
+            // and parked whatever was sealed past it. Nothing else re-triggers those: the
+            // group id string is unchanged, and the SSE tick only fires for a Commit arriving
+            // LIVE. Without this nudge, a message sealed to an epoch we only just caught up
+            // to stays "not available" on every open, forever, while being one decrypt away.
+            setCatchUpTick((n) => n + 1)
           })
           .catch((e: unknown) => {
             // The other person has published no keys on any device, so nothing can be
@@ -463,7 +470,13 @@ export function ConversationChatRoute() {
     let active = true
     const timer = setInterval(() => {
       ensureGroup(conversation, userId)
-        .then((gid) => active && gid && setGroupId(gid))
+        .then((gid) => {
+          if (!active || !gid) return
+          setGroupId(gid)
+          // Same as the on-open settle: being let in means Commits were just applied, and
+          // the messages parked while we waited need one more look.
+          setCatchUpTick((n) => n + 1)
+        })
         .catch(() => {})
     }, 15_000)
     return () => {
