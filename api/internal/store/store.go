@@ -192,11 +192,15 @@ type Store interface {
 	DeleteConversation(ctx context.Context, conversationID string) error
 	// AppendChatMessage stores one message in a conversation's ordered log.
 	AppendChatMessage(ctx context.Context, m domain.ChatMessage) (domain.ChatMessage, error)
-	// ChatMessagesByConversation returns messages newest-first with cursor
-	// pagination (cursor is an exclusive anchor message id), mirroring
+	// ChatMessagesByConversation returns a conversation's TRANSCRIPT newest-first with
+	// cursor pagination (cursor is an exclusive anchor message id), mirroring
 	// MessagesByChannel. There is no query parameter — content is opaque. `after`
 	// applies the caller's clear-history watermark: only messages strictly newer than
 	// it are returned (zero returns everything).
+	//
+	// MLS protocol traffic is excluded (domain.MLSProtocolContentTypes): no client renders
+	// it, so counting it against `limit` only returned pages that looked half empty. The
+	// catch-up that needs it uses MLSControlMessagesSince.
 	ChatMessagesByConversation(ctx context.Context, conversationID, cursor string, limit int, after time.Time) ([]domain.ChatMessage, error)
 	// ClearConversationHistory sets a member's clear-history watermark to `before`,
 	// hiding that member's messages up to and including it. Per-member: it never

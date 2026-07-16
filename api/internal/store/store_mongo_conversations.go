@@ -201,7 +201,14 @@ func (m *Mongo) ClearConversationHistory(ctx context.Context, conversationID, us
 }
 
 func (m *Mongo) ChatMessagesByConversation(ctx context.Context, conversationID, cursor string, limit int, after time.Time) ([]domain.ChatMessage, error) {
-	filter := bson.M{"conversationId": conversationID}
+	filter := bson.M{
+		"conversationId": conversationID,
+		// The transcript, not the raw log: MLS protocol traffic is excluded here rather than
+		// by the client, so a page of `limit` is `limit` messages people actually sent. Filtered
+		// client-side it merely arrived and was thrown away, and a chat whose recent log is
+		// mostly Commits and device announcements showed a nearly empty page.
+		"contentType": bson.M{"$nin": domain.MLSProtocolContentTypes},
+	}
 	// The caller's clear-history watermark and the load-older cursor both bound
 	// createdAt, so they combine into one range condition rather than overwriting.
 	created := bson.M{}

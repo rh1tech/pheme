@@ -206,6 +206,11 @@ func (m *Memory) ChatMessagesByConversation(_ context.Context, conversationID, c
 		if msg.ConversationID != conversationID {
 			continue
 		}
+		// The transcript, not the raw log — MLS protocol traffic is not part of it. See
+		// domain.MLSProtocolContentTypes.
+		if domain.IsMLSProtocol(msg.ContentType) {
+			continue
+		}
 		// Respect the caller's clear-history watermark: hide messages at or before it.
 		if !after.IsZero() && !msg.CreatedAt.After(after) {
 			continue

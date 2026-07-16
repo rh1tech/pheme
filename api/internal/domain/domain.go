@@ -413,6 +413,30 @@ const (
 	ContentTypeCallEvent = "application/pheme-call-event"
 )
 
+// MLSProtocolContentTypes is the protocol traffic that rides a conversation's ordered log
+// without being part of its TRANSCRIPT: nobody wrote it and no client renders it. The feed
+// excludes it (Store.ChatMessagesByConversation), so a page of 50 is 50 things people
+// actually said rather than 50 rows of which some are invisible. The catch-up that does
+// need this traffic reads it through MLSControlMessagesSince, by epoch.
+//
+// ContentTypeCallEvent is deliberately absent: a missed call IS part of the transcript.
+var MLSProtocolContentTypes = []string{
+	ContentTypeMLSWelcome,
+	ContentTypeMLSCommit,
+	ContentTypeMLSDevice,
+}
+
+// IsMLSProtocol reports whether a content type is MLS protocol traffic rather than
+// something a person sent.
+func IsMLSProtocol(contentType string) bool {
+	switch contentType {
+	case ContentTypeMLSWelcome, ContentTypeMLSCommit, ContentTypeMLSDevice:
+		return true
+	default:
+		return false
+	}
+}
+
 // MLSGroupState is a conversation's MLS group: which group it is, and how far
 // along that group's history the server has accepted.
 //
