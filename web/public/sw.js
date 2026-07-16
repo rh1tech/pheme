@@ -9,6 +9,25 @@
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
 
+// The conversation (or channel) the app says is on screen, as the app last told us.
+//
+// The app TELLS us rather than us reading it off client.url, because a client's url is the
+// document's — and this app navigates with history.pushState, which does not reliably update it.
+// A worker that reads the url can therefore still believe the reader is sitting on "/" while they
+// are in fact looking at the chat, and notify them about the message already on their screen.
+//
+// Trusting it alone would be worse than the url, mind: nothing clears it if the tab dies. So it is
+// only ever consulted alongside a VISIBLE client (see isViewing) — no visible client, no
+// suppression, whatever this says.
+let activeChatId = null
+
+self.addEventListener('message', (event) => {
+  const data = event.data
+  if (data && data.type === 'pheme:active-chat') {
+    activeChatId = data.id || null
+  }
+})
+
 self.addEventListener('push', (event) => {
   let payload = { title: 'Pheme', body: '' }
   if (event.data) {
@@ -38,10 +57,9 @@ self.addEventListener('push', (event) => {
 
   const isCall = data.kind === 'call'
 
-  // Suppress a message notification for a chat the user is already looking at. If a
-  // focused, visible window is open on this conversation (or channel), the message is
-  // already on screen over the live stream, so a second buzz on the lock screen is just
-  // noise. Calls are exempt — a ringing call must always surface, even in the chat.
+  // Suppress a message notification for a chat the user is already looking at: it is on their
+  // screen over the live stream, so a second buzz is only noise. See isViewing. Calls are exempt —
+  // a ringing call must always surface, even from inside the chat.
   const title = payload.title || 'Pheme'
   const options = {
     body: payload.body || '',
@@ -68,21 +86,39 @@ self.addEventListener('push', (event) => {
   )
 })
 
-// Whether a focused, visible window is currently on the chat (or channel) this push
-// is about. Only a client that is BOTH focused and visible counts: a background tab
-// left open on the chat should still notify. Checked only for messages — never calls.
+// Whether a window is currently SHOWING the chat (or channel) this push is about. Checked only for
+// messages — never calls.
+//
+// A VISIBLE client is the requirement, not a focused one. Visible is the Push API's own bar for
+// letting a worker stay quiet, and it is what the reader means: the chat is on screen, the message
+// is already on it over the live stream, so buzzing them about it is noise. Demanding focus as well
+// notified people who were plainly looking at the conversation — a window can be visible without
+// holding the OS's focus (another window clicked, a second monitor, a standalone PWA), and this
+// asked for both.
+//
+// A hidden or backgrounded tab has no visible client and so still notifies, which is the point.
 async function isViewing(data) {
-  const target = data.conversationId
-    ? `/chats/${data.conversationId}`
-    : data.channelId
-      ? `/channels/${data.channelId}`
-      : null
-  if (!target) return false
+  const id = data.conversationId || data.channelId
+  if (!id) return false
+  const target = data.conversationId ? `/chats/${data.conversationId}` : `/channels/${data.channelId}`
 
   const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-  return clients.some((client) => {
-    if (!client.focused || client.visibilityState !== 'visible') return false
-    if (new URL(client.url).origin !== self.location.origin) return false
+  const visible = clients.filter((client) => {
+    if (client.visibilityState !== 'visible') return false
+    try {
+      return new URL(client.url).origin === self.location.origin
+    } catch {
+      return false
+    }
+  })
+  if (visible.length === 0) return false
+
+  // What the window says it is showing. Authoritative where it exists, because pushState leaves
+  // client.url behind; gated on a visible client above, so a stale value cannot silence anything.
+  if (activeChatId && activeChatId === id) return true
+
+  // Otherwise fall back to the url — right on a fresh load, and all a restarted worker has.
+  return visible.some((client) => {
     const path = new URL(client.url).pathname
     // Exact match, or a nested route under it (a channel's /messages/:id deep link).
     return path === target || path.startsWith(`${target}/`)

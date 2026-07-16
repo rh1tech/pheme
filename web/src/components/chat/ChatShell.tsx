@@ -10,6 +10,7 @@ import { useAuth } from '../../auth/context'
 import { useChannelList } from '../../hooks/useChannelList'
 import { useConversationList } from '../../hooks/useConversationList'
 import { useDeviceAdmission } from '../../hooks/useDeviceAdmission'
+import { useActiveChatSync } from '../../hooks/useActiveChatSync'
 import { useColdLaunchToList } from '../../hooks/useColdLaunchToList'
 import { useKeyboardOpen, useVisualViewportRect } from '../../hooks/useVisualViewport'
 import type { ChatOutletContext } from './context'
@@ -34,6 +35,9 @@ export function ChatShell() {
   const channelMatch = useMatch({ path: '/channels/:id', end: false })
   const chatMatch = useMatch({ path: '/chats/:id', end: false })
   const activeId = channelMatch?.params.id ?? chatMatch?.params.id
+  // Tell the service worker what is on screen, so it does not notify about a message the reader is
+  // already looking at. It cannot read this off the client's url — see useActiveChatSync.
+  useActiveChatSync(activeId)
   // Pin the shell to the VISUAL viewport — its top (offsetTop) and its height —
   // rather than sizing by height alone at the document's top. iOS moves the layout
   // viewport out from under a fixed-height root when the keyboard opens; sizing by
