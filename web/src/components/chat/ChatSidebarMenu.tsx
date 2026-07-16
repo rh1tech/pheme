@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
 import { SUPPORTED_LANGUAGES, type Language } from '../../i18n'
+import { APP_VERSION, BUILD_ID } from '../../lib/version'
 import { KeyBackupModal } from './KeyBackup'
 
 /**
@@ -97,6 +98,17 @@ export function ChatSidebarMenu() {
         <Menu.Item color="red" leftSection={<IconLogout size={18} />} onClick={handleLogout}>
           {t('common.logout')}
         </Menu.Item>
+
+        <Menu.Divider />
+
+        {/* Which Pheme is this? One tap from anywhere, and the answer someone reads back in a bug
+            report — hence the build id too, since a release can be rebuilt and the version alone
+            would not say whether this bundle has a given fix.
+
+            A Label, not an Item: a menu is a list of choices and this is not one of them. */}
+        <Menu.Label ta="center">
+          {t('common.version', { version: APP_VERSION })} · {BUILD_ID}
+        </Menu.Label>
       </Menu.Dropdown>
     </Menu>
     <KeyBackupModal opened={backupOpen} onClose={() => setBackupOpen(false)} />

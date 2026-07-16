@@ -206,17 +206,18 @@ export function ProfilePage() {
               </Button>
             </Group>
 
-            {/* Which Pheme is this? The answer someone reads back to us in a bug report, so the
-                build id is here too: a release can be rebuilt, and "v0.9.19" alone would not
-                distinguish the bundle that has the fix from the one that does not. */}
-            <Divider />
-            <Text size="xs" c="dimmed" ta="center">
-              {t('profile.version', { version: APP_VERSION })}
-              {' · '}
-              {BUILD_ID}
-            </Text>
           </>
         )}
+
+        {/* Outside the `user &&` gate on purpose: the version must still be readable when the
+            profile failed to load, which is exactly when someone is filing the bug report that
+            needs it. It describes the running bundle, not the account. */}
+        <Divider />
+        <Text size="xs" c="dimmed" ta="center">
+          {t('common.version', { version: APP_VERSION })}
+          {' · '}
+          {BUILD_ID}
+        </Text>
       </Stack>
     </Container>
   )

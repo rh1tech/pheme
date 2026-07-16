@@ -1,6 +1,7 @@
 // English translations (default language).
 const en = {
   common: {
+    version: 'Pheme {{version}}',
     appName: 'Pheme',
     tagline: 'notification relay',
     logout: 'Log out',
@@ -92,7 +93,6 @@ const en = {
     enableFailed: 'Could not enable',
   },
   profile: {
-    version: 'Pheme {{version}}',
     title: 'Your profile',
     subtitle: 'How you appear to others across Pheme.',
     avatar: 'Avatar',

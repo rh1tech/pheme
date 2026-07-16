@@ -3,6 +3,7 @@ import type { Resources } from './en'
 // Russian translations.
 const ru: Resources = {
   common: {
+    version: 'Pheme {{version}}',
     appName: 'Pheme',
     tagline: 'служба уведомлений',
     logout: 'Выйти',
@@ -94,7 +95,6 @@ const ru: Resources = {
     enableFailed: 'Не удалось включить',
   },
   profile: {
-    version: 'Pheme {{version}}',
     title: 'Ваш профиль',
     subtitle: 'Как вас видят другие в Pheme.',
     avatar: 'Аватар',
