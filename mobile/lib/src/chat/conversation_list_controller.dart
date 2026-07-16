@@ -64,7 +64,25 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
 
     // Control traffic is not a message. It must not bump a conversation up the list, and it must
     // certainly not light up an unread dot — the user has nothing to read.
-    if (message.isControl) return;
+    if (message.isControl) {
+      // One of them IS acted on from here: a device announcing that it needs to be let in.
+      // Handled on the app-wide stream so that somebody's new phone is admitted because a
+      // member has the app open AT ALL, not because they happen to be looking at the right
+      // chat. Announcements from our own user included — the device most likely to be
+      // around to admit a person's new phone is that same person's old one, and
+      // admitAnnouncedDevice no-ops on a device that does not hold the group, so the
+      // announcer processing its own announce is harmless.
+      if (message.contentType == ContentType.mlsDevice) {
+        final myUserId = ref.read(myUserIdProvider);
+        unawaited(
+          ref
+              .read(mlsServiceProvider)
+              .admitAnnouncedDevice(conversationId, myUserId)
+              .catchError((_) {}),
+        );
+      }
+      return;
+    }
 
     // It has reached this device — which is what one tick means. Reported from HERE, the app-wide
     // stream, rather than from the open chat: arriving has nothing to do with looking at the

@@ -323,5 +323,18 @@ func (h *Handler) postMLSCommit(w http.ResponseWriter, r *http.Request) {
 	for i := range stored {
 		h.Live.Publish(live.Event{ConversationID: convID, ChatMessage: &stored[i]})
 	}
+
+	// The tripwire. A group that is committing this fast is at war with itself — clients
+	// feeding each other's reconcile loops — and it looks like perfect health from every
+	// endpoint: every Commit here was individually well-formed and accepted.
+	if n, storming := h.storms().Observe(convID, now); storming {
+		h.logger().Error("mls commit storm",
+			"conversationId", convID,
+			"commits", n,
+			"window", stormAlarmWindow.String(),
+			"epoch", epoch,
+		)
+	}
+
 	httpx.JSON(w, http.StatusOK, state)
 }

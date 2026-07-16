@@ -858,6 +858,13 @@ async function settleGroup(
   }
   clearStuck(conversation.id)
 
+  // Holding the group is not the same as being able to FOLLOW it. If the catch-up above
+  // left this device behind the server's epoch, its ratchet may have forked — see the
+  // fork self-healing block for what happens next.
+  if (await stillBehind(session, conversation.id, state)) {
+    observeWedge(conversation.id, myUserId)
+  }
+
   // WE HOLD THE GROUP. Nothing below this line may take that away.
   //
   // Reconciliation is hygiene — admitting somebody's new device, pruning a ghost. It talks to
@@ -1155,6 +1162,70 @@ export async function catchUp(
       })
     }
   }
+}
+
+// --- fork self-healing ------------------------------------------------------
+//
+// A device can hold a group and still be unable to FOLLOW it. If its ratchet ever forked —
+// the July 2026 commit storm managed it by interleaving adds of the same KeyPackage — every
+// Commit the others make is rejected by OpenMLS from then on, and rejected silently: the
+// device keeps its group id, so nothing announces, nothing resets, and nothing ever
+// recovers. It just stops being able to read anything new, forever, while looking joined.
+//
+// The fingerprint is unmistakable, though: the server's epoch is ahead, every Commit that
+// would close the gap is fetchable, and applying them changes nothing. A device that is
+// merely behind closes the gap the moment catchUp runs; a forked one cannot, ever.
+//
+// So a settle or live catch-up that leaves the device still behind puts the conversation
+// under observation, and a fresh check after a grace period decides. Still behind then →
+// the group is beyond following, and it is retired (mlsResetGroup) — which destroys
+// nothing: the old group is remembered and stays readable, and a fresh group comes up that
+// everyone can actually be in. Every wedged member does the same and the server's
+// compare-and-set lets exactly one reset through.
+
+/** Long enough to outlast a flurry of in-flight Commits; short enough that a person watching a broken chat sees it come back. */
+const WEDGE_GRACE_MS = 20_000
+
+/** Conversations under observation for a forked ratchet, by id → the pending recheck. */
+const wedgeTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/**
+ * True when this device holds the group, the server's epoch is ahead, and catching up does
+ * not close the gap — the one state an intact ratchet can never be in after a catch-up.
+ */
+async function stillBehind(
+  session: Session,
+  conversationId: string,
+  state: { groupId: string; epoch: number },
+): Promise<boolean> {
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) return false
+  if ((await session.epoch(state.groupId)) >= state.epoch) return false
+  await catchUp(session, conversationId, state.groupId).catch(() => {})
+  return (await session.epoch(state.groupId)) < state.epoch
+}
+
+/** Puts a conversation under observation; the recheck heals it if the wedge is real. */
+function observeWedge(conversationId: string, myUserId: string): void {
+  if (wedgeTimers.has(conversationId)) return
+  const timer = setTimeout(() => {
+    void (async () => {
+      try {
+        const session = await mlsSession(myUserId)
+        const state = await api.mlsGroupState(conversationId)
+        if (!(await stillBehind(session, conversationId, state))) return
+        // Confirmed: this ratchet can never follow the group again. Retire it and settle
+        // into whatever comes next.
+        await api.mlsResetGroup(conversationId)
+        const conversation = await api.getConversation(conversationId)
+        await ensureGroup(conversation, myUserId)
+      } catch {
+        // Nothing lost — the next settle of this conversation observes again.
+      } finally {
+        wedgeTimers.delete(conversationId)
+      }
+    })()
+  }, WEDGE_GRACE_MS)
+  wedgeTimers.set(conversationId, timer)
 }
 
 /**
@@ -1519,7 +1590,13 @@ export async function catchUpToLatest(conversationId: string, myUserId: string):
   const state = await api.mlsGroupState(conversationId)
   if (!state.groupId) return 0
   await catchUp(session, conversationId, state.groupId)
-  return session.epoch(state.groupId)
+  const epoch = await session.epoch(state.groupId)
+  // Caught up and still behind: the fingerprint of a forked ratchet. Put the conversation
+  // under observation — the recheck decides, and heals if it is real.
+  if (epoch < state.epoch && (await session.hasGroup(state.groupId))) {
+    observeWedge(conversationId, myUserId)
+  }
+  return epoch
 }
 
 /**
@@ -1656,6 +1733,10 @@ async function wipeUnlocked(): Promise<void> {
   clearPreviews()
   clearSafetyPins()
   settling.clear()
+  // A heal that fires after the keys it was healing are gone would reset a group the next
+  // account has no stake in.
+  for (const timer of wedgeTimers.values()) clearTimeout(timer)
+  wedgeTimers.clear()
 }
 
 // --- encrypted key backup -------------------------------------------------

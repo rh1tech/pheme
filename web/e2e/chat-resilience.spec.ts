@@ -6,6 +6,7 @@ import {
   keyPackageCount,
   keyPackageCountFor,
   openChatAndJoin,
+  postJunkCommit,
   publishKeyPackagesRaw,
   resetGroup,
   send,
@@ -312,6 +313,76 @@ test('every message survives a reload on both sides', async ({ browser }) => {
       )
     }
     await expect(device.page.getByTestId('chat-message-sealed')).toHaveCount(0)
+  }
+
+  await Promise.all([alice.context.close(), bob.context.close()])
+})
+
+/**
+ * FORK SELF-HEALING. A Commit lands that no client can apply — which is exactly what a
+ * forked member's history looks like to everyone else, and what the July 2026 storm left
+ * behind. Every device now holds the group yet can never follow it again: the server's
+ * epoch is ahead, and applying the Commits that would close the gap changes nothing.
+ *
+ * Nobody may need to reach for an operator. Each client must notice the wedge on its own,
+ * retire the group after the grace period, establish a fresh one, and carry the
+ * conversation on. Before the healer existed this state was permanent and silent — the
+ * production conversation sat in it for a day, readable by no fix short of a hand reset.
+ */
+test('a commit nobody can apply heals itself into a fresh group', async ({ browser }) => {
+  const aliceEmail = uniqueEmail('alice-heal')
+  const bobEmail = uniqueEmail('bob-heal')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const bob = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+
+  const conv = await startDirectChat(alice.page, bob.userId)
+  await openChatAndJoin(alice.page, conv)
+  await send(alice.page, 'from before the poison')
+  await openChatAndJoin(bob.page, conv)
+  await expect(bob.page.getByTestId('chat-message').last()).toContainText(
+    'from before the poison',
+    { timeout: 25_000 },
+  )
+
+  // The poison: a Commit the server accepts and no client can ever apply. Both open tabs
+  // are now wedged — behind an epoch they can never reach.
+  const poisoned = await groupState(alice.page, conv)
+  expect(await postJunkCommit(alice.page, conv, poisoned.groupId, poisoned.epoch)).toBe(200)
+
+  // The healer notices, waits out its grace, retires the group and establishes a fresh
+  // one — all without anyone touching anything.
+  await expect
+    .poll(async () => (await groupState(alice.page, conv)).groupId, {
+      timeout: 90_000,
+      intervals: [2_000],
+    })
+    .not.toBe(poisoned.groupId)
+
+  // The conversation carries on in the fresh group, in both directions, and what was said
+  // before the poison is still on both screens.
+  await openChatAndJoin(alice.page, conv)
+  await openChatAndJoin(bob.page, conv)
+  await send(alice.page, 'healed and talking')
+  await expect(bob.page.getByTestId('chat-message').last()).toContainText('healed and talking', {
+    timeout: 30_000,
+  })
+  await send(bob.page, 'confirmed on this side')
+  await expect(alice.page.getByTestId('chat-message').last()).toContainText(
+    'confirmed on this side',
+    { timeout: 25_000 },
+  )
+  for (const device of [alice, bob]) {
+    await expect(
+      device.page.getByTestId('chat-message').filter({ hasText: 'from before the poison' }),
+    ).toHaveCount(1)
   }
 
   await Promise.all([alice.context.close(), bob.context.close()])

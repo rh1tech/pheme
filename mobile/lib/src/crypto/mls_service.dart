@@ -361,6 +361,13 @@ class MlsService {
     }
     _waitingSince.remove(conversation.id);
 
+    // Holding the group is not the same as being able to FOLLOW it. If the catch-up above
+    // left this device behind the server's epoch, its ratchet may have forked — see
+    // _observeWedge for what happens next.
+    if (await _stillBehind(session, conversation.id, state)) {
+      _observeWedge(conversation.id, myUserId);
+    }
+
     // WE HOLD THE GROUP. Nothing below this line may take that away.
     //
     // Reconciliation is hygiene — admitting somebody's new device, pruning a ghost. It talks to the
@@ -1077,7 +1084,73 @@ class MlsService {
     final state = await _repo.mlsGroupState(conversationId);
     if (!state.isEstablished) return 0;
     await _catchUp(session, conversationId, state.groupId);
-    return session.epoch(state.groupId);
+    final epoch = await session.epoch(state.groupId);
+    // Caught up and still behind: the fingerprint of a forked ratchet. Put the conversation
+    // under observation — the recheck decides, and heals if it is real.
+    if (epoch < state.epoch && await session.hasGroup(state.groupId)) {
+      _observeWedge(conversationId, myUserId);
+    }
+    return epoch;
+  }
+
+  // --- fork self-healing ---------------------------------------------------------------
+  //
+  // A device can hold a group and still be unable to FOLLOW it. If its ratchet ever forked,
+  // every Commit the others make is rejected from then on — silently: the device keeps its
+  // group id, so nothing announces, nothing resets, and nothing ever recovers. It just stops
+  // being able to read anything new, forever, while looking joined.
+  //
+  // The fingerprint is unmistakable: the server's epoch is ahead, every Commit that would
+  // close the gap is fetchable, and applying them changes nothing. A device that is merely
+  // behind closes the gap the moment a catch-up runs; a forked one cannot, ever.
+  //
+  // A settle or live catch-up that leaves the device still behind puts the conversation
+  // under observation, and a fresh check after a grace period decides. Still behind then →
+  // the group is beyond following and is retired — which destroys nothing: the old group is
+  // remembered and stays readable, and a fresh one comes up that everyone can actually be
+  // in. Every wedged member does the same; the server's compare-and-set lets one through.
+
+  static const _wedgeGrace = Duration(seconds: 20);
+
+  /// Conversations under observation for a forked ratchet, by id → the pending recheck.
+  final _wedgeTimers = <String, Timer>{};
+
+  /// True when this device holds the group, the server's epoch is ahead, and catching up
+  /// does not close the gap — the one state an intact ratchet can never be in afterwards.
+  Future<bool> _stillBehind(
+    MlsSession session,
+    String conversationId,
+    MLSGroupState state,
+  ) async {
+    if (!state.isEstablished || !await session.hasGroup(state.groupId)) {
+      return false;
+    }
+    if (await session.epoch(state.groupId) >= state.epoch) return false;
+    await _catchUp(session, conversationId, state.groupId).catchError((_) {});
+    return await session.epoch(state.groupId) < state.epoch;
+  }
+
+  /// Puts a conversation under observation; the recheck heals it if the wedge is real.
+  void _observeWedge(String conversationId, String myUserId) {
+    if (_wedgeTimers.containsKey(conversationId)) return;
+    _wedgeTimers[conversationId] = Timer(_wedgeGrace, () {
+      unawaited(() async {
+        try {
+          final session = await this.session(myUserId);
+          final state = await _repo.mlsGroupState(conversationId);
+          if (!await _stillBehind(session, conversationId, state)) return;
+          // Confirmed: this ratchet can never follow the group again. Retire it and
+          // settle into whatever comes next.
+          await _repo.mlsResetGroup(conversationId);
+          final conversation = await _repo.getConversation(conversationId);
+          await ensureGroup(conversation, myUserId);
+        } on Object {
+          // Nothing lost — the next settle of this conversation observes again.
+        } finally {
+          _wedgeTimers.remove(conversationId);
+        }
+      }());
+    });
   }
 
   /// Brings this device up to [epoch] so it can derive a key minted there. A device that is behind can

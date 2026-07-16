@@ -11,6 +11,7 @@ package chat
 import (
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/auth"
@@ -49,6 +50,12 @@ type Handler struct {
 	// store of things it cannot open, which is the point.
 	Blobs  blob.Store
 	Logger *slog.Logger
+
+	// storm notices a conversation whose group is committing at a rate no honest
+	// membership churn explains — the observable half of the July 2026 reconcile war,
+	// which burned five hundred epochs without a single server-side line saying so.
+	storm     *commitStormDetector
+	stormOnce sync.Once
 }
 
 func (h *Handler) logger() *slog.Logger {
@@ -56,6 +63,13 @@ func (h *Handler) logger() *slog.Logger {
 		return h.Logger
 	}
 	return slog.Default()
+}
+
+func (h *Handler) storms() *commitStormDetector {
+	h.stormOnce.Do(func() {
+		h.storm = newCommitStormDetector(stormAlarmWindow, stormAlarmThreshold)
+	})
+	return h.storm
 }
 
 // Register attaches the conversation routes to an already-authenticated mux (the

@@ -311,13 +311,18 @@ class MessageFeedController extends Notifier<MessageFeedState> {
             .catchError((_) {});
         return;
       }
-      // A Welcome or a Commit: the group moved, and this may be the very Welcome that lets us in.
+      // A Welcome or a Commit: catch up on it DIRECTLY, rather than through ensureGroup.
+      // Full device reconciliation on every Commit is how two clients feed each other's
+      // reconcile loops into a commit storm; an incoming Commit calls for catching up and
+      // confirming, nothing more — admitting other devices belongs to the list controller's
+      // app-wide listener and the on-open settle.
       try {
-        final conversation = await ref
-            .read(repositoryProvider)
-            .getConversation(_conversationId);
-        final groupId = await mls.ensureGroup(conversation, myUserId);
+        await mls.catchUpToLatest(_conversationId, myUserId);
+        final groupId = await mls.confirmGroup(_conversationId, myUserId);
         state = state.copyWith(joined: groupId != null);
+        // The epoch advanced. A message that would not decrypt a moment ago — sealed to
+        // the very epoch this Commit produced — may open now, and nothing else retries it.
+        await _decryptUnread();
       } on Object {
         // Nothing to do. The next open settles it.
       }

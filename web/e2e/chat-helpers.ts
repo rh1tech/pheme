@@ -219,6 +219,37 @@ export function deleteKeyPackagesFor(page: Page, deviceId: string): Promise<numb
   )
 }
 
+/**
+ * Posts a Commit whose bytes are garbage — server-accepted (Commits are opaque to it), but one
+ * no client can ever apply. This is what a forked device's history looks like to everyone
+ * else, and it is the test's way of wedging every member at once.
+ */
+export function postJunkCommit(
+  page: Page,
+  conversationId: string,
+  groupId: string,
+  baseEpoch: number,
+): Promise<number> {
+  return page.evaluate(
+    async (args: { base: string; conv: string; groupId: string; baseEpoch: number }) => {
+      const res = await fetch(`${args.base}/v1/conversations/${args.conv}/mls/commit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}`,
+        },
+        body: JSON.stringify({
+          groupId: args.groupId,
+          baseEpoch: args.baseEpoch,
+          commit: btoa('not an mls commit, and never will be'),
+        }),
+      })
+      return res.status
+    },
+    { base: API_URL, conv: conversationId, groupId, baseEpoch },
+  )
+}
+
 /** Retires the conversation's current MLS group, exactly as a stuck client would. */
 export function resetGroup(page: Page, conversationId: string): Promise<number> {
   return page.evaluate(
