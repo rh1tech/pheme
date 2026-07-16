@@ -124,8 +124,16 @@ export function useConversationList(): ConversationListApi {
         const lastActivity = c.lastMessage?.createdAt ?? c.createdAt
         // Unread when the newest message is newer than last seen AND not our own —
         // our own sends never count as unread.
-        const fromOther = c.lastMessage ? c.lastMessage.senderId !== userId : false
-        const unread = fromOther && lastActivity > (seen[c.id] ?? '')
+        //
+        // Protocol traffic is not something to read, so it can never make a chat unread. The
+        // server already keeps it out of lastMessage; this mirrors the guard the mobile app has
+        // always had (unreadProvider), because getting it wrong lights a dot that CANNOT be
+        // cleared: opening the chat marks read up to the newest real message, which is older
+        // than the announcement that lit it.
+        const last = c.lastMessage
+        const fromOther = last ? last.senderId !== userId : false
+        const readable = last ? !MLS_CONTROL_TYPES.has(last.contentType) : false
+        const unread = fromOther && readable && lastActivity > (seen[c.id] ?? '')
         return {
           id: c.id,
           conversation: c,

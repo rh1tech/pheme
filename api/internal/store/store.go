@@ -209,6 +209,10 @@ type Store interface {
 	ClearConversationHistory(ctx context.Context, conversationID, userID string, before time.Time) error
 	// LastChatMessagesByConversations returns the newest message of each given
 	// conversation, keyed by conversation id, for chat-list ordering/preview.
+	//
+	// The last thing SAID: MLS protocol traffic is excluded (domain.MLSProtocolContentTypes),
+	// so a device announcement cannot become a conversation's lastMessage and light an unread
+	// dot with nothing behind it.
 	LastChatMessagesByConversations(ctx context.Context, conversationIDs []string) (map[string]domain.ChatMessage, error)
 
 	// CreateAttachment records that an encrypted photo belongs to a conversation. The

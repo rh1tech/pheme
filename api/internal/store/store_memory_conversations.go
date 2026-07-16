@@ -252,6 +252,11 @@ func (m *Memory) LastChatMessagesByConversations(_ context.Context, conversation
 		if _, ok := wanted[msg.ConversationID]; !ok {
 			continue
 		}
+		// The last thing SAID, not the last row written — protocol traffic is not a message.
+		// See domain.MLSProtocolContentTypes.
+		if domain.IsMLSProtocol(msg.ContentType) {
+			continue
+		}
 		if cur, ok := out[msg.ConversationID]; ok && !msg.CreatedAt.After(cur.CreatedAt) {
 			continue
 		}

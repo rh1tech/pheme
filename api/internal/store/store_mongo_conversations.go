@@ -242,7 +242,16 @@ func (m *Mongo) LastChatMessagesByConversations(ctx context.Context, conversatio
 		return out, nil
 	}
 	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"conversationId": bson.M{"$in": conversationIDs}}}},
+		{{Key: "$match", Value: bson.M{
+			"conversationId": bson.M{"$in": conversationIDs},
+			// The last thing SAID, not the last row written. MLS protocol traffic is not a
+			// message: letting a device announcement be a conversation's lastMessage lit an
+			// unread dot with nothing behind it (it is "from someone else, newer than you have
+			// seen"), bumped the row up the list, and left it with an empty preview. Worse, the
+			// dot was permanent — opening the chat marks read up to the newest real message,
+			// which is older than the announcement, so it never cleared.
+			"contentType": bson.M{"$nin": domain.MLSProtocolContentTypes},
+		}}},
 		{{Key: "$sort", Value: bson.D{{Key: "conversationId", Value: 1}, {Key: "createdAt", Value: -1}}}},
 		{{Key: "$group", Value: bson.M{"_id": "$conversationId", "doc": bson.M{"$first": "$$ROOT"}}}},
 		{{Key: "$replaceRoot", Value: bson.M{"newRoot": "$doc"}}},
