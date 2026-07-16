@@ -277,7 +277,6 @@ const ru: Resources = {
     openInfo: 'Открыть профиль',
     refresh: 'Обновить',
     pullToRefresh: 'Потяните, чтобы обновить',
-    searchChatsSection: 'Чаты и каналы',
     peopleSection: 'Люди',
     searchKeepTyping: 'Продолжайте вводить, чтобы найти людей',
     phemeId: 'Pheme ID',

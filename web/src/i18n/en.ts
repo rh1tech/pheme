@@ -275,7 +275,6 @@ const en = {
     openInfo: 'View info',
     refresh: 'Refresh',
     pullToRefresh: 'Pull to refresh',
-    searchChatsSection: 'Chats & channels',
     peopleSection: 'People',
     searchKeepTyping: 'Keep typing to search people',
     phemeId: 'Pheme ID',
