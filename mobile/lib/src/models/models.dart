@@ -1,6 +1,6 @@
 // Domain models mirroring the Pheme App API responses (see web/src/lib/types.ts).
 
-import 'chat_models.dart' show ChatMessage;
+import 'chat_models.dart' show ChatMessage, ConversationReceipt;
 
 enum SubscriptionMode {
   open,
@@ -484,6 +484,7 @@ class LiveEvent {
     this.conversationId,
     this.chatMessage,
     this.conversationDeleted = false,
+    this.receipt,
     this.callSignal,
   });
 
@@ -494,6 +495,10 @@ class LiveEvent {
   final ChatMessage? chatMessage;
   final bool conversationDeleted;
 
+  /// A member's receipt watermarks moved: they have received (or read) up to here. Carries
+  /// conversationId, and moves the sender's ticks without a refetch.
+  final ConversationReceipt? receipt;
+
   /// A nudge, NOT the signal itself. The live bus is allowed to drop events for slow consumers, and
   /// a dropped SDP answer is a call that never connects — so the signal of record lives in the
   /// server's ordered mailbox and this only says "go read it".
@@ -503,6 +508,7 @@ class LiveEvent {
     final message = j['message'] as Map?;
     final chatMessage = j['chatMessage'] as Map?;
     final callSignal = j['callSignal'] as Map?;
+    final receipt = j['receipt'] as Map?;
 
     return LiveEvent(
       channelId: j['channelId'] as String?,
@@ -514,6 +520,9 @@ class LiveEvent {
           ? null
           : ChatMessage.fromJson(chatMessage.cast<String, dynamic>()),
       conversationDeleted: j['conversationDeleted'] as bool? ?? false,
+      receipt: receipt == null
+          ? null
+          : ConversationReceipt.fromJson(receipt.cast<String, dynamic>()),
       callSignal: callSignal == null
           ? null
           : CallSignalNudge.fromJson(callSignal.cast<String, dynamic>()),

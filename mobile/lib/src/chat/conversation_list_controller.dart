@@ -1,5 +1,7 @@
 // The conversation list, and the unread state that goes with it.
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/providers.dart';
@@ -7,6 +9,7 @@ import '../data/app_providers.dart';
 import '../models/chat_models.dart';
 import '../models/models.dart';
 import 'chat_providers.dart';
+import 'receipts.dart';
 
 class ConversationListController extends AsyncNotifier<List<Conversation>> {
   @override
@@ -42,12 +45,32 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
       return;
     }
 
+    // Someone got further through a conversation: move their watermark so the ticks in the list's
+    // copy follow. Forward only — see applyReceipt.
+    final receipt = event.receipt;
+    if (receipt != null) {
+      state = AsyncData([
+        for (final c in current)
+          if (c.id == conversationId)
+            c.withMembers(applyReceipt(c.members, receipt))
+          else
+            c,
+      ]);
+      return;
+    }
+
     final message = event.chatMessage;
     if (message == null) return;
 
     // Control traffic is not a message. It must not bump a conversation up the list, and it must
     // certainly not light up an unread dot — the user has nothing to read.
     if (message.isControl) return;
+
+    // It has reached this device — which is what one tick means. Reported from HERE, the app-wide
+    // stream, rather than from the open chat: arriving has nothing to do with looking at the
+    // conversation, and most messages land while the reader is somewhere else entirely. Never for
+    // our own echo: a sender does not deliver to themselves.
+    _reportDelivered(conversationId, message);
 
     final index = current.indexWhere((c) => c.id == conversationId);
     if (index == -1) {
@@ -79,6 +102,27 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
       ),
     );
     state = AsyncData(updated);
+  }
+
+  /// The furthest point already reported per conversation, so a receipt goes once per advance.
+  final _reportedDelivered = <String, String>{};
+
+  void _reportDelivered(String conversationId, ChatMessage message) {
+    if (message.senderId == ref.read(myUserIdProvider)) return;
+    if (message.createdAt.compareTo(_reportedDelivered[conversationId] ?? '') <=
+        0) {
+      return;
+    }
+    _reportedDelivered[conversationId] = message.createdAt;
+    unawaited(
+      ref
+          .read(repositoryProvider)
+          .reportReceipt(conversationId, delivered: message.createdAt)
+          .catchError((Object _) {
+            // A receipt is a courtesy: a lost one costs a tick until the next advance, never a
+            // message.
+          }),
+    );
   }
 
   Future<void> refresh() async {

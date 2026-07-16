@@ -30,6 +30,7 @@ import 'chat_time.dart';
 import 'conversation_title.dart';
 import 'group_members_sheet.dart';
 import 'message_feed_controller.dart';
+import 'receipts.dart';
 import 'safety_number_sheet.dart';
 import 'widgets/call_event_bubble.dart';
 import 'widgets/conversation_avatar.dart';
@@ -772,6 +773,10 @@ class _Message extends ConsumerWidget {
       body: content?.body,
       createdAt: message.createdAt,
       isOwn: isOwn,
+      // Only our own: a tick on someone else's would tell them what they already know.
+      receipt: isOwn
+          ? messageReceipt(message.createdAt, feed.members, myUserId)
+          : null,
       senderName: senderName,
       startsRun: startsRun,
       endsRun: endsRun,

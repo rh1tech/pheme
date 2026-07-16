@@ -1,5 +1,7 @@
 // The conversation layer's providers: the crypto service, the list, and one open chat.
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/jwt.dart';
@@ -70,9 +72,26 @@ class LastSeenController extends AsyncNotifier<Map<String, String>> {
   @override
   Future<Map<String, String>> build() => ref.watch(lastSeenStoreProvider).all();
 
+  /// The furthest point already reported to the server, so a receipt goes once per advance rather
+  /// than every time the feed touches the bottom.
+  final _reported = <String, String>{};
+
   Future<void> markRead(String conversationId, String at) async {
     await ref.read(lastSeenStoreProvider).markRead(conversationId, at);
     state = AsyncData({...?state.value, conversationId: at});
+
+    // This device has displayed up to here, which is what two ticks mean. Only ever forwards, and
+    // only when it actually moves.
+    if (at.compareTo(_reported[conversationId] ?? '') <= 0) return;
+    _reported[conversationId] = at;
+    unawaited(
+      ref.read(repositoryProvider).reportReceipt(conversationId, read: at).catchError((
+        Object _,
+      ) {
+        // A receipt is a courtesy: a lost one costs a tick until the next advance, never a
+        // message. Not rolled back — retrying every failure would hammer a struggling server.
+      }),
+    );
   }
 }
 

@@ -50,6 +50,8 @@ class ConversationMember {
     required this.role,
     required this.joinedAt,
     required this.user,
+    this.deliveredAt = '',
+    this.readAt = '',
   });
 
   final String id;
@@ -59,7 +61,28 @@ class ConversationMember {
   final String joinedAt;
   final PublicUser user;
 
+  /// How far this member has got: they have RECEIVED every message up to [deliveredAt] and READ
+  /// every message up to [readAt]. Watermarks, not per-message state — messages are ordered by
+  /// createdAt, so "read up to T" already covers every message at or before T, and the ticks on
+  /// your own message are a comparison against the other members' (see messageReceipt).
+  ///
+  /// Empty for a member who has not reported since joining.
+  final String deliveredAt;
+  final String readAt;
+
   bool get isAdmin => role == ChannelRole.admin;
+
+  ConversationMember copyWith({String? deliveredAt, String? readAt}) =>
+      ConversationMember(
+        id: id,
+        conversationId: conversationId,
+        userId: userId,
+        role: role,
+        joinedAt: joinedAt,
+        user: user,
+        deliveredAt: deliveredAt ?? this.deliveredAt,
+        readAt: readAt ?? this.readAt,
+      );
 
   factory ConversationMember.fromJson(Map<String, dynamic> j) =>
       ConversationMember(
@@ -71,6 +94,29 @@ class ConversationMember {
         user: PublicUser.fromJson(
           ((j['user'] as Map?) ?? const {}).cast<String, dynamic>(),
         ),
+        deliveredAt: j['deliveredAt'] as String? ?? '',
+        readAt: j['readAt'] as String? ?? '',
+      );
+}
+
+/// One member's receipt watermarks moving, as the live stream reports them. It says how far
+/// someone has got, never what they read.
+class ConversationReceipt {
+  const ConversationReceipt({
+    required this.userId,
+    this.deliveredAt = '',
+    this.readAt = '',
+  });
+
+  final String userId;
+  final String deliveredAt;
+  final String readAt;
+
+  factory ConversationReceipt.fromJson(Map<String, dynamic> j) =>
+      ConversationReceipt(
+        userId: j['userId'] as String? ?? '',
+        deliveredAt: j['deliveredAt'] as String? ?? '',
+        readAt: j['readAt'] as String? ?? '',
       );
 }
 
@@ -100,6 +146,19 @@ class Conversation {
   final LastChatMessage? lastMessage;
 
   bool get isGroup => kind == ConversationKind.group;
+
+  /// The same conversation with a new member list — for moving a receipt watermark without
+  /// rebuilding every field by hand at the call site.
+  Conversation withMembers(List<ConversationMember> members) => Conversation(
+    id: id,
+    kind: kind,
+    createdBy: createdBy,
+    createdAt: createdAt,
+    title: title,
+    avatarId: avatarId,
+    members: members,
+    lastMessage: lastMessage,
+  );
 
   /// The member row for [userId], or null if they are not in this conversation.
   ConversationMember? memberOf(String userId) {

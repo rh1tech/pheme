@@ -12,6 +12,7 @@ import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
 import '../../widgets/adaptive/platform.dart';
 import '../chat_time.dart';
+import '../receipts.dart';
 
 /// 16px — the Mantine `lg` radius the web bubble uses.
 const _round = Radius.circular(16);
@@ -25,6 +26,7 @@ class MessageBubble extends StatelessWidget {
     required this.body,
     required this.createdAt,
     required this.isOwn,
+    this.receipt,
     this.senderName,
     this.startsRun = true,
     this.endsRun = true,
@@ -60,6 +62,10 @@ class MessageBubble extends StatelessWidget {
   /// one utterance with a single tail rather than a stack of identical blocks.
   final bool startsRun;
   final bool endsRun;
+
+  /// The ticks on YOUR message: one delivered, two read. Null on someone else's — ticking theirs
+  /// would be telling them what they already know.
+  final Receipt? receipt;
 
   final VoidCallback? onLongPress;
 
@@ -157,12 +163,24 @@ class MessageBubble extends StatelessWidget {
                   const SizedBox(height: 2),
                   Align(
                     alignment: Alignment.centerRight,
-                    child: Text(
-                      bubbleTime(l10n, createdAt),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontSize: 11,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          bubbleTime(l10n, createdAt),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontSize: 11,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        // Nothing until it has been delivered: a message that has left is simply
+                        // there, and "no news yet" reads better as silence than as a third symbol
+                        // nobody remembers the meaning of.
+                        if (receipt != null && receipt != Receipt.sent) ...[
+                          const SizedBox(width: 3),
+                          _Ticks(receipt: receipt!, l10n: l10n),
+                        ],
+                      ],
                     ),
                   ),
                 ],
@@ -170,6 +188,32 @@ class MessageBubble extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// One tick delivered, two read. Read is the accent — the one state worth catching the eye, and the
+/// only way to tell the two apart at a glance without counting strokes.
+class _Ticks extends StatelessWidget {
+  const _Ticks({required this.receipt, required this.l10n});
+
+  final Receipt receipt;
+  final AppLocalizations l10n;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final read = receipt == Receipt.read;
+    return Icon(
+      read ? Icons.done_all : Icons.done,
+      size: 14,
+      color: read
+          ? theme.colorScheme.primary
+          : theme.colorScheme.onSurfaceVariant,
+      // A tick is meaningless read aloud, so it carries the sentence instead.
+      semanticLabel: l10n.t(
+        read ? 'chat.receiptRead' : 'chat.receiptDelivered',
       ),
     );
   }

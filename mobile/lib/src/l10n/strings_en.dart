@@ -300,6 +300,8 @@ const Map<String, String> enStrings = {
       'This deletes the chat and its messages for both of you. This cannot be undone.',
   'chat.chatDeleted': 'Chat deleted',
   'chat.deleteFailed': 'Could not delete the chat',
+  'chat.receiptDelivered': 'Delivered',
+  'chat.receiptRead': 'Read',
   'chat.clearHistory': 'Clear history',
   'chat.clearHistoryConfirm':
       'This permanently deletes every message in this chat and cannot be undone. The conversation stays; only its history is cleared.',

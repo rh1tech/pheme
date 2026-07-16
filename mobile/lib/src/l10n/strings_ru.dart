@@ -300,6 +300,8 @@ const Map<String, String> ruStrings = {
       'Чат и его сообщения будут удалены у вас обоих. Это действие необратимо.',
   'chat.chatDeleted': 'Чат удалён',
   'chat.deleteFailed': 'Не удалось удалить чат',
+  'chat.receiptDelivered': 'Доставлено',
+  'chat.receiptRead': 'Прочитано',
   'chat.clearHistory': 'Очистить историю',
   'chat.clearHistoryConfirm':
       'Все сообщения в этом чате будут удалены безвозвратно. Сам разговор останется — очищается только его история.',

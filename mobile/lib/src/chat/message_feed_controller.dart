@@ -10,6 +10,7 @@ import '../crypto/chat_content.dart';
 import '../crypto/mls_errors.dart';
 import '../data/app_providers.dart';
 import '../models/chat_models.dart';
+import 'receipts.dart';
 import 'chat_providers.dart';
 
 const _pageSize = 50;
@@ -18,6 +19,7 @@ class MessageFeedState {
   const MessageFeedState({
     this.messages = const [],
     this.contents = const {},
+    this.members = const [],
     this.loading = true,
     this.loadingOlder = false,
     this.joined,
@@ -31,6 +33,11 @@ class MessageFeedState {
   /// messageId -> the decrypted content. Absent means this device cannot read it, which is a real
   /// answer, not a failure — MLS gives a device no access to what was said before it joined.
   final Map<String, ChatContent?> contents;
+
+  /// The conversation's members, carrying how far each has got (deliveredAt/readAt). Held here, not
+  /// read off the page's Conversation, because the ticks have to move as receipts arrive — and that
+  /// Conversation came from a FutureProvider that nothing re-fetches. Seeded by the settle below.
+  final List<ConversationMember> members;
 
   final bool loading;
   final bool loadingOlder;
@@ -56,6 +63,7 @@ class MessageFeedState {
   MessageFeedState copyWith({
     List<ChatMessage>? messages,
     Map<String, ChatContent?>? contents,
+    List<ConversationMember>? members,
     bool? loading,
     bool? loadingOlder,
     bool? joined,
@@ -67,6 +75,7 @@ class MessageFeedState {
     return MessageFeedState(
       messages: messages ?? this.messages,
       contents: contents ?? this.contents,
+      members: members ?? this.members,
       loading: loading ?? this.loading,
       loadingOlder: loadingOlder ?? this.loadingOlder,
       joined: clearJoined ? null : (joined ?? this.joined),
@@ -105,6 +114,14 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     ref.listen(liveEventsProvider, (_, next) {
       final event = next.value;
       if (event?.conversationId != _conversationId) return;
+
+      // Someone got further through the conversation: move their watermark, and our ticks with it.
+      final receipt = event?.receipt;
+      if (receipt != null) {
+        state = state.copyWith(members: applyReceipt(state.members, receipt));
+        return;
+      }
+
       final message = event?.chatMessage;
       if (message != null) _onLiveMessage(message);
     });
@@ -210,7 +227,12 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       final conversation = await repo.getConversation(_conversationId);
       final groupId = await mls.ensureGroup(conversation, myUserId);
 
-      state = state.copyWith(joined: groupId != null, peerNotReady: false);
+      // The members carry how far everyone has got, which is what the ticks are drawn from.
+      state = state.copyWith(
+        joined: groupId != null,
+        peerNotReady: false,
+        members: conversation.members,
+      );
 
       // The settle may have caught up on commits that let us read messages we could not read a moment
       // ago — the very Welcome that admits this device, for instance. Try the ones we gave up on.

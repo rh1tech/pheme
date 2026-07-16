@@ -416,6 +416,16 @@ class PhemeRepository {
   Future<void> clearChatHistory(String id) =>
       _delete('/v1/conversations/$id/messages');
 
+  /// Reports how far this user has got in a conversation, so the sender's ticks can fill in.
+  ///
+  /// Watermarks, not message ids — "I have read up to this instant". Both only ever move forward
+  /// server-side, so a duplicate or out-of-order report is harmless.
+  Future<void> reportReceipt(String id, {String? delivered, String? read}) =>
+      _post('/v1/conversations/$id/receipts', {
+        'delivered': ?delivered,
+        'read': ?read,
+      });
+
   /// One page of history, newest-first, walking backwards. [cursor] is the previous page's
   /// [ChatMessagesPage.nextCursor].
   Future<ChatMessagesPage> listChatMessages(
