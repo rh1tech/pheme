@@ -21,7 +21,21 @@
   --pheme-sheet-bg: #f7f6fb;
   --pheme-unread-bg: rgba(119, 64, 238, 0.1);
   --pheme-unread-fg: var(--mantine-color-iris-7);
-  --pheme-own-bubble-bg: rgba(119, 64, 238, 0.12);
+  /* OPAQUE, not a tint. The feed now has a wallpaper under it (--pheme-chat-wallpaper), and a
+     12%-alpha bubble over a tinted ground is the ground — it stopped reading as a bubble at all. */
+  --pheme-own-bubble-bg: #e7ddfb;
+  /* The wallpaper behind the messages, and the whole reason a white bubble is legible: the pane it
+     sits on is 72% white over #fcfcfe, so a #fff bubble on it was white on white. Telegram solves
+     this with a wallpaper rather than by greying the bubbles, and it is the better answer — the
+     bubbles stay clean and the surface gains some depth. This one is the brand's own iris/magenta
+     rather than a copy of anyone's artwork. */
+  --pheme-chat-wallpaper-bg: #f5f2fc;
+  --pheme-chat-wallpaper: radial-gradient(
+      900px 600px at 12% 0%,
+      rgba(119, 64, 238, 0.11),
+      transparent 60%
+    ),
+    radial-gradient(760px 520px at 100% 100%, rgba(190, 75, 219, 0.1), transparent 55%);
 }
 
 [data-mantine-color-scheme='dark'] {
@@ -36,7 +50,14 @@
   --pheme-sheet-bg: #141517;
   --pheme-unread-bg: rgba(168, 136, 245, 0.16);
   --pheme-unread-fg: var(--mantine-color-iris-2);
-  --pheme-own-bubble-bg: rgba(168, 136, 245, 0.22);
+  --pheme-own-bubble-bg: #3a2f5e;
+  --pheme-chat-wallpaper-bg: #15161a;
+  --pheme-chat-wallpaper: radial-gradient(
+      900px 600px at 12% 0%,
+      rgba(119, 64, 238, 0.22),
+      transparent 60%
+    ),
+    radial-gradient(760px 520px at 100% 100%, rgba(190, 75, 219, 0.16), transparent 55%);
 }
 
 .pheme-shell {
@@ -471,11 +492,17 @@
 }
 
 /* The feed and its pill share a positioning context. */
+/* The wallpaper goes behind the MESSAGES only — not the header or the composer, which keep the
+   pane's own surface. That is what makes the feed read as a distinct place, and it is where the
+   contrast a white bubble needs comes from. Fixed to the wrapper, so it does not scroll with the
+   messages the way a background on the scroller would. */
 .pheme-feed-wrap {
   position: relative;
   flex: 1 1 auto;
   display: flex;
   min-height: 0;
+  background-color: var(--pheme-chat-wallpaper-bg);
+  background-image: var(--pheme-chat-wallpaper);
 }
 
 /* --- Composer ----------------------------------------------------------- */
