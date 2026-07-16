@@ -604,7 +604,13 @@ class Session {
       conversationId,
       groupId,
       (bytes) => ({ commit: this.client.stageRemoveDevices(bytes, identities) }),
-      [...new Set(identities.map((i) => i.slice(0, i.indexOf(':'))))],
+      // The users this Commit removes leaves of. A legacy leaf has no ':' and IS the user
+      // id whole — slicing to indexOf(-1) used to chop its last character instead, and the
+      // server was told a user that does not exist was being removed.
+      [...new Set(identities.map((i) => {
+        const sep = i.indexOf(':')
+        return sep === -1 ? i : i.slice(0, sep)
+      }))],
     )
   }
 
@@ -897,11 +903,15 @@ async function establishGroup(
     throw new PeerKeysMissingError()
   }
 
-  const keyPackages = await claimFor(conversation.id, targets)
+  const claimed = await claimFor(conversation.id, targets)
   const groupId = crypto.randomUUID()
 
   await session.createGroup(groupId)
-  const result = await session.commitAdd(conversation.id, groupId, keyPackages)
+  const result = await session.commitAdd(
+    conversation.id,
+    groupId,
+    claimed.map((c) => c.keyPackage),
+  )
   if (result === 'conflict') {
     // Another device of ours established the group first. What we built is an orphan that
     // nobody will ever join — drop it and settle again, this time joining theirs.
@@ -976,10 +986,32 @@ async function reconcileDevices(
     const missing = missingDevices(session, published, leaves)
     if (missing.length === 0) return
 
-    const keyPackages = await claimFor(conversationId, missing)
-    if (keyPackages.length === 0) return // they published nothing after all
-    const result = await session.commitAdd(conversationId, groupId, keyPackages)
-    if (result === 'accepted') return
+    const claimed = await claimFor(conversationId, missing)
+    if (claimed.length === 0) return // they published nothing after all
+    const result = await session.commitAdd(
+      conversationId,
+      groupId,
+      claimed.map((c) => c.keyPackage),
+    )
+    if (result === 'accepted') {
+      // Verify each add actually MATERIALISED: the leaf a claimed package produces answers
+      // to whatever credential is inside the bytes, and a stale directory entry can carry
+      // somebody's long-dead legacy identity. A device that is still not a leaf after its
+      // own accepted Add can never be added by this route — remember that, or the next
+      // reconcile claims the same package and commits the same no-op forever.
+      const now = new Set(await session.memberIdentities(groupId))
+      const duds = claimed.filter((c) => !now.has(deviceIdentity(c.userId, c.deviceId)))
+      if (duds.length === 0) return
+      for (const dud of duds) {
+        zombieDevices.add(deviceIdentity(dud.userId, dud.deviceId))
+        // Our own dead device's packages we can actually purge — only the owner may — which
+        // stops every OTHER member's reconcile from walking into the same trap.
+        if (dud.userId === session.userId) {
+          void api.deleteKeyPackages(dud.deviceId).catch(() => {})
+        }
+      }
+      continue // the prune round removes whatever leaf the dud package created
+    }
     // Refused: another member committed first. Apply their Commit and look again — the
     // device we were adding may already be in, in which case there is nothing left to do.
     await catchUp(session, conversationId, groupId)
@@ -1012,8 +1044,18 @@ function staleLeaves(
   const out: string[] = []
   for (const leaf of leaves) {
     if (leaf === session.identity) continue // never prune ourselves
-    const userId = leaf.slice(0, leaf.indexOf(':'))
-    if (!userId) continue
+    const sep = leaf.indexOf(':')
+    if (sep === -1) {
+      // A LEGACY leaf — an identity from before leaves carried a device id, so it names a
+      // person and no device. No current client can hold its keys (legacy state is
+      // discarded on load), so it can never read anything, and it never leaves on its own.
+      // Prune it deliberately. It used to be pruned by accident — slice(0, -1) mangled the
+      // user id, which read as a departed member — which happened to do the right thing
+      // here while doing the wrong thing everywhere else.
+      out.push(leaf)
+      continue
+    }
+    const userId = leaf.slice(0, sep)
     if (!members.has(userId)) {
       out.push(leaf) // departed member
       continue
@@ -1024,6 +1066,19 @@ function staleLeaves(
   }
   return out
 }
+
+/**
+ * Devices whose published KeyPackage turned out to be a TRAP: it was claimed and committed, and the
+ * leaf it produced does not answer to `userId:deviceId` at all. That is what a zombie from the
+ * legacy directory looks like — a package published under a device id whose credential inside is
+ * the old bare-user identity. Adding it creates a leaf nobody can ever hold, the device stays
+ * "missing", and every reconcile does it again: half of an add/prune war that once burned five
+ * hundred epochs in a single conversation.
+ *
+ * Remembered here so this session never claims for them again; a zombie of OUR OWN user
+ * additionally gets its published packages purged (only the owner may), which ends it for everyone.
+ */
+const zombieDevices = new Set<string>()
 
 /** The published devices that are not already leaves of the group, excluding our own. */
 function missingDevices(
@@ -1039,20 +1094,28 @@ function missingDevices(
       // claiming our own KeyPackage would burn one for nothing.
       if (deviceIdentity(userId, deviceId) === session.identity) continue
       if (have.has(deviceIdentity(userId, deviceId))) continue
+      if (zombieDevices.has(deviceIdentity(userId, deviceId))) continue
       out.push({ userId, deviceId })
     }
   }
   return out
 }
 
-/** Claims one KeyPackage per device. A device that has published none is skipped. */
+/**
+ * Claims one KeyPackage per device, keeping WHICH device each one was claimed for. A device that
+ * has published none is skipped.
+ */
 async function claimFor(
   conversationId: string,
   devices: { userId: string; deviceId: string }[],
-): Promise<Uint8Array[]> {
+): Promise<{ userId: string; deviceId: string; keyPackage: Uint8Array }[]> {
   try {
     const claimed = await api.claimKeyPackages(conversationId, devices)
-    return claimed.map((c) => base64ToBytes(c.keyPackage))
+    return claimed.map((c) => ({
+      userId: c.userId,
+      deviceId: c.deviceId,
+      keyPackage: base64ToBytes(c.keyPackage),
+    }))
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return []
     throw e

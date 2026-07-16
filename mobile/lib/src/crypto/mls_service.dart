@@ -417,13 +417,13 @@ class MlsService {
       throw const PeerKeysMissingException();
     }
 
-    final keyPackages = await _claimFor(conversation.id, targets);
+    final claimed = await _claimFor(conversation.id, targets);
     final groupId = newUuid();
 
     await session.createGroup(groupId);
     final outcome = await session.commitAdd(
       groupId,
-      keyPackages,
+      claimed.map((c) => c.keyPackage).toList(),
       _offer(conversation.id, groupId),
     );
 
@@ -496,7 +496,12 @@ class MlsService {
             _offer(
               conversationId,
               groupId,
-              removes: stale.map(userOf).toSet().toList(),
+              // A legacy leaf has no ':' and IS the user id whole; userOf() on it is empty,
+              // which would declare the removal of nobody.
+              removes: stale
+                  .map((l) => userOf(l).isEmpty ? l : userOf(l))
+                  .toSet()
+                  .toList(),
             ),
           );
         } on ApiException catch (e) {
@@ -513,15 +518,35 @@ class MlsService {
       final missing = _missingDevices(session, published, leaves);
       if (missing.isEmpty) return;
 
-      final keyPackages = await _claimFor(conversationId, missing);
-      if (keyPackages.isEmpty) return; // they published nothing after all
+      final claimed = await _claimFor(conversationId, missing);
+      if (claimed.isEmpty) return; // they published nothing after all
 
       final outcome = await session.commitAdd(
         groupId,
-        keyPackages,
+        claimed.map((c) => c.keyPackage).toList(),
         _offer(conversationId, groupId),
       );
-      if (outcome == CommitOutcome.accepted) return;
+      if (outcome == CommitOutcome.accepted) {
+        // Verify each add actually MATERIALISED: the leaf a claimed package produces answers
+        // to whatever credential is inside the bytes, and a stale directory entry can carry
+        // somebody's long-dead legacy identity. A device that is still not a leaf after its
+        // own accepted Add can never be added by this route — remember that, or the next
+        // reconcile claims the same package and commits the same no-op forever.
+        final now = (await session.memberIdentities(groupId)).toSet();
+        final duds = claimed
+            .where((c) => !now.contains(deviceIdentity(c.userId, c.deviceId)))
+            .toList();
+        if (duds.isEmpty) return;
+        for (final dud in duds) {
+          _zombieDevices.add(deviceIdentity(dud.userId, dud.deviceId));
+          // Our own dead device's packages we can actually purge — only the owner may —
+          // which stops every OTHER member's reconcile walking into the same trap.
+          if (dud.userId == session.userId) {
+            unawaited(_repo.deleteKeyPackages(dud.deviceId).catchError((_) {}));
+          }
+        }
+        continue; // the prune round removes whatever leaf the dud package created
+      }
 
       // Refused: another member committed first. Apply their Commit and look again — the device we
       // were adding may already be in, in which case there is nothing left to do.
@@ -581,7 +606,14 @@ class MlsService {
     for (final leaf in leaves) {
       if (leaf == session.identity) continue; // never prune ourselves
       final userId = userOf(leaf);
-      if (userId.isEmpty) continue;
+      if (userId.isEmpty) {
+        // A LEGACY leaf — an identity from before leaves carried a device id, so it names a
+        // person and no device. No current client can hold its keys, so it can never read
+        // anything and never leaves on its own. Prune it deliberately; leaving it be keeps a
+        // dead leaf in every member's tree forever.
+        out.add(leaf);
+        continue;
+      }
 
       if (!memberIds.contains(userId)) {
         out.add(leaf); // departed member
@@ -608,20 +640,29 @@ class MlsService {
         final identity = deviceIdentity(userId, deviceId);
         if (identity == session.identity) continue;
         if (have.contains(identity)) continue;
+        if (_zombieDevices.contains(identity)) continue;
         out.add(MLSDeviceRef(userId: userId, deviceId: deviceId));
       }
     });
     return out;
   }
 
-  /// Claims one key package per device. A device that has published none is skipped.
-  Future<List<Uint8List>> _claimFor(
+  /// Devices whose claimed key package turned out to be a TRAP: it was committed, and the leaf it
+  /// produced does not answer to `userId:deviceId` at all — a package published under a device id
+  /// whose credential inside is a long-dead legacy identity. Adding it creates a leaf nobody can
+  /// hold, the device stays "missing", and every reconcile does it again: half of an add/prune war.
+  /// Remembered so this session never claims for them again; a zombie of OUR OWN user additionally
+  /// gets its published packages purged, which ends it for everyone.
+  final _zombieDevices = <String>{};
+
+  /// Claims one key package per device, keeping WHICH device each was claimed for. A device that
+  /// has published none is skipped.
+  Future<List<MLSClaimedKeyPackage>> _claimFor(
     String conversationId,
     List<MLSDeviceRef> devices,
   ) async {
     try {
-      final claimed = await _repo.claimKeyPackages(conversationId, devices);
-      return claimed.map((c) => c.keyPackage).toList();
+      return await _repo.claimKeyPackages(conversationId, devices);
     } on ApiException catch (e) {
       if (e.statusCode == 404) return const [];
       rethrow;

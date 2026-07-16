@@ -32,6 +32,7 @@ import {
   MLS_DEVICE,
   PeerKeysMissingError,
   base64ToBytes,
+  catchUpToLatest,
   decryptChatMessage,
   confirmGroup,
   ensureGroup,
@@ -727,22 +728,32 @@ export function ConversationChatRoute() {
     // but it is how the group changes shape, so it has to be acted on the moment it
     // arrives rather than the next time somebody reloads.
     if (MLS_CONTROL_TYPES.has(msg.contentType)) {
-      if (!userId || !conversation) return
+      // Only the user is needed to catch up — requiring the fetched conversation too meant a
+      // Commit arriving in the first moments of an open was silently dropped.
+      if (!userId) return
       if (msg.contentType === MLS_DEVICE) {
         // Handled app-wide by useDeviceAdmission, which listens whether or not this chat is
         // open — a device waiting to be let in must not depend on somebody happening to be
         // looking at the right conversation.
         return
       }
-      // A Welcome or a Commit: catch up on it. If it is the Welcome that admits THIS
-      // device, settling now is what turns the conversation from unreadable to readable
-      // without the user having to reload.
-      void ensureGroup(conversation, userId)
+      // A Welcome or a Commit: catch up on it DIRECTLY — apply it, or join from it if it is
+      // the Welcome that admits this device — rather than through ensureGroup. ensureGroup
+      // dedupes concurrent callers onto one in-flight settle, so a Commit that arrived while
+      // a settle was already running rode a catch-up that had finished before the Commit
+      // existed: the tick bumped, the retry ran against the old epoch, and a message sealed
+      // to the new one stayed parked forever. It also re-ran full device reconciliation on
+      // every Commit, which is how two clients fed each other's reconcile loops into a
+      // commit storm. An incoming Commit calls for catching up and confirming, nothing more;
+      // admitting OTHER devices stays with useDeviceAdmission and the on-open settle.
+      void catchUpToLatest(id, userId)
+        .then(() => confirmGroup(id, userId))
         .then((gid) => {
           setGroupId(gid ?? '')
-          // The epoch may have advanced (a member added, a device admitted). Nudge the
-          // decrypt effect so a message sealed to the new epoch — a newly joined user's
-          // first words — is read now, not only after leaving and coming back.
+          setSettledFor(id)
+          // The epoch advanced (a member added, a device admitted). Nudge the decrypt
+          // effect so a message sealed to the new epoch — a newly joined user's first
+          // words — is read now, not only after leaving and coming back.
           setCatchUpTick((n) => n + 1)
         })
         .catch(() => {})
