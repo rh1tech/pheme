@@ -151,7 +151,20 @@ export function ConversationChatRoute() {
 
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([]) // oldest-first
-  const [bodies, setBodies] = useState<Record<string, ChatContent>>({}) // decrypted, by id
+  /**
+   * The decrypted content of each message, by id — with THREE states, because two were not enough:
+   *
+   *   absent (undefined) — not tried yet. It has only just arrived and the decrypt is still running.
+   *   null               — tried, and this device cannot read it. Permanent (MLS gives a device no
+   *                        access to what was said before it joined).
+   *   a ChatContent      — read.
+   *
+   * With only two, a message that had merely not been decrypted YET was indistinguishable from one
+   * that never could be, so every arriving message flashed "Not available on this device" for the
+   * instant before its body landed. The mobile app has always had the third state (contents is a
+   * Map<String, ChatContent?>), which is why it never flashed.
+   */
+  const [bodies, setBodies] = useState<Record<string, ChatContent | null>>({})
   // The conversation id whose local body cache has finished loading; message
   // processing waits for this so cached messages are never re-decrypted.
   const [readyId, setReadyId] = useState('')
@@ -216,7 +229,7 @@ export function ConversationChatRoute() {
   const atBottomRef = useRef(true)
   // The decrypted-body cache mirrored into a ref, plus the set of message ids we
   // have already handled — so the one-shot decrypt never runs twice for a message.
-  const bodiesRef = useRef<Record<string, ChatContent>>({})
+  const bodiesRef = useRef<Record<string, ChatContent | null>>({})
   const processedRef = useRef<Set<string>>(new Set())
   // Whether the network reconcile has landed for the current chat. The cache hydrate
   // and the network fetch race; if the network wins, the cache must not clobber its
@@ -466,7 +479,7 @@ export function ConversationChatRoute() {
         for (const mid of failedRef.current) processedRef.current.delete(mid)
         failedRef.current.clear()
       }
-      const next: Record<string, ChatContent> = { ...bodiesRef.current }
+      const next: Record<string, ChatContent | null> = { ...bodiesRef.current }
       let changed = false
       for (const m of messages) {
         if (processedRef.current.has(m.id) || MLS_CONTROL_TYPES.has(m.contentType)) continue
@@ -534,13 +547,18 @@ export function ConversationChatRoute() {
         // processed set so ordinary re-renders skip it, but recorded in failedRef so the
         // next epoch catch-up above releases it for another try. This is what turns a
         // new member's first message from "reopen to see it" into "it just appears".
-        if (next[m.id] !== undefined) {
-          processedRef.current.add(m.id)
-          failedRef.current.delete(m.id)
-        } else {
-          processedRef.current.add(m.id)
-          failedRef.current.add(m.id)
+        //
+        // `!= null` on purpose: a resolved body is an OBJECT. null means we tried and came back
+        // with nothing, which must not read as resolved here — it is the value that lets the
+        // bubble say "not available" only once that is actually known.
+        const resolved = next[m.id] != null
+        if (!resolved) {
+          next[m.id] = null
+          changed = true
         }
+        processedRef.current.add(m.id)
+        if (resolved) failedRef.current.delete(m.id)
+        else failedRef.current.add(m.id)
       }
 
       if (active && changed) {
@@ -1089,7 +1107,7 @@ export function ConversationChatRoute() {
                       ? conversation?.members.find((mem) => mem.userId === m.senderId)?.user
                       : undefined
                     const event =
-                      m.contentType === CALL_EVENT && content !== undefined
+                      m.contentType === CALL_EVENT && content != null
                         ? readCallEvent(content.body)
                         : null
                     if (event) {
@@ -1127,7 +1145,15 @@ export function ConversationChatRoute() {
                           <PhotoGrid conversationId={id} photos={content.photos} />
                         ) : null}
 
-                        {content !== undefined ? (
+                        {content === undefined ? (
+                          // Not tried yet — it has just arrived and its decrypt is still running. An
+                          // ellipsis is the honest thing HERE, where something really is about to
+                          // appear; saying "not available" for the instant before a body lands is
+                          // what made every incoming message flash that it could not be read.
+                          <Text size="sm" c="dimmed" aria-hidden>
+                            …
+                          </Text>
+                        ) : content !== null ? (
                           // A photo with no caption has no body line at all — an empty <Text> still
                           // takes a row of leading and leaves a strip of dead space under the picture.
                           content.body ? (
@@ -1155,7 +1181,9 @@ export function ConversationChatRoute() {
                               and a sealed message cannot be edited or deleted. It appears on hover
                               rather than sitting there permanently, so a wall of text stays a wall of
                               text. */}
-                          {content !== undefined && (
+                          {/* Only on a message we can actually read: there is nothing to quote of one
+                              that is still decrypting, or that this device will never open. */}
+                          {content != null && (
                             <ActionIcon
                               className="pheme-bubble-reply"
                               aria-label={t('chat.reply')}
