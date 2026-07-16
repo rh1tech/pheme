@@ -27,6 +27,10 @@ const ru: Resources = {
     errorBody: 'На странице произошла непредвиденная ошибка. Обычно помогает перезагрузка.',
     reload: 'Перезагрузить',
   },
+  update: {
+    available: 'Доступна новая версия Pheme.',
+    reload: 'Обновить',
+  },
   language: {
     label: 'Язык',
     en: 'English',
@@ -90,6 +94,7 @@ const ru: Resources = {
     enableFailed: 'Не удалось включить',
   },
   profile: {
+    version: 'Pheme {{version}}',
     title: 'Ваш профиль',
     subtitle: 'Как вас видят другие в Pheme.',
     avatar: 'Аватар',

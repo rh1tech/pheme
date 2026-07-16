@@ -7,6 +7,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+# The release to stamp into the bundle (deploy.yml passes the git tag). Declared here, after the
+# dependency layers, so a new version does not invalidate `npm ci` — only the build below, which is
+# exactly what must re-run: a cached bundle would ship the previous release's version and build id.
+ARG PHEME_VERSION=dev
+ENV PHEME_VERSION=${PHEME_VERSION}
 RUN npm run build
 
 FROM nginx:1.27-alpine

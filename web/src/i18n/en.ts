@@ -25,6 +25,10 @@ const en = {
     errorBody: 'The page hit an unexpected error. Reloading usually fixes it.',
     reload: 'Reload',
   },
+  update: {
+    available: 'A new version of Pheme is available.',
+    reload: 'Reload',
+  },
   language: {
     label: 'Language',
     en: 'English',
@@ -88,6 +92,7 @@ const en = {
     enableFailed: 'Could not enable',
   },
   profile: {
+    version: 'Pheme {{version}}',
     title: 'Your profile',
     subtitle: 'How you appear to others across Pheme.',
     avatar: 'Avatar',

@@ -7,6 +7,7 @@ import { DiscussionPane } from './components/chat/DiscussionPane'
 import { RequireAuth } from './components/RequireAuth'
 import { RequireAdmin } from './components/RequireAdmin'
 import { ScrollToTop } from './components/ScrollToTop'
+import { UpdatePrompt } from './components/UpdatePrompt'
 import { LoginPage } from './pages/LoginPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { ChatEmptyState } from './pages/chat/ChatEmptyState'
@@ -29,6 +30,8 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ScrollToTop />
+        {/* Above every route: a tab is just as stale on the login page as in a chat. */}
+        <UpdatePrompt />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />

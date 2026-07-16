@@ -256,3 +256,21 @@ html[data-surface='chat'][data-mantine-color-scheme='dark'] body {
   color: var(--mantine-color-iris-6);
   background-color: color-mix(in srgb, var(--mantine-color-iris-5) 7%, transparent);
 }
+
+/* The "you are running old code" bar. Fixed to the bottom centre, above everything including the
+   chat shell (which is itself position:fixed), and clear of the iOS home indicator.
+
+   Bottom rather than top: the top of a phone is the header, and on the chat surface the top is
+   where the conversation you are reading starts. pointer-events on the bar only — the page behind
+   it stays usable, because nothing here is urgent enough to block anyone. */
+.pheme-update-prompt {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  /* Below every overlay layer: the info sheet (150), Mantine's modal (200), popover (300) and
+     notifications (400), and the image viewer (500), which owns the whole screen. Nothing here is
+     urgent enough to sit over a dialog someone is answering — the tab is behind, not broken. */
+  z-index: 100;
+  max-width: calc(100vw - 2rem);
+}

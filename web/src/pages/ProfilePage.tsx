@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next'
 import { api, imageUrl } from '../lib/api'
 import { notifyError, notifySuccess } from '../lib/notify'
 import { ApiError } from '../lib/api'
+import { APP_VERSION, BUILD_ID } from '../lib/version'
 import type { User } from '../lib/types'
 import { CardListSkeleton } from '../components/Skeletons'
 
@@ -204,6 +205,16 @@ export function ProfilePage() {
                 {t('profile.save')}
               </Button>
             </Group>
+
+            {/* Which Pheme is this? The answer someone reads back to us in a bug report, so the
+                build id is here too: a release can be rebuilt, and "v0.9.19" alone would not
+                distinguish the bundle that has the fix from the one that does not. */}
+            <Divider />
+            <Text size="xs" c="dimmed" ta="center">
+              {t('profile.version', { version: APP_VERSION })}
+              {' · '}
+              {BUILD_ID}
+            </Text>
           </>
         )}
       </Stack>

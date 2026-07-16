@@ -71,6 +71,8 @@ jobs:
           file: ./web/Dockerfile
           platforms: linux/amd64
           push: true
+          build-args: |
+            PHEME_VERSION=${{ steps.refs.outputs.tag }}
           tags: |
             ${{ steps.refs.outputs.web_image }}
             ${{ steps.refs.outputs.web_repo }}:${{ github.ref_type == 'tag' && 'latest' || 'edge' }}
