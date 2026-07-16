@@ -91,6 +91,20 @@ const PAGE_SIZE = 50
 const MAX_PHOTOS = 10
 
 /**
+ * How long a message that would not decrypt is given before the bubble calls it unreadable.
+ *
+ * A first decrypt can fail for a reason that fixes itself seconds later: the message is sealed to an
+ * MLS epoch this device has not applied yet — a new member's first words ride in with the very Commit
+ * that admits them — and the catch-up is already on its way. Saying "not available on this device"
+ * in that gap is a lie that then corrects itself, which is worse than saying nothing.
+ *
+ * So: say nothing, and only call it unreadable once this much time has passed and it is still sealed.
+ * Long enough for a settle to land, short enough that a genuinely unreadable message does not sit
+ * there pretending to load.
+ */
+const SEALED_GRACE_MS = 6_000
+
+/**
  * Reconciles the cached transcript with the server's newest page. Within the page's
  * time window the server is authoritative — a cached message the page does not include
  * was cleared or deleted (perhaps on another of this user's devices), so it is dropped.
@@ -237,6 +251,34 @@ export function ConversationChatRoute() {
   // and the network fetch race; if the network wins, the cache must not clobber its
   // (authoritative) result by re-showing messages the fetch deliberately dropped.
   const reconciledRef = useRef(false)
+  // Messages waiting out SEALED_GRACE_MS before the bubble gives up on them, by id.
+  const sealedTimers = useRef<Map<string, number>>(new Map())
+
+  /**
+   * Starts a message's grace. When it runs out, the message is marked unreadable (null) — unless it
+   * decrypted in the meantime, which is the whole point of waiting.
+   */
+  const scheduleSealed = useCallback((messageId: string) => {
+    if (sealedTimers.current.has(messageId)) return
+    const timer = window.setTimeout(() => {
+      sealedTimers.current.delete(messageId)
+      // It arrived after all: an epoch caught up and the decrypt succeeded. Nothing to say.
+      if (bodiesRef.current[messageId] != null) return
+      bodiesRef.current = { ...bodiesRef.current, [messageId]: null }
+      setBodies(bodiesRef.current)
+    }, SEALED_GRACE_MS)
+    sealedTimers.current.set(messageId, timer)
+  }, [])
+
+  // Leaving the chat entirely: nothing is left to tell, and a timer that outlives the component
+  // would setState on it.
+  useEffect(() => {
+    const timers = sealedTimers.current
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
   // Messages that could not be read on the last pass — sealed to an MLS epoch this
   // device has not applied yet (a new member's first message rides in with the Commit
   // that admits them). They are parked here, not retired, and retried when the epoch
@@ -430,6 +472,10 @@ export function ConversationChatRoute() {
     processedRef.current = new Set()
     failedRef.current = new Set()
     reconciledRef.current = false
+    // Another chat's graces are not this one's: a timer left running would mark a message of the
+    // conversation we just left, against a bodies map that no longer holds it.
+    for (const timer of sealedTimers.current.values()) clearTimeout(timer)
+    sealedTimers.current.clear()
     void Promise.all([loadCachedContents(id), loadEnvelope(id)]).then(([cached, envelope]) => {
       if (!active) return
       bodiesRef.current = cached
@@ -551,16 +597,18 @@ export function ConversationChatRoute() {
         // new member's first message from "reopen to see it" into "it just appears".
         //
         // `!= null` on purpose: a resolved body is an OBJECT. null means we tried and came back
-        // with nothing, which must not read as resolved here — it is the value that lets the
-        // bubble say "not available" only once that is actually known.
+        // with nothing, which must not read as resolved here.
         const resolved = next[m.id] != null
-        if (!resolved) {
-          next[m.id] = null
-          changed = true
-        }
         processedRef.current.add(m.id)
-        if (resolved) failedRef.current.delete(m.id)
-        else failedRef.current.add(m.id)
+        if (resolved) {
+          failedRef.current.delete(m.id)
+        } else {
+          failedRef.current.add(m.id)
+          // Not "unavailable" — not yet. The bubble stays quiet while the grace runs, because the
+          // catch-up that would make this readable is very often already in flight. See
+          // scheduleSealed / SEALED_GRACE_MS.
+          scheduleSealed(m.id)
+        }
       }
 
       if (active && changed) {
@@ -572,7 +620,8 @@ export function ConversationChatRoute() {
     return () => {
       active = false
     }
-  }, [messages, readyId, userId, id, conversation, groupId, readable, catchUpTick])
+    // scheduleSealed is a stable useCallback, so listing it costs no extra runs.
+  }, [messages, readyId, userId, id, conversation, groupId, readable, catchUpTick, scheduleSealed])
 
   // Reconcile the cached transcript with the server's newest page. `loading` is not
   // forced true here — the preload effect above owns the skeleton and has already
