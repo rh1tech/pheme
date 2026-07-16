@@ -29,6 +29,7 @@ const ru: Resources = {
     reload: 'Перезагрузить',
   },
   update: {
+    dismiss: 'Скрыть',
     available: 'Доступна новая версия Pheme.',
     reload: 'Обновить',
   },

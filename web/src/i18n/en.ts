@@ -27,6 +27,7 @@ const en = {
     reload: 'Reload',
   },
   update: {
+    dismiss: 'Dismiss',
     available: 'A new version of Pheme is available.',
     reload: 'Reload',
   },

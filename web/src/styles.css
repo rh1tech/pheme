@@ -265,8 +265,15 @@ html[data-surface='chat'][data-mantine-color-scheme='dark'] body {
    it stays usable, because nothing here is urgent enough to block anyone. */
 .pheme-update-prompt {
   position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
+  /* left/right + margin-inline:auto to centre, NOT left:50% + translateX(-50%).
+     A fixed box with `left: 50%` and no `right` shrink-to-fits against the space from its left edge
+     to the viewport's right edge — 50vw. It was 195px on a 390px phone, max-width never got a look
+     in, the label wrapped to three lines and shoved the Reload button out of the card. Pinning both
+     edges makes the available width the real 100vw - 2rem. */
+  left: 1rem;
+  right: 1rem;
+  width: fit-content;
+  margin-inline: auto;
   bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
   /* Below every overlay layer: the info sheet (150), Mantine's modal (200), popover (300) and
      notifications (400), and the image viewer (500), which owns the whole screen. Nothing here is
