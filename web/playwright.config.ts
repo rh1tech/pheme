@@ -76,16 +76,22 @@ export default defineConfig({
       },
     },
     {
-      // The E2E runs against a PRODUCTION BUILD served statically, not the Vite dev server.
-      // The dev server transpiles per request and holds every module live; under this suite —
-      // dozens of real-WASM crypto contexts across many tests — it was choking and aborting
-      // navigations (net::ERR_ABORTED), which read as flaky test failures. A built bundle served
-      // by `vite preview` is static and far lighter, and it exercises the artifact we actually
-      // ship. VITE_API_BASE is baked in at build time (see src/lib/api.ts).
-      command: `npm run build && npm run preview -- --port ${WEB_PORT} --strictPort`,
+      // The Vite DEV server, not a production `vite preview`.
+      //
+      // A production build was tried, to escape the net::ERR_ABORTED the dev server threw when
+      // the WHOLE suite — dozens of real-WASM crypto contexts — ran against it in one process.
+      // But the production build silently broke the CALL tests: peer-to-peer audio never flowed
+      // (inboundAudioPackets stuck at -1) though every call test passes here on the dev server.
+      // A green crypto run that quietly stops testing calls is worse than the abort it fixed.
+      //
+      // The real cause of the abort was accumulation, not the dev server itself: the suite is now
+      // sharded across the runners (see ci.yml), so each process runs half of it, and the dev
+      // server carries that comfortably — the WASM-heavy Phase 2/3 specs and the call tests both
+      // pass. VITE_API_BASE reaches the client through Vite's env at dev time (see src/lib/api.ts).
+      command: `npm run dev -- --port ${WEB_PORT} --strictPort`,
       url: WEB_URL,
       reuseExistingServer: !isCI,
-      timeout: 180_000,
+      timeout: 120_000,
       env: { VITE_API_BASE: API_URL },
     },
   ],

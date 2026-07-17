@@ -123,11 +123,10 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
-      # The Playwright config builds the web bundle and serves it with `vite
-      # preview` (not the dev server — a fresh browser context under WASM load
-      # would race the dev server's module graph and abort requests), and starts
-      # the App API (in-memory drivers, seeded admin). CI=true disables server
-      # reuse so each shard is isolated.
+      # The Playwright config starts the Vite dev server and the App API (in-memory
+      # drivers, seeded admin), then tears them down. Sharding keeps each dev server's
+      # load to half the suite, which is what it was choking on. CI=true disables
+      # server reuse so each shard is isolated.
       - run: npx playwright test --shard=${{ matrix.shard }}/2
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
