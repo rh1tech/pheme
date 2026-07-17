@@ -266,11 +266,6 @@ const ru: Resources = {
     notJoined: 'Настраиваем шифрование — попробуйте ещё раз через мгновение',
     peerNotReady:
       'Этот человек ещё не настроил зашифрованные чаты. Ему нужно один раз открыть Pheme — после этого сообщения будут доходить.',
-    notAvailableOnThisDevice: 'Недоступно на этом устройстве',
-    sealedRun_one: '{{count}} сообщение недоступно на этом устройстве',
-    sealedRun_few: '{{count}} сообщения недоступны на этом устройстве',
-    sealedRun_many: '{{count}} сообщений недоступны на этом устройстве',
-    sealedRun_other: '{{count}} сообщения недоступно на этом устройстве',
     receiptDelivered: 'Доставлено',
     receiptRead: 'Прочитано',
     joiningOnThisDevice:

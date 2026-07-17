@@ -13,7 +13,6 @@ import {
 } from './chat-helpers'
 
 const PASSWORD = 'Sup3rSecret!'
-const SEALED = 'available on this device' // shared suffix of the singular and plural divider
 
 // Real crypto between real people on real devices. Chromium is enough; none of this is
 // about rendering.
@@ -229,17 +228,18 @@ test('a device that joins late reads new messages and marks the old ones sealed'
     { timeout: 20_000 },
   )
 
-  // The message that predates the laptop is sealed on it — said so plainly, not left as an
-  // ellipsis that reads like it is still loading.
-  await expect(bobLaptop.page.getByTestId('chat-sealed-divider').first()).toContainText(SEALED)
+  // The message that predates the laptop is simply NOT SHOWN on it — no "not available"
+  // placeholder, no divider. A new device opens a clean conversation of what it can read.
+  await expect(
+    bobLaptop.page.getByTestId('chat-message').filter({ hasText: 'said before the laptop existed' }),
+  ).toHaveCount(0)
+  await expect(bobLaptop.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
 
   // And crucially, the devices that WERE there keep every word. The old code's rebuild is
   // what took this away from everybody.
   await expect(bobPhone.page.getByTestId('chat-message').first()).toContainText(
     'said before the laptop existed',
   )
-  await expect(bobPhone.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
-  await expect(alice.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
 
   await Promise.all([alice.context.close(), bobPhone.context.close(), bobLaptop.context.close()])
 })

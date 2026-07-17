@@ -128,38 +128,6 @@ function mergeSorted(a: ChatMessage[], b: ChatMessage[]): ChatMessage[] {
   return [...byId.values()].sort((x, y) => x.createdAt.localeCompare(y.createdAt))
 }
 
-/**
- * One renderable row of a day: an ordinary message, or a RUN of consecutive messages this
- * device cannot read, folded into a single line.
- *
- * A device that joined after a stretch of history was written can never read that stretch
- * — MLS working as intended — and it is usually a CONTIGUOUS stretch, so rendering each
- * message as its own grey bubble makes a new device's first open a wall of identical
- * apologies. One quiet line carries the same truth. Only messages that were TRIED and
- * failed (null) fold; ones still decrypting (undefined) stay bubbles, because theirs is
- * about to appear.
- */
-type DayItem =
-  | { kind: 'message'; message: ChatMessage }
-  | { kind: 'sealed'; key: string; count: number }
-
-function collapseSealed(
-  day: ChatMessage[],
-  bodies: Record<string, ChatContent | null>,
-): DayItem[] {
-  const out: DayItem[] = []
-  for (const m of day) {
-    const last = out[out.length - 1]
-    if (bodies[m.id] === null) {
-      if (last?.kind === 'sealed') out[out.length - 1] = { ...last, count: last.count + 1 }
-      else out.push({ kind: 'sealed', key: m.id, count: 1 })
-    } else {
-      out.push({ kind: 'message', message: m })
-    }
-  }
-  return out
-}
-
 function reconcile(cached: ChatMessage[], fetched: ChatMessage[]): ChatMessage[] {
   // Only ever called with the newest page (no cursor), so an empty result is authoritative:
   // the whole history is gone — every message cleared (here or on another device) or deleted —
@@ -1030,8 +998,16 @@ export function ConversationChatRoute() {
     void send()
   }
 
-  // MLS control messages carry no user-visible text.
-  const visibleMessages = messages.filter((m) => !MLS_CONTROL_TYPES.has(m.contentType))
+  // What actually renders in the feed. Two kinds are dropped:
+  //   * MLS control messages, which carry no user-visible text; and
+  //   * messages this device cannot read (body resolved to null) — a stretch of history
+  //     from before this device joined, or one not in the backup it restored. Rather than
+  //     announce "not available on this device", we simply do not show them: a new device
+  //     opens a clean conversation of what it CAN read, not a wall of apologies. A message
+  //     still decrypting (body undefined) is kept — its bubble shows "…" until it lands.
+  const visibleMessages = messages.filter(
+    (m) => !MLS_CONTROL_TYPES.has(m.contentType) && bodies[m.id] !== null,
+  )
 
   const title = header ? conversationTitle(header, userId ?? '') : ''
   const avatarId =
@@ -1221,25 +1197,7 @@ export function ConversationChatRoute() {
                 // carried off by it. See groupByDay.
                 <section className="pheme-day" key={dayKey(day[0].createdAt)}>
                   <DateSeparator iso={day[0].createdAt} />
-                  {collapseSealed(day, bodies).map((item) => {
-                    if (item.kind === 'sealed') {
-                      // A stretch of history this device can never read — said once, plainly,
-                      // instead of as a wall of identical grey bubbles. See collapseSealed.
-                      return (
-                        <Text
-                          key={item.key}
-                          size="xs"
-                          c="dimmed"
-                          fs="italic"
-                          ta="center"
-                          py="xs"
-                          data-testid="chat-sealed-divider"
-                        >
-                          {t('chat.sealedRun', { count: item.count })}
-                        </Text>
-                      )
-                    }
-                    const m = item.message
+                  {day.map((m) => {
                     const own = m.senderId === userId
                     const content = bodies[m.id]
                     const senderName = isGroup
@@ -1292,17 +1250,18 @@ export function ConversationChatRoute() {
                           <Text size="sm" c="dimmed" aria-hidden>
                             …
                           </Text>
-                        ) : content !== null ? (
-                          // A photo with no caption has no body line at all — an empty <Text> still
+                        ) : content === null ? (
+                          // Unreadable — this device cannot read it and never will. Filtered out
+                          // of visibleMessages before it reaches here, so this branch renders
+                          // nothing; it stays only to keep the type exhaustive.
+                          null
+                        ) : content.body ? (
+                          // A photo with no caption has no body line at all: an empty <Text> still
                           // takes a row of leading and leaves a strip of dead space under the picture.
-                          content.body ? (
-                            <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                              {content.body}
-                            </Text>
-                          ) : null
-                        ) : // Unreadable (null) never reaches a bubble: collapseSealed folds
-                        // those into the run divider above before rendering begins.
-                        null}
+                          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                            {content.body}
+                          </Text>
+                        ) : null}
                         <div className="pheme-bubble-footer">
                           {/* Reply is the only action the server can support: there are no reactions,
                               and a sealed message cannot be edited or deleted. It appears on hover
