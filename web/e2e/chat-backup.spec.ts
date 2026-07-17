@@ -246,3 +246,86 @@ test('auto-backup keeps later messages recoverable without a manual re-backup', 
 
   await Promise.all([alice.context.close(), restoredContext.close()])
 })
+
+/**
+ * THE PARALLEL-DEVICE TRAP. A user keeps using device A and ALSO restores on device B while
+ * A is still live. Restoring must not make B a CLONE of A — same MLS identity, same leaf —
+ * because then neither can read the other: to MLS a message from A is B's own message, and a
+ * sender can never decrypt its own. That is exactly the "not available on this device" the
+ * user hit in both directions at once.
+ *
+ * A restored device must be its OWN leaf: it recovers HISTORY from the backup, but joins the
+ * group under a fresh identity, so it and the original device talk like any two devices.
+ */
+test('a device restored alongside a still-live one is its own leaf, not a clone', async ({
+  browser,
+}) => {
+  const peerEmail = uniqueEmail('peer-par')
+  const bobEmail = uniqueEmail('bob-par')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, peerEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const deviceA = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const peer = await signInOnNewDevice(browser, peerEmail, PASSWORD)
+
+  const conv = await startDirectChat(peer.page, deviceA.userId)
+  await openChatAndJoin(peer.page, conv)
+  await send(peer.page, 'hello from the peer')
+  await openChatAndJoin(deviceA.page, conv)
+  await expect(deviceA.page.getByTestId('chat-message').last()).toContainText('hello from the peer', {
+    timeout: 25_000,
+  })
+
+  // Bob backs up from device A, without leaving the chat.
+  await deviceA.page.getByTestId('chat-sidebar').getByRole('button', { name: 'Menu' }).click()
+  await deviceA.page.getByRole('menuitem', { name: 'Chat backup' }).click()
+  await deviceA.page.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
+  await deviceA.page.getByLabel('Confirm passphrase').fill(PASSPHRASE)
+  await deviceA.page.getByRole('button', { name: 'Back up now' }).click()
+  await expect(deviceA.page.getByText('Chats backed up')).toBeVisible({ timeout: 20_000 })
+
+  // Device B signs in and restores — while device A is STILL OPEN and in use.
+  const bContext = await browser.newContext()
+  const deviceB = await bContext.newPage()
+  await login(deviceB, bobEmail, PASSWORD)
+  await expect(deviceB.getByText('Restore your chats')).toBeVisible({ timeout: 20_000 })
+  await deviceB.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
+  await deviceB.getByRole('button', { name: 'Restore', exact: true }).click()
+  await expect(deviceB.getByText('Restore your chats')).toBeHidden({ timeout: 30_000 })
+  await expect(deviceB.getByTestId('chat-sidebar')).toBeVisible({ timeout: 30_000 })
+
+  // B must be its OWN device, not a clone of A. Equal ids here is the root of the bug.
+  const bDeviceId = await deviceB.evaluate(() => localStorage.getItem('pheme.mlsDeviceId') ?? '')
+  expect(bDeviceId).not.toBe(deviceA.deviceId)
+
+  // B inherited the history from the backup.
+  await openChatAndJoin(deviceB, conv)
+  await expect(
+    deviceB.getByTestId('chat-message').filter({ hasText: 'hello from the peer' }),
+  ).toHaveCount(1, { timeout: 25_000 })
+
+  // The two devices of the same user now talk BOTH WAYS — the exact thing that failed.
+  await send(deviceA.page, 'from device A')
+  await expect(deviceB.getByTestId('chat-message').filter({ hasText: 'from device A' })).toHaveCount(
+    1,
+    { timeout: 25_000 },
+  )
+  await send(deviceB, 'from device B')
+  await expect(
+    deviceA.page.getByTestId('chat-message').filter({ hasText: 'from device B' }),
+  ).toHaveCount(1, { timeout: 25_000 })
+
+  // And the peer reads both devices.
+  for (const said of ['from device A', 'from device B']) {
+    await expect(peer.page.getByTestId('chat-message').filter({ hasText: said })).toHaveCount(1, {
+      timeout: 25_000,
+    })
+  }
+
+  await Promise.all([peer.context.close(), deviceA.context.close(), bContext.close()])
+})

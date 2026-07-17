@@ -1862,88 +1862,86 @@ export async function backupKeys(userId: string, passphrase: string): Promise<vo
 }
 
 /**
- * Recovers device state from the server backup using `passphrase`, writing it to
- * local storage. Returns false when there is no backup; throws on a wrong
- * passphrase (the GCM tag fails). Must run before the first mlsSession() call, so a
- * fresh identity is not created in place of the recovered one; it resets the
- * session singleton to be safe.
+ * Recovers a user's HISTORY onto this device from the server backup, under `passphrase`.
+ * Returns false when there is no backup; throws on a wrong passphrase (the GCM tag fails).
+ *
+ * ----------------------------------------------------------------------------------------
+ * IT DOES NOT ADOPT THE BACKED-UP DEVICE'S IDENTITY. That was the old behaviour, and it was
+ * a trap: it made the restoring device a CLONE of the one that took the backup — the same
+ * MLS leaf, the same keys. If that other device was still in use (a second phone, a laptop
+ * kept open), the two shared one identity, and to MLS a message from either looked to the
+ * OTHER like its own — which a sender can never decrypt. Both devices showed "not available
+ * on this device" for everything the other said, and their ratchets forked on the next
+ * Commit. Two devices of one person are meant to be two independent leaves; that is the
+ * whole design (see the header of this file), and cloning breaks it.
+ *
+ * So a restore recovers the WORDS, not the leaf: the passphrase is proven, the transcript is
+ * imported, and this device then comes up under its OWN fresh identity and is admitted to
+ * each group as a new member — exactly as any new device is. It reads history from the
+ * imported cache, and new messages as its own leaf. The backed-up key state is used ONLY to
+ * check the passphrase, never to become this device.
+ * ----------------------------------------------------------------------------------------
  */
 export async function restoreKeys(userId: string, passphrase: string): Promise<boolean> {
   await ensureWasm()
   const backup = await api.getKeyBackup(true)
   if (!backup) return false
+
+  // Prove the passphrase by opening the state blob (throws on a wrong one) — then discard
+  // it. Its only job here is to validate, and to confirm the bytes really are a client state.
   const state = decryptBackup(
     new TextEncoder().encode(passphrase),
     base64ToBytes(backup.salt),
     base64ToBytes(backup.nonce),
     base64ToBytes(backup.ciphertext),
   )
-  // Validate the recovered blob really is a client state before committing it — and read
-  // back WHICH DEVICE it belongs to.
-  const restored = MlsClient.fromState(state)
-  const restoredDevice = deviceOf(restored.identity)
+  MlsClient.fromState(state)
 
-  return withMlsLock(async () => {
-    // Another tab may have set up an identity while this prompt sat open (the user chose
-    // "start fresh" there, or simply signed in elsewhere). Restoring would replace it
-    // with an older snapshot and strand whatever was said in between. Refuse — and say
-    // so, rather than closing the prompt as though the restore had happened.
-    if ((await idbGet(STATE_KEY)) && (await storedOwner()) === userId) {
-      throw new IdentityAlreadySetUpError()
-    }
-
-    // The state and its owner must land together, in one transaction. Written
-    // separately, a Session.load racing in between would see state whose owner is not
-    // yet claimed, take it for another account's leftovers, and wipe the backup we
-    // just recovered — while restore went on to report success.
-    const nextVersion = (await storedVersion()) + 1
-    const nextEpoch = (await storedEpoch()) + 1
-    await idbSetMany([
-      [STATE_KEY, state],
-      [OWNER_KEY, new TextEncoder().encode(userId)],
-      [VERSION_KEY, encodeVersion(nextVersion)],
-      // A new epoch: any session built on the identity this replaces — in this tab or
-      // another — must not write over what we just recovered.
-      [EPOCH_KEY, encodeVersion(nextEpoch)],
-    ])
-    // Adopt the identity we just restored. The groups inside that state hold leaves under
-    // the ORIGINAL device's name, and its published KeyPackages are filed under it — so
-    // this browser has to answer to that device id, not to one of its own. Keeping a
-    // local id here would leave the restored client unable to be added to anything: it
-    // would publish keys as one device and hold leaves as another.
-    if (restoredDevice) saveMlsDeviceId(restoredDevice)
-
-    // The transcripts, if the backup carried them: everything the old device had read,
-    // straight into this one's cache. Best effort AND non-fatal — a backup from before
-    // transcripts existed has none, and a blob that will not open must not undo the key
-    // restore that already succeeded.
-    if (backup.transcriptCiphertext && backup.transcriptSalt && backup.transcriptNonce) {
-      try {
-        const opened = decryptBackup(
-          new TextEncoder().encode(passphrase),
-          base64ToBytes(backup.transcriptSalt),
-          base64ToBytes(backup.transcriptNonce),
-          base64ToBytes(backup.transcriptCiphertext),
-        )
-        const parsed: unknown = JSON.parse(new TextDecoder().decode(opened))
-        if (typeof parsed === 'object' && parsed !== null && 'bodies' in parsed) {
-          await importContents((parsed as { bodies: Record<string, Record<string, string>> }).bodies)
-        }
-      } catch {
-        // The keys are restored and the conversations work; only the old scrollback is
-        // missing. Saying nothing here beats failing a restore that succeeded.
+  // Open the transcript too, before committing anything, so a bad blob fails cleanly rather
+  // than half-way. Its own seal under the same passphrase.
+  let bodies: Record<string, Record<string, string>> | null = null
+  if (backup.transcriptCiphertext && backup.transcriptSalt && backup.transcriptNonce) {
+    try {
+      const opened = decryptBackup(
+        new TextEncoder().encode(passphrase),
+        base64ToBytes(backup.transcriptSalt),
+        base64ToBytes(backup.transcriptNonce),
+        base64ToBytes(backup.transcriptCiphertext),
+      )
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(opened))
+      if (typeof parsed === 'object' && parsed !== null && 'bodies' in parsed) {
+        bodies = (parsed as { bodies: Record<string, Record<string, string>> }).bodies
       }
+    } catch {
+      // A history that will not open must not fail the restore — the device still comes up
+      // working, just without the old scrollback.
     }
+  }
 
-    restoreNeeded = false
-    ready = null
-    readyUserId = ''
-    settling.clear()
-    // Proven this session: keep it so auto-backup carries forward anything read from here
-    // on, and the restored device's backup stays as current as the old one's was.
-    sessionPassphrase = passphrase
-    return true
-  })
+  // Come up as a FRESH device, not the backed-up one. acceptFreshIdentity is what tells the
+  // bootstrap to mint a new identity rather than demand a restore, and it shuts the restore
+  // gate for good.
+  await acceptFreshIdentity()
+  ready = null
+  readyUserId = ''
+  settling.clear()
+
+  // Mint that fresh identity now — before importing history, because bootstrapping wipes the
+  // store to a clean slate for the new identity, and history written first would go with it.
+  await mlsSession(userId)
+
+  // Now the history, on top of the fresh identity. Imported after the wipe, so it survives.
+  if (bodies) {
+    try {
+      await importContents(bodies)
+    } catch {
+      // Best effort; the device is already up and working without it.
+    }
+  }
+
+  // Proven this session: keep it so auto-backup keeps this device's own backup current.
+  sessionPassphrase = passphrase
+  return true
 }
 
 // --- base64 helpers (the JSON transport carries bytes as base64) ---
