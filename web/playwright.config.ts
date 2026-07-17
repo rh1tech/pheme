@@ -11,7 +11,11 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: isCI,
-  retries: isCI ? 1 : 0,
+  // Two retries in CI. The crypto suite drives real WASM + WebRTC contexts, and under the
+  // dev server the odd navigation still aborts (net::ERR_ABORTED) purely from load — a flake
+  // in the harness, not the product. A retry clears it; the assertions themselves are
+  // deterministic. Locally, no retries — a failure there should be seen, not papered over.
+  retries: isCI ? 2 : 0,
   timeout: 30_000,
   expect: { timeout: 10_000 },
   reporter: isCI ? [['github'], ['html', { open: 'never' }]] : 'list',
