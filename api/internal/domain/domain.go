@@ -545,6 +545,21 @@ type MLSKeyPackage struct {
 	LastResort bool `bson:"lastResort,omitempty" json:"lastResort,omitempty"`
 }
 
+// MLSDevice is one of a user's own devices, as the user sees it in "your devices":
+// its client-minted MLS device id, a human label (e.g. "Chrome on macOS"), and when it
+// was last active. It carries no key material — the KeyPackage directory holds that. It
+// exists so a user can SEE and MANAGE the devices signed in to their account, which the
+// per-conversation KeyPackage directory cannot answer (it is scoped to a conversation's
+// members, not to "all of my devices").
+type MLSDevice struct {
+	ID         string    `bson:"_id,omitempty" json:"-"`
+	UserID     string    `bson:"userId" json:"-"`
+	DeviceID   string    `bson:"deviceId" json:"deviceId"`
+	Label      string    `bson:"label" json:"label"`
+	CreatedAt  time.Time `bson:"createdAt" json:"createdAt"`
+	LastSeenAt time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
+}
+
 // MLSKeyBackup is the encrypted backup of a device's MLS client state, sealed
 // client-side under a key derived from the user's recovery passphrase. The server
 // stores only this opaque ciphertext (plus the public salt/nonce needed to derive

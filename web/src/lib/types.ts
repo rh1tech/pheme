@@ -121,6 +121,14 @@ export interface MLSClaimedKeyPackage extends MLSDeviceRef {
   keyPackage: string
 }
 
+/** One of the user's own devices, as shown in "your devices". */
+export interface MLSDevice {
+  deviceId: string
+  label: string
+  createdAt: string
+  lastSeenAt: string
+}
+
 // A conversation's newest message, for chat-list ordering and preview.
 export interface LastChatMessage {
   id: string

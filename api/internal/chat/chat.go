@@ -97,6 +97,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/mls/key-packages", h.publishKeyPackages)
 	mux.HandleFunc("GET /v1/mls/key-packages/count", h.keyPackageCount)
 	mux.HandleFunc("DELETE /v1/mls/key-packages", h.deleteKeyPackages)
+	// The user's own device registry — what "your devices" lists.
+	mux.HandleFunc("GET /v1/mls/devices", h.listMyDevices)
 	// Both device-scoped: an MLS leaf is a device, so a group is built from a KeyPackage
 	// per DEVICE of each member, never one per user. `devices` answers which devices
 	// exist without consuming anything; `claim` hands out a package for named ones.

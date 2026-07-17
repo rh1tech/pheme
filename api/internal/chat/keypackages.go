@@ -28,7 +28,13 @@ type publishKeyPackagesRequest struct {
 	// after first use. A flag invented server-side would be pure bookkeeping — the
 	// package would still be single-use, and the user could still be drained.
 	LastResortKeyPackage []byte `json:"lastResortKeyPackage,omitempty"`
+	// A human label for this device — "Chrome on macOS", "Pheme on iPhone" — set by the client,
+	// so the user can recognise it in "your devices". Optional; the registry works without it.
+	Label string `json:"label,omitempty"`
 }
+
+// maxDeviceLabelLen bounds the client-supplied device label so the registry cannot be stuffed.
+const maxDeviceLabelLen = 100
 
 // publishKeyPackages stores a batch of the caller's public KeyPackages so others
 // can add them to encrypted groups. Public bytes only; no private material.
@@ -99,7 +105,40 @@ func (h *Handler) publishKeyPackages(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not store key packages")
 		return
 	}
+
+	// Record this device in the user's own registry (what "your devices" reads), and refresh its
+	// last-seen. Best effort — a device is reachable and usable whether or not it is listed, so a
+	// registry write must never fail a key publish.
+	label := req.Label
+	if len(label) > maxDeviceLabelLen {
+		label = label[:maxDeviceLabelLen]
+	}
+	if err := h.Store.UpsertMLSDevice(r.Context(), domain.MLSDevice{
+		UserID:     uid,
+		DeviceID:   req.DeviceID,
+		Label:      label,
+		CreatedAt:  now,
+		LastSeenAt: now,
+	}); err != nil {
+		h.logger().Error("device registry: upsert", "error", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// listMyDevices reports the signed-in user's own devices — id, label, first/last seen — for the
+// "your devices" surface. User-scoped (their own only); the device's own id lets the client flag
+// which row is "this device".
+func (h *Handler) listMyDevices(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	devices, err := h.Store.ListMLSDevices(r.Context(), uid)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not list devices")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"devices": devices})
 }
 
 type claimKeyPackagesRequest struct {

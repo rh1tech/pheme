@@ -32,6 +32,7 @@ import type {
   Meta,
   MessagesPage,
   MLSClaimedKeyPackage,
+  MLSDevice,
   MLSDeviceRef,
   MLSGroupState,
   Platform,
@@ -283,11 +284,20 @@ export const api = {
     request<Channel>(`/v1/channels/${id}/avatar`, { method: 'DELETE' }),
 
   // MLS key directory. KeyPackages cross as base64 (Go []byte).
-  publishKeyPackages: (deviceId: string, keyPackages: string[], lastResortKeyPackage?: string) =>
+  publishKeyPackages: (
+    deviceId: string,
+    keyPackages: string[],
+    lastResortKeyPackage?: string,
+    label?: string,
+  ) =>
     request<void>('/v1/mls/key-packages', {
       method: 'POST',
-      body: { deviceId, keyPackages, lastResortKeyPackage },
+      body: { deviceId, keyPackages, lastResortKeyPackage, label },
     }),
+
+  /** The signed-in user's own devices — for the "your devices" panel. */
+  myDevices: () =>
+    request<{ devices: MLSDevice[] }>('/v1/mls/devices').then((r) => r.devices ?? []),
   /** `count` is the single-use stock; the last-resort package is never consumed. */
   keyPackageCount: (deviceId: string) =>
     request<{ count: number; hasLastResort: boolean }>(

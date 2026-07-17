@@ -32,6 +32,7 @@ type Memory struct {
 	attachments   map[string]domain.Attachment
 	keyPackages   map[string]domain.MLSKeyPackage
 	keyBackups    map[string]domain.MLSKeyBackup // by userId (one per user)
+	mlsDevices    map[string]domain.MLSDevice    // by userId + ":" + deviceId
 	mlsGroupInfo  map[string]domain.MLSGroupInfo // by conversationId (one per group)
 	blobs         blob.Store
 }
@@ -55,6 +56,7 @@ func NewMemory(blobs blob.Store) *Memory {
 		attachments:   map[string]domain.Attachment{},
 		keyPackages:   map[string]domain.MLSKeyPackage{},
 		keyBackups:    map[string]domain.MLSKeyBackup{},
+		mlsDevices:    map[string]domain.MLSDevice{},
 		mlsGroupInfo:  map[string]domain.MLSGroupInfo{},
 		blobs:         blobs,
 	}

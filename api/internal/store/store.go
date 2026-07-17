@@ -343,6 +343,13 @@ type Store interface {
 	PutKeyBackup(ctx context.Context, backup domain.MLSKeyBackup) error
 	GetKeyBackup(ctx context.Context, userID string) (domain.MLSKeyBackup, error)
 
+	// The user's own device registry — what "your devices" reads. UpsertMLSDevice records
+	// a device and bumps its last-seen; ListMLSDevices returns the user's devices, most
+	// recently seen first; DeleteMLSDevice removes one (a terminated device).
+	UpsertMLSDevice(ctx context.Context, device domain.MLSDevice) error
+	ListMLSDevices(ctx context.Context, userID string) ([]domain.MLSDevice, error)
+	DeleteMLSDevice(ctx context.Context, userID, deviceID string) error
+
 	// Admin
 	AdminStats(ctx context.Context, topN, recentN int) (domain.AdminStats, error)
 

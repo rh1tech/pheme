@@ -198,6 +198,30 @@ function clearStuck(conversationId: string): void {
   waitingSince.delete(conversationId)
 }
 
+/**
+ * A human label for THIS device, for the user's "your devices" list — "Chrome on macOS", "Safari on
+ * iPhone". Derived from the user agent, best effort; a device is perfectly usable if the label is
+ * vague. Never anything identifying beyond browser + OS family.
+ */
+function deviceLabel(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  const browser =
+    /Edg\//.test(ua) ? 'Edge'
+    : /OPR\/|Opera/.test(ua) ? 'Opera'
+    : /Firefox\//.test(ua) ? 'Firefox'
+    : /Chrome\//.test(ua) ? 'Chrome'
+    : /Safari\//.test(ua) ? 'Safari'
+    : 'Browser'
+  const os =
+    /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+    : /Android/.test(ua) ? 'Android'
+    : /Macintosh|Mac OS X/.test(ua) ? 'macOS'
+    : /Windows/.test(ua) ? 'Windows'
+    : /Linux/.test(ua) ? 'Linux'
+    : ''
+  return os ? `${browser} on ${os}` : browser
+}
+
 /** Loads the WASM module once. Backup/restore need it before any Session exists. */
 function ensureWasm(): Promise<void> {
   if (!wasmReady) wasmReady = init(wasmUrl).then(() => undefined)
@@ -486,7 +510,7 @@ class Session {
       await this.persist()
       return { packages: fresh, lastResort: reusable }
     })
-    await api.publishKeyPackages(this.deviceId, packages, lastResort)
+    await api.publishKeyPackages(this.deviceId, packages, lastResort, deviceLabel())
   }
 
   /** True when this client holds the group — encrypt/decrypt will work. */

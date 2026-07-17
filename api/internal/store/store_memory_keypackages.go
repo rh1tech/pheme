@@ -270,6 +270,46 @@ func (m *Memory) GetKeyBackup(_ context.Context, userID string) (domain.MLSKeyBa
 	return b, nil
 }
 
+func mlsDeviceKey(userID, deviceID string) string { return userID + ":" + deviceID }
+
+func (m *Memory) UpsertMLSDevice(_ context.Context, d domain.MLSDevice) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := mlsDeviceKey(d.UserID, d.DeviceID)
+	existing, ok := m.mlsDevices[key]
+	if ok {
+		existing.Label = d.Label
+		existing.LastSeenAt = d.LastSeenAt
+		m.mlsDevices[key] = existing
+		return nil
+	}
+	if d.ID == "" {
+		d.ID = newID()
+	}
+	m.mlsDevices[key] = d
+	return nil
+}
+
+func (m *Memory) ListMLSDevices(_ context.Context, userID string) ([]domain.MLSDevice, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]domain.MLSDevice, 0)
+	for _, d := range m.mlsDevices {
+		if d.UserID == userID {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastSeenAt.After(out[j].LastSeenAt) })
+	return out, nil
+}
+
+func (m *Memory) DeleteMLSDevice(_ context.Context, userID, deviceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.mlsDevices, mlsDeviceKey(userID, deviceID))
+	return nil
+}
+
 // How many retired groups a conversation remembers. Each one is a group somebody might still
 // hold and still be reading history from; a handful is generous, and it stops an abusive
 // client growing the document without bound.

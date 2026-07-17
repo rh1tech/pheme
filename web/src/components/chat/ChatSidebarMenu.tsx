@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ActionIcon, Menu, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
 import {
   IconCheck,
+  IconDevices,
   IconLanguage,
   IconLogout,
   IconMenu2,
@@ -17,6 +18,7 @@ import { useAuth } from '../../auth/context'
 import { SUPPORTED_LANGUAGES, type Language } from '../../i18n'
 import { APP_VERSION, BUILD_ID } from '../../lib/version'
 import { RecoveryCodeModal } from './KeyBackup'
+import { SecurityModal } from './SecurityModal'
 
 /**
  * The burger in the chat-list header. Everything the old left nav held that is
@@ -35,6 +37,7 @@ export function ChatSidebarMenu() {
   const isDark = scheme === 'dark'
   const language = (i18n.resolvedLanguage ?? 'en') as Language
   const [recoveryOpen, setRecoveryOpen] = useState(false)
+  const [securityOpen, setSecurityOpen] = useState(false)
 
   function handleLogout() {
     logout()
@@ -61,6 +64,9 @@ export function ChatSidebarMenu() {
         )}
         <Menu.Item leftSection={<IconShieldLock size={18} />} onClick={() => setRecoveryOpen(true)}>
           {t('recovery.menuItem')}
+        </Menu.Item>
+        <Menu.Item leftSection={<IconDevices size={18} />} onClick={() => setSecurityOpen(true)}>
+          {t('security.menuItem')}
         </Menu.Item>
 
         <Menu.Divider />
@@ -112,6 +118,7 @@ export function ChatSidebarMenu() {
       </Menu.Dropdown>
     </Menu>
     <RecoveryCodeModal opened={recoveryOpen} onClose={() => setRecoveryOpen(false)} />
+      <SecurityModal opened={securityOpen} onClose={() => setSecurityOpen(false)} />
     </>
   )
 }

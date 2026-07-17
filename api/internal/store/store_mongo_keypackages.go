@@ -339,6 +339,45 @@ func (m *Mongo) PutKeyBackup(ctx context.Context, backup domain.MLSKeyBackup) er
 	return err
 }
 
+// UpsertMLSDevice records or refreshes one of a user's devices. One document per (user, device);
+// createdAt is set once, lastSeenAt and label move with each publish.
+func (m *Mongo) UpsertMLSDevice(ctx context.Context, d domain.MLSDevice) error {
+	_, err := m.db.Collection("mlsDevices").UpdateOne(
+		ctx,
+		bson.M{"userId": d.UserID, "deviceId": d.DeviceID},
+		bson.M{
+			"$set":         bson.M{"label": d.Label, "lastSeenAt": d.LastSeenAt},
+			"$setOnInsert": bson.M{"_id": mongoID(), "userId": d.UserID, "deviceId": d.DeviceID, "createdAt": d.CreatedAt},
+		},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
+// ListMLSDevices returns a user's devices, most recently seen first.
+func (m *Mongo) ListMLSDevices(ctx context.Context, userID string) ([]domain.MLSDevice, error) {
+	cur, err := m.db.Collection("mlsDevices").Find(
+		ctx,
+		bson.M{"userId": userID},
+		options.Find().SetSort(bson.D{{Key: "lastSeenAt", Value: -1}}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	out := make([]domain.MLSDevice, 0)
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DeleteMLSDevice forgets one device — a terminated one.
+func (m *Mongo) DeleteMLSDevice(ctx context.Context, userID, deviceID string) error {
+	_, err := m.db.Collection("mlsDevices").DeleteOne(ctx, bson.M{"userId": userID, "deviceId": deviceID})
+	return err
+}
+
 func (m *Mongo) GetKeyBackup(ctx context.Context, userID string) (domain.MLSKeyBackup, error) {
 	var b domain.MLSKeyBackup
 	err := m.db.Collection("mlsKeyBackups").
