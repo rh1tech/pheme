@@ -8,6 +8,14 @@ on:
 permissions:
   contents: read
 
+# Only one CI run per branch at a time. The two runners share a host, so two runs in parallel put
+# two of the SAME-numbered E2E shard on that host at once — and per-shard ports (PW_PORT_OFFSET)
+# separate shards WITHIN a run, not across runs, so both would bind the same port and one would die
+# with "address already in use". A newer push supersedes an older one anyway, so cancel it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   api:
     name: API (Go)
