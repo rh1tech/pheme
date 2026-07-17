@@ -265,6 +265,12 @@ const en = {
     peerNotReady:
       'This person hasn’t set up encrypted chats yet. They need to open Pheme once — then your messages will go through.',
     notAvailableOnThisDevice: 'Not available on this device',
+    sealedRun_one: 'A message isn’t available on this device',
+    sealedRun_other: '{{count}} messages aren’t available on this device',
+    // English never selects these plural categories; they exist so locales that do
+    // (Russian's few/many) type-check against this shape.
+    sealedRun_few: '{{count}} messages aren’t available on this device',
+    sealedRun_many: '{{count}} messages aren’t available on this device',
     receiptDelivered: 'Delivered',
     receiptRead: 'Read',
     joiningOnThisDevice:

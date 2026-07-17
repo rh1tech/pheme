@@ -169,7 +169,7 @@ test('a device whose keys are destroyed rejoins without destroying the conversat
   // The crucial part: ALICE never lost anything. Under the old rebuild, repairing Bob threw
   // away the group that her history was encrypted to, and her own transcript went blank.
   await expect(alice.page.getByTestId('chat-message').first()).toContainText('can you hear me')
-  await expect(alice.page.getByTestId('chat-message-sealed')).toHaveCount(0)
+  await expect(alice.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
 
   await Promise.all([alice.context.close(), bob.context.close()])
 })

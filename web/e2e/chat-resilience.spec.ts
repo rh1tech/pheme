@@ -147,8 +147,8 @@ test('a zombie key package in the directory neither wars nor blocks the conversa
   expect((await groupState(bob.page, conv)).epoch).toBe(settled)
 
   // And nothing anywhere is sealed.
-  await expect(alice.page.getByTestId('chat-message-sealed')).toHaveCount(0)
-  await expect(bob.page.getByTestId('chat-message-sealed')).toHaveCount(0)
+  await expect(alice.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
+  await expect(bob.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
 
   await Promise.all([alice.context.close(), bob.context.close()])
 })
@@ -211,7 +211,7 @@ test('a message sealed ahead of the reader decrypts after the on-open catch-up',
   await expect(
     returned.getByTestId('chat-message').filter({ hasText: 'before you left' }),
   ).toHaveCount(1)
-  await expect(returned.getByTestId('chat-message-sealed')).toHaveCount(0)
+  await expect(returned.getByTestId('chat-sealed-divider')).toHaveCount(0)
 
   await Promise.all([alice.context.close(), alicePhone.context.close(), bob.context.close()])
 })
@@ -260,7 +260,7 @@ test('a message arriving into two open tabs of the same device shows in both', a
     await expect(
       tab.getByTestId('chat-message').filter({ hasText: 'exactly one of you decrypts this' }),
     ).toHaveCount(1, { timeout: 25_000 })
-    await expect(tab.getByTestId('chat-message-sealed')).toHaveCount(0)
+    await expect(tab.getByTestId('chat-sealed-divider')).toHaveCount(0)
   }
 
   await Promise.all([alice.context.close(), bob.context.close()])
@@ -312,7 +312,7 @@ test('every message survives a reload on both sides', async ({ browser }) => {
         { timeout: 25_000 },
       )
     }
-    await expect(device.page.getByTestId('chat-message-sealed')).toHaveCount(0)
+    await expect(device.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
   }
 
   await Promise.all([alice.context.close(), bob.context.close()])
@@ -447,8 +447,8 @@ test('the conversation survives its group being reset', async ({ browser }) => {
   await expect(alice.page.getByTestId('chat-message').last()).toContainText('good as new', {
     timeout: 25_000,
   })
-  await expect(alice.page.getByTestId('chat-message-sealed')).toHaveCount(0)
-  await expect(bob.page.getByTestId('chat-message-sealed')).toHaveCount(0)
+  await expect(alice.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
+  await expect(bob.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
 
   await Promise.all([alice.context.close(), bob.context.close()])
 })

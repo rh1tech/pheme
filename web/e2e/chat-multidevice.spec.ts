@@ -13,7 +13,7 @@ import {
 } from './chat-helpers'
 
 const PASSWORD = 'Sup3rSecret!'
-const SEALED = 'Not available on this device'
+const SEALED = 'available on this device' // shared suffix of the singular and plural divider
 
 // Real crypto between real people on real devices. Chromium is enough; none of this is
 // about rendering.
@@ -90,7 +90,7 @@ test('a user signed in on two devices reads and writes from both', async ({ brow
 
   // Nothing anywhere is sealed: every device could read every message.
   for (const d of [alice, phone, desktop]) {
-    await expect(d.page.getByTestId('chat-message-sealed')).toHaveCount(0)
+    await expect(d.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
   }
 
   await Promise.all([alice.context.close(), phone.context.close(), desktop.context.close()])
@@ -231,15 +231,15 @@ test('a device that joins late reads new messages and marks the old ones sealed'
 
   // The message that predates the laptop is sealed on it — said so plainly, not left as an
   // ellipsis that reads like it is still loading.
-  await expect(bobLaptop.page.getByTestId('chat-message-sealed').first()).toContainText(SEALED)
+  await expect(bobLaptop.page.getByTestId('chat-sealed-divider').first()).toContainText(SEALED)
 
   // And crucially, the devices that WERE there keep every word. The old code's rebuild is
   // what took this away from everybody.
   await expect(bobPhone.page.getByTestId('chat-message').first()).toContainText(
     'said before the laptop existed',
   )
-  await expect(bobPhone.page.getByTestId('chat-message-sealed')).toHaveCount(0)
-  await expect(alice.page.getByTestId('chat-message-sealed')).toHaveCount(0)
+  await expect(bobPhone.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
+  await expect(alice.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
 
   await Promise.all([alice.context.close(), bobPhone.context.close(), bobLaptop.context.close()])
 })
@@ -550,7 +550,7 @@ test('a member who leaves a group loses access, and the group carries on', async
   // The group still works for the owner — leaving must not take the conversation with it.
   await send(owner.page, 'after bob left')
   await expect(owner.page.getByTestId('chat-message').last()).toContainText('after bob left')
-  await expect(owner.page.getByTestId('chat-message-sealed')).toHaveCount(0)
+  await expect(owner.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
 
   // And Bob cannot read it: he is not a member any more, so the conversation is gone from
   // his side entirely.
@@ -623,7 +623,7 @@ test('in a group, everyone reads messages from every device of every member', as
         timeout: 25_000,
       })
     }
-    await expect(d.page.getByTestId('chat-message-sealed')).toHaveCount(0)
+    await expect(d.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
   }
 
   await Promise.all(everyone.map((d) => d.context.close()))

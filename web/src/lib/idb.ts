@@ -33,6 +33,11 @@ export function idbGet(key: string): Promise<Uint8Array | undefined> {
   return tx<Uint8Array | undefined>('readonly', (s) => s.get(key))
 }
 
+/** Every key in the store. How the transcript backup finds the per-conversation caches. */
+export function idbKeys(): Promise<string[]> {
+  return tx<IDBValidKey[]>('readonly', (s) => s.getAllKeys()).then((keys) => keys.map(String))
+}
+
 export function idbSet(key: string, value: Uint8Array): Promise<void> {
   return tx('readwrite', (s) => s.put(value, key)).then(() => undefined)
 }

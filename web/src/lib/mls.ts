@@ -28,7 +28,7 @@ import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/phe
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { ApiError, api } from './api'
 import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
-import { cacheContent, clearPreviews } from './chatCache'
+import { cacheContent, clearPreviews, exportAllContents, importContents } from './chatCache'
 import { clearSafetyPins } from './safety'
 import { loadMlsDeviceId, saveMlsDeviceId } from './device'
 import { serializeContent } from './chatContent'
@@ -1756,17 +1756,52 @@ export async function backupExists(): Promise<boolean> {
   return (await api.getKeyBackup(true)) != null
 }
 
-/** Seals the current device state under `passphrase` and uploads it. */
+/**
+ * How big a sealed transcript blob may grow before it is left out of the backup. Matches
+ * the server's cap; a history past it still gets its KEYS backed up — recoverable
+ * conversation, unrecoverable scrollback — which beats failing the whole backup.
+ */
+const MAX_TRANSCRIPT_BACKUP_BYTES = 8 * 1024 * 1024
+
+/**
+ * Seals the current device state under `passphrase` and uploads it — together with the
+ * decrypted transcript cache, sealed separately under the same passphrase.
+ *
+ * The transcripts are not an optimisation. Decryption is one-shot, so everything this
+ * device has already read exists NOWHERE but its local cache: keys alone restore the
+ * ability to talk, and only this restores what was said.
+ */
 export async function backupKeys(userId: string, passphrase: string): Promise<void> {
   const session = await mlsSession(userId)
   const state = await idbGet(STATE_KEY)
   if (!state) throw new Error('no local key state to back up')
-  const blob = encryptBackup(new TextEncoder().encode(passphrase), state)
+  const pass = new TextEncoder().encode(passphrase)
+  const blob = encryptBackup(pass, state)
+
+  let transcript: { salt: string; nonce: string; ciphertext: string } | undefined
+  try {
+    const bodies = await exportAllContents()
+    const sealed = encryptBackup(
+      pass,
+      new TextEncoder().encode(JSON.stringify({ v: 1, bodies })),
+    )
+    if (sealed.ciphertext.byteLength <= MAX_TRANSCRIPT_BACKUP_BYTES) {
+      transcript = {
+        salt: bytesToBase64(sealed.salt),
+        nonce: bytesToBase64(sealed.nonce),
+        ciphertext: bytesToBase64(sealed.ciphertext),
+      }
+    }
+  } catch {
+    // A transcript that cannot be gathered must not stop the keys being backed up.
+  }
+
   await api.putKeyBackup(
     session.deviceId,
     bytesToBase64(blob.salt),
     bytesToBase64(blob.nonce),
     bytesToBase64(blob.ciphertext),
+    transcript,
   )
 }
 
@@ -1821,6 +1856,28 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
     // local id here would leave the restored client unable to be added to anything: it
     // would publish keys as one device and hold leaves as another.
     if (restoredDevice) saveMlsDeviceId(restoredDevice)
+
+    // The transcripts, if the backup carried them: everything the old device had read,
+    // straight into this one's cache. Best effort AND non-fatal — a backup from before
+    // transcripts existed has none, and a blob that will not open must not undo the key
+    // restore that already succeeded.
+    if (backup.transcriptCiphertext && backup.transcriptSalt && backup.transcriptNonce) {
+      try {
+        const opened = decryptBackup(
+          new TextEncoder().encode(passphrase),
+          base64ToBytes(backup.transcriptSalt),
+          base64ToBytes(backup.transcriptNonce),
+          base64ToBytes(backup.transcriptCiphertext),
+        )
+        const parsed: unknown = JSON.parse(new TextDecoder().decode(opened))
+        if (typeof parsed === 'object' && parsed !== null && 'bodies' in parsed) {
+          await importContents((parsed as { bodies: Record<string, Record<string, string>> }).bodies)
+        }
+      } catch {
+        // The keys are restored and the conversations work; only the old scrollback is
+        // missing. Saying nothing here beats failing a restore that succeeded.
+      }
+    }
 
     restoreNeeded = false
     ready = null

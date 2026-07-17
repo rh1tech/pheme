@@ -11,7 +11,7 @@
 // hold it, exactly as the messages themselves are.
 
 import { deserializeContent, serializeContent, type ChatContent } from './chatContent'
-import { idbDelete, idbGet, idbSet } from './idb'
+import { idbDelete, idbGet, idbKeys, idbSet } from './idb'
 
 // One IndexedDB entry holds the whole per-conversation body map, which keeps
 // reads and writes simple; conversations are not large enough to need per-message
@@ -57,6 +57,38 @@ export async function loadCachedContents(
     out[id] = content ?? { body: serialised }
   }
   return out
+}
+
+/**
+ * Every conversation's cached bodies, raw — the transcript half of the key backup.
+ *
+ * Raw (still-serialised) on purpose: this is a copy of the cache, not a reading of it, and
+ * round-tripping through parse/serialise here could only lose information.
+ */
+export async function exportAllContents(): Promise<Record<string, ContentMap>> {
+  const out: Record<string, ContentMap> = {}
+  for (const key of await idbKeys()) {
+    if (!key.startsWith('bodies:')) continue
+    const conversationId = key.slice('bodies:'.length)
+    const map = await loadMap(conversationId)
+    if (Object.keys(map).length > 0) out[conversationId] = map
+  }
+  return out
+}
+
+/**
+ * Imports a backup's transcripts — a restored device adopting what its predecessor had read.
+ *
+ * Merged UNDER what this device already holds: anything decrypted here was decrypted more
+ * recently than the backup was taken, so on a collision the local copy wins.
+ */
+export async function importContents(all: Record<string, ContentMap>): Promise<void> {
+  for (const [conversationId, imported] of Object.entries(all)) {
+    if (typeof imported !== 'object' || imported === null) continue
+    const existing = await loadMap(conversationId)
+    const merged = { ...imported, ...existing }
+    await idbSet(cacheKey(conversationId), encoder.encode(JSON.stringify(merged)))
+  }
 }
 
 /** Records a message's content, once, at decryption time. */

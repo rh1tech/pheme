@@ -237,12 +237,24 @@ func (h *Handler) memberIDs(ctx context.Context, convID string) (map[string]bool
 // state is small, but cap it so the store cannot be filled with junk.
 const maxKeyBackupBytes = 512 * 1024
 
+// The sealed transcripts are text plus photo metadata — never the photos themselves,
+// which live in the blob store — so even a heavy user's history is megabytes, not
+// gigabytes. Mongo caps a document at 16MB; this leaves comfortable room beside the
+// key state.
+const maxTranscriptBackupBytes = 8 * 1024 * 1024
+
 type putKeyBackupRequest struct {
 	DeviceID string `json:"deviceId"`
 	// All base64 of opaque bytes: the AES-GCM salt, nonce and sealed ciphertext.
 	Salt       []byte `json:"salt"`
 	Nonce      []byte `json:"nonce"`
 	Ciphertext []byte `json:"ciphertext"`
+	// The sealed transcript cache, optional. Its own salt and nonce: one passphrase,
+	// two independent seals, so either blob can be replaced without re-encrypting the
+	// other.
+	TranscriptSalt       []byte `json:"transcriptSalt,omitempty"`
+	TranscriptNonce      []byte `json:"transcriptNonce,omitempty"`
+	TranscriptCiphertext []byte `json:"transcriptCiphertext,omitempty"`
 }
 
 // putKeyBackup stores the caller's encrypted MLS state. The ciphertext is sealed
@@ -253,7 +265,7 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req putKeyBackupRequest
-	if !httpx.DecodeLimited(w, r, &req, 2*maxKeyBackupBytes) {
+	if !httpx.DecodeLimited(w, r, &req, 2*(maxKeyBackupBytes+maxTranscriptBackupBytes)) {
 		return
 	}
 	if len(req.Salt) == 0 || len(req.Nonce) == 0 || len(req.Ciphertext) == 0 {
@@ -264,6 +276,18 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "backup too large")
 		return
 	}
+	// The transcript seal travels whole or not at all: a ciphertext without its salt
+	// and nonce can never be opened, and storing it would let a restore silently lose
+	// the history it promises.
+	hasTranscript := len(req.TranscriptCiphertext) > 0
+	if hasTranscript && (len(req.TranscriptSalt) == 0 || len(req.TranscriptNonce) == 0) {
+		httpx.Error(w, http.StatusBadRequest, "transcript salt and nonce are required")
+		return
+	}
+	if len(req.TranscriptCiphertext) > maxTranscriptBackupBytes {
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "transcript backup too large")
+		return
+	}
 	backup := domain.MLSKeyBackup{
 		UserID:     uid,
 		DeviceID:   req.DeviceID,
@@ -271,6 +295,11 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 		Nonce:      req.Nonce,
 		Ciphertext: req.Ciphertext,
 		UpdatedAt:  time.Now().UTC(),
+	}
+	if hasTranscript {
+		backup.TranscriptSalt = req.TranscriptSalt
+		backup.TranscriptNonce = req.TranscriptNonce
+		backup.TranscriptCiphertext = req.TranscriptCiphertext
 	}
 	if err := h.Store.PutKeyBackup(r.Context(), backup); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not store backup")
@@ -292,10 +321,13 @@ func (h *Handler) getKeyBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"salt":       backup.Salt,
-		"nonce":      backup.Nonce,
-		"ciphertext": backup.Ciphertext,
-		"updatedAt":  backup.UpdatedAt,
+		"salt":                 backup.Salt,
+		"nonce":                backup.Nonce,
+		"ciphertext":           backup.Ciphertext,
+		"transcriptSalt":       backup.TranscriptSalt,
+		"transcriptNonce":      backup.TranscriptNonce,
+		"transcriptCiphertext": backup.TranscriptCiphertext,
+		"updatedAt":            backup.UpdatedAt,
 	})
 }
 

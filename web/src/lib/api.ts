@@ -441,17 +441,42 @@ export const api = {
     }),
 
   // Encrypted key backup. All fields are base64 of opaque bytes; the server never
-  // sees the passphrase or the plaintext state.
-  putKeyBackup: (deviceId: string, salt: string, nonce: string, ciphertext: string) =>
+  // sees the passphrase or the plaintext state. The transcript blob rides along
+  // optionally — the decrypted message cache, sealed under the same passphrase, so a
+  // restore recovers the words and not just the keys.
+  putKeyBackup: (
+    deviceId: string,
+    salt: string,
+    nonce: string,
+    ciphertext: string,
+    transcript?: { salt: string; nonce: string; ciphertext: string },
+  ) =>
     request<void>('/v1/mls/key-backup', {
       method: 'PUT',
-      body: { deviceId, salt, nonce, ciphertext },
+      body: {
+        deviceId,
+        salt,
+        nonce,
+        ciphertext,
+        ...(transcript
+          ? {
+              transcriptSalt: transcript.salt,
+              transcriptNonce: transcript.nonce,
+              transcriptCiphertext: transcript.ciphertext,
+            }
+          : {}),
+      },
     }),
   getKeyBackup: (quiet = false) =>
-    request<{ salt: string; nonce: string; ciphertext: string; updatedAt: string } | null>(
-      '/v1/mls/key-backup',
-      { quiet, allow404: true },
-    ),
+    request<{
+      salt: string
+      nonce: string
+      ciphertext: string
+      transcriptSalt?: string | null
+      transcriptNonce?: string | null
+      transcriptCiphertext?: string | null
+      updatedAt: string
+    } | null>('/v1/mls/key-backup', { quiet, allow404: true }),
 
   // User search for starting a chat (public profiles only, never email).
   searchUsers: (q: string) =>

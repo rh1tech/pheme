@@ -127,6 +127,38 @@ function mergeSorted(a: ChatMessage[], b: ChatMessage[]): ChatMessage[] {
   return [...byId.values()].sort((x, y) => x.createdAt.localeCompare(y.createdAt))
 }
 
+/**
+ * One renderable row of a day: an ordinary message, or a RUN of consecutive messages this
+ * device cannot read, folded into a single line.
+ *
+ * A device that joined after a stretch of history was written can never read that stretch
+ * — MLS working as intended — and it is usually a CONTIGUOUS stretch, so rendering each
+ * message as its own grey bubble makes a new device's first open a wall of identical
+ * apologies. One quiet line carries the same truth. Only messages that were TRIED and
+ * failed (null) fold; ones still decrypting (undefined) stay bubbles, because theirs is
+ * about to appear.
+ */
+type DayItem =
+  | { kind: 'message'; message: ChatMessage }
+  | { kind: 'sealed'; key: string; count: number }
+
+function collapseSealed(
+  day: ChatMessage[],
+  bodies: Record<string, ChatContent | null>,
+): DayItem[] {
+  const out: DayItem[] = []
+  for (const m of day) {
+    const last = out[out.length - 1]
+    if (bodies[m.id] === null) {
+      if (last?.kind === 'sealed') out[out.length - 1] = { ...last, count: last.count + 1 }
+      else out.push({ kind: 'sealed', key: m.id, count: 1 })
+    } else {
+      out.push({ kind: 'message', message: m })
+    }
+  }
+  return out
+}
+
 function reconcile(cached: ChatMessage[], fetched: ChatMessage[]): ChatMessage[] {
   // Only ever called with the newest page (no cursor), so an empty result is authoritative:
   // the whole history is gone — every message cleared (here or on another device) or deleted —
@@ -1181,7 +1213,25 @@ export function ConversationChatRoute() {
                 // carried off by it. See groupByDay.
                 <section className="pheme-day" key={dayKey(day[0].createdAt)}>
                   <DateSeparator iso={day[0].createdAt} />
-                  {day.map((m) => {
+                  {collapseSealed(day, bodies).map((item) => {
+                    if (item.kind === 'sealed') {
+                      // A stretch of history this device can never read — said once, plainly,
+                      // instead of as a wall of identical grey bubbles. See collapseSealed.
+                      return (
+                        <Text
+                          key={item.key}
+                          size="xs"
+                          c="dimmed"
+                          fs="italic"
+                          ta="center"
+                          py="xs"
+                          data-testid="chat-sealed-divider"
+                        >
+                          {t('chat.sealedRun', { count: item.count })}
+                        </Text>
+                      )
+                    }
+                    const m = item.message
                     const own = m.senderId === userId
                     const content = bodies[m.id]
                     const senderName = isGroup
@@ -1242,21 +1292,9 @@ export function ConversationChatRoute() {
                               {content.body}
                             </Text>
                           ) : null
-                        ) : (
-                          // Not a loading state: this device cannot read this message and
-                          // never will. MLS gives a device no access to what was said before
-                          // it joined the group, so a message from before this browser or
-                          // phone signed in stays sealed here even though it is perfectly
-                          // readable on the device that received it.
-                          //
-                          // Saying that is the whole point. The old placeholder was an
-                          // ellipsis, which reads as "still loading" — so a conversation that
-                          // was permanently broken looked like one that was about to arrive,
-                          // and nobody could tell the difference.
-                          <Text size="sm" c="dimmed" fs="italic" data-testid="chat-message-sealed">
-                            {t('chat.notAvailableOnThisDevice')}
-                          </Text>
-                        )}
+                        ) : // Unreadable (null) never reaches a bubble: collapseSealed folds
+                        // those into the run divider above before rendering begins.
+                        null}
                         <div className="pheme-bubble-footer">
                           {/* Reply is the only action the server can support: there are no reactions,
                               and a sealed message cannot be edited or deleted. It appears on hover

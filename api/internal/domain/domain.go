@@ -546,6 +546,16 @@ type MLSKeyBackup struct {
 	Nonce      []byte    `bson:"nonce" json:"nonce"`
 	Ciphertext []byte    `bson:"ciphertext" json:"ciphertext"`
 	UpdatedAt  time.Time `bson:"updatedAt" json:"updatedAt"`
+
+	// The user's decrypted transcripts, sealed under the same passphrase with their own
+	// salt and nonce. Optional — a backup from before transcripts rode along has none.
+	// They matter because decryption is one-shot: the keys alone recover the ability to
+	// TALK, but everything already read exists nowhere except the device's local cache,
+	// and this is that cache's only way off the device. Opaque to the server, like the
+	// state itself.
+	TranscriptSalt       []byte `bson:"transcriptSalt,omitempty" json:"transcriptSalt,omitempty"`
+	TranscriptNonce      []byte `bson:"transcriptNonce,omitempty" json:"transcriptNonce,omitempty"`
+	TranscriptCiphertext []byte `bson:"transcriptCiphertext,omitempty" json:"transcriptCiphertext,omitempty"`
 }
 
 // DirectKey builds the unique deduplication key for a direct chat between two
