@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, PasswordInput, Stack, Text } from '@mantine/core'
+import { Alert, Button, Checkbox, Code, CopyButton, Group, PasswordInput, Stack, Text } from '@mantine/core'
 import { IconShieldLock } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
@@ -7,80 +7,157 @@ import {
   IdentityAlreadySetUpError,
   acceptFreshIdentity,
   backupExists,
-  backupKeys,
+  ensureRecoveryBackup,
+  hasAcceptedFresh,
   hasLocalKeys,
-  restoreKeys,
+  loadRecoveryCode,
+  regenerateRecoveryCode,
+  restoreWithSecret,
 } from '../../lib/mls'
 import { notifyError, notifySuccess } from '../../lib/notify'
 import { ResponsiveModal } from '../ResponsiveModal'
 
-// The sealed backup is stored on a server we do not trust, so a stolen database
-// lets an attacker guess this passphrase offline without limit. Argon2id makes each
-// guess expensive; a length floor is what stops the guess count from being small.
-// Twelve is the shortest that is defensible for a passphrase protecting a whole
-// chat history — shorter belongs to a rate-limited login, not to this.
-const MIN_PASSPHRASE = 12
+/**
+ * Shows the generated recovery code once, and the "save it" acknowledgement — the display of a
+ * secret the server can never reproduce. Reused by the first-time gate and the "view code" modal.
+ */
+function CodeDisplay({ code }: { code: string }) {
+  const { t } = useTranslation()
+  return (
+    <Group gap="sm" wrap="nowrap" align="center">
+      <Code
+        data-testid="recovery-code"
+        style={{ fontSize: '1rem', letterSpacing: '0.05em', flex: 1, padding: '0.5rem 0.75rem' }}
+      >
+        {code}
+      </Code>
+      <CopyButton value={code}>
+        {({ copied, copy }) => (
+          <Button variant="light" size="sm" onClick={copy}>
+            {copied ? t('recovery.copied') : t('recovery.copy')}
+          </Button>
+        )}
+      </CopyButton>
+    </Group>
+  )
+}
 
-interface KeyBackupModalProps {
+/**
+ * Sets up the encrypted backup automatically the first time a device has keys but no backup, and
+ * shows the fresh recovery code ONCE. Mounted on the chat shell. After this, auto-backup keeps the
+ * server copy current (the code is remembered in memory this session).
+ *
+ * Not dismissible until the user confirms they saved it — the code cannot be shown again on a device
+ * that did not generate it, so losing it here loses recoverable history.
+ */
+export function RecoveryCodeGate() {
+  const { userId } = useAuth()
+  const { t } = useTranslation()
+  const [code, setCode] = useState<string | null>(null)
+  const [acked, setAcked] = useState(false)
+
+  useEffect(() => {
+    if (!userId) return
+    let active = true
+    // ensureRecoveryBackup is a no-op when a backup already exists, so this runs at most once per
+    // device — on the first open after encryption is set up (including for existing users on upgrade).
+    ensureRecoveryBackup(userId)
+      .then((generated) => {
+        if (!active || !generated) return
+        // The backup is done regardless; the E2E suite suppresses only the forced one-time DISPLAY
+        // so it does not block every test behind this modal. The dedicated recovery test does not
+        // set the flag and exercises the real prompt.
+        if ((window as { __phemeSkipRecoveryPrompt?: boolean }).__phemeSkipRecoveryPrompt) return
+        setCode(generated)
+      })
+      .catch(() => {
+        // No keys yet, or the network is down; the next open tries again. Never blocks the chat.
+      })
+    return () => {
+      active = false
+    }
+  }, [userId])
+
+  return (
+    <ResponsiveModal opened={code !== null} onClose={() => {}} title={t('recovery.setupTitle')}>
+      <Stack gap="sm">
+        <Text size="sm" c="dimmed">
+          {t('recovery.setupDescription')}
+        </Text>
+        {code && <CodeDisplay code={code} />}
+        <Alert variant="light" color="yellow" icon={<IconShieldLock size={18} />} p="xs">
+          <Text size="xs">{t('recovery.setupWarning')}</Text>
+        </Alert>
+        <Checkbox
+          checked={acked}
+          onChange={(e) => setAcked(e.currentTarget.checked)}
+          label={t('recovery.saved')}
+        />
+        <Button disabled={!acked} onClick={() => setCode(null)}>
+          {t('recovery.done')}
+        </Button>
+      </Stack>
+    </ResponsiveModal>
+  )
+}
+
+interface RecoveryCodeModalProps {
   opened: boolean
   onClose: () => void
 }
 
 /**
- * Set up (or refresh) the encrypted key backup. The passphrase seals the device's
- * MLS state client-side; the server only ever stores the resulting ciphertext, so
- * losing the passphrase loses the recoverable history — that trade is stated here.
+ * View the recovery code again on the device that generated it, or generate a new one. Opened from
+ * the sidebar menu. A restored device holds no local code (it was set elsewhere) — there we explain
+ * that and offer to generate a fresh one, which re-seals the backup and invalidates the old code.
  */
-export function KeyBackupModal({ opened, onClose }: KeyBackupModalProps) {
+export function RecoveryCodeModal({ opened, onClose }: RecoveryCodeModalProps) {
   const { t } = useTranslation()
   const { userId } = useAuth()
-  const [passphrase, setPassphrase] = useState('')
-  const [confirm, setConfirm] = useState('')
+  const [code, setCode] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const tooShort = passphrase.length < MIN_PASSPHRASE
-  const mismatch = confirm.length > 0 && confirm !== passphrase
-  const canSave = !tooShort && !mismatch && confirm === passphrase
+  useEffect(() => {
+    if (!opened) return
+    let active = true
+    loadRecoveryCode().then((c) => active && setCode(c))
+    return () => {
+      active = false
+    }
+  }, [opened])
 
-  async function save() {
-    if (!canSave || busy || !userId) return
+  async function regenerate() {
+    if (!userId || busy) return
+    if (!window.confirm(t('recovery.regenerateConfirm'))) return
     setBusy(true)
     try {
-      await backupKeys(userId, passphrase)
-      notifySuccess(t('backup.saved'))
-      setPassphrase('')
-      setConfirm('')
-      onClose()
+      const next = await regenerateRecoveryCode(userId)
+      setCode(next)
+      notifySuccess(t('recovery.regenerated'))
     } catch (e) {
-      notifyError(t('backup.saveFailed'), e)
+      notifyError(t('recovery.regenerateFailed'), e)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <ResponsiveModal opened={opened} onClose={onClose} title={t('backup.title')}>
+    <ResponsiveModal opened={opened} onClose={onClose} title={t('recovery.viewTitle')}>
       <Stack gap="sm">
-        <Text size="sm" c="dimmed">
-          {t('backup.description')}
-        </Text>
-        <Alert variant="light" color="yellow" icon={<IconShieldLock size={18} />} p="xs">
-          <Text size="xs">{t('backup.warning')}</Text>
-        </Alert>
-        <PasswordInput
-          label={t('backup.passphrase')}
-          value={passphrase}
-          onChange={(e) => setPassphrase(e.currentTarget.value)}
-          error={passphrase.length > 0 && tooShort ? t('backup.tooShort', { min: MIN_PASSPHRASE }) : null}
-        />
-        <PasswordInput
-          label={t('backup.confirm')}
-          value={confirm}
-          onChange={(e) => setConfirm(e.currentTarget.value)}
-          error={mismatch ? t('backup.mismatch') : null}
-        />
-        <Button onClick={save} loading={busy} disabled={!canSave}>
-          {t('backup.save')}
+        {code ? (
+          <>
+            <Text size="sm" c="dimmed">
+              {t('recovery.viewDescription')}
+            </Text>
+            <CodeDisplay code={code} />
+          </>
+        ) : (
+          <Alert variant="light" color="blue" icon={<IconShieldLock size={18} />} p="xs">
+            <Text size="xs">{t('recovery.notOnThisDevice')}</Text>
+          </Alert>
+        )}
+        <Button variant="subtle" color="gray" onClick={regenerate} loading={busy}>
+          {t('recovery.regenerate')}
         </Button>
       </Stack>
     </ResponsiveModal>
@@ -88,16 +165,16 @@ export function KeyBackupModal({ opened, onClose }: KeyBackupModalProps) {
 }
 
 /**
- * Shown automatically when this device has no local keys but the server holds a
- * backup — i.e. a fresh device, or after IndexedDB was evicted. Recovering here
- * avoids silently minting a new identity and losing the existing chats. On success
- * the page reloads so every part of the app picks up the restored state.
+ * Shown automatically when this device has no local keys but the server holds a backup — a fresh
+ * device, or after IndexedDB was evicted. Recovering here brings the history back and comes up under
+ * this device's OWN identity (restoreWithSecret → restoreKeys, which never clones the backed-up
+ * device). Accepts a recovery code (typed loosely) or a legacy passphrase.
  */
 export function KeyRestoreGate() {
   const { t } = useTranslation()
   const { userId } = useAuth()
   const [needed, setNeeded] = useState(false)
-  const [passphrase, setPassphrase] = useState('')
+  const [secret, setSecret] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -105,11 +182,20 @@ export function KeyRestoreGate() {
     const run = async () => {
       try {
         if (await hasLocalKeys()) return
+        // The user already chose to start fresh here; do not nag to restore a backup they declined.
+        if (await hasAcceptedFresh()) return
         const exists = await backupExists()
-        if (exists && active) setNeeded(true)
+        if (!exists || !active) return
+        // Test hook: a fresh independent device (the multi-device crypto suites) starts over rather
+        // than restoring. Production never sets this, so a real second device sees the prompt.
+        if ((window as { __phemeAutoStartFresh?: boolean }).__phemeAutoStartFresh) {
+          await startFresh()
+          return
+        }
+        setNeeded(true)
       } catch {
-        // Could not reach the server to find out. Say nothing rather than guess: the
-        // session bootstrap refuses to mint an identity in this state anyway.
+        // Could not reach the server to find out. Say nothing rather than guess: the session
+        // bootstrap refuses to mint an identity in this state anyway.
       }
     }
     void run()
@@ -119,10 +205,10 @@ export function KeyRestoreGate() {
   }, [])
 
   async function restore() {
-    if (busy || passphrase.length === 0 || !userId) return
+    if (busy || secret.trim().length === 0 || !userId) return
     setBusy(true)
     try {
-      const ok = await restoreKeys(userId, passphrase)
+      const ok = await restoreWithSecret(userId, secret.trim())
       if (!ok) {
         setNeeded(false) // the backup is gone from the server; nothing to restore
         return
@@ -130,46 +216,37 @@ export function KeyRestoreGate() {
       window.location.reload()
     } catch (e) {
       if (e instanceof IdentityAlreadySetUpError) {
-        // Another session set encryption up on this device while this prompt sat open.
-        // Silently closing here would look like the restore worked when it did not.
         notifyError(t('backup.alreadySetUp'), null)
         window.location.reload()
         return
       }
-      // Wrong passphrase (the GCM tag failed) — let them try again.
       notifyError(t('backup.wrongPassphrase'), null)
     } finally {
       setBusy(false)
     }
   }
 
-  // Starting fresh is a real choice with a real cost: a new identity on this device,
-  // and the backed-up history stays unreadable here until they restore. It has to be
-  // recorded, because until it is, the app refuses to mint an identity at all — that
-  // refusal is what stops a throwaway identity publishing KeyPackages that the restore
-  // would then orphan.
   async function startFresh() {
     await acceptFreshIdentity()
     window.location.reload()
   }
 
-  // Deliberately not dismissible. Until the user picks one of the two options, the app
-  // will not create an MLS identity at all, so dismissing this would leave chats
-  // silently broken with no way back to the prompt.
   return (
-    <ResponsiveModal opened={needed} onClose={() => {}} title={t('backup.restoreTitle')}>
+    <ResponsiveModal opened={needed} onClose={() => {}} title={t('recovery.restoreTitle')}>
       <Stack gap="sm">
         <Text size="sm" c="dimmed">
-          {t('backup.restoreDescription')}
+          {t('recovery.restoreDescription')}
         </Text>
         <PasswordInput
           data-autofocus
-          label={t('backup.passphrase')}
-          value={passphrase}
-          onChange={(e) => setPassphrase(e.currentTarget.value)}
+          label={t('recovery.codeLabel')}
+          placeholder={t('recovery.codePlaceholder')}
+          description={t('recovery.codeHint')}
+          value={secret}
+          onChange={(e) => setSecret(e.currentTarget.value)}
           onKeyDown={(e) => e.key === 'Enter' && restore()}
         />
-        <Button onClick={restore} loading={busy} disabled={passphrase.length === 0}>
+        <Button onClick={restore} loading={busy} disabled={secret.trim().length === 0}>
           {t('backup.restore')}
         </Button>
         <Button variant="subtle" color="gray" onClick={startFresh}>

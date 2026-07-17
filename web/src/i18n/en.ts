@@ -219,8 +219,35 @@ const en = {
       'This device has no chat keys, but a backup was found. Enter your recovery passphrase to restore your encrypted chats.',
     restore: 'Restore',
     skip: 'Start fresh on this device',
-    wrongPassphrase: 'Wrong passphrase — try again',
+    wrongPassphrase: 'That code did not work — check it and try again',
     alreadySetUp: 'Encryption was already set up on this device in another window. Reloading.',
+  },
+  recovery: {
+    menuItem: 'Recovery code',
+    setupTitle: 'Save your recovery code',
+    setupDescription:
+      'Your chats are backed up, encrypted. If you lose this device or sign in on a new one, this code is the only way to get your history back.',
+    setupWarning:
+      'We can never see or reset this code. Write it down and keep it somewhere safe — if you lose it, your backed-up history cannot be recovered.',
+    saved: 'I have saved my recovery code',
+    done: 'Done',
+    copy: 'Copy',
+    copied: 'Copied',
+    viewTitle: 'Your recovery code',
+    viewDescription: 'Keep this somewhere safe. It restores your chat history on a new device.',
+    notOnThisDevice:
+      'Your recovery code was set on another device and is not stored here. If you no longer have it, generate a new one — it replaces the old code everywhere.',
+    regenerate: 'Generate a new code',
+    regenerateConfirm:
+      'Generate a new recovery code? The old code stops working immediately, on every device.',
+    regenerated: 'New recovery code generated',
+    regenerateFailed: 'Could not generate a new code',
+    restoreTitle: 'Restore your chats',
+    restoreDescription:
+      'This device has no chat history yet. Enter your recovery code to bring it back.',
+    codeLabel: 'Recovery code',
+    codePlaceholder: 'XXXXX-XXXXX-XXXXX-XXXXX-XXXXX',
+    codeHint: 'You can also enter a recovery passphrase if you set one instead.',
   },
   chat: {
     reply: 'Reply',

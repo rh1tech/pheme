@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Outlet, useMatch } from 'react-router-dom'
 import { useMediaQuery } from '@mantine/hooks'
 import { ChatSidebar } from './ChatSidebar'
-import { KeyRestoreGate } from './KeyBackup'
+import { KeyRestoreGate, RecoveryCodeGate } from './KeyBackup'
 import { CallProvider } from '../call/CallProvider'
 import { CallUI } from '../call/CallUI'
 import { mlsSession } from '../../lib/mls'
@@ -122,6 +122,7 @@ export function ChatShell() {
           <Outlet context={context} />
         </div>
         <KeyRestoreGate />
+        <RecoveryCodeGate />
         <CallUI />
       </div>
     </CallProvider>

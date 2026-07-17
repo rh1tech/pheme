@@ -1781,6 +1781,15 @@ export async function acceptFreshIdentity(): Promise<void> {
 }
 
 /**
+ * Whether the user has already chosen to start fresh on this device. Once they have, the restore
+ * prompt must not reappear on the next reload — the device is minting its own identity, and nagging
+ * to restore a backup it deliberately declined is a loop.
+ */
+export async function hasAcceptedFresh(): Promise<boolean> {
+  return (await idbGet(FRESH_KEY)) != null
+}
+
+/**
  * Whether this device must restore from a backup before it can have an identity:
  * it holds no usable keys, the user has not chosen to start over, and the server has
  * a backup waiting.
@@ -1898,6 +1907,134 @@ export async function hasLocalKeys(): Promise<boolean> {
 /** Whether the server holds a key backup for the signed-in user. */
 export async function backupExists(): Promise<boolean> {
   return (await api.getKeyBackup(true)) != null
+}
+
+// --- recovery code --------------------------------------------------------
+//
+// A recovery code is just a high-entropy passphrase the APP generates, so the user never has to
+// invent or type one to be protected. It is fed to the same Argon2id-backed encryptBackup as a
+// passphrase — encryptBackup takes opaque bytes, so a code and a passphrase are interchangeable.
+//
+// It is shown ONCE at setup and stored locally (never server-side) so the same device can re-show
+// it; a new device needs the user to have written it down. Losing it loses the recoverable history
+// — the same trade a forgotten passphrase carries.
+
+/** Where the plaintext recovery code lives locally, for re-display. Never sent to the server. */
+const RECOVERY_CODE_KEY = 'recovery-code'
+
+// Crockford base32 — no I, L, O, U, so nothing is ambiguous to read back or type.
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+/**
+ * A fresh recovery code: 25 Crockford-base32 chars (125 bits) in five dash-separated groups, e.g.
+ * `K7Q2M-9XPTW-3RJ4H-N8BVD-2FZ6Y`. High enough entropy that the Argon2id KDF is belt-and-braces.
+ */
+export function generateRecoveryCode(): string {
+  const bytes = new Uint8Array(25)
+  crypto.getRandomValues(bytes)
+  const chars = Array.from(bytes, (b) => CROCKFORD[b % 32])
+  const groups: string[] = []
+  for (let i = 0; i < chars.length; i += 5) groups.push(chars.slice(i, i + 5).join(''))
+  return groups.join('-')
+}
+
+/**
+ * Normalises a code the user typed, so it can be entered loosely: uppercased, spaces/dashes
+ * stripped, and Crockford's read-alike letters folded (I/L→1, O→0). The result is what was sealed
+ * with, so a code entered `k7q2m 9xptw…` opens a backup made from `K7Q2M-9XPTW-…`.
+ */
+export function normalizeRecoveryCode(input: string): string {
+  return input
+    .toUpperCase()
+    .replace(/[IL]/g, '1')
+    .replace(/O/g, '0')
+    .replace(/[^0-9A-Z]/g, '')
+}
+
+/** Re-reads the recovery code stored on this device, or null if none (e.g. a restored device). */
+export async function loadRecoveryCode(): Promise<string | null> {
+  const bytes = await idbGet(RECOVERY_CODE_KEY)
+  return bytes ? new TextDecoder().decode(bytes) : null
+}
+
+/** Records the recovery code locally so the user can view it again on THIS device. */
+async function saveRecoveryCode(code: string): Promise<void> {
+  await idbSet(RECOVERY_CODE_KEY, new TextEncoder().encode(code))
+}
+
+/**
+ * The default backup path: if this device holds keys but the user has no server backup yet, generate
+ * a recovery code, seal a backup under it, and hand the code back to be shown ONCE. Returns null when
+ * a backup already exists (nothing to set up) — so it is safe to call on every chat-surface open.
+ *
+ * This is what makes "your history follows you" true without the user ever choosing a passphrase.
+ */
+export async function ensureRecoveryBackup(userId: string): Promise<string | null> {
+  try {
+    // Make sure this device HAS an identity to back up. mlsSession mints or loads it; it throws
+    // when a restore is required first (a fresh device with a backup waiting), in which case
+    // auto-setup is not our job — the restore gate is.
+    await mlsSession(userId)
+  } catch {
+    return null
+  }
+  if (await backupExists()) {
+    // Already set up. But sessionPassphrase is in-memory and a reload (or PWA relaunch) clears it,
+    // which would silently stop auto-backup. If THIS device holds the recovery code, re-unlock
+    // auto-backup with it so the server copy keeps up across reloads. Nothing new to show.
+    const localCode = await loadRecoveryCode()
+    if (localCode) {
+      sessionPassphrase = normalizeRecoveryCode(localCode)
+      autoBackupSoon(userId)
+    }
+    return null
+  }
+  return sealUnderNewCode(userId)
+}
+
+/**
+ * Re-seals the backup under a NEW recovery code and returns it — for "regenerate", when a user
+ * believes their old code is compromised or lost. The old code stops working immediately.
+ */
+export async function regenerateRecoveryCode(userId: string): Promise<string> {
+  return sealUnderNewCode(userId)
+}
+
+/**
+ * Generates a code, seals the backup under its CANONICAL form, stores the pretty form for display.
+ *
+ * The seal uses the normalized code so a user who later types it loosely (lowercase, no dashes) still
+ * opens it — see `restoreWithSecret`. The pretty, dash-grouped form is what we show and store.
+ */
+async function sealUnderNewCode(userId: string): Promise<string> {
+  const pretty = generateRecoveryCode()
+  await backupKeys(userId, normalizeRecoveryCode(pretty)) // seals state+transcript; sets sessionPassphrase
+  await saveRecoveryCode(pretty)
+  // The initial seal above races message decryption: messages read BEFORE the session unlocked here
+  // called autoBackupSoon while it was still a no-op, so they are not in that seal. Schedule a
+  // catch-up now that the passphrase is set — it re-seals with whatever has been decrypted by the
+  // time it fires, and every later decrypt arms it normally.
+  autoBackupSoon(userId)
+  return pretty
+}
+
+/**
+ * Restores from whatever the user typed, whether it is a recovery CODE or a legacy PASSPHRASE.
+ *
+ * A code was sealed in its normalized form; a passphrase was sealed verbatim. We cannot tell which
+ * the user has, so try the input as-is first (opens a passphrase backup), and on the "wrong secret"
+ * failure try its normalized form (opens a code backup, typed loosely). restoreKeys validates before
+ * any side effect, so the first attempt failing leaves nothing to undo.
+ */
+export async function restoreWithSecret(userId: string, input: string): Promise<boolean> {
+  try {
+    return await restoreKeys(userId, input)
+  } catch (e) {
+    if (e instanceof IdentityAlreadySetUpError || e instanceof NeedsRestoreError) throw e
+    const normalized = normalizeRecoveryCode(input)
+    if (normalized === input) throw e // nothing new to try
+    return restoreKeys(userId, normalized)
+  }
 }
 
 /**
@@ -2076,8 +2213,11 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
     }
   }
 
-  // Proven this session: keep it so auto-backup keeps this device's own backup current.
+  // Proven this session: keep it so auto-backup keeps this device's own backup current, and
+  // schedule a catch-up so the imported history (and anything decrypted during restore) is re-sealed
+  // under this device's own backup.
   sessionPassphrase = passphrase
+  autoBackupSoon(userId)
   return true
 }
 

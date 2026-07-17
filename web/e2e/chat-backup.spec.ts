@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import type { Browser, Page } from '@playwright/test'
 import { createUserViaAdmin, login, loginAsAdmin, uniqueEmail } from './helpers'
 import {
   backupTranscriptLen,
@@ -10,23 +11,9 @@ import {
   startDirectChat,
   userId,
 } from './chat-helpers'
-import type { Browser } from '@playwright/test'
 import type { Device } from './chat-helpers'
 
-/** Like signInOnNewDevice, but with auto-backup's debounce shortened so a test need not idle a minute. */
-async function signInWithFastAutoBackup(browser: Browser, email: string): Promise<Device> {
-  const context = await browser.newContext()
-  await context.addInitScript(() => {
-    ;(window as { __phemeAutoBackupMs?: number }).__phemeAutoBackupMs = 400
-  })
-  const page = await context.newPage()
-  await login(page, email, PASSWORD)
-  await expect.poll(() => keyPackageCount(page), { timeout: 20_000 }).toBeGreaterThan(0)
-  return { context, page, userId: await userId(page), deviceId: await deviceId(page) }
-}
-
 const PASSWORD = 'Sup3rSecret!'
-const PASSPHRASE = 'correct horse battery pheme'
 
 // A one-pixel PNG — enough to ride the whole photo path: sealed on the client, uploaded as
 // an opaque blob, and on the far side re-fetched and opened with the key from the message.
@@ -43,20 +30,69 @@ test.skip(({ browserName }) => browserName !== 'chromium', 'crypto round-trip: c
 // default 30 seconds of honest work.
 test.describe.configure({ timeout: 120_000 })
 
+/** Signs in on a fresh device with auto-backup's debounce shortened, so a test need not idle a minute. */
+async function signInWithFastAutoBackup(browser: Browser, email: string): Promise<Device> {
+  const context = await browser.newContext()
+  await context.addInitScript(() => {
+    ;(window as { __phemeAutoBackupMs?: number; __phemeSkipRecoveryPrompt?: boolean }).__phemeAutoBackupMs = 400
+    ;(window as { __phemeSkipRecoveryPrompt?: boolean }).__phemeSkipRecoveryPrompt = true
+  })
+  const page = await context.newPage()
+  await login(page, email, PASSWORD)
+  await expect.poll(() => keyPackageCount(page), { timeout: 20_000 }).toBeGreaterThan(0)
+  return { context, page, userId: await userId(page), deviceId: await deviceId(page) }
+}
+
 /**
- * The recovery passphrase's whole promise, walked end to end.
- *
- * Decryption is one-shot: everything a device has read exists nowhere but its local cache.
- * So "back up your chats" must mean the WORDS, not just the keys — a user who loses their
- * phone and types their passphrase into a new one expects their conversations back, not an
- * empty timeline that can merely send. The backup carries the transcript cache, sealed
- * under the same passphrase the keys are; the server stores only ciphertext it cannot
- * open. This test is that promise: set a passphrase, lose the device, restore on a fresh
- * one, and the history is simply there.
+ * Reads the recovery code the device auto-generated, via the sidebar "Recovery code" menu. Waits for
+ * the silent first backup to land (so the code is stored) before opening the menu.
  */
-test('a recovery passphrase carries the whole transcript to a new device', async ({
-  browser,
-}) => {
+async function readRecoveryCode(page: Page): Promise<string> {
+  await expect.poll(() => backupTranscriptLen(page), { timeout: 25_000 }).toBeGreaterThan(0)
+  await page.getByTestId('chat-sidebar').getByRole('button', { name: 'Menu' }).click()
+  await page.getByRole('menuitem', { name: 'Recovery code' }).click()
+  const code = (await page.getByTestId('recovery-code').innerText()).trim()
+  await page.keyboard.press('Escape')
+  return code
+}
+
+/**
+ * Waits until the backing device's server backup includes everything it has decrypted, by sending
+ * one more message through it and watching the sealed transcript grow — the transcript is cumulative,
+ * so a seal that lands after the marker holds every earlier body too. Requires fast auto-backup.
+ */
+async function flushBackup(backing: Page, sender: Page): Promise<void> {
+  const before = await backupTranscriptLen(backing)
+  const marker = `flush-${Math.random().toString(36).slice(2, 8)}`
+  await send(sender, marker)
+  await expect(backing.getByTestId('chat-message').filter({ hasText: marker })).toHaveCount(1, {
+    timeout: 25_000,
+  })
+  await expect
+    .poll(() => backupTranscriptLen(backing), { timeout: 20_000, intervals: [400] })
+    .toBeGreaterThan(before)
+}
+
+/** Drives the "Restore your chats" gate on a fresh device with the given recovery code. */
+async function restoreWithCode(page: Page, code: string): Promise<void> {
+  await expect(page.getByText('Restore your chats')).toBeVisible({ timeout: 20_000 })
+  await page.getByLabel('Recovery code', { exact: true }).fill(code)
+  await page.getByRole('button', { name: 'Restore', exact: true }).click()
+  // The prompt survives until the reload lands and the now-present keys keep the gate shut — wait
+  // for it to actually go, not for the sidebar behind it.
+  await expect(page.getByText('Restore your chats')).toBeHidden({ timeout: 30_000 })
+  await expect(page.getByTestId('chat-sidebar')).toBeVisible({ timeout: 30_000 })
+}
+
+/**
+ * The recovery code's whole promise, walked end to end.
+ *
+ * Decryption is one-shot: everything a device has read exists nowhere but its local cache. So the
+ * backup carries the transcript (and photo keys), sealed under an app-generated recovery code the
+ * server can never read. This is that promise: the code is generated automatically, the device is
+ * lost, a fresh device enters the code, and the full history — text AND photo — is simply there.
+ */
+test('a recovery code carries the whole transcript to a new device', async ({ browser }) => {
   const aliceEmail = uniqueEmail('alice-backup')
   const bobEmail = uniqueEmail('bob-backup')
 
@@ -67,11 +103,9 @@ test('a recovery passphrase carries the whole transcript to a new device', async
   await createUserViaAdmin(admin, bobEmail, PASSWORD)
   await setup.close()
 
-  const doomed = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const doomed = await signInWithFastAutoBackup(browser, bobEmail)
   const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
 
-  // A real conversation happens — both directions, so the transcript holds messages Bob
-  // decrypted AND messages he wrote (which he could never decrypt again himself).
   const conv = await startDirectChat(alice.page, doomed.userId)
   await openChatAndJoin(alice.page, conv)
   await send(alice.page, 'first, from alice, before the backup')
@@ -86,51 +120,32 @@ test('a recovery passphrase carries the whole transcript to a new device', async
     { timeout: 25_000 },
   )
 
-  // A photo, too. The encrypted blob lives on the server; its key travels inside the
-  // message — so what the transcript backup must carry for a photo to survive is that key,
-  // not the pixels. Alice sends it; Bob's device reads it (and caches the decrypted body,
-  // key and all) before the backup is taken.
+  // A photo, too — its key rides in the message, which the transcript backup carries.
   const aliceComposer = alice.page.getByTestId('composer')
   await aliceComposer.locator('input[type="file"]').setInputFiles({
     name: 'before.png',
     mimeType: 'image/png',
     buffer: TEST_PNG,
   })
-  // The picked photo is sealed and shows as a preview thumbnail before it can be sent.
   await expect(aliceComposer.locator('.pheme-attachment img')).toBeVisible({ timeout: 15_000 })
   await aliceComposer.getByRole('button', { name: 'Send' }).click()
-  // Bob sees the picture decrypt and render (a real object URL, not a broken image).
   await expect(doomed.page.locator('.pheme-photo img').last()).toBeVisible({ timeout: 25_000 })
 
-  // Bob sets his recovery passphrase — through the real menu, like a person.
-  await doomed.page.goto('/')
-  await doomed.page.getByRole('button', { name: 'Menu' }).click()
-  await doomed.page.getByRole('menuitem', { name: 'Chat backup' }).click()
-  await doomed.page.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
-  await doomed.page.getByLabel('Confirm passphrase').fill(PASSPHRASE)
-  await doomed.page.getByRole('button', { name: 'Back up now' }).click()
-  await expect(doomed.page.getByText('Chats backed up')).toBeVisible({ timeout: 20_000 })
+  // Make sure everything Bob has read is in the server backup before he loses the device.
+  await flushBackup(doomed.page, alice.page)
 
-  // The phone falls in a lake.
+  // Bob's device auto-generated a recovery code and backed up. Read it, then lose the device.
+  const code = await readRecoveryCode(doomed.page)
+  expect(code).toMatch(/[0-9A-Z]{5}-/)
   await doomed.context.close()
 
-  // A brand-new device signs in. It has no keys — and the restore prompt must offer the
-  // backup rather than quietly minting a fresh identity.
+  // A fresh device signs in, is offered the restore gate, and recovers with the code.
   const restoredContext = await browser.newContext()
   const restored = await restoredContext.newPage()
-  await login(restored, bobEmail, PASSWORD)
-  await expect(restored.getByText('Restore your chats')).toBeVisible({ timeout: 20_000 })
-  await restored.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
-  await restored.getByRole('button', { name: 'Restore', exact: true }).click()
+  await login(restored, bobEmail, PASSWORD, { realRecovery: true })
+  await restoreWithCode(restored, code)
 
-  // The restore reloads the app into the recovered identity. Wait for the prompt itself to
-  // go — it survives until the reload lands and the now-present keys keep the gate shut —
-  // rather than for the sidebar, which is visible BEHIND the modal and would let the test
-  // race ahead into a navigation the reload then interrupts.
-  await expect(restored.getByText('Restore your chats')).toBeHidden({ timeout: 30_000 })
-  await expect(restored.getByTestId('chat-sidebar')).toBeVisible({ timeout: 30_000 })
-
-  // THE PROMISE: the history is there. Not sealed, not blank — the words.
+  // The history is there — text and photo — not sealed, not blank.
   await openChatAndJoin(restored, conv)
   await expect(
     restored.getByTestId('chat-message').filter({ hasText: 'first, from alice, before the backup' }),
@@ -138,22 +153,15 @@ test('a recovery passphrase carries the whole transcript to a new device', async
   await expect(
     restored.getByTestId('chat-message').filter({ hasText: 'second, from bob, also before' }),
   ).toHaveCount(1)
-  await expect(restored.getByTestId('chat-sealed-divider')).toHaveCount(0)
-
-  // THE PHOTO PROMISE: the picture is back too. The restored device never uploaded it and
-  // has no local photo cache — it re-fetches the server's encrypted blob and opens it with
-  // the key the backup carried inside the message. A blank or broken image here means the
-  // key did not survive the round trip.
   await expect(restored.locator('.pheme-photo img').first()).toBeVisible({ timeout: 25_000 })
   const photoSrc = await restored.locator('.pheme-photo img').first().getAttribute('src')
   expect(photoSrc).toMatch(/^blob:/)
 
-  // And the conversation continues, in both directions, as the same device it always was.
+  // And the conversation continues, both ways.
   await send(alice.page, 'third, after the restore')
-  await expect(restored.getByTestId('chat-message').last()).toContainText(
-    'third, after the restore',
-    { timeout: 25_000 },
-  )
+  await expect(restored.getByTestId('chat-message').last()).toContainText('third, after the restore', {
+    timeout: 25_000,
+  })
   await send(restored, 'fourth, from the restored device')
   await expect(alice.page.getByTestId('chat-message').last()).toContainText(
     'fourth, from the restored device',
@@ -164,13 +172,53 @@ test('a recovery passphrase carries the whole transcript to a new device', async
 })
 
 /**
- * Auto-backup: once a passphrase is set, messages that arrive AFTER keep flowing into the
- * server copy on their own, so a new device does not land on a stale snapshot.
- *
- * The user's earlier question was exactly this — does a backup freeze at the moment you take
- * it, or stay current? With auto-backup it stays current for as long as the app is open: each
- * new message schedules a (debounced) re-seal. This proves a message sent long after the
- * manual backup, never manually re-backed-up, still restores on a fresh device.
+ * The forced one-time prompt. On a device's first chat open, the recovery code is generated and shown
+ * in a modal the user MUST acknowledge — this is what stops the code from being silently lost. This
+ * test does NOT suppress the prompt (unlike the shared sign-in helper), so it exercises the real UI.
+ */
+test('the recovery code is generated and shown once, and it restores', async ({ browser }) => {
+  const aliceEmail = uniqueEmail('alice-prompt')
+  const bobEmail = uniqueEmail('bob-prompt')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  // Sign Bob in WITHOUT the suppression flag — the forced modal must appear on its own.
+  const bobContext = await browser.newContext()
+  const bob = await bobContext.newPage()
+  await login(bob, bobEmail, PASSWORD, { realRecovery: true })
+
+  // The one-time modal appears unprompted, carrying the code.
+  await expect(bob.getByText('Save your recovery code')).toBeVisible({ timeout: 25_000 })
+  const code = (await bob.getByTestId('recovery-code').innerText()).trim()
+  expect(code).toMatch(/^[0-9A-Z]{5}(-[0-9A-Z]{5}){4}$/)
+
+  // It cannot be dismissed until the user confirms they saved it.
+  const done = bob.getByRole('button', { name: 'Done' })
+  await expect(done).toBeDisabled()
+  await bob.getByText('I have saved my recovery code').click()
+  await expect(done).toBeEnabled()
+  await done.click()
+  await expect(bob.getByText('Save your recovery code')).toBeHidden()
+
+  // The code really restores: a fresh device recovers Bob's account with it.
+  await bobContext.close()
+  const restoredContext = await browser.newContext()
+  const restored = await restoredContext.newPage()
+  await login(restored, bobEmail, PASSWORD, { realRecovery: true })
+  await restoreWithCode(restored, code)
+  await expect(restored.getByTestId('chat-sidebar')).toBeVisible()
+
+  await restoredContext.close()
+})
+
+/**
+ * Auto-backup: once set up, messages that arrive AFTER keep flowing into the server copy on their
+ * own, so a new device does not land on a stale snapshot. No manual re-backup.
  */
 test('auto-backup keeps later messages recoverable without a manual re-backup', async ({
   browser,
@@ -190,72 +238,48 @@ test('auto-backup keeps later messages recoverable without a manual re-backup', 
 
   const conv = await startDirectChat(alice.page, doomed.userId)
   await openChatAndJoin(alice.page, conv)
-  await send(alice.page, 'before the backup was set')
+  await send(alice.page, 'before the code was saved')
   await openChatAndJoin(doomed.page, conv)
   await expect(doomed.page.getByTestId('chat-message').last()).toContainText(
-    'before the backup was set',
+    'before the code was saved',
     { timeout: 25_000 },
   )
 
-  // Bob sets the passphrase — the one and only manual backup he will ever do — from the menu
-  // WITHOUT leaving the chat. The unlocked passphrase lives in memory for the session; a full
-  // reload would (by design) drop it, so the test navigates the way a person does, by not
-  // reloading at all.
-  await doomed.page.getByTestId('chat-sidebar').getByRole('button', { name: 'Menu' }).click()
-  await doomed.page.getByRole('menuitem', { name: 'Chat backup' }).click()
-  await doomed.page.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
-  await doomed.page.getByLabel('Confirm passphrase').fill(PASSPHRASE)
-  await doomed.page.getByRole('button', { name: 'Back up now' }).click()
-  await expect(doomed.page.getByText('Chats backed up')).toBeVisible({ timeout: 20_000 })
-
+  const code = await readRecoveryCode(doomed.page)
   const beforeLen = await backupTranscriptLen(doomed.page)
 
-  // A message arrives AFTER the manual backup. Bob reads it on the same live page — and
-  // auto-backup, unprompted, folds it into the server copy.
+  // A message arrives AFTER; Bob reads it on the live page and auto-backup folds it in, unprompted.
   await send(alice.page, 'this arrived only after the backup')
   await expect(doomed.page.getByTestId('chat-message').last()).toContainText(
     'this arrived only after the backup',
     { timeout: 25_000 },
   )
-
-  // The server's sealed transcript grows on its own — no menu, no button.
   await expect
     .poll(() => backupTranscriptLen(doomed.page), { timeout: 20_000, intervals: [500] })
     .toBeGreaterThan(beforeLen)
 
-  // Bob's device is lost, and he never touched the backup menu again.
+  // Bob's device is lost; he never re-backed-up. A fresh device restores and has the later message.
   await doomed.context.close()
-
   const restoredContext = await browser.newContext()
   const restored = await restoredContext.newPage()
-  await login(restored, bobEmail, PASSWORD)
-  await expect(restored.getByText('Restore your chats')).toBeVisible({ timeout: 20_000 })
-  await restored.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
-  await restored.getByRole('button', { name: 'Restore', exact: true }).click()
-  await expect(restored.getByText('Restore your chats')).toBeHidden({ timeout: 30_000 })
-  await expect(restored.getByTestId('chat-sidebar')).toBeVisible({ timeout: 30_000 })
+  await login(restored, bobEmail, PASSWORD, { realRecovery: true })
+  await restoreWithCode(restored, code)
 
-  // The post-backup message — captured only by auto-backup — is there.
   await openChatAndJoin(restored, conv)
   await expect(
     restored.getByTestId('chat-message').filter({ hasText: 'this arrived only after the backup' }),
   ).toHaveCount(1, { timeout: 25_000 })
   await expect(
-    restored.getByTestId('chat-message').filter({ hasText: 'before the backup was set' }),
+    restored.getByTestId('chat-message').filter({ hasText: 'before the code was saved' }),
   ).toHaveCount(1)
 
   await Promise.all([alice.context.close(), restoredContext.close()])
 })
 
 /**
- * THE PARALLEL-DEVICE TRAP. A user keeps using device A and ALSO restores on device B while
- * A is still live. Restoring must not make B a CLONE of A — same MLS identity, same leaf —
- * because then neither can read the other: to MLS a message from A is B's own message, and a
- * sender can never decrypt its own. That is exactly the "not available on this device" the
- * user hit in both directions at once.
- *
- * A restored device must be its OWN leaf: it recovers HISTORY from the backup, but joins the
- * group under a fresh identity, so it and the original device talk like any two devices.
+ * THE PARALLEL-DEVICE TRAP, with recovery codes. Keep using device A and ALSO restore on device B
+ * while A is live. Restoring must not make B a CLONE of A (same MLS leaf) — else neither can read the
+ * other. A restored device must be its OWN leaf: history from the code, own identity for messaging.
  */
 test('a device restored alongside a still-live one is its own leaf, not a clone', async ({
   browser,
@@ -270,7 +294,7 @@ test('a device restored alongside a still-live one is its own leaf, not a clone'
   await createUserViaAdmin(admin, bobEmail, PASSWORD)
   await setup.close()
 
-  const deviceA = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const deviceA = await signInWithFastAutoBackup(browser, bobEmail)
   const peer = await signInOnNewDevice(browser, peerEmail, PASSWORD)
 
   const conv = await startDirectChat(peer.page, deviceA.userId)
@@ -281,35 +305,25 @@ test('a device restored alongside a still-live one is its own leaf, not a clone'
     timeout: 25_000,
   })
 
-  // Bob backs up from device A, without leaving the chat.
-  await deviceA.page.getByTestId('chat-sidebar').getByRole('button', { name: 'Menu' }).click()
-  await deviceA.page.getByRole('menuitem', { name: 'Chat backup' }).click()
-  await deviceA.page.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
-  await deviceA.page.getByLabel('Confirm passphrase').fill(PASSPHRASE)
-  await deviceA.page.getByRole('button', { name: 'Back up now' }).click()
-  await expect(deviceA.page.getByText('Chats backed up')).toBeVisible({ timeout: 20_000 })
+  await flushBackup(deviceA.page, peer.page)
+  const code = await readRecoveryCode(deviceA.page)
 
   // Device B signs in and restores — while device A is STILL OPEN and in use.
   const bContext = await browser.newContext()
   const deviceB = await bContext.newPage()
-  await login(deviceB, bobEmail, PASSWORD)
-  await expect(deviceB.getByText('Restore your chats')).toBeVisible({ timeout: 20_000 })
-  await deviceB.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
-  await deviceB.getByRole('button', { name: 'Restore', exact: true }).click()
-  await expect(deviceB.getByText('Restore your chats')).toBeHidden({ timeout: 30_000 })
-  await expect(deviceB.getByTestId('chat-sidebar')).toBeVisible({ timeout: 30_000 })
+  await login(deviceB, bobEmail, PASSWORD, { realRecovery: true })
+  await restoreWithCode(deviceB, code)
 
-  // B must be its OWN device, not a clone of A. Equal ids here is the root of the bug.
+  // B must be its OWN device, not a clone of A.
   const bDeviceId = await deviceB.evaluate(() => localStorage.getItem('pheme.mlsDeviceId') ?? '')
   expect(bDeviceId).not.toBe(deviceA.deviceId)
 
-  // B inherited the history from the backup.
   await openChatAndJoin(deviceB, conv)
   await expect(
     deviceB.getByTestId('chat-message').filter({ hasText: 'hello from the peer' }),
   ).toHaveCount(1, { timeout: 25_000 })
 
-  // The two devices of the same user now talk BOTH WAYS — the exact thing that failed.
+  // The two devices of the same user now talk BOTH WAYS.
   await send(deviceA.page, 'from device A')
   await expect(deviceB.getByTestId('chat-message').filter({ hasText: 'from device A' })).toHaveCount(
     1,
@@ -320,7 +334,6 @@ test('a device restored alongside a still-live one is its own leaf, not a clone'
     deviceA.page.getByTestId('chat-message').filter({ hasText: 'from device B' }),
   ).toHaveCount(1, { timeout: 25_000 })
 
-  // And the peer reads both devices.
   for (const said of ['from device A', 'from device B']) {
     await expect(peer.page.getByTestId('chat-message').filter({ hasText: said })).toHaveCount(1, {
       timeout: 25_000,

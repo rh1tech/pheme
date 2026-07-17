@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
 import { SUPPORTED_LANGUAGES, type Language } from '../../i18n'
 import { APP_VERSION, BUILD_ID } from '../../lib/version'
-import { KeyBackupModal } from './KeyBackup'
+import { RecoveryCodeModal } from './KeyBackup'
 
 /**
  * The burger in the chat-list header. Everything the old left nav held that is
@@ -34,7 +34,7 @@ export function ChatSidebarMenu() {
   const scheme = useComputedColorScheme('light', { getInitialValueInEffect: true })
   const isDark = scheme === 'dark'
   const language = (i18n.resolvedLanguage ?? 'en') as Language
-  const [backupOpen, setBackupOpen] = useState(false)
+  const [recoveryOpen, setRecoveryOpen] = useState(false)
 
   function handleLogout() {
     logout()
@@ -59,8 +59,8 @@ export function ChatSidebarMenu() {
             {t('admin.nav')}
           </Menu.Item>
         )}
-        <Menu.Item leftSection={<IconShieldLock size={18} />} onClick={() => setBackupOpen(true)}>
-          {t('backup.menuItem')}
+        <Menu.Item leftSection={<IconShieldLock size={18} />} onClick={() => setRecoveryOpen(true)}>
+          {t('recovery.menuItem')}
         </Menu.Item>
 
         <Menu.Divider />
@@ -111,7 +111,7 @@ export function ChatSidebarMenu() {
         </Menu.Label>
       </Menu.Dropdown>
     </Menu>
-    <KeyBackupModal opened={backupOpen} onClose={() => setBackupOpen(false)} />
+    <RecoveryCodeModal opened={recoveryOpen} onClose={() => setRecoveryOpen(false)} />
     </>
   )
 }

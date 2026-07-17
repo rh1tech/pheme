@@ -13,7 +13,26 @@ export async function loginAsAdmin(page: Page): Promise<void> {
 }
 
 /** Logs in through the login form and waits for the chat surface. */
-export async function login(page: Page, email: string, password: string): Promise<void> {
+/**
+ * Signs in. By default it also suppresses the recovery-code UX that now auto-appears on a signed-in
+ * device — the forced "save your code" modal (which would block the chat surface) and, when a backup
+ * already exists, the restore prompt (a "new device" in most suites is an independent one that starts
+ * fresh). Tests that specifically exercise the recovery UI pass `realRecovery: true` to see it.
+ * Production sets neither flag.
+ */
+export async function login(
+  page: Page,
+  email: string,
+  password: string,
+  opts: { realRecovery?: boolean } = {},
+): Promise<void> {
+  if (!opts.realRecovery) {
+    await page.addInitScript(() => {
+      const w = window as { __phemeSkipRecoveryPrompt?: boolean; __phemeAutoStartFresh?: boolean }
+      w.__phemeSkipRecoveryPrompt = true
+      w.__phemeAutoStartFresh = true
+    })
+  }
   await page.goto('/login')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password', { exact: true }).fill(password)

@@ -34,6 +34,15 @@ export async function signInOnNewDevice(
   password: string,
 ): Promise<Device> {
   const context = await browser.newContext()
+  // A "new device" in the crypto suites is an INDEPENDENT device with its own identity — so when a
+  // backup already exists (a previous device of this user auto-backed-up), it starts fresh rather
+  // than restoring, matching the pre-recovery-code behaviour. And suppress the one-time "save your
+  // recovery code" modal, which would otherwise block every test. Production sets neither flag.
+  await context.addInitScript(() => {
+    const w = window as { __phemeSkipRecoveryPrompt?: boolean; __phemeAutoStartFresh?: boolean }
+    w.__phemeSkipRecoveryPrompt = true
+    w.__phemeAutoStartFresh = true
+  })
   const page = await context.newPage()
   await login(page, email, password)
   await expect.poll(() => keyPackageCount(page), { timeout: 20_000 }).toBeGreaterThan(0)
@@ -60,16 +69,22 @@ export function deviceId(page: Page): Promise<string> {
 }
 
 /** How many single-use KeyPackages this device still has published. */
-export function keyPackageCount(page: Page): Promise<number> {
-  return page.evaluate(async (base: string) => {
-    const deviceId = localStorage.getItem('pheme.mlsDeviceId') ?? ''
-    const res = await fetch(
-      `${base}/v1/mls/key-packages/count?deviceId=${encodeURIComponent(deviceId)}`,
-      { headers: { Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}` } },
-    )
-    if (!res.ok) return 0
-    return ((await res.json()) as { count: number }).count
-  }, API_URL)
+export async function keyPackageCount(page: Page): Promise<number> {
+  try {
+    return await page.evaluate(async (base: string) => {
+      const deviceId = localStorage.getItem('pheme.mlsDeviceId') ?? ''
+      const res = await fetch(
+        `${base}/v1/mls/key-packages/count?deviceId=${encodeURIComponent(deviceId)}`,
+        { headers: { Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}` } },
+      )
+      if (!res.ok) return 0
+      return ((await res.json()) as { count: number }).count
+    }, API_URL)
+  } catch {
+    // A navigation may be in flight (the auto-start-fresh reload destroys the execution context
+    // mid-evaluate). Treat as "not ready yet" so the surrounding expect.poll retries after it settles.
+    return 0
+  }
 }
 
 /** The conversation's MLS group id and epoch, straight from the server. */
