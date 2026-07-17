@@ -116,6 +116,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// The way out of a group nobody holds any more. Retires it (remembering it, so nothing
 	// anyone still has is lost) so a fresh one can be established.
 	mux.HandleFunc("POST /v1/conversations/{id}/mls/reset", h.postMLSReset)
+	// Device-to-device history handoff: a member seals its transcript for a joining device under a
+	// group-derived key and uploads it here; the joining device fetches it once. Sealed off the
+	// server, so it only ever holds ciphertext.
+	mux.HandleFunc("POST /v1/conversations/{id}/mls/history", h.uploadHistory)
+	mux.HandleFunc("GET /v1/conversations/{id}/mls/history/{historyId}", h.getHistory)
 	// 1:1 voice calls. The server relays a few kilobytes of sealed signalling and hands out
 	// ICE credentials; the media itself is peer to peer and never comes near us, and nothing
 	// about a call is ever written to the database.

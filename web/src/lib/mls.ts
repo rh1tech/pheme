@@ -127,9 +127,34 @@ export const MLS_COMMIT = 'application/mls-commit'
  * message ever sent to the old group, for everybody.
  */
 export const MLS_DEVICE = 'application/mls-device'
+/**
+ * "I just joined and hold none of this conversation's past — can a device that has it send it?"
+ *
+ * Posted by a freshly-joined device with no local transcript. A co-member that holds the history
+ * seals it and answers with MLS_HISTORY_OFFER. Carries the requester's identity and epoch, never
+ * key material or content.
+ */
+export const MLS_HISTORY_REQUEST = 'application/mls-history-request'
+/**
+ * The answer to a history request: "your history is sealed and waiting at this id."
+ *
+ * The transcript never rides the message — it is sealed under a key DERIVED FROM THE GROUP (which
+ * the server cannot derive) and stored as a blob; this points at it, with the salt and nonce and the
+ * epoch the key was derived at, addressed to the one requester it is for.
+ */
+export const MLS_HISTORY_OFFER = 'application/mls-history-offer'
 
 /** The control types, which carry no user-visible text. */
-export const MLS_CONTROL_TYPES: ReadonlySet<string> = new Set([MLS_WELCOME, MLS_COMMIT, MLS_DEVICE])
+export const MLS_CONTROL_TYPES: ReadonlySet<string> = new Set([
+  MLS_WELCOME,
+  MLS_COMMIT,
+  MLS_DEVICE,
+  MLS_HISTORY_REQUEST,
+  MLS_HISTORY_OFFER,
+])
+
+/** The exporter label for the history-sync key. Versioned, since changing it changes the key. */
+const HISTORY_SYNC_LABEL = 'pheme/history-sync/v1'
 
 let ready: Promise<Session> | null = null
 let readyUserId = ''
@@ -894,6 +919,8 @@ async function settleGroup(
     const joined = await tryExternalJoin(session, conversation.id, state.groupId)
     if (joined) {
       clearStuck(conversation.id)
+      // We just joined and hold none of the past — ask a co-member for it. No-op if we have it.
+      void requestHistory(conversation.id, myUserId)
       return joined
     }
 
@@ -951,6 +978,8 @@ async function settleGroup(
   // Keep GroupInfo fresh at whatever epoch we ended on (reconcile may have added a device), so the
   // NEXT new device can external-join immediately instead of waiting to be admitted. Fire-and-forget.
   void publishGroupInfo(session, conversation.id, state.groupId)
+  // If we hold the group but none of its history (a device admitted by Welcome, say), ask for it.
+  void requestHistory(conversation.id, myUserId)
   return state.groupId
 }
 
@@ -1395,6 +1424,158 @@ export async function admitAnnouncedDevice(
   const state = await api.mlsGroupState(conversationId)
   if (!state.groupId || !(await session.hasGroup(state.groupId))) return
   await reconcileDevices(session, conversationId, state.groupId)
+}
+
+// --- device-to-device history sync ----------------------------------------
+//
+// A device that joins an existing conversation holds none of what was said before it arrived —
+// MLS gives a new leaf no access to the past. Rather than leave that history to a backup alone, a
+// co-member that DOES hold it can hand it over directly: sealed under a key both derive from the
+// group (which the server cannot derive), stored as a one-shot blob, pointed at by a control
+// message. The server only ever sees ciphertext.
+//
+// The key is the group's exporter secret at a specific epoch, bound to the requester's identity, so
+// a blob offered to one device at one epoch cannot be replayed to another or at another epoch.
+
+interface HistoryRequestBody {
+  id: string // the requester's leaf identity
+  epoch: number
+}
+interface HistoryOfferBody {
+  to: string // the requester this offer is for
+  epoch: number // the epoch the key was derived at
+  historyId: string
+  salt: string
+  nonce: string
+}
+
+function encodeControl(obj: unknown): string {
+  return bytesToBase64(new TextEncoder().encode(JSON.stringify(obj)))
+}
+function decodeControl<T>(ciphertextBase64: string): T | null {
+  try {
+    return JSON.parse(new TextDecoder().decode(base64ToBytes(ciphertextBase64))) as T
+  } catch {
+    return null
+  }
+}
+
+/** Conversations this device has already asked history for this session — so it asks once, not on every settle. */
+const historyRequested = new Set<string>()
+
+/**
+ * Asks co-members for this conversation's pre-join history — once per conversation per session.
+ * A no-op unless this device holds the group but has no local transcript for it (i.e. it just
+ * joined and has nothing to show). The request carries only this device's identity and epoch.
+ */
+export async function requestHistory(conversationId: string, myUserId: string): Promise<void> {
+  if (historyRequested.has(conversationId)) return
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) return
+  // Nothing to fetch if we already hold this conversation's history.
+  const existing = (await exportAllContents())[conversationId]
+  if (existing && Object.keys(existing).length > 0) return
+  historyRequested.add(conversationId)
+  const epoch = await session.epoch(state.groupId)
+  const body: HistoryRequestBody = { id: session.identity, epoch }
+  await api
+    .sendChatMessage(conversationId, encodeControl(body), MLS_HISTORY_REQUEST)
+    .catch(() => historyRequested.delete(conversationId))
+}
+
+/**
+ * Responds to a history request: seal this conversation's transcript under a group-derived key bound
+ * to the requester, upload it, and point the requester at it. No-op if we hold nothing, or the
+ * request is our own. Callers elect a single responder before calling this (see useHistorySync).
+ */
+export async function offerHistory(
+  conversationId: string,
+  myUserId: string,
+  requesterIdentity: string,
+): Promise<void> {
+  const session = await mlsSession(myUserId)
+  if (requesterIdentity === session.identity) return
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) return
+  const bodies = (await exportAllContents())[conversationId]
+  if (!bodies || Object.keys(bodies).length === 0) return
+
+  const derived = await session.exportSecret(
+    state.groupId,
+    HISTORY_SYNC_LABEL,
+    new TextEncoder().encode(requesterIdentity),
+    32,
+  )
+  if (!derived) return
+  const sealed = encryptBackup(
+    derived.secret,
+    new TextEncoder().encode(JSON.stringify({ v: 1, bodies })),
+  )
+  const historyId = await api.uploadHistory(conversationId, sealed.ciphertext)
+  const offer: HistoryOfferBody = {
+    to: requesterIdentity,
+    epoch: derived.epoch,
+    historyId,
+    salt: bytesToBase64(sealed.salt),
+    nonce: bytesToBase64(sealed.nonce),
+  }
+  await api.sendChatMessage(conversationId, encodeControl(offer), MLS_HISTORY_OFFER).catch(() => {})
+}
+
+/**
+ * Receives an offer addressed to this device: derive the same group key, fetch the blob, open it,
+ * and import the history into the local cache. Returns whether it imported anything.
+ *
+ * The epoch must match: the exporter secret is per-epoch, so a drift between the offer and now means
+ * the keys differ — we bail and let a re-request settle it.
+ */
+export async function receiveHistoryOffer(
+  conversationId: string,
+  myUserId: string,
+  offerCiphertext: string,
+): Promise<boolean> {
+  const session = await mlsSession(myUserId)
+  const offer = decodeControl<HistoryOfferBody>(offerCiphertext)
+  if (!offer || offer.to !== session.identity) return false
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) return false
+
+  const derived = await session.exportSecret(
+    state.groupId,
+    HISTORY_SYNC_LABEL,
+    new TextEncoder().encode(session.identity),
+    32,
+  )
+  if (!derived || derived.epoch !== offer.epoch) return false
+
+  let plaintext: Uint8Array
+  try {
+    const blob = await api.getHistory(conversationId, offer.historyId)
+    plaintext = decryptBackup(derived.secret, base64ToBytes(offer.salt), base64ToBytes(offer.nonce), blob)
+  } catch {
+    return false
+  }
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(plaintext)) as {
+      bodies?: Record<string, string>
+    }
+    if (parsed.bodies && Object.keys(parsed.bodies).length > 0) {
+      await importContents({ [conversationId]: parsed.bodies })
+      return true
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+/** The leaf identities of a conversation's current group, for the responder election. Empty if we do not hold it. */
+export async function groupMemberIdentities(conversationId: string, myUserId: string): Promise<string[]> {
+  const session = await mlsSession(myUserId)
+  const state = await api.mlsGroupState(conversationId)
+  if (!state.groupId || !(await session.hasGroup(state.groupId))) return []
+  return session.memberIdentities(state.groupId)
 }
 
 /**
@@ -1886,6 +2067,7 @@ async function wipeUnlocked(): Promise<void> {
   // The recovery passphrase must not survive a logout, nor an auto-backup fire under the
   // next account on a shared device.
   sessionPassphrase = null
+  historyRequested.clear()
   if (autoBackupTimer) {
     clearTimeout(autoBackupTimer)
     autoBackupTimer = null

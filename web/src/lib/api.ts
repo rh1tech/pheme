@@ -423,6 +423,28 @@ export const api = {
     }),
 
   /**
+   * Uploads a sealed transcript blob for a joining device to fetch, returning its id. Opaque bytes —
+   * sealed under a group-derived key the server cannot derive.
+   */
+  uploadHistory: async (conversationId: string, sealed: Uint8Array): Promise<string> => {
+    const res = await requestBinary(`/v1/conversations/${conversationId}/mls/history`, {
+      method: 'POST',
+      body: sealed,
+    })
+    const out = (await res.json()) as { id?: string }
+    return out.id ?? ''
+  },
+
+  /** Fetches a sealed transcript blob once (the server deletes it after). Still ciphertext. */
+  getHistory: async (conversationId: string, historyId: string): Promise<Uint8Array> => {
+    const res = await requestBinary(
+      `/v1/conversations/${conversationId}/mls/history/${historyId}`,
+      { method: 'GET' },
+    )
+    return new Uint8Array(await res.arrayBuffer())
+  },
+
+  /**
    * Retires a group nobody can use any more, so the conversation can start a fresh one.
    *
    * The last resort, and only called by a device that has announced itself and given up on

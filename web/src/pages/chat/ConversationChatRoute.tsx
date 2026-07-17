@@ -55,6 +55,7 @@ import { conversationAvatarKey, conversationTitle, otherMember } from '../../lib
 import { dayKey, groupByDay, messageTime } from '../../lib/time'
 import { useAuth } from '../../auth/context'
 import { useEventStream } from '../../hooks/useEventStream'
+import { HISTORY_IMPORTED_EVENT } from '../../hooks/useHistorySync'
 import { useChatScroll } from '../../hooks/useChatScroll'
 import { usePrependAnchor } from '../../hooks/usePrependAnchor'
 import { useEdgeSwipeBack } from '../../hooks/useEdgeSwipeBack'
@@ -524,6 +525,36 @@ export function ConversationChatRoute() {
     return () => {
       active = false
     }
+  }, [id])
+
+  // Device-to-device history sync just imported this conversation's past into the cache (a
+  // co-member handed it over). Merge it into the on-screen bodies so it paints without a reopen:
+  // messages that were hidden as unreadable now have content and appear. Only touches ids not
+  // already resolved, so it never clobbers a live decrypt.
+  useEffect(() => {
+    const onImported = (e: Event) => {
+      const detail = (e as CustomEvent<{ conversationId: string }>).detail
+      if (!detail || detail.conversationId !== id) return
+      void loadCachedContents(id).then((cached) => {
+        if (liveIdRef.current !== id) return
+        let changed = false
+        const next = { ...bodiesRef.current }
+        for (const [messageId, content] of Object.entries(cached)) {
+          if (next[messageId] == null) {
+            next[messageId] = content
+            processedRef.current.add(messageId)
+            failedRef.current.delete(messageId)
+            changed = true
+          }
+        }
+        if (changed) {
+          bodiesRef.current = next
+          setBodies(next)
+        }
+      })
+    }
+    window.addEventListener(HISTORY_IMPORTED_EVENT, onImported)
+    return () => window.removeEventListener(HISTORY_IMPORTED_EVENT, onImported)
   }, [id])
 
   // Decrypt every message not yet handled, in order. Runs whenever the message list

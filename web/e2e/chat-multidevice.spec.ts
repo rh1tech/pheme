@@ -179,15 +179,12 @@ test('the conversation creator signing in on a second device does not fork the g
 })
 
 /**
- * A device added to a conversation that is already running gets let in — and the history
- * that predates it is honestly marked as unreadable rather than left as a spinner.
- *
- * MLS gives a new member no access to what was said before it joined; that is forward
- * secrecy working, not a bug. What WAS a bug is that the old code, faced with a device it
- * could not admit, destroyed the group and rebuilt it — which made the history unreadable
- * for EVERYONE, not just the newcomer. Here the existing devices keep everything.
+ * A device added to a conversation that is already running gets let in, reads new messages, AND —
+ * because a co-member holding the history is online — receives the pre-join history device-to-device
+ * (Phase 2 sync). MLS itself gives a new member no access to the past; the sync is what hands it over
+ * anyway, sealed under a group-derived key. The existing devices, of course, keep everything.
  */
-test('a device that joins late reads new messages and marks the old ones sealed', async ({
+test('a device that joins late reads new messages and syncs the old ones from a co-member', async ({
   browser,
 }) => {
   const aliceEmail = uniqueEmail('alice-late')
@@ -228,11 +225,11 @@ test('a device that joins late reads new messages and marks the old ones sealed'
     { timeout: 20_000 },
   )
 
-  // The message that predates the laptop is simply NOT SHOWN on it — no "not available"
-  // placeholder, no divider. A new device opens a clean conversation of what it can read.
+  // The message that predates the laptop — which it could never MLS-decrypt — is SYNCED to it from
+  // a co-member that holds it (Bob's phone, or Alice). No "not available" placeholder, no divider.
   await expect(
     bobLaptop.page.getByTestId('chat-message').filter({ hasText: 'said before the laptop existed' }),
-  ).toHaveCount(0)
+  ).toHaveCount(1, { timeout: 40_000 })
   await expect(bobLaptop.page.getByTestId('chat-sealed-divider')).toHaveCount(0)
 
   // And crucially, the devices that WERE there keep every word. The old code's rebuild is

@@ -10,6 +10,7 @@ import { useAuth } from '../../auth/context'
 import { useChannelList } from '../../hooks/useChannelList'
 import { useConversationList } from '../../hooks/useConversationList'
 import { useDeviceAdmission } from '../../hooks/useDeviceAdmission'
+import { useHistorySync } from '../../hooks/useHistorySync'
 import { useActiveChatSync } from '../../hooks/useActiveChatSync'
 import { useColdLaunchToList } from '../../hooks/useColdLaunchToList'
 import { useKeyboardOpen, useVisualViewportRect } from '../../hooks/useVisualViewport'
@@ -32,6 +33,8 @@ export function ChatShell() {
   // Let other people's newly signed-in devices into the groups they belong to, from anywhere
   // in the app — not only from the conversation they concern, which nobody may have open.
   useDeviceAdmission(userId)
+  // Answer a newly-joined device's request for the history it holds none of, and receive our own.
+  useHistorySync(userId)
   const channelMatch = useMatch({ path: '/channels/:id', end: false })
   const chatMatch = useMatch({ path: '/chats/:id', end: false })
   const activeId = channelMatch?.params.id ?? chatMatch?.params.id

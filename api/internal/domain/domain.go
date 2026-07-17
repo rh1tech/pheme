@@ -427,6 +427,15 @@ const (
 	// its group" — posted by a device that holds no group, so that a member who does hold
 	// it adds this device. It carries no key material.
 	ContentTypeMLSDevice = "application/mls-device"
+	// ContentTypeMLSHistoryRequest is "I just joined this conversation and hold none of its
+	// past; can a device that has it send it to me?" — posted by a freshly-joined device that
+	// has no local transcript. It carries the requester's identity and epoch, no key material.
+	ContentTypeMLSHistoryRequest = "application/mls-history-request"
+	// ContentTypeMLSHistoryOffer answers a request: "the history is sealed and waiting at this
+	// object id." The transcript itself never rides the message — it is sealed under a key
+	// derived from the group (which the server cannot derive) and stored as a blob; this only
+	// points at it. Carries the requester identity, the epoch the key was derived at, and the id.
+	ContentTypeMLSHistoryOffer = "application/mls-history-offer"
 	// ContentTypeCallEvent is the record a call leaves in the conversation when nobody
 	// answered it. Unlike the types above it IS user-visible — it is the "missed call" in
 	// the transcript — and it is encrypted like any other message, so the server knows only
@@ -449,13 +458,16 @@ var MLSProtocolContentTypes = []string{
 	ContentTypeMLSWelcome,
 	ContentTypeMLSCommit,
 	ContentTypeMLSDevice,
+	ContentTypeMLSHistoryRequest,
+	ContentTypeMLSHistoryOffer,
 }
 
 // IsMLSProtocol reports whether a content type is MLS protocol traffic rather than
 // something a person sent.
 func IsMLSProtocol(contentType string) bool {
 	switch contentType {
-	case ContentTypeMLSWelcome, ContentTypeMLSCommit, ContentTypeMLSDevice:
+	case ContentTypeMLSWelcome, ContentTypeMLSCommit, ContentTypeMLSDevice,
+		ContentTypeMLSHistoryRequest, ContentTypeMLSHistoryOffer:
 		return true
 	default:
 		return false
