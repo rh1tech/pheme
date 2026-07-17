@@ -31,6 +31,7 @@ import {
   MLS_CONTROL_TYPES,
   MLS_DEVICE,
   PeerKeysMissingError,
+  autoBackupSoon,
   base64ToBytes,
   catchUpToLatest,
   decryptChatMessage,
@@ -648,6 +649,9 @@ export function ConversationChatRoute() {
           bodiesRef.current = { ...bodiesRef.current, [m.id]: content }
           setBodies(bodiesRef.current)
           failedRef.current.delete(m.id)
+          // Now cache-only (the MLS key is spent); keep the backup current so a new device
+          // inherits it. No-op unless the user has unlocked backup this session.
+          autoBackupSoon(userId)
         } else {
           // Parked, not retired: it is in the processed set so ordinary re-renders skip it, but
           // recorded in failedRef so the next epoch catch-up releases it for another try — a new
@@ -993,6 +997,10 @@ export function ConversationChatRoute() {
       setBodies(bodiesRef.current)
       void cacheContent(id, msg.id, content)
       setPreview(id, body || (photos.length ? '__photo__' : ''))
+      // A new message this device will never decrypt again lives only in the cache now —
+      // keep the backup current so it survives to a new device. No-op unless backup is
+      // unlocked this session.
+      autoBackupSoon(userId)
 
       setDraft('')
       setPending([])

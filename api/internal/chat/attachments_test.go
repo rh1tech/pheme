@@ -179,7 +179,8 @@ func TestAttachment_DeletedWithTheConversation(t *testing.T) {
 
 func TestAttachment_UnavailableWithoutABlobStore(t *testing.T) {
 	// A deployment with no blob store configured must refuse rather than pretend.
-	f := newFixture(t) // no Blobs
+	f := newFixture(t)
+	f.handler.Blobs = nil // explicitly none, whatever the fixture's default
 	_, aTok := f.user(t, "a@example.com")
 	bID, _ := f.user(t, "b@example.com")
 	convID := f.directChat(t, aTok, bID)

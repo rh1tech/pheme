@@ -539,23 +539,28 @@ type MLSKeyPackage struct {
 // and open it); it never sees the passphrase, the derived key, or the plaintext
 // state. One backup per user — the latest upload replaces the previous.
 type MLSKeyBackup struct {
-	ID         string    `bson:"_id,omitempty" json:"id"`
-	UserID     string    `bson:"userId" json:"userId"`
-	DeviceID   string    `bson:"deviceId" json:"deviceId"`
-	Salt       []byte    `bson:"salt" json:"salt"`
-	Nonce      []byte    `bson:"nonce" json:"nonce"`
-	Ciphertext []byte    `bson:"ciphertext" json:"ciphertext"`
-	UpdatedAt  time.Time `bson:"updatedAt" json:"updatedAt"`
+	ID       string `bson:"_id,omitempty" json:"id"`
+	UserID   string `bson:"userId" json:"userId"`
+	DeviceID string `bson:"deviceId" json:"deviceId"`
+	// Salt and nonce are tiny and stay inline. The sealed ciphertext does NOT: it lives in
+	// the blob store (GridFS in production), and this record keeps only its id. A Mongo
+	// document caps at 16MB, and a whole chat history — even sealed and text-only — can pass
+	// that; storing the blob inline made "no limitation" a lie. GridFS chunks with no such
+	// ceiling, so the backup is now bounded only by policy, not by the document format.
+	Salt             []byte `bson:"salt" json:"salt"`
+	Nonce            []byte `bson:"nonce" json:"nonce"`
+	CiphertextBlobID string `bson:"ciphertextBlobId" json:"ciphertextBlobId"`
 
-	// The user's decrypted transcripts, sealed under the same passphrase with their own
-	// salt and nonce. Optional — a backup from before transcripts rode along has none.
-	// They matter because decryption is one-shot: the keys alone recover the ability to
-	// TALK, but everything already read exists nowhere except the device's local cache,
-	// and this is that cache's only way off the device. Opaque to the server, like the
-	// state itself.
-	TranscriptSalt       []byte `bson:"transcriptSalt,omitempty" json:"transcriptSalt,omitempty"`
-	TranscriptNonce      []byte `bson:"transcriptNonce,omitempty" json:"transcriptNonce,omitempty"`
-	TranscriptCiphertext []byte `bson:"transcriptCiphertext,omitempty" json:"transcriptCiphertext,omitempty"`
+	// The user's decrypted transcripts, sealed under the same passphrase with their own salt
+	// and nonce, and their own blob. Optional — a backup from before transcripts rode along
+	// has none. They matter because decryption is one-shot: the keys alone recover the
+	// ability to TALK, but everything already read exists nowhere except the device's local
+	// cache, and this is that cache's only way off the device.
+	TranscriptSalt   []byte `bson:"transcriptSalt,omitempty" json:"transcriptSalt,omitempty"`
+	TranscriptNonce  []byte `bson:"transcriptNonce,omitempty" json:"transcriptNonce,omitempty"`
+	TranscriptBlobID string `bson:"transcriptBlobId,omitempty" json:"transcriptBlobId,omitempty"`
+
+	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
 }
 
 // DirectKey builds the unique deduplication key for a direct chat between two

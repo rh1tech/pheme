@@ -1,6 +1,29 @@
 import { expect, test } from '@playwright/test'
 import { createUserViaAdmin, login, loginAsAdmin, uniqueEmail } from './helpers'
-import { openChatAndJoin, send, signInOnNewDevice, startDirectChat } from './chat-helpers'
+import {
+  backupTranscriptLen,
+  deviceId,
+  keyPackageCount,
+  openChatAndJoin,
+  send,
+  signInOnNewDevice,
+  startDirectChat,
+  userId,
+} from './chat-helpers'
+import type { Browser } from '@playwright/test'
+import type { Device } from './chat-helpers'
+
+/** Like signInOnNewDevice, but with auto-backup's debounce shortened so a test need not idle a minute. */
+async function signInWithFastAutoBackup(browser: Browser, email: string): Promise<Device> {
+  const context = await browser.newContext()
+  await context.addInitScript(() => {
+    ;(window as { __phemeAutoBackupMs?: number }).__phemeAutoBackupMs = 400
+  })
+  const page = await context.newPage()
+  await login(page, email, PASSWORD)
+  await expect.poll(() => keyPackageCount(page), { timeout: 20_000 }).toBeGreaterThan(0)
+  return { context, page, userId: await userId(page), deviceId: await deviceId(page) }
+}
 
 const PASSWORD = 'Sup3rSecret!'
 const PASSPHRASE = 'correct horse battery pheme'
@@ -136,6 +159,90 @@ test('a recovery passphrase carries the whole transcript to a new device', async
     'fourth, from the restored device',
     { timeout: 25_000 },
   )
+
+  await Promise.all([alice.context.close(), restoredContext.close()])
+})
+
+/**
+ * Auto-backup: once a passphrase is set, messages that arrive AFTER keep flowing into the
+ * server copy on their own, so a new device does not land on a stale snapshot.
+ *
+ * The user's earlier question was exactly this — does a backup freeze at the moment you take
+ * it, or stay current? With auto-backup it stays current for as long as the app is open: each
+ * new message schedules a (debounced) re-seal. This proves a message sent long after the
+ * manual backup, never manually re-backed-up, still restores on a fresh device.
+ */
+test('auto-backup keeps later messages recoverable without a manual re-backup', async ({
+  browser,
+}) => {
+  const aliceEmail = uniqueEmail('alice-auto')
+  const bobEmail = uniqueEmail('bob-auto')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const doomed = await signInWithFastAutoBackup(browser, bobEmail)
+  const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+
+  const conv = await startDirectChat(alice.page, doomed.userId)
+  await openChatAndJoin(alice.page, conv)
+  await send(alice.page, 'before the backup was set')
+  await openChatAndJoin(doomed.page, conv)
+  await expect(doomed.page.getByTestId('chat-message').last()).toContainText(
+    'before the backup was set',
+    { timeout: 25_000 },
+  )
+
+  // Bob sets the passphrase — the one and only manual backup he will ever do — from the menu
+  // WITHOUT leaving the chat. The unlocked passphrase lives in memory for the session; a full
+  // reload would (by design) drop it, so the test navigates the way a person does, by not
+  // reloading at all.
+  await doomed.page.getByTestId('chat-sidebar').getByRole('button', { name: 'Menu' }).click()
+  await doomed.page.getByRole('menuitem', { name: 'Chat backup' }).click()
+  await doomed.page.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
+  await doomed.page.getByLabel('Confirm passphrase').fill(PASSPHRASE)
+  await doomed.page.getByRole('button', { name: 'Back up now' }).click()
+  await expect(doomed.page.getByText('Chats backed up')).toBeVisible({ timeout: 20_000 })
+
+  const beforeLen = await backupTranscriptLen(doomed.page)
+
+  // A message arrives AFTER the manual backup. Bob reads it on the same live page — and
+  // auto-backup, unprompted, folds it into the server copy.
+  await send(alice.page, 'this arrived only after the backup')
+  await expect(doomed.page.getByTestId('chat-message').last()).toContainText(
+    'this arrived only after the backup',
+    { timeout: 25_000 },
+  )
+
+  // The server's sealed transcript grows on its own — no menu, no button.
+  await expect
+    .poll(() => backupTranscriptLen(doomed.page), { timeout: 20_000, intervals: [500] })
+    .toBeGreaterThan(beforeLen)
+
+  // Bob's device is lost, and he never touched the backup menu again.
+  await doomed.context.close()
+
+  const restoredContext = await browser.newContext()
+  const restored = await restoredContext.newPage()
+  await login(restored, bobEmail, PASSWORD)
+  await expect(restored.getByText('Restore your chats')).toBeVisible({ timeout: 20_000 })
+  await restored.getByLabel('Recovery passphrase', { exact: true }).fill(PASSPHRASE)
+  await restored.getByRole('button', { name: 'Restore', exact: true }).click()
+  await expect(restored.getByText('Restore your chats')).toBeHidden({ timeout: 30_000 })
+  await expect(restored.getByTestId('chat-sidebar')).toBeVisible({ timeout: 30_000 })
+
+  // The post-backup message — captured only by auto-backup — is there.
+  await openChatAndJoin(restored, conv)
+  await expect(
+    restored.getByTestId('chat-message').filter({ hasText: 'this arrived only after the backup' }),
+  ).toHaveCount(1, { timeout: 25_000 })
+  await expect(
+    restored.getByTestId('chat-message').filter({ hasText: 'before the backup was set' }),
+  ).toHaveCount(1)
 
   await Promise.all([alice.context.close(), restoredContext.close()])
 })

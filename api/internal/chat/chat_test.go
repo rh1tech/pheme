@@ -30,7 +30,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	db := store.NewMemory(blob.NewMemory())
 	tokens := auth.NewTokenManager("test-secret", 15*time.Minute, 24*time.Hour)
-	h := &Handler{Store: db, Live: live.NewMemoryBus()}
+	h := &Handler{Store: db, Live: live.NewMemoryBus(), Blobs: blob.NewMemory()}
 	protected := http.NewServeMux()
 	h.Register(protected)
 	mux := http.NewServeMux()

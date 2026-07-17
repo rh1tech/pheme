@@ -319,18 +319,18 @@ func (m *Mongo) PutKeyBackup(ctx context.Context, backup domain.MLSKeyBackup) er
 		bson.M{"userId": backup.UserID},
 		bson.M{
 			"$set": bson.M{
-				"deviceId":   backup.DeviceID,
-				"salt":       backup.Salt,
-				"nonce":      backup.Nonce,
-				"ciphertext": backup.Ciphertext,
+				"deviceId":         backup.DeviceID,
+				"salt":             backup.Salt,
+				"nonce":            backup.Nonce,
+				"ciphertextBlobId": backup.CiphertextBlobID,
 				// Written even when empty, so re-uploading a backup WITHOUT transcripts
-				// does not leave a stale transcript blob from a previous upload behind —
+				// does not leave a stale transcript blob id from a previous upload behind —
 				// one that would restore somebody's history as of months ago and call it
 				// current.
-				"transcriptSalt":       backup.TranscriptSalt,
-				"transcriptNonce":      backup.TranscriptNonce,
-				"transcriptCiphertext": backup.TranscriptCiphertext,
-				"updatedAt":            backup.UpdatedAt,
+				"transcriptSalt":   backup.TranscriptSalt,
+				"transcriptNonce":  backup.TranscriptNonce,
+				"transcriptBlobId": backup.TranscriptBlobID,
+				"updatedAt":        backup.UpdatedAt,
 			},
 			"$setOnInsert": bson.M{"_id": mongoID(), "userId": backup.UserID},
 		},

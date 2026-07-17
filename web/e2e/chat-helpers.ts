@@ -250,6 +250,18 @@ export function postJunkCommit(
   )
 }
 
+/** The byte length of the sealed transcript the server currently holds (0 if none) — a proxy for "has auto-backup re-uploaded with more history yet". */
+export function backupTranscriptLen(page: Page): Promise<number> {
+  return page.evaluate(async (base) => {
+    const res = await fetch(`${base}/v1/mls/key-backup`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('pheme.accessToken') ?? ''}` },
+    })
+    if (!res.ok) return 0
+    const body = (await res.json()) as { transcriptCiphertext?: string | null }
+    return body.transcriptCiphertext ? body.transcriptCiphertext.length : 0
+  }, API_URL)
+}
+
 /** Retires the conversation's current MLS group, exactly as a stuck client would. */
 export function resetGroup(page: Page, conversationId: string): Promise<number> {
   return page.evaluate(

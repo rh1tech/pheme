@@ -233,20 +233,12 @@ func (h *Handler) memberIDs(ctx context.Context, convID string) (map[string]bool
 	return out, nil
 }
 
-// The sealed backup blob is the whole exported client state. A few groups' ratchet state
-// is small, but it is not bounded the way the first cap assumed: a client keeps every group
-// it has ever been in (retired ones stay, so old messages remain readable), and each keeps
-// up to MAX_PAST_EPOCHS epochs of ratchet secrets. A long-lived account — or one that lived
-// through a group reset or two — can carry well past half a megabyte, and the old 512KB cap
-// rejected its backup outright with "backup too large". 4MB is generous headroom that still
-// leaves room beside the transcript under Mongo's 16MB document ceiling.
-const maxKeyBackupBytes = 4 * 1024 * 1024
-
-// The sealed transcripts are text plus photo metadata — never the photos themselves,
-// which live in the blob store — so even a heavy user's history is megabytes, not
-// gigabytes. Mongo caps a document at 16MB; this leaves comfortable room beside the
-// key state.
-const maxTranscriptBackupBytes = 8 * 1024 * 1024
+// A single upload's ceiling — a safety bound against a bogus multi-gigabyte body that would
+// exhaust memory, NOT a limit on how much history a user may keep. The sealed blobs go to the
+// blob store, which has no size ceiling of its own; this only bounds what one request buffers
+// while decoding. A whole text history, sealed, is comfortably inside 256MB, and a client that
+// somehow exceeds it can back up in a smaller window and grow from there.
+const maxBackupUploadBytes = 256 * 1024 * 1024
 
 type putKeyBackupRequest struct {
 	DeviceID string `json:"deviceId"`
@@ -262,23 +254,26 @@ type putKeyBackupRequest struct {
 	TranscriptCiphertext []byte `json:"transcriptCiphertext,omitempty"`
 }
 
-// putKeyBackup stores the caller's encrypted MLS state. The ciphertext is sealed
-// client-side under a passphrase-derived key; the server keeps only opaque bytes.
+// putKeyBackup stores the caller's encrypted MLS state, and optionally their sealed
+// transcripts. Both ciphertexts are sealed client-side under a passphrase-derived key and
+// written to the blob store; this record keeps only their ids, salts and nonces, so there is
+// no document-size ceiling on how much a user can back up. The server never sees the
+// passphrase or any plaintext.
 func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 	uid, ok := h.requireUser(w, r)
 	if !ok {
 		return
 	}
+	if h.Blobs == nil {
+		httpx.Error(w, http.StatusServiceUnavailable, "backups are not available on this server")
+		return
+	}
 	var req putKeyBackupRequest
-	if !httpx.DecodeLimited(w, r, &req, 2*(maxKeyBackupBytes+maxTranscriptBackupBytes)) {
+	if !httpx.DecodeLimited(w, r, &req, maxBackupUploadBytes) {
 		return
 	}
 	if len(req.Salt) == 0 || len(req.Nonce) == 0 || len(req.Ciphertext) == 0 {
 		httpx.Error(w, http.StatusBadRequest, "salt, nonce and ciphertext are required")
-		return
-	}
-	if len(req.Ciphertext) > maxKeyBackupBytes {
-		httpx.Error(w, http.StatusBadRequest, "backup too large")
 		return
 	}
 	// The transcript seal travels whole or not at all: a ciphertext without its salt
@@ -289,26 +284,57 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "transcript salt and nonce are required")
 		return
 	}
-	if len(req.TranscriptCiphertext) > maxTranscriptBackupBytes {
-		httpx.Error(w, http.StatusRequestEntityTooLarge, "transcript backup too large")
+
+	// What is already stored, so its blobs can be deleted once the new ones are safely in.
+	// A GetKeyBackup miss is fine — this is the first backup.
+	prev, prevErr := h.Store.GetKeyBackup(r.Context(), uid)
+
+	ciphertextBlobID, err := h.Blobs.Put(r.Context(), req.Ciphertext, "application/octet-stream")
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not store backup")
 		return
 	}
 	backup := domain.MLSKeyBackup{
-		UserID:     uid,
-		DeviceID:   req.DeviceID,
-		Salt:       req.Salt,
-		Nonce:      req.Nonce,
-		Ciphertext: req.Ciphertext,
-		UpdatedAt:  time.Now().UTC(),
+		UserID:           uid,
+		DeviceID:         req.DeviceID,
+		Salt:             req.Salt,
+		Nonce:            req.Nonce,
+		CiphertextBlobID: ciphertextBlobID,
+		UpdatedAt:        time.Now().UTC(),
 	}
 	if hasTranscript {
+		transcriptBlobID, tErr := h.Blobs.Put(r.Context(), req.TranscriptCiphertext, "application/octet-stream")
+		if tErr != nil {
+			// The state blob we just wrote is now an orphan; drop it rather than leave it.
+			_ = h.Blobs.Delete(r.Context(), ciphertextBlobID)
+			httpx.Error(w, http.StatusInternalServerError, "could not store backup")
+			return
+		}
 		backup.TranscriptSalt = req.TranscriptSalt
 		backup.TranscriptNonce = req.TranscriptNonce
-		backup.TranscriptCiphertext = req.TranscriptCiphertext
+		backup.TranscriptBlobID = transcriptBlobID
 	}
+
 	if err := h.Store.PutKeyBackup(r.Context(), backup); err != nil {
+		// Point the record nowhere and the blobs are orphans — clean them up.
+		_ = h.Blobs.Delete(r.Context(), backup.CiphertextBlobID)
+		if backup.TranscriptBlobID != "" {
+			_ = h.Blobs.Delete(r.Context(), backup.TranscriptBlobID)
+		}
 		httpx.Error(w, http.StatusInternalServerError, "could not store backup")
 		return
+	}
+
+	// The record now points at the new blobs; the old ones are unreferenced. Delete them —
+	// best effort, and only after the swap, so a failure here leaks a blob but never loses a
+	// backup. Nothing points at them any more regardless.
+	if prevErr == nil {
+		if prev.CiphertextBlobID != "" && prev.CiphertextBlobID != backup.CiphertextBlobID {
+			_ = h.Blobs.Delete(r.Context(), prev.CiphertextBlobID)
+		}
+		if prev.TranscriptBlobID != "" && prev.TranscriptBlobID != backup.TranscriptBlobID {
+			_ = h.Blobs.Delete(r.Context(), prev.TranscriptBlobID)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -320,18 +346,37 @@ func (h *Handler) getKeyBackup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.Blobs == nil {
+		httpx.Error(w, http.StatusNotFound, "no backup found")
+		return
+	}
 	backup, err := h.Store.GetKeyBackup(r.Context(), uid)
 	if err != nil {
 		httpx.Error(w, http.StatusNotFound, "no backup found")
 		return
 	}
+	ciphertext, _, err := h.Blobs.Get(r.Context(), backup.CiphertextBlobID)
+	if err != nil {
+		// The record survived but its blob did not — treat as no recoverable backup rather
+		// than hand back a record whose ciphertext cannot be fetched.
+		httpx.Error(w, http.StatusNotFound, "no backup found")
+		return
+	}
+	var transcriptCiphertext []byte
+	if backup.TranscriptBlobID != "" {
+		if tc, _, tErr := h.Blobs.Get(r.Context(), backup.TranscriptBlobID); tErr == nil {
+			transcriptCiphertext = tc
+		}
+		// A missing transcript blob is not fatal: the keys still restore, the history just
+		// does not. Fall through with an empty transcript rather than fail the whole restore.
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"salt":                 backup.Salt,
 		"nonce":                backup.Nonce,
-		"ciphertext":           backup.Ciphertext,
+		"ciphertext":           ciphertext,
 		"transcriptSalt":       backup.TranscriptSalt,
 		"transcriptNonce":      backup.TranscriptNonce,
-		"transcriptCiphertext": backup.TranscriptCiphertext,
+		"transcriptCiphertext": transcriptCiphertext,
 		"updatedAt":            backup.UpdatedAt,
 	})
 }

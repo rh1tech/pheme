@@ -1737,6 +1737,13 @@ async function wipeUnlocked(): Promise<void> {
   // account has no stake in.
   for (const timer of wedgeTimers.values()) clearTimeout(timer)
   wedgeTimers.clear()
+  // The recovery passphrase must not survive a logout, nor an auto-backup fire under the
+  // next account on a shared device.
+  sessionPassphrase = null
+  if (autoBackupTimer) {
+    clearTimeout(autoBackupTimer)
+    autoBackupTimer = null
+  }
 }
 
 // --- encrypted key backup -------------------------------------------------
@@ -1757,11 +1764,57 @@ export async function backupExists(): Promise<boolean> {
 }
 
 /**
- * How big a sealed transcript blob may grow before it is left out of the backup. Matches
- * the server's cap; a history past it still gets its KEYS backed up — recoverable
- * conversation, unrecoverable scrollback — which beats failing the whole backup.
+ * A sanity ceiling on the sealed transcript, matched to the server's per-upload bound — not a
+ * limit on history. Past it, the KEYS still back up (recoverable conversation, missing
+ * scrollback) rather than failing the whole backup. Real text histories sit far below this.
  */
-const MAX_TRANSCRIPT_BACKUP_BYTES = 8 * 1024 * 1024
+const MAX_TRANSCRIPT_BACKUP_BYTES = 256 * 1024 * 1024
+
+/**
+ * The recovery passphrase, held IN MEMORY for the life of the tab once the user has proven it
+ * this session — by setting up a backup or by restoring one. It enables auto-backup (below)
+ * to keep the server copy current without prompting on every change.
+ *
+ * In memory only, never persisted: the device already holds all the plaintext this would
+ * protect, so keeping the passphrase in a variable adds no exposure the server could reach —
+ * but writing it to disk WOULD let a stolen device decrypt the server's copy, so we do not.
+ * Cleared on logout with everything else. A reload therefore stops auto-backup until the next
+ * manual backup or restore, which is the safe direction to fail.
+ */
+let sessionPassphrase: string | null = null
+
+/**
+ * How long to coalesce a burst of changes before re-sealing. A backup re-encrypts the whole
+ * state and transcript, so it must not run per message; a minute of quiet is plenty fresh
+ * while keeping the cost off the hot path.
+ */
+const AUTO_BACKUP_DEBOUNCE_MS = 60_000
+let autoBackupTimer: ReturnType<typeof setTimeout> | null = null
+let autoBackupUser = ''
+
+/**
+ * Schedules a background backup, if one is unlocked this session. A no-op when it is not — the
+ * user has not set up or restored a backup here, so there is no passphrase to seal with, and
+ * nothing to keep current. Coalesced: many calls in a burst result in one upload.
+ */
+export function autoBackupSoon(userId: string): void {
+  if (!sessionPassphrase || !userId) return
+  autoBackupUser = userId
+  if (autoBackupTimer) return
+  // The E2E suite shortens this so it does not have to idle a real minute; the app never
+  // sets it, so production always uses the full debounce.
+  const override = (globalThis as { __phemeAutoBackupMs?: number }).__phemeAutoBackupMs
+  const delay = typeof override === 'number' ? override : AUTO_BACKUP_DEBOUNCE_MS
+  autoBackupTimer = setTimeout(() => {
+    autoBackupTimer = null
+    const pass = sessionPassphrase
+    if (!pass) return
+    // Fire and forget: a failed auto-backup is not worth surfacing — the next change
+    // schedules another, and the manual backup button is always there. The keys and
+    // transcripts are safe locally regardless.
+    void backupKeys(autoBackupUser, pass).catch(() => {})
+  }, delay)
+}
 
 /**
  * Seals the current device state under `passphrase` and uploads it — together with the
@@ -1803,6 +1856,9 @@ export async function backupKeys(userId: string, passphrase: string): Promise<vo
     bytesToBase64(blob.ciphertext),
     transcript,
   )
+  // The passphrase is proven and the backup is live: remember it for this session so
+  // auto-backup can keep the server copy current as the conversation grows.
+  sessionPassphrase = passphrase
 }
 
 /**
@@ -1883,6 +1939,9 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
     ready = null
     readyUserId = ''
     settling.clear()
+    // Proven this session: keep it so auto-backup carries forward anything read from here
+    // on, and the restored device's backup stays as current as the old one's was.
+    sessionPassphrase = passphrase
     return true
   })
 }

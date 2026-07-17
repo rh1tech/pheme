@@ -54,5 +54,12 @@ func (m *Memory) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+// Len is the number of stored blobs. For tests that assert nothing is orphaned.
+func (m *Memory) Len() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.items)
+}
+
 // Close is a no-op for the in-memory store.
 func (m *Memory) Close(context.Context) error { return nil }
