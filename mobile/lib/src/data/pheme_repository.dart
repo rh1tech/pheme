@@ -591,6 +591,13 @@ class PhemeRepository {
     if (label != null && label.isNotEmpty) 'label': label,
   });
 
+  /// Registers this device in the user's own registry and refreshes its last-seen, without
+  /// publishing key packages — called on session load so a device lists itself from launch.
+  Future<void> registerDevice(String deviceId, String label) => _post(
+    '/v1/mls/devices',
+    {'deviceId': deviceId, if (label.isNotEmpty) 'label': label},
+  );
+
   /// The signed-in user's own devices — for the "your devices" panel. Newest activity first.
   Future<List<MLSDevice>> myDevices() async {
     final d = await _get('/v1/mls/devices');

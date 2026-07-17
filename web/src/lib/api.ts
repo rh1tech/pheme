@@ -299,6 +299,15 @@ export const api = {
   myDevices: () =>
     request<{ devices: MLSDevice[] }>('/v1/mls/devices').then((r) => r.devices ?? []),
   /**
+   * Registers this device in the user's own registry and refreshes its last-seen, without
+   * publishing key packages — called on session load so a device lists itself from launch.
+   */
+  registerMlsDevice: (deviceId: string, label: string) =>
+    request<void>('/v1/mls/devices', {
+      method: 'POST',
+      body: { deviceId, label },
+    }),
+  /**
    * Terminates one of the caller's own devices server-side: deletes its published key
    * packages so it cannot be re-added, revokes its login, and forgets it from the registry.
    * The MLS leaf removal is done first, client-side, by terminateOwnDevice in lib/mls.

@@ -211,6 +211,52 @@ func (h *Handler) listMyDevices(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"devices": devices})
 }
 
+type registerDeviceRequest struct {
+	DeviceID string `json:"deviceId"`
+	Label    string `json:"label,omitempty"`
+}
+
+// registerDevice records the caller's current device in their registry and refreshes its last-seen,
+// WITHOUT publishing any key packages.
+//
+// Registration used to be a side effect of publishing KeyPackages, which only happens when a device's
+// stock runs low — so a long-lived, well-stocked device (one that established its identity before the
+// registry existed, or simply has not needed to replenish since) never appeared in "your devices",
+// including the very device the user is looking at. A device calls this on load instead, so it lists
+// itself from the first launch and its last-seen tracks activity rather than the rare replenish.
+func (h *Handler) registerDevice(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var req registerDeviceRequest
+	if !httpx.DecodeLimited(w, r, &req, maxSmallBodyBytes) {
+		return
+	}
+	if req.DeviceID == "" {
+		httpx.Error(w, http.StatusBadRequest, "deviceId is required")
+		return
+	}
+	label := req.Label
+	if len(label) > maxDeviceLabelLen {
+		label = label[:maxDeviceLabelLen]
+	}
+	now := time.Now().UTC()
+	sid, _ := auth.SessionIDFromContext(r.Context())
+	if err := h.Store.UpsertMLSDevice(r.Context(), domain.MLSDevice{
+		UserID:     uid,
+		DeviceID:   req.DeviceID,
+		Label:      label,
+		SessionID:  sid,
+		CreatedAt:  now,
+		LastSeenAt: now,
+	}); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not register device")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type claimKeyPackagesRequest struct {
 	// The exact devices to claim for. A claim is per DEVICE, never per user: every
 	// device of a member is its own MLS leaf, and one that is not in the group cannot

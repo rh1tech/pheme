@@ -408,6 +408,11 @@ class Session {
       if (session.retiredDeviceId) {
         await api.deleteKeyPackages(session.retiredDeviceId).catch(() => {})
       }
+      // Register this device in the user's own registry on every load, and refresh its last-seen —
+      // independent of KeyPackage replenishment, which only publishes when stock runs low. Without
+      // this, a long-lived, well-stocked device (including the one the user is looking at) never
+      // appears in "your devices".
+      await api.registerMlsDevice(session.s.deviceId, deviceLabel()).catch(() => {})
       await session.s.replenishKeyPackages().catch(() => {
         // A peer starting a chat finds no package and has to retry. Nothing we are already in breaks.
       })

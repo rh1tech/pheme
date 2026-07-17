@@ -61,6 +61,30 @@ func TestMyDevicesListsPublishedDevices(t *testing.T) {
 	}
 }
 
+// A device registers itself with no key packages — the fix for a long-lived, well-stocked device
+// that never republished and so never appeared in "your devices".
+func TestRegisterDeviceListsWithoutPublishing(t *testing.T) {
+	f := newFixture(t)
+	_, tok := f.user(t, "register@pheme.test")
+
+	body := map[string]any{"deviceId": "dev-reg", "label": "Firefox on Linux"}
+	if rec := f.do(http.MethodPost, "/v1/mls/devices", tok, body); rec.Code != http.StatusNoContent {
+		t.Fatalf("register: got %d", rec.Code)
+	}
+
+	rec := f.do(http.MethodGet, "/v1/mls/devices", tok, nil)
+	var out struct {
+		Devices []domain.MLSDevice `json:"devices"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Devices) != 1 || out.Devices[0].DeviceID != "dev-reg" {
+		t.Fatalf("want dev-reg listed, got %+v", out.Devices)
+	}
+	if out.Devices[0].Label != "Firefox on Linux" || out.Devices[0].LastSeenAt.IsZero() {
+		t.Fatalf("register must set label and last-seen: %+v", out.Devices[0])
+	}
+}
+
 // The registry is per-user: a user never sees another user's devices.
 func TestMyDevicesIsPerUser(t *testing.T) {
 	f := newFixture(t)

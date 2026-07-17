@@ -198,6 +198,13 @@ class MlsService {
       await _repo.deleteKeyPackages(retired).catchError((_) {});
     }
 
+    // Register this device on every load, and refresh its last-seen — independent of KeyPackage
+    // replenishment, which only publishes when stock runs low. Without this, a long-lived,
+    // well-stocked device never appears in "your devices".
+    await _repo
+        .registerDevice(session.deviceId, deviceLabel())
+        .catchError((_) {});
+
     try {
       await _replenishKeyPackages(session);
     } on Object {

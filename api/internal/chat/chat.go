@@ -109,7 +109,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/mls/key-packages", h.publishKeyPackages)
 	mux.HandleFunc("GET /v1/mls/key-packages/count", h.keyPackageCount)
 	mux.HandleFunc("DELETE /v1/mls/key-packages", h.deleteKeyPackages)
-	// The user's own device registry — what "your devices" lists, and terminating one.
+	// The user's own device registry — registering the current device, what "your devices" lists,
+	// and terminating one.
+	mux.HandleFunc("POST /v1/mls/devices", h.registerDevice)
 	mux.HandleFunc("GET /v1/mls/devices", h.listMyDevices)
 	mux.HandleFunc("DELETE /v1/mls/devices/{deviceId}", h.terminateDevice)
 	// Both device-scoped: an MLS leaf is a device, so a group is built from a KeyPackage
