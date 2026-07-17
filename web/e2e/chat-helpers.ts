@@ -1,6 +1,6 @@
 import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { API_URL } from './constants'
-import { login } from './helpers'
+import { gotoStable, login } from './helpers'
 
 /**
  * Helpers for the encrypted-chat specs.
@@ -174,7 +174,7 @@ export async function send(page: Page, text: string): Promise<void> {
  * test would race ahead and send into a group it had not joined. (It did exactly that.)
  */
 export async function openChatAndJoin(page: Page, conversationId: string): Promise<void> {
-  await page.goto(`/chats/${conversationId}`)
+  await gotoStable(page, `/chats/${conversationId}`)
   await expect(page.locator('[data-testid="composer"][data-joined="true"]')).toBeVisible({
     timeout: 30_000,
   })

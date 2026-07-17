@@ -7,6 +7,29 @@ export function uniqueEmail(prefix = 'user'): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@pheme.test`
 }
 
+/**
+ * Navigates without tripping over the app's own boot-time redirects.
+ *
+ * A plain `page.goto(path)` waits for the `load` event, and if the SPA client-redirects while the
+ * page is still loading — which it does during auth hydration, /login → / or / → /login — Playwright
+ * reports the interrupted navigation as net::ERR_ABORTED and fails the test. It reads as flake but is
+ * really the router doing its job mid-load. Waiting only for `commit` (the navigation is committed,
+ * before the load event a redirect could interrupt) sidesteps it; a couple of retries cover the case
+ * where the very first request is itself replaced. The caller still asserts on a real element after,
+ * so "navigated but bounced elsewhere" cannot pass silently.
+ */
+export async function gotoStable(page: Page, path: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await page.goto(path, { waitUntil: 'commit' })
+      return
+    } catch (error) {
+      const aborted = error instanceof Error && error.message.includes('ERR_ABORTED')
+      if (!aborted || attempt >= 3) throw error
+    }
+  }
+}
+
 /** Logs in through the UI as the seeded admin and waits for the dashboard. */
 export async function loginAsAdmin(page: Page): Promise<void> {
   await login(page, ADMIN_EMAIL, ADMIN_PASSWORD)
@@ -33,7 +56,7 @@ export async function login(
       w.__phemeAutoStartFresh = true
     })
   }
-  await page.goto('/login')
+  await gotoStable(page, '/login')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
@@ -47,7 +70,7 @@ export async function createUserViaAdmin(
   password: string,
   role: 'user' | 'admin' = 'user',
 ): Promise<void> {
-  await page.goto('/admin/users')
+  await gotoStable(page, '/admin/users')
   await page.getByRole('button', { name: 'Add user' }).click()
   const dialog = page.getByRole('dialog')
   await dialog.getByLabel('Email').fill(email)
@@ -80,7 +103,7 @@ export async function openRowMenu(page: Page, text: string): Promise<void> {
 
 /** Creates a channel from the chat list's "+" menu and opens its conversation. */
 export async function createChannel(page: Page, name: string): Promise<void> {
-  await page.goto('/')
+  await gotoStable(page, '/')
   await page.getByRole('button', { name: 'Create or subscribe to a channel' }).click()
   await page.getByRole('menuitem', { name: 'New channel' }).click()
   const dialog = page.getByRole('dialog')

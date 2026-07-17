@@ -106,7 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2]
     defaults:
       run:
         working-directory: web
@@ -124,10 +124,10 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
       # The Playwright config starts the Vite dev server and the App API (in-memory
-      # drivers, seeded admin), then tears them down. Four shards over two runners (two
-      # waves) keep each dev server to ~a quarter of the suite — the load it was choking
-      # on past a certain point. CI=true disables server reuse so each shard is isolated.
-      - run: npx playwright test --shard=${{ matrix.shard }}/4
+      # drivers, seeded admin), then tears them down. Two shards, one per runner, split
+      # the suite so no dev server carries the whole of it. CI=true disables server reuse
+      # so each shard is isolated.
+      - run: npx playwright test --shard=${{ matrix.shard }}/2
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
