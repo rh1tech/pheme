@@ -269,6 +269,10 @@ const ru: Resources = {
     deviceCount_many: '{{count}} устройств',
     deviceCount_other: '{{count}} устройства',
     loadFailed: 'Не удалось загрузить устройства',
+    remove: 'Удалить',
+    confirmRemove: 'Удалить устройство',
+    removed: 'Устройство удалено',
+    removeFailed: 'Не удалось удалить устройство',
   },
   chat: {
     reply: 'Ответить',

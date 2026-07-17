@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"go.mongodb.org/mongo-driver/bson"
@@ -346,12 +347,23 @@ func (m *Mongo) UpsertMLSDevice(ctx context.Context, d domain.MLSDevice) error {
 		ctx,
 		bson.M{"userId": d.UserID, "deviceId": d.DeviceID},
 		bson.M{
-			"$set":         bson.M{"label": d.Label, "lastSeenAt": d.LastSeenAt},
+			"$set":         upsertDeviceSet(d),
 			"$setOnInsert": bson.M{"_id": mongoID(), "userId": d.UserID, "deviceId": d.DeviceID, "createdAt": d.CreatedAt},
 		},
 		options.Update().SetUpsert(true),
 	)
 	return err
+}
+
+// upsertDeviceSet is the $set for a device upsert: label and last-seen always move, and the
+// session id moves too WHEN one is supplied — a blank must never erase a device's known
+// session, or "terminate this device" would lose the login it needs to revoke.
+func upsertDeviceSet(d domain.MLSDevice) bson.M {
+	set := bson.M{"label": d.Label, "lastSeenAt": d.LastSeenAt}
+	if d.SessionID != "" {
+		set["sessionId"] = d.SessionID
+	}
+	return set
 }
 
 // ListMLSDevices returns a user's devices, most recently seen first.
@@ -376,6 +388,42 @@ func (m *Mongo) ListMLSDevices(ctx context.Context, userID string) ([]domain.MLS
 func (m *Mongo) DeleteMLSDevice(ctx context.Context, userID, deviceID string) error {
 	_, err := m.db.Collection("mlsDevices").DeleteOne(ctx, bson.M{"userId": userID, "deviceId": deviceID})
 	return err
+}
+
+// RevokeSession records a terminated session's id in the deny list, keyed by the id so a
+// repeat revoke just refreshes its expiry. The token is rejected on expiry regardless, so
+// the stored expiry is only there to let entries be reaped once they can no longer matter.
+func (m *Mongo) RevokeSession(ctx context.Context, sessionID string, expiresAt time.Time) error {
+	_, err := m.db.Collection("revokedSessions").UpdateOne(
+		ctx,
+		bson.M{"sessionId": sessionID},
+		bson.M{
+			"$set":         bson.M{"sessionId": sessionID, "expiresAt": expiresAt},
+			"$setOnInsert": bson.M{"_id": mongoID()},
+		},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
+// ActiveRevokedSessions returns the session ids still within their expiry as of now — the
+// set the in-memory deny list hydrates from at startup. Expired entries are skipped (their
+// tokens are already rejected on expiry) and left for a background reap.
+func (m *Mongo) ActiveRevokedSessions(ctx context.Context, now time.Time) ([]string, error) {
+	cur, err := m.db.Collection("revokedSessions").Find(ctx, bson.M{"expiresAt": bson.M{"$gt": now}})
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var docs []domain.RevokedSession
+	if err := cur.All(ctx, &docs); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(docs))
+	for _, d := range docs {
+		out = append(out, d.SessionID)
+	}
+	return out, nil
 }
 
 func (m *Mongo) GetKeyBackup(ctx context.Context, userID string) (domain.MLSKeyBackup, error) {

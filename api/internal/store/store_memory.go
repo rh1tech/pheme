@@ -32,9 +32,10 @@ type Memory struct {
 	attachments   map[string]domain.Attachment
 	keyPackages   map[string]domain.MLSKeyPackage
 	keyBackups    map[string]domain.MLSKeyBackup // by userId (one per user)
-	mlsDevices    map[string]domain.MLSDevice    // by userId + ":" + deviceId
-	mlsGroupInfo  map[string]domain.MLSGroupInfo // by conversationId (one per group)
-	blobs         blob.Store
+	mlsDevices      map[string]domain.MLSDevice    // by userId + ":" + deviceId
+	revokedSessions map[string]time.Time           // sid -> expiry (terminated sessions)
+	mlsGroupInfo    map[string]domain.MLSGroupInfo // by conversationId (one per group)
+	blobs           blob.Store
 }
 
 // NewMemory returns an initialised in-memory store. The blob store (may be nil)
@@ -56,9 +57,10 @@ func NewMemory(blobs blob.Store) *Memory {
 		attachments:   map[string]domain.Attachment{},
 		keyPackages:   map[string]domain.MLSKeyPackage{},
 		keyBackups:    map[string]domain.MLSKeyBackup{},
-		mlsDevices:    map[string]domain.MLSDevice{},
-		mlsGroupInfo:  map[string]domain.MLSGroupInfo{},
-		blobs:         blobs,
+		mlsDevices:      map[string]domain.MLSDevice{},
+		revokedSessions: map[string]time.Time{},
+		mlsGroupInfo:    map[string]domain.MLSGroupInfo{},
+		blobs:           blobs,
 	}
 }
 

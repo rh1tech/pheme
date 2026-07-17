@@ -11,6 +11,7 @@ type ctxKey int
 const (
 	userIDKey ctxKey = iota
 	roleKey
+	sessionIDKey
 )
 
 // WithUserID returns a copy of ctx carrying the authenticated user ID.
@@ -41,8 +42,21 @@ func IsAdmin(ctx context.Context) bool {
 	return ok && role == "admin"
 }
 
-// Middleware validates the Bearer access token and injects the user ID and role
-// into the request context. Requests without a valid token receive 401.
+// WithSessionID returns a copy of ctx carrying the authenticated session id (the token's
+// `sid` claim), so a handler can record which session a request belongs to.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDKey, sessionID)
+}
+
+// SessionIDFromContext returns the authenticated session id, if present.
+func SessionIDFromContext(ctx context.Context) (string, bool) {
+	sid, ok := ctx.Value(sessionIDKey).(string)
+	return sid, ok && sid != ""
+}
+
+// Middleware validates the Bearer access token and injects the user ID, role and session
+// id into the request context. Requests without a valid token — or with one whose session
+// has been revoked (a terminated device) — receive 401.
 func (m *TokenManager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
@@ -56,8 +70,14 @@ func (m *TokenManager) Middleware(next http.Handler) http.Handler {
 			unauthorized(w)
 			return
 		}
+		// A validly-signed, unexpired token still loses if its session was terminated.
+		if m.revoker != nil && m.revoker.IsRevoked(claims.SID) {
+			unauthorized(w)
+			return
+		}
 		ctx := WithUserID(r.Context(), claims.Subject)
 		ctx = WithRole(ctx, claims.Role)
+		ctx = WithSessionID(ctx, claims.SID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

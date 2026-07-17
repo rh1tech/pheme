@@ -1,12 +1,28 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
+
+// publishDevice registers a device under the given token's session, so its KeyPackages and its
+// session id land in the store the way the real publish path records them.
+func (f *fixture) publishDevice(t *testing.T, tok, deviceID, label string) {
+	t.Helper()
+	body := map[string]any{
+		"deviceId":             deviceID,
+		"keyPackages":          [][]byte{[]byte("kp-" + deviceID)},
+		"lastResortKeyPackage": []byte("last-" + deviceID),
+		"label":                label,
+	}
+	if rec := f.do(http.MethodPost, "/v1/mls/key-packages", tok, body); rec.Code != http.StatusNoContent {
+		t.Fatalf("publish %s: got %d", deviceID, rec.Code)
+	}
+}
 
 // Publishing KeyPackages registers the device in the user's own registry with its label, and
 // GET /v1/mls/devices lists it — the data behind "your devices".
@@ -63,5 +79,85 @@ func TestMyDevicesIsPerUser(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	if len(out.Devices) != 0 {
 		t.Fatalf("b must not see a's devices, got %d", len(out.Devices))
+	}
+}
+
+// Terminating a device severs it three ways: its login stops working (the session is revoked),
+// its published KeyPackages are gone so it cannot be re-added to a group, and it leaves the
+// registry. A user's OTHER device is untouched — this is "remove that one device", not "log out
+// everywhere".
+func TestTerminateDeviceRevokesSessionAndKeys(t *testing.T) {
+	f := newFixture(t)
+	uid, tokA := f.user(t, "multi@pheme.test")
+
+	// A second session for the same user — the device we will terminate, signed in separately.
+	accessB, _, _, err := f.tokens.Issue(uid, string(domain.RoleUser))
+	if err != nil {
+		t.Fatalf("issue B: %v", err)
+	}
+
+	f.publishDevice(t, tokA, "dev-a", "Laptop")
+	f.publishDevice(t, accessB, "dev-b", "Old phone")
+
+	// Both sessions work, and both devices are listed.
+	if rec := f.do(http.MethodGet, "/v1/mls/devices", accessB, nil); rec.Code != http.StatusOK {
+		t.Fatalf("B pre-terminate list: got %d", rec.Code)
+	}
+
+	// Device A terminates device B.
+	if rec := f.do(http.MethodDelete, "/v1/mls/devices/dev-b", tokA, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("terminate dev-b: got %d", rec.Code)
+	}
+
+	// B's session is dead: its token now 401s everywhere behind the middleware...
+	if rec := f.do(http.MethodGet, "/v1/mls/devices", accessB, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("B after terminate: want 401, got %d", rec.Code)
+	}
+	// ...and it cannot refresh its way back in (the deny list is checked, not just expiry).
+	// A's session is untouched.
+	if rec := f.do(http.MethodGet, "/v1/mls/devices", tokA, nil); rec.Code != http.StatusOK {
+		t.Fatalf("A after terminating B: want 200, got %d", rec.Code)
+	}
+
+	// B's KeyPackages are gone, so it can never be claimed back into a group.
+	if n, err := f.store.CountKeyPackages(context.Background(), uid, "dev-b"); err != nil || n != 0 {
+		t.Fatalf("dev-b key packages: n=%d err=%v (want 0)", n, err)
+	}
+	if has, _ := f.store.HasLastResortKeyPackage(context.Background(), uid, "dev-b"); has {
+		t.Fatal("dev-b last-resort package should be gone")
+	}
+	// A's KeyPackages are untouched.
+	if has, _ := f.store.HasLastResortKeyPackage(context.Background(), uid, "dev-a"); !has {
+		t.Fatal("dev-a last-resort package should survive terminating dev-b")
+	}
+
+	// And B is out of the registry, while A remains.
+	var out struct {
+		Devices []domain.MLSDevice `json:"devices"`
+	}
+	rec := f.do(http.MethodGet, "/v1/mls/devices", tokA, nil)
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Devices) != 1 || out.Devices[0].DeviceID != "dev-a" {
+		t.Fatalf("after terminate, want only dev-a, got %+v", out.Devices)
+	}
+}
+
+// A user cannot terminate a device that is not theirs — the registry lookup is user-scoped, so
+// another user's device id simply is not found.
+func TestTerminateDeviceIsOwnerScoped(t *testing.T) {
+	f := newFixture(t)
+	aUID, aTok := f.user(t, "owner@pheme.test")
+	_, bTok := f.user(t, "attacker@pheme.test")
+	f.publishDevice(t, aTok, "a-dev", "A's laptop")
+
+	if rec := f.do(http.MethodDelete, "/v1/mls/devices/a-dev", bTok, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-user terminate: want 404, got %d", rec.Code)
+	}
+	// A's session and keys are intact — the attacker touched nothing.
+	if has, _ := f.store.HasLastResortKeyPackage(context.Background(), aUID, "a-dev"); !has {
+		t.Fatal("a-dev key package should survive a cross-user terminate attempt")
+	}
+	if rec := f.do(http.MethodGet, "/v1/mls/devices", aTok, nil); rec.Code != http.StatusOK {
+		t.Fatalf("A still works: got %d", rec.Code)
 	}
 }

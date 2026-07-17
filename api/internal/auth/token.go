@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"time"
 
@@ -23,7 +25,18 @@ var ErrInvalidToken = errors.New("invalid token")
 type Claims struct {
 	Type TokenType `json:"typ"`
 	Role string    `json:"role,omitempty"`
+	// SID identifies the auth session — one login, stable across token refresh (the
+	// refresh path re-issues under the same SID). It is what "terminate this device"
+	// revokes: the middleware refuses a token whose SID has been revoked. Tokens issued
+	// before this field existed simply have no SID and are never matched by a revocation.
+	SID string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
+}
+
+// sessionChecker answers whether a session id has been revoked. *SessionRevoker satisfies
+// it; the field is optional so a TokenManager with no revoker simply never revokes.
+type sessionChecker interface {
+	IsRevoked(sessionID string) bool
 }
 
 // TokenManager issues and verifies signed JWTs.
@@ -31,6 +44,7 @@ type TokenManager struct {
 	secret     []byte
 	accessTTL  time.Duration
 	refreshTTL time.Duration
+	revoker    sessionChecker
 }
 
 // NewTokenManager creates a TokenManager with the given signing secret and TTLs.
@@ -38,25 +52,64 @@ func NewTokenManager(secret string, accessTTL, refreshTTL time.Duration) *TokenM
 	return &TokenManager{secret: []byte(secret), accessTTL: accessTTL, refreshTTL: refreshTTL}
 }
 
-// Issue returns a signed access and refresh token pair for the given user ID,
-// embedding the user's role.
-func (m *TokenManager) Issue(userID, role string) (access, refresh string, err error) {
-	access, err = m.sign(userID, role, AccessToken, m.accessTTL)
+// UseRevoker attaches a session revoker, so the middleware rejects tokens whose session
+// has been terminated. Without one, no token is ever revoked (the prior behaviour).
+func (m *TokenManager) UseRevoker(r sessionChecker) {
+	m.revoker = r
+}
+
+// RefreshTTL is how long a refresh token lives — the horizon past which a revoked
+// session's entry can be reaped, since the token is rejected on expiry anyway.
+func (m *TokenManager) RefreshTTL() time.Duration {
+	return m.refreshTTL
+}
+
+// Issue starts a NEW session (a fresh login) and returns a signed access/refresh pair
+// for it, embedding the user's role and the new session id. The session id is also
+// returned so the caller can record it.
+func (m *TokenManager) Issue(userID, role string) (access, refresh, sessionID string, err error) {
+	sid, err := newSessionID()
+	if err != nil {
+		return "", "", "", err
+	}
+	access, refresh, err = m.IssueWithSession(userID, role, sid)
+	if err != nil {
+		return "", "", "", err
+	}
+	return access, refresh, sid, nil
+}
+
+// IssueWithSession returns a signed access/refresh pair under an EXISTING session id.
+// The refresh path uses it so a token refresh keeps the same session — otherwise every
+// refresh would mint a new session id and "terminate this device" could only ever revoke
+// a login the device had already rotated away from.
+func (m *TokenManager) IssueWithSession(userID, role, sessionID string) (access, refresh string, err error) {
+	access, err = m.sign(userID, role, sessionID, AccessToken, m.accessTTL)
 	if err != nil {
 		return "", "", err
 	}
-	refresh, err = m.sign(userID, role, RefreshToken, m.refreshTTL)
+	refresh, err = m.sign(userID, role, sessionID, RefreshToken, m.refreshTTL)
 	if err != nil {
 		return "", "", err
 	}
 	return access, refresh, nil
 }
 
-func (m *TokenManager) sign(userID, role string, typ TokenType, ttl time.Duration) (string, error) {
+// newSessionID returns a high-entropy, URL-safe session identifier.
+func newSessionID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func (m *TokenManager) sign(userID, role, sessionID string, typ TokenType, ttl time.Duration) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		Type: typ,
 		Role: role,
+		SID:  sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
 			IssuedAt:  jwt.NewNumericDate(now),

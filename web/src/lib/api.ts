@@ -298,6 +298,13 @@ export const api = {
   /** The signed-in user's own devices — for the "your devices" panel. */
   myDevices: () =>
     request<{ devices: MLSDevice[] }>('/v1/mls/devices').then((r) => r.devices ?? []),
+  /**
+   * Terminates one of the caller's own devices server-side: deletes its published key
+   * packages so it cannot be re-added, revokes its login, and forgets it from the registry.
+   * The MLS leaf removal is done first, client-side, by terminateOwnDevice in lib/mls.
+   */
+  terminateDevice: (deviceId: string) =>
+    request<void>(`/v1/mls/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
   /** `count` is the single-use stock; the last-resort package is never consumed. */
   keyPackageCount: (deviceId: string) =>
     request<{ count: number; hasLastResort: boolean }>(

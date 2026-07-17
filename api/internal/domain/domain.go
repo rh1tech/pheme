@@ -552,12 +552,28 @@ type MLSKeyPackage struct {
 // per-conversation KeyPackage directory cannot answer (it is scoped to a conversation's
 // members, not to "all of my devices").
 type MLSDevice struct {
-	ID         string    `bson:"_id,omitempty" json:"-"`
-	UserID     string    `bson:"userId" json:"-"`
-	DeviceID   string    `bson:"deviceId" json:"deviceId"`
-	Label      string    `bson:"label" json:"label"`
+	ID       string `bson:"_id,omitempty" json:"-"`
+	UserID   string `bson:"userId" json:"-"`
+	DeviceID string `bson:"deviceId" json:"deviceId"`
+	Label    string `bson:"label" json:"label"`
+	// SessionID is the id of the auth session this device last authenticated with — the
+	// `sid` claim in its JWT. It is what lets "terminate this device" revoke the right
+	// login and no other: never sent to any client (there is nothing a client does with
+	// another device's session id but harm), refreshed whenever the device republishes.
+	SessionID  string    `bson:"sessionId,omitempty" json:"-"`
 	CreatedAt  time.Time `bson:"createdAt" json:"createdAt"`
 	LastSeenAt time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
+}
+
+// RevokedSession records one auth session that has been terminated before its token
+// would expire. Auth tokens are stateless — signature and expiry only — so revoking one
+// needs an explicit deny list: the middleware refuses any token whose `sid` is listed
+// here. Entries carry the token's own expiry so they can be reaped once the token they
+// deny would have been rejected on expiry anyway.
+type RevokedSession struct {
+	ID        string    `bson:"_id,omitempty" json:"-"`
+	SessionID string    `bson:"sessionId" json:"sessionId"`
+	ExpiresAt time.Time `bson:"expiresAt" json:"expiresAt"`
 }
 
 // MLSKeyBackup is the encrypted backup of a device's MLS client state, sealed

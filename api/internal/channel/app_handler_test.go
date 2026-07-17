@@ -51,7 +51,7 @@ func newAppFixture(t *testing.T) *appFixture {
 func (f *appFixture) tokenFor(t *testing.T, email string) (string, domain.User) {
 	t.Helper()
 	u := seedUser(t, f.store, email, domain.RoleUser)
-	access, _, err := f.tokens.Issue(u.ID, string(domain.RoleUser))
+	access, _, _, err := f.tokens.Issue(u.ID, string(domain.RoleUser))
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}

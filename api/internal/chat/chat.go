@@ -9,6 +9,7 @@
 package chat
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -50,6 +51,17 @@ type Handler struct {
 	// store of things it cannot open, which is the point.
 	Blobs  blob.Store
 	Logger *slog.Logger
+
+	// Revoker terminates a device's login when the user removes it. Auth tokens are
+	// stateless, so revoking one means adding its session to a deny list the auth
+	// middleware checks. Nil disables session revocation (tests, or a build without it):
+	// terminating a device then still severs its crypto, but its token lives out its TTL.
+	Revoker interface {
+		Revoke(ctx context.Context, sessionID string, expiresAt time.Time) error
+	}
+	// SessionTTL is how far ahead a revoked session's deny entry is kept — the refresh
+	// token's lifetime, past which the token is rejected on expiry anyway.
+	SessionTTL time.Duration
 
 	// storm notices a conversation whose group is committing at a rate no honest
 	// membership churn explains — the observable half of the July 2026 reconcile war,
@@ -97,8 +109,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/mls/key-packages", h.publishKeyPackages)
 	mux.HandleFunc("GET /v1/mls/key-packages/count", h.keyPackageCount)
 	mux.HandleFunc("DELETE /v1/mls/key-packages", h.deleteKeyPackages)
-	// The user's own device registry — what "your devices" lists.
+	// The user's own device registry — what "your devices" lists, and terminating one.
 	mux.HandleFunc("GET /v1/mls/devices", h.listMyDevices)
+	mux.HandleFunc("DELETE /v1/mls/devices/{deviceId}", h.terminateDevice)
 	// Both device-scoped: an MLS leaf is a device, so a group is built from a KeyPackage
 	// per DEVICE of each member, never one per user. `devices` answers which devices
 	// exist without consuming anything; `claim` hands out a package for named ones.

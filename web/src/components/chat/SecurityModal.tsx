@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Alert, Badge, Group, Loader, Stack, Text } from '@mantine/core'
+import { Alert, Badge, Button, Group, Loader, Stack, Text } from '@mantine/core'
+import { notifications } from '@mantine/notifications'
 import { IconDeviceDesktop, IconShieldCheck, IconShieldOff } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
+import { useAuth } from '../../auth/context'
 import { api } from '../../lib/api'
-import { backupExists } from '../../lib/mls'
+import { backupExists, terminateOwnDevice } from '../../lib/mls'
 import { loadMlsDeviceId } from '../../lib/device'
 import { ResponsiveModal } from '../ResponsiveModal'
 import type { MLSDevice } from '../../lib/types'
@@ -33,9 +35,14 @@ function relative(iso: string, lang: string): string {
  */
 export function SecurityModal({ opened, onClose }: SecurityModalProps) {
   const { t, i18n } = useTranslation()
+  const { userId } = useAuth()
   const [devices, setDevices] = useState<MLSDevice[] | null>(null)
   const [backedUp, setBackedUp] = useState<boolean | null>(null)
   const [failed, setFailed] = useState(false)
+  // The device a "Remove?" confirmation is currently showing for, and the one whose removal is
+  // in flight — so the row can ask before acting and disable while it works.
+  const [confirming, setConfirming] = useState<string | null>(null)
+  const [removing, setRemoving] = useState<string | null>(null)
   const thisDeviceId = loadMlsDeviceId()
 
   useEffect(() => {
@@ -55,8 +62,24 @@ export function SecurityModal({ opened, onClose }: SecurityModalProps) {
     void load()
     return () => {
       active = false
+      setConfirming(null)
     }
   }, [opened])
+
+  const removeDevice = async (deviceId: string) => {
+    if (!userId) return
+    setRemoving(deviceId)
+    try {
+      await terminateOwnDevice(userId, deviceId)
+      setDevices((current) => (current ? current.filter((d) => d.deviceId !== deviceId) : current))
+      notifications.show({ color: 'green', message: t('security.removed') })
+    } catch {
+      notifications.show({ color: 'red', message: t('security.removeFailed') })
+    } finally {
+      setRemoving(null)
+      setConfirming(null)
+    }
+  }
 
   return (
     <ResponsiveModal opened={opened} onClose={onClose} title={t('security.title')}>
@@ -112,26 +135,67 @@ export function SecurityModal({ opened, onClose }: SecurityModalProps) {
               {t('security.noDevices')}
             </Text>
           )}
-          {devices?.map((d) => (
-            <Group key={d.deviceId} gap="sm" wrap="nowrap" data-testid="security-device">
-              <IconDeviceDesktop size={20} />
-              <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
-                <Group gap="xs" wrap="nowrap">
-                  <Text size="sm" fw={500} truncate>
-                    {d.label || d.deviceId.slice(0, 8)}
+          {devices?.map((d) => {
+            const isThis = d.deviceId === thisDeviceId
+            return (
+              <Group key={d.deviceId} gap="sm" wrap="nowrap" data-testid="security-device">
+                <IconDeviceDesktop size={20} />
+                <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
+                  <Group gap="xs" wrap="nowrap">
+                    <Text size="sm" fw={500} truncate>
+                      {d.label || d.deviceId.slice(0, 8)}
+                    </Text>
+                    {isThis && (
+                      <Badge size="xs" variant="light" color="iris">
+                        {t('security.thisDevice')}
+                      </Badge>
+                    )}
+                  </Group>
+                  <Text size="xs" c="dimmed">
+                    {t('security.lastActive', { when: relative(d.lastSeenAt, i18n.language) })}
                   </Text>
-                  {d.deviceId === thisDeviceId && (
-                    <Badge size="xs" variant="light" color="iris">
-                      {t('security.thisDevice')}
-                    </Badge>
-                  )}
-                </Group>
-                <Text size="xs" c="dimmed">
-                  {t('security.lastActive', { when: relative(d.lastSeenAt, i18n.language) })}
-                </Text>
-              </Stack>
-            </Group>
-          ))}
+                </Stack>
+
+                {/* No "remove" on the device you are using — that is what Log out is for. Removing
+                    another device is a two-tap confirm: it signs that device out and cuts it out of
+                    every encrypted conversation, which is not something to do on a stray tap. */}
+                {!isThis &&
+                  (confirming === d.deviceId ? (
+                    <Group gap="xs" wrap="nowrap">
+                      <Button
+                        size="compact-xs"
+                        color="red"
+                        loading={removing === d.deviceId}
+                        onClick={() => void removeDevice(d.deviceId)}
+                        data-testid="security-device-confirm-remove"
+                      >
+                        {t('security.confirmRemove')}
+                      </Button>
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        color="gray"
+                        disabled={removing === d.deviceId}
+                        onClick={() => setConfirming(null)}
+                      >
+                        {t('common.cancel')}
+                      </Button>
+                    </Group>
+                  ) : (
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      color="red"
+                      disabled={removing !== null}
+                      onClick={() => setConfirming(d.deviceId)}
+                      data-testid="security-device-remove"
+                    >
+                      {t('security.remove')}
+                    </Button>
+                  ))}
+              </Group>
+            )
+          })}
         </Stack>
       </Stack>
     </ResponsiveModal>

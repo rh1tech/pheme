@@ -350,6 +350,13 @@ type Store interface {
 	ListMLSDevices(ctx context.Context, userID string) ([]domain.MLSDevice, error)
 	DeleteMLSDevice(ctx context.Context, userID, deviceID string) error
 
+	// Auth session revocation — the deny list behind "terminate this device". Auth tokens
+	// are stateless, so revoking one means recording its session id until it would expire
+	// anyway. RevokeSession adds (or extends) an entry; ActiveRevokedSessions lists the
+	// ids still within their expiry, to hydrate the in-memory deny set at startup.
+	RevokeSession(ctx context.Context, sessionID string, expiresAt time.Time) error
+	ActiveRevokedSessions(ctx context.Context, now time.Time) ([]string, error)
+
 	// Admin
 	AdminStats(ctx context.Context, topN, recentN int) (domain.AdminStats, error)
 

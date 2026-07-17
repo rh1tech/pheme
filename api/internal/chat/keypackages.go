@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 )
@@ -113,14 +114,83 @@ func (h *Handler) publishKeyPackages(w http.ResponseWriter, r *http.Request) {
 	if len(label) > maxDeviceLabelLen {
 		label = label[:maxDeviceLabelLen]
 	}
+	// Bind this device to the session it is authenticating with, so terminating the device
+	// later can revoke exactly that login. Empty for a token minted before sessions carried
+	// an id — harmless, it just leaves nothing to revoke.
+	sid, _ := auth.SessionIDFromContext(r.Context())
 	if err := h.Store.UpsertMLSDevice(r.Context(), domain.MLSDevice{
 		UserID:     uid,
 		DeviceID:   req.DeviceID,
 		Label:      label,
+		SessionID:  sid,
 		CreatedAt:  now,
 		LastSeenAt: now,
 	}); err != nil {
 		h.logger().Error("device registry: upsert", "error", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// terminateDevice removes one of the caller's OWN devices: it deletes the device's published
+// KeyPackages so it cannot be re-added to any group, forgets it from the registry, and revokes
+// its auth session so its token stops working. The MLS leaf removal — cutting the device out of
+// each conversation it is in — is orchestrated client-side by the terminating device (only a
+// group member can author that commit); this endpoint handles the parts the server owns.
+//
+// The effect on the terminated device: its leaf goes missing from every group (it can no longer
+// decrypt new messages) and its next request 401s, so it wipes and signs out. This is the
+// lost-or-stolen-device answer, which is why it revokes auth rather than only signing out.
+func (h *Handler) terminateDevice(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	deviceID := r.PathValue("deviceId")
+	if deviceID == "" {
+		httpx.Error(w, http.StatusBadRequest, "deviceId is required")
+		return
+	}
+
+	// Find the device in the caller's OWN registry — both to confirm ownership (a user can
+	// only terminate their own devices) and to learn which session to revoke.
+	devices, err := h.Store.ListMLSDevices(r.Context(), uid)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not load devices")
+		return
+	}
+	var target *domain.MLSDevice
+	for i := range devices {
+		if devices[i].DeviceID == deviceID {
+			target = &devices[i]
+			break
+		}
+	}
+	if target == nil {
+		httpx.Error(w, http.StatusNotFound, "no such device")
+		return
+	}
+
+	// Delete its KeyPackages first, so that even if a later step fails the device can no
+	// longer be handed out to a group and re-added behind the user's back.
+	if err := h.Store.DeleteKeyPackages(r.Context(), uid, deviceID); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not terminate device")
+		return
+	}
+
+	// Revoke its login. Best effort past the KeyPackage delete: if this fails the device is
+	// already crypto-severed (no leaf, no keys), and its token dies on its own expiry.
+	if h.Revoker != nil && target.SessionID != "" {
+		ttl := h.SessionTTL
+		if ttl <= 0 {
+			ttl = 24 * time.Hour
+		}
+		if err := h.Revoker.Revoke(r.Context(), target.SessionID, time.Now().Add(ttl)); err != nil {
+			h.logger().Error("terminate device: revoke session", "error", err)
+		}
+	}
+
+	if err := h.Store.DeleteMLSDevice(r.Context(), uid, deviceID); err != nil {
+		h.logger().Error("terminate device: forget device", "error", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

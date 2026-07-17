@@ -1673,6 +1673,51 @@ export async function removeGroupMember(
   await api.removeConversationMember(conversationId, memberUserId)
 }
 
+/**
+ * Terminates one of the user's OWN devices — the "remove this device" action.
+ *
+ * The device being removed is another leaf of the same user, present in every conversation that
+ * user is in. Only a group member can author the Commit that removes it, so THIS device does it:
+ * for each conversation it holds the group for, it commits away the target's leaf. Then the server
+ * finishes the job it owns — deletes the target's key packages so it can never be re-added, revokes
+ * its login, and forgets it. The removed device is left with no leaf (it can decrypt nothing new)
+ * and a dead token (its next request signs it out), so it wipes.
+ *
+ * Removing the leaves is best-effort per conversation: one that will not commit (the group moved
+ * out from under us and would not settle) must not stop the others or the server-side revocation —
+ * a co-member prunes any leaf we could not, and the key-package delete already stops a rejoin.
+ */
+export async function terminateOwnDevice(myUserId: string, deviceId: string): Promise<void> {
+  const session = await mlsSession(myUserId)
+  const target = deviceIdentity(myUserId, deviceId)
+  if (target === session.identity) {
+    // Terminating the device you are using is just signing out — there is no other device to
+    // orchestrate the removal, and committing your own leaf away is not allowed (CannotRemoveSelf).
+    throw new Error('use log out to sign out of this device')
+  }
+
+  const conversations = await api.listConversations().catch(() => [])
+  for (const conversation of conversations) {
+    try {
+      const state = await api.mlsGroupState(conversation.id)
+      if (!state.groupId || !(await session.hasGroup(state.groupId))) continue
+      const leaves = await session.memberIdentities(state.groupId)
+      if (!leaves.includes(target)) continue
+      for (let attempt = 0; attempt < COMMIT_ATTEMPTS; attempt++) {
+        const result = await session.commitRemoveDevices(conversation.id, state.groupId, [target])
+        if (result === 'accepted') break
+        await catchUp(session, conversation.id, state.groupId)
+      }
+    } catch {
+      // This conversation would not settle; leave its leaf for a co-member to prune. The
+      // server-side key-package delete below still prevents the device from being re-added.
+    }
+  }
+
+  // The parts only the server can do: kill the login, delete the key packages, forget the device.
+  await api.terminateDevice(deviceId)
+}
+
 // --- call keys ------------------------------------------------------------
 //
 // A voice call's media is encrypted by WebRTC itself (DTLS-SRTP), but the key exchange for

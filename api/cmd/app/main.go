@@ -51,6 +51,15 @@ func main() {
 		os.Exit(1)
 	}
 	tokens := b.Tokens()
+	// Session revocation is the deny list behind "terminate this device": the middleware
+	// refuses a token whose session has been revoked, and the set is hydrated from the store
+	// so a revocation outlives a restart.
+	revoker := auth.NewSessionRevoker(db)
+	if err := revoker.Hydrate(ctx); err != nil {
+		logger.Error("session revoker hydrate", "error", err)
+		os.Exit(1)
+	}
+	tokens.UseRevoker(revoker)
 	codes := b.Codes()
 	sender, err := b.Mailer()
 	if err != nil {
@@ -79,6 +88,9 @@ func main() {
 		Mailer:       sender,
 		AdminEmails:  adminEmails,
 		Logger:       logger,
+		// The refresh endpoint is public, so it checks revocation itself — otherwise a
+		// terminated session could refresh its way back in past the middleware.
+		Revoker:      revoker,
 		CodeTTL:      cfg.CodeTTL,
 		CodeCooldown: cfg.CodeCooldown,
 	}).Routes(mux)
@@ -107,6 +119,10 @@ func main() {
 			Mailbox: b.CallMailbox(),
 			Limiter: b.Limiter(),
 			Logger:  logger,
+			// Terminating a device revokes its login; the deny entry is kept for a refresh
+			// token's lifetime, past which the token expires on its own.
+			Revoker:    revoker,
+			SessionTTL: cfg.RefreshTokenTTL,
 		},
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
 	}).Routes(mux)

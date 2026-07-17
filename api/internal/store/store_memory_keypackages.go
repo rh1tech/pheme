@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sort"
+	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
@@ -280,6 +281,12 @@ func (m *Memory) UpsertMLSDevice(_ context.Context, d domain.MLSDevice) error {
 	if ok {
 		existing.Label = d.Label
 		existing.LastSeenAt = d.LastSeenAt
+		// Keep the session id current so a later "terminate this device" revokes the login
+		// the device is actually using. Only overwrite when the caller supplied one — a
+		// blank must not erase a known session.
+		if d.SessionID != "" {
+			existing.SessionID = d.SessionID
+		}
 		m.mlsDevices[key] = existing
 		return nil
 	}
@@ -308,6 +315,28 @@ func (m *Memory) DeleteMLSDevice(_ context.Context, userID, deviceID string) err
 	defer m.mu.Unlock()
 	delete(m.mlsDevices, mlsDeviceKey(userID, deviceID))
 	return nil
+}
+
+func (m *Memory) RevokeSession(_ context.Context, sessionID string, expiresAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.revokedSessions == nil {
+		m.revokedSessions = make(map[string]time.Time)
+	}
+	m.revokedSessions[sessionID] = expiresAt
+	return nil
+}
+
+func (m *Memory) ActiveRevokedSessions(_ context.Context, now time.Time) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]string, 0, len(m.revokedSessions))
+	for sid, exp := range m.revokedSessions {
+		if exp.After(now) {
+			out = append(out, sid)
+		}
+	}
+	return out, nil
 }
 
 // How many retired groups a conversation remembers. Each one is a group somebody might still

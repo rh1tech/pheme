@@ -267,6 +267,10 @@ const en = {
     deviceCount_few: '{{count}} devices',
     deviceCount_many: '{{count}} devices',
     loadFailed: 'Could not load your devices',
+    remove: 'Remove',
+    confirmRemove: 'Remove device',
+    removed: 'Device removed',
+    removeFailed: 'Could not remove that device',
   },
   chat: {
     reply: 'Reply',

@@ -61,3 +61,39 @@ test('the security panel lists all of a user’s devices', async ({ browser }) =
 
   await Promise.all([one.context.close(), two.context.close()])
 })
+
+/**
+ * From the security panel, a user removes their OTHER device. It takes a confirm, and once it goes
+ * through the device is gone from the list — the panel drops back to just this one. There is no
+ * remove control on the current device (that is what Log out is for).
+ */
+test('a user can remove another of their devices from the security panel', async ({ browser }) => {
+  const email = uniqueEmail('sec3')
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, email, PASSWORD)
+  await setup.close()
+
+  // Device "two" is the one we keep and act from; "one" is the device we remove.
+  const one = await signInOnNewDevice(browser, email, PASSWORD)
+  const two = await signInOnNewDevice(browser, email, PASSWORD)
+
+  await two.page.getByTestId('chat-sidebar').getByRole('button', { name: 'Menu' }).click()
+  await two.page.getByRole('menuitem', { name: 'Devices & security' }).click()
+  await expect(two.page.getByTestId('security-device')).toHaveCount(2, { timeout: 20_000 })
+
+  // Exactly one row offers a remove control — the current device has none.
+  const removeButtons = two.page.getByTestId('security-device-remove')
+  await expect(removeButtons).toHaveCount(1)
+
+  // Remove it: first tap asks to confirm, second carries it out.
+  await removeButtons.first().click()
+  await two.page.getByTestId('security-device-confirm-remove').click()
+
+  // The panel settles on just this device.
+  await expect(two.page.getByTestId('security-device')).toHaveCount(1, { timeout: 20_000 })
+  await expect(two.page.getByText('This device')).toHaveCount(1)
+
+  await Promise.all([one.context.close(), two.context.close()])
+})

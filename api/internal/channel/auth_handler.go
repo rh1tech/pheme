@@ -34,6 +34,14 @@ type AuthHandler struct {
 	AdminEmails map[string]bool
 	Logger      *slog.Logger
 
+	// Revoker rejects a refresh whose session has been terminated. The /v1/auth/* routes
+	// are public — outside the JWT middleware that guards everything else — so a revoked
+	// session would otherwise mint fresh tokens here forever. Optional: without one, no
+	// session is revoked (the prior behaviour, and what the auth tests exercise).
+	Revoker interface {
+		IsRevoked(sessionID string) bool
+	}
+
 	// CodeTTL is how long a pending signup / reset code stays valid.
 	CodeTTL time.Duration
 	// CodeCooldown is the minimum interval between code sends to one email.
@@ -282,7 +290,12 @@ func (h *AuthHandler) refresh(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	}
-	h.issue(w, claims.Subject, claims.Role, http.StatusOK)
+	// A terminated device must not be able to refresh its way back in.
+	if h.Revoker != nil && h.Revoker.IsRevoked(claims.SID) {
+		httpx.Error(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+	h.issueForSession(w, claims.Subject, claims.Role, claims.SID, http.StatusOK)
 }
 
 type forgotRequest struct {
@@ -399,8 +412,20 @@ func (h *AuthHandler) resetPassword(w http.ResponseWriter, r *http.Request) {
 	h.issue(w, rst.UserID, string(role), http.StatusOK)
 }
 
+// issue starts a NEW session (login, register, password reset) and writes its tokens.
 func (h *AuthHandler) issue(w http.ResponseWriter, userID, role string, status int) {
-	access, refresh, err := h.Tokens.Issue(userID, role)
+	access, refresh, _, err := h.Tokens.Issue(userID, role)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not issue tokens")
+		return
+	}
+	httpx.JSON(w, status, tokenResponse{AccessToken: access, RefreshToken: refresh, UserID: userID, Role: role})
+}
+
+// issueForSession re-issues tokens for an EXISTING session (a token refresh), keeping the
+// same session id so terminating the device still revokes the right login.
+func (h *AuthHandler) issueForSession(w http.ResponseWriter, userID, role, sessionID string, status int) {
+	access, refresh, err := h.Tokens.IssueWithSession(userID, role, sessionID)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not issue tokens")
 		return

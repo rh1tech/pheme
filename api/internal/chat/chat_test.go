@@ -30,7 +30,9 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	db := store.NewMemory(blob.NewMemory())
 	tokens := auth.NewTokenManager("test-secret", 15*time.Minute, 24*time.Hour)
-	h := &Handler{Store: db, Live: live.NewMemoryBus(), Blobs: blob.NewMemory()}
+	revoker := auth.NewSessionRevoker(db)
+	tokens.UseRevoker(revoker)
+	h := &Handler{Store: db, Live: live.NewMemoryBus(), Blobs: blob.NewMemory(), Revoker: revoker, SessionTTL: 24 * time.Hour}
 	protected := http.NewServeMux()
 	h.Register(protected)
 	mux := http.NewServeMux()
@@ -46,7 +48,7 @@ func (f *fixture) user(t *testing.T, email string) (string, string) {
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	access, _, err := f.tokens.Issue(u.ID, string(domain.RoleUser))
+	access, _, _, err := f.tokens.Issue(u.ID, string(domain.RoleUser))
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}

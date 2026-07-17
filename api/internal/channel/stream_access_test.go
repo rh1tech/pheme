@@ -173,7 +173,7 @@ func TestStreamEndsWhenItsTokenExpires(t *testing.T) {
 	f.h.Tokens = shortLived
 
 	u := seedUser(t, f.store, "expiring-stream@pheme.test", domain.RoleUser)
-	token, _, err := shortLived.Issue(u.ID, string(domain.RoleUser))
+	token, _, _, err := shortLived.Issue(u.ID, string(domain.RoleUser))
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
