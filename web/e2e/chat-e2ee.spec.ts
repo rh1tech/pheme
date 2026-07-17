@@ -198,7 +198,12 @@ test('an admin adds and removes a group member, and encryption follows', async (
 
   const bob = await signInOnNewDevice(browser, bobEmail, PASSWORD)
   const carol = await signInOnNewDevice(browser, carolEmail, PASSWORD)
-  await setDisplayName(carol.page, 'Carol Findme')
+  // A name unique to THIS run. The in-memory test server never forgets, so a retry (or an earlier
+  // test) that reused a fixed name would leave several "Carol Findme"s for the search to match, and
+  // the "Add …" button would resolve to more than one element — a strict-mode violation, not a bug
+  // in the app.
+  const carolName = `Carol Findme ${Date.now()}`
+  await setDisplayName(carol.page, carolName)
   const owner = await signInOnNewDevice(browser, ownerEmail, PASSWORD)
 
   const group = await createGroup(owner.page, `The Group ${Date.now()}`, [bob.userId])
@@ -210,8 +215,8 @@ test('an admin adds and removes a group member, and encryption follows', async (
   // Owner adds Carol through the member-management UI.
   await owner.page.getByRole('button', { name: 'Conversation menu' }).click()
   await owner.page.getByRole('menuitem', { name: 'Members' }).click()
-  await owner.page.getByPlaceholder('Search people by name or @username').fill('Carol Findme')
-  await owner.page.getByRole('button', { name: 'Add Carol Findme' }).click()
+  await owner.page.getByPlaceholder('Search people by name or @username').fill(carolName)
+  await owner.page.getByRole('button', { name: `Add ${carolName}` }).click()
   await expect(owner.page.getByText('Member added')).toBeVisible({ timeout: 20_000 })
   await owner.page.keyboard.press('Escape')
 
