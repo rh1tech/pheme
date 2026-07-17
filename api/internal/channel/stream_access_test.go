@@ -164,8 +164,12 @@ func TestBlockedUserLosesLiveStreamImmediately(t *testing.T) {
 // permanently. It reopens with a fresh token instead (see useEventStream).
 func TestStreamEndsWhenItsTokenExpires(t *testing.T) {
 	f := newAppFixture(t)
-	// A token that outlives the connect handshake and little else.
-	shortLived := auth.NewTokenManager("test-secret", 700*time.Millisecond, 24*time.Hour)
+	// A token that outlives the connect handshake and little else. It has to clear the
+	// handshake with room to spare on a busy CI runner — the connect must observe 200
+	// while the token is still valid — so this is generous rather than tight; the drain
+	// below still proves the stream ends once it expires, and 2.5s expires long before
+	// that 5s window closes.
+	shortLived := auth.NewTokenManager("test-secret", 2500*time.Millisecond, 24*time.Hour)
 	f.h.Tokens = shortLived
 
 	u := seedUser(t, f.store, "expiring-stream@pheme.test", domain.RoleUser)
