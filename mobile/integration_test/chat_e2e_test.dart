@@ -45,6 +45,7 @@ import 'package:pheme_mobile/src/crypto/chat_cache.dart';
 import 'package:pheme_mobile/src/crypto/mls_errors.dart';
 import 'package:pheme_mobile/src/crypto/mls_service.dart';
 import 'package:pheme_mobile/src/data/pheme_repository.dart';
+import 'package:pheme_mobile/src/models/chat_models.dart';
 import 'package:pheme_mobile/src/rust/frb_generated.dart';
 
 /// Where the API is. An Android emulator cannot see the host as localhost, so:
@@ -637,6 +638,75 @@ void main() {
             'shared one',
       );
       expect((await bob.read(conversation.id))[m4.id], 'fourth');
+    });
+  });
+
+  group('history sync', () {
+    // A new device joins a conversation and gets its PRE-JOIN history from a co-member who is
+    // online — device to device, sealed under a group-derived key the server never has. This is
+    // the request -> offer -> import handshake, driven here through the service directly (the app
+    // wires the same calls to the live stream's responder election).
+    testWidgets('hands a fresh device its pre-join history from a co-member', (
+      _,
+    ) async {
+      final bobEmail = _email('bob');
+      final alice = await Device.signUp('alice', _email('alice'));
+      final bobPhone = await Device.signUp('bobphone', bobEmail);
+      await alice.publishKeys();
+      await bobPhone.publishKeys();
+
+      final conversation = await alice.repo.createDirectChat(bobPhone.userId);
+      final past = await alice.mls.sendMessage(
+        conversation,
+        alice.userId,
+        'said before the laptop existed',
+      );
+      // Bob's phone reads it, so the phone holds this history to hand out later.
+      expect((await bobPhone.read(conversation.id))[past.id], isNotNull);
+
+      // Bob's laptop: a brand-new device. It external-joins and, holding no transcript, cannot read
+      // the pre-join message.
+      final bobLaptop = await Device.signIn('boblaptop', bobEmail);
+      await bobLaptop.publishKeys();
+      final beforeSync = await bobLaptop.read(conversation.id);
+      expect(
+        beforeSync[past.id],
+        isNull,
+        reason: 'a device that just joined holds none of the history yet',
+      );
+
+      // The laptop asks for the history. The phone catches up to the laptop's join epoch (so the
+      // key it derives matches), then answers as the elected responder.
+      await bobLaptop.mls.requestHistory(conversation.id, bobLaptop.userId);
+      await bobPhone.read(conversation.id); // catch up to the laptop's leaf
+      final laptopIdentity = await bobLaptop.mls.myIdentity(bobLaptop.userId);
+      await bobPhone.mls.offerHistory(
+        conversation.id,
+        bobPhone.userId,
+        laptopIdentity,
+      );
+
+      // The laptop receives the offer (a control message) and opens it.
+      final page = await bobLaptop.repo.listChatMessages(conversation.id);
+      final offer = page.messages.firstWhere(
+        (m) => m.contentType == ContentType.mlsHistoryOffer,
+      );
+      final imported = await bobLaptop.mls.receiveHistoryOffer(
+        conversation.id,
+        bobLaptop.userId,
+        offer.ciphertext,
+      );
+      expect(
+        imported,
+        isTrue,
+        reason: 'the offer was addressed to this device',
+      );
+
+      // The pre-join message is now readable on the laptop — device-to-device, never via the server.
+      expect(
+        bobLaptop.cache.content(conversation.id, past.id)?.body,
+        'said before the laptop existed',
+      );
     });
   });
 }

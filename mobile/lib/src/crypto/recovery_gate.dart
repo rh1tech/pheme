@@ -19,6 +19,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../chat/chat_providers.dart';
+import '../chat/history_sync_controller.dart';
 import '../core/snackbar.dart';
 import '../l10n/app_localizations.dart';
 import 'mls_errors.dart';
@@ -202,7 +203,12 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
   }
 
   @override
-  Widget build(BuildContext context) => widget.child;
+  Widget build(BuildContext context) {
+    // Keep device-to-device history sync alive app-wide, so a co-member answers a new device's
+    // history request whether or not anyone is looking at the conversation it concerns.
+    ref.watch(historySyncControllerProvider);
+    return widget.child;
+  }
 }
 
 /// The recovery code, shown in a selectable monospace box with a copy button.

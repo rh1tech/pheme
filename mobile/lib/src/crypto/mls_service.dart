@@ -64,6 +64,10 @@ const _externalJoinAttempts = 3;
 /// The exporter label for call keys. Changing it changes every derived key, so it is versioned.
 const callKeyLabel = 'pheme-call-v1';
 
+/// The exporter label for history-sync keys. Versioned like the call label, and identical to the
+/// web client's so a sealed transcript is readable across platforms.
+const _historySyncLabel = 'pheme/history-sync/v1';
+
 /// A human label for THIS device, for the user's "your devices" list. Best effort — a device is
 /// perfectly usable if the label is vague. Nothing identifying beyond the OS family.
 String deviceLabel() {
@@ -417,6 +421,8 @@ class MlsService {
       );
       if (joined != null) {
         _waitingSince.remove(conversation.id);
+        // We just joined and hold none of the past — ask a co-member for it. A no-op if we have it.
+        unawaited(requestHistory(conversation.id, myUserId).catchError((_) {}));
         return joined;
       }
 
@@ -475,6 +481,8 @@ class MlsService {
         state.groupId,
       ).catchError((_) {}),
     );
+    // If we hold the group but none of its history (a device admitted by Welcome), ask for it.
+    unawaited(requestHistory(conversation.id, myUserId).catchError((_) {}));
     return state.groupId;
   }
 
@@ -1537,6 +1545,189 @@ class MlsService {
   Future<String?> currentDeviceId() =>
       loadMlsDeviceId(_storage, namespace: _ns);
 
+  // --- history sync ----------------------------------------------------------------------------
+  //
+  // A device that joins a conversation it holds no transcript for asks a co-member for the history,
+  // over the conversation's own MLS group. Any co-member can answer (all members already see all
+  // messages, so this leaks nothing): it seals this conversation's bodies under a group-derived key
+  // bound to the requester, uploads the blob, and points the requester at it. Degrades to the backup
+  // (Phase 3) when nobody is online, and to new-messages-only when there is no backup either.
+
+  /// The current group's member identities, or empty when this device does not hold the group — the
+  /// input to the responder election.
+  Future<List<String>> groupMemberIdentities(
+    String conversationId,
+    String userId,
+  ) async {
+    final session = await this.session(userId);
+    final state = await _repo.mlsGroupState(conversationId);
+    if (!state.isEstablished || !await session.hasGroup(state.groupId)) {
+      return const [];
+    }
+    return session.memberIdentities(state.groupId);
+  }
+
+  /// Conversations this device has already asked history for this session — so it asks once, not on
+  /// every settle.
+  final _historyRequested = <String>{};
+
+  /// Asks co-members for this conversation's pre-join history — once per conversation per session, and
+  /// only when this device holds the group but has no local transcript for it (it just joined).
+  Future<void> requestHistory(String conversationId, String userId) async {
+    if (_historyRequested.contains(conversationId)) return;
+    final session = await this.session(userId);
+    final state = await _repo.mlsGroupState(conversationId);
+    if (!state.isEstablished || !await session.hasGroup(state.groupId)) return;
+    // Nothing to fetch if we already hold this conversation's history.
+    final existing = (await _cache.exportAllContents())[conversationId];
+    if (existing != null && existing.isNotEmpty) return;
+
+    _historyRequested.add(conversationId);
+    final epoch = await session.epoch(state.groupId);
+    final body = _encodeControl({'id': session.identity, 'epoch': epoch});
+    try {
+      await _repo.sendChatMessage(
+        conversationId,
+        body,
+        ContentType.mlsHistoryRequest,
+      );
+    } on Object {
+      _historyRequested.remove(conversationId); // let a later settle try again
+    }
+  }
+
+  /// Responds to a history request: seal this conversation's transcript under a group-derived key
+  /// bound to the requester, upload it, and point the requester at it. No-op if we hold nothing, or
+  /// the request is our own device's. Callers elect a single responder before calling this.
+  Future<void> offerHistory(
+    String conversationId,
+    String userId,
+    String requesterIdentity,
+  ) async {
+    final session = await this.session(userId);
+    if (requesterIdentity.isEmpty || requesterIdentity == session.identity) {
+      return;
+    }
+    final state = await _repo.mlsGroupState(conversationId);
+    if (!state.isEstablished || !await session.hasGroup(state.groupId)) return;
+    final bodies = (await _cache.exportAllContents())[conversationId];
+    if (bodies == null || bodies.isEmpty) return;
+
+    final derived = await session.exportSecret(
+      state.groupId,
+      _historySyncLabel,
+      Uint8List.fromList(utf8.encode(requesterIdentity)),
+      32,
+    );
+    if (derived == null) return;
+
+    final plaintext = Uint8List.fromList(
+      utf8.encode(jsonEncode({'v': 1, 'bodies': bodies})),
+    );
+    final sealed = await rust.mlsBackupEncrypt(
+      passphrase: derived.secret,
+      plaintext: plaintext,
+    );
+    final String historyId;
+    try {
+      historyId = await _repo.uploadHistory(conversationId, sealed.ciphertext);
+    } on Object {
+      return;
+    }
+    final offer = _encodeControl({
+      'to': requesterIdentity,
+      'epoch': derived.epoch,
+      'historyId': historyId,
+      'salt': base64Encode(sealed.salt),
+      'nonce': base64Encode(sealed.nonce),
+    });
+    try {
+      await _repo.sendChatMessage(
+        conversationId,
+        offer,
+        ContentType.mlsHistoryOffer,
+      );
+    } on Object {
+      // The requester will re-ask on its next settle if this never lands.
+    }
+  }
+
+  /// Opens a history offer addressed to this device: derive the same group-bound key, fetch the
+  /// sealed blob, open it and merge the bodies under what we already hold. Returns whether any
+  /// history was imported. Ignores offers not addressed to this device.
+  Future<bool> receiveHistoryOffer(
+    String conversationId,
+    String userId,
+    Uint8List offerCiphertext,
+  ) async {
+    final session = await this.session(userId);
+    final offer = _decodeControl(offerCiphertext);
+    if (offer == null || offer['to'] != session.identity) return false;
+    final state = await _repo.mlsGroupState(conversationId);
+    if (!state.isEstablished || !await session.hasGroup(state.groupId)) {
+      return false;
+    }
+
+    final derived = await session.exportSecret(
+      state.groupId,
+      _historySyncLabel,
+      Uint8List.fromList(utf8.encode(session.identity)),
+      32,
+    );
+    // Bound to the epoch the offer was sealed at; if we have since moved, re-request rather than
+    // open with a key that will not match.
+    if (derived == null || derived.epoch != (offer['epoch'] as num?)?.toInt()) {
+      return false;
+    }
+
+    final Uint8List plaintext;
+    try {
+      final blob = await _repo.getHistory(
+        conversationId,
+        offer['historyId'] as String? ?? '',
+      );
+      plaintext = await rust.mlsBackupDecrypt(
+        passphrase: derived.secret,
+        salt: base64Decode(offer['salt'] as String? ?? ''),
+        nonce: base64Decode(offer['nonce'] as String? ?? ''),
+        ciphertext: blob,
+      );
+    } on Object {
+      return false;
+    }
+
+    try {
+      final parsed = jsonDecode(utf8.decode(plaintext));
+      if (parsed is Map && parsed['bodies'] is Map) {
+        final bodies = (parsed['bodies'] as Map).map(
+          (id, body) => MapEntry(id as String, body as String),
+        );
+        if (bodies.isNotEmpty) {
+          await _cache.importContents({conversationId: bodies});
+          return true;
+        }
+      }
+    } on Object {
+      return false;
+    }
+    return false;
+  }
+
+  /// base64/JSON control-body helpers. The wire carries the ciphertext field base64-encoded, so the
+  /// bytes here are the UTF-8 JSON — the exact shape the web client uses, so a request or offer works
+  /// across platforms.
+  Uint8List _encodeControl(Map<String, dynamic> obj) =>
+      Uint8List.fromList(utf8.encode(jsonEncode(obj)));
+
+  Map<String, dynamic>? _decodeControl(Uint8List bytes) {
+    try {
+      final parsed = jsonDecode(utf8.decode(bytes));
+      return parsed is Map<String, dynamic> ? parsed : null;
+    } on Object {
+      return null;
+    }
+  }
+
   /// Schedules a debounced re-seal of this device's backup, if auto-backup is armed (a secret is
   /// held). Fire-and-forget: a failed auto-backup is not worth surfacing — the next change schedules
   /// another, and the keys/transcript are safe locally regardless.
@@ -1570,6 +1761,7 @@ class MlsService {
     _settling.clear();
     _readableGroups.clear();
     _waitingSince.clear();
+    _historyRequested.clear();
 
     // Disarm auto-backup and forget the secret, so nothing re-seals this identity after it is gone.
     _autoBackupTimer?.cancel();

@@ -24,11 +24,23 @@ abstract final class ContentType {
   /// "I am a member of this conversation and my device holds no group — admit me."
   static const mlsDevice = 'application/mls-device';
 
+  /// "I just joined and hold none of this conversation's history — can a co-member send it?"
+  static const mlsHistoryRequest = 'application/mls-history-request';
+
+  /// "Here is the sealed history you asked for" — points at an uploaded blob, addressed to one device.
+  static const mlsHistoryOffer = 'application/mls-history-offer';
+
   /// A missed/declined/failed call, recorded as a real encrypted message.
   static const callEvent = 'application/pheme-call-event';
 
   /// Control traffic: never rendered as a message, never decrypted as one.
-  static const control = {mlsWelcome, mlsCommit, mlsDevice};
+  static const control = {
+    mlsWelcome,
+    mlsCommit,
+    mlsDevice,
+    mlsHistoryRequest,
+    mlsHistoryOffer,
+  };
 }
 
 enum ConversationKind {

@@ -484,6 +484,39 @@ class PhemeRepository {
     return res['id'] as String? ?? '';
   }
 
+  /// Uploads a sealed transcript blob for a newly-joined device (history sync), returning its id.
+  /// Opaque ciphertext — sealed under a group-derived key the server never has.
+  Future<String> uploadHistory(String conversationId, Uint8List sealed) async {
+    final res = await _send(
+      () => _dio.post<dynamic>(
+        '/v1/conversations/$conversationId/mls/history',
+        data: Stream.fromIterable([sealed]),
+        options: Options(
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': sealed.length,
+          },
+        ),
+      ),
+    );
+    return res['id'] as String? ?? '';
+  }
+
+  /// Fetches a sealed transcript blob once — the server deletes it after (one-shot). Still ciphertext.
+  Future<Uint8List> getHistory(String conversationId, String historyId) async {
+    try {
+      final res = await _dio.get<List<int>>(
+        '/v1/conversations/$conversationId/mls/history/$historyId',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(res.data ?? const []);
+    } on DioException catch (e) {
+      final err = e.error;
+      if (err is ApiException || err is AuthException) throw err as Object;
+      throw ApiException(0, e.message ?? 'network error');
+    }
+  }
+
   /// Fetches one encrypted photo. Still ciphertext — the caller opens it with the key from the message.
   Future<Uint8List> downloadAttachment(
     String conversationId,
