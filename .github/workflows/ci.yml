@@ -127,7 +127,12 @@ jobs:
       # drivers, seeded admin), then tears them down. Two shards, one per runner, split
       # the suite so no dev server carries the whole of it. CI=true disables server reuse
       # so each shard is isolated.
+      #
+      # PW_PORT_OFFSET gives each shard its OWN ports (see e2e/constants.ts): the two
+      # runners share a host, so without it the shards' App APIs collide on one port.
       - run: npx playwright test --shard=${{ matrix.shard }}/2
+        env:
+          PW_PORT_OFFSET: ${{ matrix.shard }}
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
