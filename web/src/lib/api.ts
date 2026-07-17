@@ -398,6 +398,31 @@ export const api = {
     request<MLSGroupState>(`/v1/conversations/${conversationId}/mls`),
 
   /**
+   * The latest GroupInfo a member has published for this conversation's current group — the
+   * self-contained snapshot a NEW device needs to join by external commit, with no member online
+   * to admit it. Null (404) is a real answer: no member has published one yet, so the joiner has
+   * to fall back to announce-and-wait.
+   */
+  mlsGroupInfo: (conversationId: string) =>
+    request<{ groupId: string; epoch: number; groupInfo: string } | null>(
+      `/v1/conversations/${conversationId}/mls/group-info`,
+      { allow404: true },
+    ),
+
+  /**
+   * Publishes fresh GroupInfo (base64) at `epoch`, so the NEXT new device can external-join at the
+   * current epoch instead of waiting to be admitted. Fire-and-forget after any accepted commit.
+   */
+  publishGroupInfo: (
+    conversationId: string,
+    body: { groupId: string; epoch: number; groupInfo: string },
+  ) =>
+    request<void>(`/v1/conversations/${conversationId}/mls/group-info`, {
+      method: 'POST',
+      body,
+    }),
+
+  /**
    * Retires a group nobody can use any more, so the conversation can start a fresh one.
    *
    * The last resort, and only called by a device that has announced itself and given up on

@@ -265,6 +265,23 @@ export class MlsClient {
         return BigInt.asUintN(64, ret[0]);
     }
     /**
+     * The self-contained GroupInfo a NON-MEMBER needs to join this group by external commit.
+     * A pure read; nothing is persisted.
+     * @param {Uint8Array} group_id
+     * @returns {Uint8Array}
+     */
+    exportGroupInfo(group_id) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_exportGroupInfo(this.__wbg_ptr, ptr0, len0);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+    /**
      * Derives a secret from the group for a purpose outside MLS's own messaging — Pheme
      * uses it to key voice-call signalling, so the server cannot read the SDP and
      * therefore cannot swap the DTLS fingerprint inside it.
@@ -361,6 +378,26 @@ export class MlsClient {
         var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         return v1;
+    }
+    /**
+     * Joins an existing group by external commit, from a member's GroupInfo — adds this client's
+     * own leaf with no Welcome and no member online. Returns the commit to offer the server through
+     * the ordinary compare-and-set. The commit is left PENDING and, unlike a staged commit, cannot
+     * be cleared: on acceptance call `commitAccepted`, on refusal call `deleteGroup` and retry from
+     * fresh GroupInfo.
+     * @param {Uint8Array} group_info
+     * @returns {Uint8Array}
+     */
+    joinByExternalCommit(group_info) {
+        const ptr0 = passArray8ToWasm0(group_info, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_joinByExternalCommit(this.__wbg_ptr, ptr0, len0);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
     }
     /**
      * @param {Uint8Array} welcome

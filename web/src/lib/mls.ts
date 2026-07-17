@@ -100,6 +100,11 @@ const TARGET_KEY_PACKAGES = 20
 // realistic, an unbounded fight is not.
 const COMMIT_ATTEMPTS = 4
 
+// How many times an external join is re-attempted against fresher GroupInfo after a conflict. A
+// conflict means a Commit landed between fetching GroupInfo and offering our external commit; a few
+// retries absorb ordinary concurrency, and beyond that we fall back to announce-and-wait.
+const EXTERNAL_JOIN_ATTEMPTS = 4
+
 /** Content types on the wire that this layer produces and consumes. */
 export const MLS_APPLICATION = 'application/mls'
 export const MLS_WELCOME = 'application/mls-welcome'
@@ -562,6 +567,57 @@ class Session {
     })
   }
 
+  /**
+   * The self-contained GroupInfo a non-member needs to join this group by external commit. A pure
+   * read — no ratchet mutation, nothing to persist.
+   */
+  async exportGroupInfo(groupId: string): Promise<Uint8Array> {
+    return this.exclusive(async () => this.client.exportGroupInfo(groupBytes(groupId)))
+  }
+
+  /**
+   * Joins an existing group by EXTERNAL COMMIT — adds this device's own leaf from a member's
+   * published GroupInfo, with no Welcome and nobody online to admit it. `baseEpoch` is the epoch the
+   * GroupInfo was exported at; the external commit produces `baseEpoch + 1`, offered through the same
+   * compare-and-set as any commit.
+   *
+   * The external commit is PENDING and, unlike a staged commit, CANNOT be cleared — so a refusal is
+   * handled by deleting the whole group (not commitRejected) and letting the caller retry from fresh
+   * GroupInfo.
+   */
+  async joinByExternalCommit(
+    conversationId: string,
+    groupId: string,
+    groupInfo: Uint8Array,
+    baseEpoch: number,
+  ): Promise<'accepted' | 'conflict'> {
+    return this.exclusive(async () => {
+      const bytes = groupBytes(groupId)
+      // A concurrent settle (or a Welcome that just landed) already put us in. Nothing to do.
+      if (this.client.hasGroup(bytes)) return 'accepted'
+
+      const commit = this.client.joinByExternalCommit(groupInfo)
+      // The pending external commit lives in the client state; persist it, or a reload would leave
+      // a group half-joined against a commit the server may have accepted.
+      await this.persist()
+
+      try {
+        await api.mlsCommit(conversationId, { groupId, baseEpoch, commit: bytesToBase64(commit) })
+      } catch (e) {
+        // Refused or unreachable. An external commit cannot be rolled back like a staged one — the
+        // only way out is to discard the group we just created and start over from fresh GroupInfo.
+        this.client.deleteGroup(bytes)
+        await this.persist()
+        if (e instanceof ApiError && e.status === 409) return 'conflict'
+        throw e
+      }
+
+      this.client.commitAccepted(bytes)
+      await this.persist()
+      return 'accepted'
+    })
+  }
+
   /** Adds devices to the group, as their own leaves, in a single Commit. */
   async commitAdd(
     conversationId: string,
@@ -830,8 +886,20 @@ async function settleGroup(
 
   if (!(await session.hasGroup(state.groupId))) {
     // The group exists and this device is not in it: a new phone, a browser whose storage
-    // was evicted, a member added while we were offline. A device cannot add itself —
-    // only a member of the group can Commit — so say so, and a member will admit us.
+    // was evicted, a member added while we were offline.
+    //
+    // FIRST, add our own leaf by EXTERNAL COMMIT against a member's published GroupInfo — no
+    // Welcome, nobody online to admit us, one round trip. This is what turns "log in on a new
+    // device / the web at any time" from a wait into an instant join.
+    const joined = await tryExternalJoin(session, conversation.id, state.groupId)
+    if (joined) {
+      clearStuck(conversation.id)
+      return joined
+    }
+
+    // No GroupInfo to join against (no member has published one, or it is for a group since
+    // retired). Fall back to announcing: post a keyless request to be added, and a member who
+    // holds the group admits us the next time one is online.
     //
     // This is where the old code destroyed the group and rebuilt it. That is why a single
     // second device could make a whole conversation unreadable for everyone in it.
@@ -879,6 +947,10 @@ async function settleGroup(
   // that encryption was still being set up — while holding perfectly good keys the whole time.
   // A failure to tidy up bricked a working conversation.
   await reconcileDevices(session, conversation.id, state.groupId).catch(() => {})
+
+  // Keep GroupInfo fresh at whatever epoch we ended on (reconcile may have added a device), so the
+  // NEXT new device can external-join immediately instead of waiting to be admitted. Fire-and-forget.
+  void publishGroupInfo(session, conversation.id, state.groupId)
   return state.groupId
 }
 
@@ -925,6 +997,9 @@ async function establishGroup(
     await session.discardGroup(groupId)
     return settleGroup(conversation, myUserId)
   }
+  // Publish GroupInfo for the group we just established, so a member who was offline when we
+  // built it can external-join the moment they open the chat, without us admitting them.
+  void publishGroupInfo(session, conversation.id, groupId)
   return groupId
 }
 
@@ -1226,6 +1301,68 @@ function observeWedge(conversationId: string, myUserId: string): void {
     })()
   }, WEDGE_GRACE_MS)
   wedgeTimers.set(conversationId, timer)
+}
+
+/**
+ * Adds this device's own leaf to an existing group by EXTERNAL COMMIT, from a member's published
+ * GroupInfo — no Welcome, nobody online to admit it. Returns the group id on success, or null when
+ * external join is not possible (no GroupInfo published, or it is for a group since retired), in
+ * which case the caller falls back to announce-and-wait.
+ *
+ * This is what makes opening a conversation on a new device — or a web login at any time — instant
+ * instead of a wait for a member to come online and admit it.
+ */
+async function tryExternalJoin(
+  session: Session,
+  conversationId: string,
+  groupId: string,
+): Promise<string | null> {
+  for (let attempt = 0; attempt < EXTERNAL_JOIN_ATTEMPTS; attempt++) {
+    const info = await api.mlsGroupInfo(conversationId).catch(() => null)
+    // No GroupInfo, or GroupInfo for a group that has since been replaced — external join cannot
+    // help; let the caller announce and wait.
+    if (!info || info.groupId !== groupId) return null
+
+    const result = await session.joinByExternalCommit(
+      conversationId,
+      groupId,
+      base64ToBytes(info.groupInfo),
+      info.epoch,
+    )
+    if (result === 'accepted') {
+      rememberReadableGroup(conversationId, groupId)
+      // Republish at the new epoch so the NEXT joiner can external-join without waiting either.
+      void publishGroupInfo(session, conversationId, groupId)
+      return groupId
+    }
+    // 'conflict': a Commit landed between the fetch and the offer. Loop to fetch fresher GroupInfo
+    // and try again at the new epoch.
+  }
+  // Exhausted the retries against a moving group. Fall back rather than hammer the commit path.
+  return null
+}
+
+/**
+ * Publishes this device's current GroupInfo, so a NEW device can external-join at the current epoch
+ * instead of waiting to be admitted. Fire-and-forget: a joiner that finds none simply falls back to
+ * announce-and-wait, so a failure here costs a little latency for the next device, never correctness.
+ */
+async function publishGroupInfo(
+  session: Session,
+  conversationId: string,
+  groupId: string,
+): Promise<void> {
+  try {
+    const info = await session.exportGroupInfo(groupId)
+    const epoch = await session.epoch(groupId)
+    await api.publishGroupInfo(conversationId, {
+      groupId,
+      epoch,
+      groupInfo: bytesToBase64(info),
+    })
+  } catch {
+    // Best effort.
+  }
 }
 
 /**

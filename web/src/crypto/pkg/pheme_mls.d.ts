@@ -52,6 +52,11 @@ export class MlsClient {
      */
     epoch(group_id: Uint8Array): bigint;
     /**
+     * The self-contained GroupInfo a NON-MEMBER needs to join this group by external commit.
+     * A pure read; nothing is persisted.
+     */
+    exportGroupInfo(group_id: Uint8Array): Uint8Array;
+    /**
      * Derives a secret from the group for a purpose outside MLS's own messaging — Pheme
      * uses it to key voice-call signalling, so the server cannot read the SDP and
      * therefore cannot swap the DTLS fingerprint inside it.
@@ -77,6 +82,14 @@ export class MlsClient {
      * This client's own long-term signature public key.
      */
     identityKey(): Uint8Array;
+    /**
+     * Joins an existing group by external commit, from a member's GroupInfo — adds this client's
+     * own leaf with no Welcome and no member online. Returns the commit to offer the server through
+     * the ordinary compare-and-set. The commit is left PENDING and, unlike a staged commit, cannot
+     * be cleared: on acceptance call `commitAccepted`, on refusal call `deleteGroup` and retry from
+     * fresh GroupInfo.
+     */
+    joinByExternalCommit(group_info: Uint8Array): Uint8Array;
     joinFromWelcome(welcome: Uint8Array): void;
     /**
      * A single-use public KeyPackage to publish to the server.
@@ -175,12 +188,14 @@ export interface InitOutput {
     readonly mlsclient_deleteGroup: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_encrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly mlsclient_epoch: (a: number, b: number, c: number) => [bigint, number, number];
+    readonly mlsclient_exportGroupInfo: (a: number, b: number, c: number) => [number, number, number, number];
     readonly mlsclient_exportSecret: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly mlsclient_exportState: (a: number) => [number, number, number, number];
     readonly mlsclient_fromState: (a: number, b: number) => [number, number, number];
     readonly mlsclient_hasGroup: (a: number, b: number, c: number) => number;
     readonly mlsclient_identity: (a: number) => [number, number];
     readonly mlsclient_identityKey: (a: number) => [number, number];
+    readonly mlsclient_joinByExternalCommit: (a: number, b: number, c: number) => [number, number, number, number];
     readonly mlsclient_joinFromWelcome: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_keyPackage: (a: number) => [number, number, number, number];
     readonly mlsclient_lastResortKeyPackage: (a: number) => [number, number, number, number];
@@ -190,10 +205,10 @@ export interface InitOutput {
     readonly mlsclient_stageAdd: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly mlsclient_stageRemoveDevices: (a: number, b: number, c: number, d: any) => [number, number, number, number];
     readonly mlsclient_stageRemoveUsers: (a: number, b: number, c: number, d: any) => [number, number, number, number];
-    readonly __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;
-    readonly __wbg_set_backupblob_salt: (a: number, b: number, c: number) => void;
     readonly __wbg_get_backupblob_nonce: (a: number) => [number, number];
     readonly __wbg_get_backupblob_salt: (a: number) => [number, number];
+    readonly __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_backupblob_salt: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

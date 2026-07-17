@@ -509,6 +509,78 @@ test('a new device is admitted while the other member is not even in the chat', 
 })
 
 /**
+ * EXTERNAL JOIN — a new device joins with literally NO ONE online to admit it.
+ *
+ * The previous test still needed a member (Alice) signed in somewhere to react to the announce.
+ * This one closes every other device: Alice establishes the group and publishes GroupInfo, then
+ * goes away entirely. Bob's new laptop must still join — by external commit against the published
+ * GroupInfo — read what Alice said next when she returns, and never sit at "setting up encryption"
+ * or trigger a group reset. This is what makes "log in on the web at any time" instant.
+ */
+test('a new device external-joins with no one online to admit it', async ({ browser }) => {
+  const aliceEmail = uniqueEmail('alice-ext')
+  const bobEmail = uniqueEmail('bob-ext')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const bobPhone = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+
+  // Alice establishes the group and, in settling, publishes GroupInfo for future joiners.
+  const conv = await startDirectChat(alice.page, bobPhone.userId)
+  await openChatAndJoin(alice.page, conv)
+  await send(alice.page, 'before the laptop')
+  await openChatAndJoin(bobPhone.page, conv)
+  await expect(bobPhone.page.getByTestId('chat-message').last()).toContainText('before the laptop', {
+    timeout: 25_000,
+  })
+
+  // EVERY other device goes away — Alice and Bob's phone both close. Nobody is online to admit.
+  await Promise.all([alice.context.close(), bobPhone.context.close()])
+
+  // Bob's brand-new laptop opens the chat. With no admitter anywhere, it must external-join off
+  // the published GroupInfo — openChatAndJoin waits for data-joined=true, which only happens once
+  // it actually holds the group.
+  const bobLaptop = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  await openChatAndJoin(bobLaptop.page, conv)
+  const joined = await groupState(bobLaptop.page, conv)
+  expect(joined.groupId).not.toBe('')
+
+  // It can send as a real member; the group id never changed (no reset happened).
+  await send(bobLaptop.page, 'joined with nobody home')
+  await expect(bobLaptop.page.getByTestId('chat-message').last()).toContainText(
+    'joined with nobody home',
+    { timeout: 25_000 },
+  )
+
+  // Alice comes back on a fresh device — it too external-joins with only the laptop around — and
+  // the two exchange NEW messages BOTH ways, proving the laptop joined the SAME live group (a
+  // reset would have forked them onto groups the other could not read). Alice2 cannot read the
+  // laptop's earlier line, and shouldn't: it is a fresh leaf that joined after it (correctly
+  // hidden), which is why this asserts a fresh round-trip rather than old history.
+  const alice2 = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+  await openChatAndJoin(alice2.page, conv)
+  expect((await groupState(alice2.page, conv)).groupId).toBe(joined.groupId)
+
+  await send(alice2.page, 'and alice is back')
+  await expect(bobLaptop.page.getByTestId('chat-message').last()).toContainText('and alice is back', {
+    timeout: 25_000,
+  })
+  await send(bobLaptop.page, 'laptop reads alice too')
+  await expect(alice2.page.getByTestId('chat-message').last()).toContainText(
+    'laptop reads alice too',
+    { timeout: 25_000 },
+  )
+
+  await Promise.all([bobLaptop.context.close(), alice2.context.close()])
+})
+
+/**
  * Leaving a group.
  *
  * MLS forbids committing your own removal (CannotRemoveSelf), so leaving cannot be a

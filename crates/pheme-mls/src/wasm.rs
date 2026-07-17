@@ -181,6 +181,23 @@ impl MlsClient {
         self.inner.join_from_welcome(welcome).map_err(js)
     }
 
+    /// The self-contained GroupInfo a NON-MEMBER needs to join this group by external commit.
+    /// A pure read; nothing is persisted.
+    #[wasm_bindgen(js_name = exportGroupInfo)]
+    pub fn export_group_info(&self, group_id: &[u8]) -> Result<Vec<u8>, JsError> {
+        self.inner.export_group_info(group_id).map_err(js)
+    }
+
+    /// Joins an existing group by external commit, from a member's GroupInfo — adds this client's
+    /// own leaf with no Welcome and no member online. Returns the commit to offer the server through
+    /// the ordinary compare-and-set. The commit is left PENDING and, unlike a staged commit, cannot
+    /// be cleared: on acceptance call `commitAccepted`, on refusal call `deleteGroup` and retry from
+    /// fresh GroupInfo.
+    #[wasm_bindgen(js_name = joinByExternalCommit)]
+    pub fn join_by_external_commit(&self, group_info: &[u8]) -> Result<Vec<u8>, JsError> {
+        self.inner.join_by_external_commit(group_info).map_err(js)
+    }
+
     #[wasm_bindgen(js_name = applyCommit)]
     pub fn apply_commit(&self, group_id: &[u8], commit: &[u8]) -> Result<(), JsError> {
         self.inner.apply_commit(group_id, commit).map_err(js)
