@@ -233,9 +233,14 @@ func (h *Handler) memberIDs(ctx context.Context, convID string) (map[string]bool
 	return out, nil
 }
 
-// The sealed backup blob is the whole exported client state; a few groups' ratchet
-// state is small, but cap it so the store cannot be filled with junk.
-const maxKeyBackupBytes = 512 * 1024
+// The sealed backup blob is the whole exported client state. A few groups' ratchet state
+// is small, but it is not bounded the way the first cap assumed: a client keeps every group
+// it has ever been in (retired ones stay, so old messages remain readable), and each keeps
+// up to MAX_PAST_EPOCHS epochs of ratchet secrets. A long-lived account — or one that lived
+// through a group reset or two — can carry well past half a megabyte, and the old 512KB cap
+// rejected its backup outright with "backup too large". 4MB is generous headroom that still
+// leaves room beside the transcript under Mongo's 16MB document ceiling.
+const maxKeyBackupBytes = 4 * 1024 * 1024
 
 // The sealed transcripts are text plus photo metadata — never the photos themselves,
 // which live in the blob store — so even a heavy user's history is megabytes, not

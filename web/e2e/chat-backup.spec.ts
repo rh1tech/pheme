@@ -5,6 +5,13 @@ import { openChatAndJoin, send, signInOnNewDevice, startDirectChat } from './cha
 const PASSWORD = 'Sup3rSecret!'
 const PASSPHRASE = 'correct horse battery pheme'
 
+// A one-pixel PNG — enough to ride the whole photo path: sealed on the client, uploaded as
+// an opaque blob, and on the far side re-fetched and opened with the key from the message.
+const TEST_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAHElEQVR4nGJhYKhQYGDARCwgAhsYnBKAAAAA//9knwJZeWr4nQAAAABJRU5ErkJggg==',
+  'base64',
+)
+
 // Real crypto between real people on real devices. Chromium is enough; none of this is
 // about rendering.
 test.skip(({ browserName }) => browserName !== 'chromium', 'crypto round-trip: chromium only')
@@ -56,6 +63,22 @@ test('a recovery passphrase carries the whole transcript to a new device', async
     { timeout: 25_000 },
   )
 
+  // A photo, too. The encrypted blob lives on the server; its key travels inside the
+  // message — so what the transcript backup must carry for a photo to survive is that key,
+  // not the pixels. Alice sends it; Bob's device reads it (and caches the decrypted body,
+  // key and all) before the backup is taken.
+  const aliceComposer = alice.page.getByTestId('composer')
+  await aliceComposer.locator('input[type="file"]').setInputFiles({
+    name: 'before.png',
+    mimeType: 'image/png',
+    buffer: TEST_PNG,
+  })
+  // The picked photo is sealed and shows as a preview thumbnail before it can be sent.
+  await expect(aliceComposer.locator('.pheme-attachment img')).toBeVisible({ timeout: 15_000 })
+  await aliceComposer.getByRole('button', { name: 'Send' }).click()
+  // Bob sees the picture decrypt and render (a real object URL, not a broken image).
+  await expect(doomed.page.locator('.pheme-photo img').last()).toBeVisible({ timeout: 25_000 })
+
   // Bob sets his recovery passphrase — through the real menu, like a person.
   await doomed.page.goto('/')
   await doomed.page.getByRole('button', { name: 'Menu' }).click()
@@ -93,6 +116,14 @@ test('a recovery passphrase carries the whole transcript to a new device', async
     restored.getByTestId('chat-message').filter({ hasText: 'second, from bob, also before' }),
   ).toHaveCount(1)
   await expect(restored.getByTestId('chat-sealed-divider')).toHaveCount(0)
+
+  // THE PHOTO PROMISE: the picture is back too. The restored device never uploaded it and
+  // has no local photo cache — it re-fetches the server's encrypted blob and opens it with
+  // the key the backup carried inside the message. A blank or broken image here means the
+  // key did not survive the round trip.
+  await expect(restored.locator('.pheme-photo img').first()).toBeVisible({ timeout: 25_000 })
+  const photoSrc = await restored.locator('.pheme-photo img').first().getAttribute('src')
+  expect(photoSrc).toMatch(/^blob:/)
 
   // And the conversation continues, in both directions, as the same device it always was.
   await send(alice.page, 'third, after the restore')
