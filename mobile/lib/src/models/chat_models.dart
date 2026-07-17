@@ -398,6 +398,29 @@ class MLSKeyPackageCount {
 
 /// The passphrase-sealed client state held server-side, so a lost device is recoverable. The server
 /// sees these three fields and never the passphrase or the plaintext.
+/// One of the user's own devices, as shown in "your devices": its client-minted MLS device id, a
+/// human label, and when it was last active. Carries no key material.
+class MLSDevice {
+  MLSDevice({
+    required this.deviceId,
+    required this.label,
+    required this.createdAt,
+    required this.lastSeenAt,
+  });
+
+  final String deviceId;
+  final String label;
+  final String createdAt;
+  final String lastSeenAt;
+
+  factory MLSDevice.fromJson(Map<String, dynamic> j) => MLSDevice(
+    deviceId: (j['deviceId'] as String?) ?? '',
+    label: (j['label'] as String?) ?? '',
+    createdAt: (j['createdAt'] as String?) ?? '',
+    lastSeenAt: (j['lastSeenAt'] as String?) ?? '',
+  );
+}
+
 class MLSKeyBackup {
   MLSKeyBackup({
     required this.salt,

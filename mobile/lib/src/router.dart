@@ -11,6 +11,7 @@ import 'core/providers.dart';
 import 'crypto/recovery_gate.dart';
 import 'home_shell.dart';
 import 'profile/profile_page.dart';
+import 'settings/security_page.dart';
 import 'settings/settings_page.dart';
 
 /// The app router. Redirects to /login when unauthenticated and away from
@@ -48,6 +49,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'profile',
             builder: (context, state) => const ProfilePage(),
+          ),
+          GoRoute(
+            path: 'security',
+            builder: (context, state) => const SecurityPage(),
           ),
           GoRoute(
             path: 'channels/:id',

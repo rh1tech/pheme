@@ -397,6 +397,29 @@ const Map<String, String> enStrings = {
   'recovery.codePlaceholder': 'XXXXX-XXXXX-XXXXX-XXXXX-XXXXX',
   'recovery.menuItem': 'Recovery code',
 
+  // devices & security
+  'security.menuItem': 'Devices & security',
+  'security.title': 'Devices & security',
+  'security.statusHeading': 'End-to-end encryption',
+  'security.backupOn': 'Chats backed up',
+  'security.backupOnHint':
+      'Your history can be restored on a new device with your recovery code.',
+  'security.backupOff': 'Chats are not backed up yet',
+  'security.backupOffHint':
+      'Set a recovery code so your history can be restored on a new device.',
+  'security.syncOn':
+      'History syncs to new devices automatically when another device is online.',
+  'security.devicesHeading': 'Your devices',
+  'security.thisDevice': 'This device',
+  'security.lastActive': 'Active {when}',
+  'security.noDevices': 'No devices found',
+  'security.loadFailed': 'Could not load your devices',
+  'security.remove': 'Remove',
+  'security.removeConfirm':
+      'Remove this device? It will be signed out and removed from your encrypted chats.',
+  'security.removed': 'Device removed',
+  'security.removeFailed': 'Could not remove that device',
+
   // calls
   'call.start': 'Call',
   'call.incoming': 'Incoming call',

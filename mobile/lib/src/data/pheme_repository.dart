@@ -542,17 +542,35 @@ class PhemeRepository {
 
   // --- MLS key material ---
 
-  /// Publishes this device's KeyPackages, so other members can add it to a group.
+  /// Publishes this device's KeyPackages, so other members can add it to a group. The optional
+  /// [label] (e.g. "Pheme on iPhone") is recorded in the user's device registry so they can
+  /// recognise this device in "your devices".
   Future<void> publishKeyPackages(
     String deviceId,
     List<Uint8List> keyPackages, {
     Uint8List? lastResortKeyPackage,
+    String? label,
   }) => _post('/v1/mls/key-packages', {
     'deviceId': deviceId,
     'keyPackages': keyPackages.map(base64Encode).toList(),
     if (lastResortKeyPackage != null)
       'lastResortKeyPackage': base64Encode(lastResortKeyPackage),
+    if (label != null && label.isNotEmpty) 'label': label,
   });
+
+  /// The signed-in user's own devices — for the "your devices" panel. Newest activity first.
+  Future<List<MLSDevice>> myDevices() async {
+    final d = await _get('/v1/mls/devices');
+    return ((d['devices'] as List?) ?? const [])
+        .map((e) => MLSDevice.fromJson((e as Map).cast<String, dynamic>()))
+        .toList();
+  }
+
+  /// Terminates one of the caller's own devices server-side: deletes its key packages so it cannot
+  /// be re-added, revokes its login, and forgets it from the registry. The MLS leaf removal is done
+  /// first, client-side, by MlsService.terminateOwnDevice.
+  Future<void> terminateDevice(String deviceId) =>
+      _delete('/v1/mls/devices/$deviceId');
 
   /// How much single-use stock this device has left, so we know when to replenish.
   Future<MLSKeyPackageCount> keyPackageCount(String deviceId) => _get(

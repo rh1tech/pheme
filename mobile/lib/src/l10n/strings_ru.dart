@@ -396,6 +396,29 @@ const Map<String, String> ruStrings = {
   'recovery.codePlaceholder': 'XXXXX-XXXXX-XXXXX-XXXXX-XXXXX',
   'recovery.menuItem': 'Код восстановления',
 
+  // devices & security
+  'security.menuItem': 'Устройства и безопасность',
+  'security.title': 'Устройства и безопасность',
+  'security.statusHeading': 'Сквозное шифрование',
+  'security.backupOn': 'Чаты скопированы',
+  'security.backupOnHint':
+      'Историю можно восстановить на новом устройстве с помощью кода восстановления.',
+  'security.backupOff': 'Чаты ещё не скопированы',
+  'security.backupOffHint':
+      'Задайте код восстановления, чтобы историю можно было восстановить на новом устройстве.',
+  'security.syncOn':
+      'История синхронизируется на новые устройства автоматически, когда другое устройство в сети.',
+  'security.devicesHeading': 'Ваши устройства',
+  'security.thisDevice': 'Это устройство',
+  'security.lastActive': 'Активно {when}',
+  'security.noDevices': 'Устройства не найдены',
+  'security.loadFailed': 'Не удалось загрузить устройства',
+  'security.remove': 'Удалить',
+  'security.removeConfirm':
+      'Удалить это устройство? Оно будет выведено из системы и удалено из ваших зашифрованных чатов.',
+  'security.removed': 'Устройство удалено',
+  'security.removeFailed': 'Не удалось удалить устройство',
+
   // calls
   'call.start': 'Позвонить',
   'call.incoming': 'Входящий звонок',

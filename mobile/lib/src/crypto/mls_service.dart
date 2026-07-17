@@ -21,6 +21,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -62,6 +63,17 @@ const _externalJoinAttempts = 3;
 
 /// The exporter label for call keys. Changing it changes every derived key, so it is versioned.
 const callKeyLabel = 'pheme-call-v1';
+
+/// A human label for THIS device, for the user's "your devices" list. Best effort — a device is
+/// perfectly usable if the label is vague. Nothing identifying beyond the OS family.
+String deviceLabel() {
+  if (Platform.isIOS) return 'Pheme on iOS';
+  if (Platform.isAndroid) return 'Pheme on Android';
+  if (Platform.isMacOS) return 'Pheme on macOS';
+  if (Platform.isWindows) return 'Pheme on Windows';
+  if (Platform.isLinux) return 'Pheme on Linux';
+  return 'Pheme';
+}
 
 /// The MLS orchestration for the signed-in user.
 ///
@@ -216,7 +228,60 @@ class MlsService {
       session.deviceId,
       minted.packages,
       lastResortKeyPackage: minted.lastResort,
+      label: deviceLabel(),
     );
+  }
+
+  /// Terminates one of the user's OWN devices — the "remove this device" action.
+  ///
+  /// The device being removed is another leaf of the same user, present in every conversation that
+  /// user is in. Only a group member can author the Commit that removes it, so THIS device does it:
+  /// for each conversation it holds the group for, it commits away the target's leaf. Then the server
+  /// finishes the parts it owns — deletes the target's key packages so it can never be re-added,
+  /// revokes its login, and forgets it. The removed device is left with no leaf and a dead token.
+  ///
+  /// Best-effort per conversation: one that will not commit must not stop the others or the
+  /// server-side revocation — a co-member prunes any leaf we could not, and the key-package delete
+  /// already stops a rejoin.
+  Future<void> terminateOwnDevice(String userId, String deviceId) async {
+    final session = await this.session(userId);
+    final target = deviceIdentity(userId, deviceId);
+    if (target == session.identity) {
+      // Terminating the device you are using is just signing out; there is no other device to
+      // orchestrate the removal, and committing your own leaf away is not allowed.
+      throw Exception('use log out to sign out of this device');
+    }
+
+    final conversations = await _repo.listConversations().catchError(
+      (_) => <Conversation>[],
+    );
+    for (final conversation in conversations) {
+      try {
+        final state = await _repo.mlsGroupState(conversation.id);
+        if (!state.isEstablished || !await session.hasGroup(state.groupId)) {
+          continue;
+        }
+        final leaves = await session.memberIdentities(state.groupId);
+        if (!leaves.contains(target)) continue;
+        for (var attempt = 0; attempt < _commitAttempts; attempt++) {
+          final outcome = await session.commitRemoveDevices(
+            state.groupId,
+            [target],
+            // The removed leaf belongs to this same user, so the roster removal the server checks
+            // against is of ourselves.
+            _offer(conversation.id, state.groupId, removes: [userId]),
+          );
+          if (outcome == CommitOutcome.accepted) break;
+          await _catchUp(session, conversation.id, state.groupId);
+        }
+      } on Object {
+        // This conversation would not settle; leave its leaf for a co-member to prune. The
+        // server-side key-package delete below still prevents the device from being re-added.
+      }
+    }
+
+    // The parts only the server can do: kill the login, delete the key packages, forget the device.
+    await _repo.terminateDevice(deviceId);
   }
 
   // --- group lifecycle -------------------------------------------------------------------------
@@ -1466,6 +1531,11 @@ class MlsService {
 
   /// This device's stored recovery code, for showing it again. Null if none is stored here.
   Future<String?> recoveryCode() => loadRecoveryCode(_storage, namespace: _ns);
+
+  /// This device's MLS device id, for flagging which row in "your devices" is the current one. Null
+  /// before an identity exists.
+  Future<String?> currentDeviceId() =>
+      loadMlsDeviceId(_storage, namespace: _ns);
 
   /// Schedules a debounced re-seal of this device's backup, if auto-backup is armed (a secret is
   /// held). Fire-and-forget: a failed auto-backup is not worth surfacing — the next change schedules
