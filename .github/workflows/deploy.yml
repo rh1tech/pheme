@@ -11,6 +11,15 @@ permissions:
   contents: read
   packages: write
 
+# One deploy at a time. A tagged release pushes main AND the tag together, firing two
+# Deploy runs at once — and on the self-hosted runners they share one Docker daemon and
+# one credential store, so two concurrent `docker login ghcr.io` clobber each other and a
+# push comes back "denied". Serialising the workflow removes the race; queued, never
+# cancelled, so both the DEV (main) and PROD (tag) deploys still run.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   API_IMAGE_NAME: ${{ github.repository_owner }}/pheme-api
@@ -20,6 +29,10 @@ jobs:
   build:
     name: Build & push images
     runs-on: [self-hosted, linux]
+    # A private credential store for this job, so a login here can never collide with
+    # another workflow's on the same box. Belt to the concurrency group's braces.
+    env:
+      DOCKER_CONFIG: ${{ github.workspace }}/.docker-${{ github.run_id }}
     outputs:
       api_image: ${{ steps.refs.outputs.api_image }}
       web_image: ${{ steps.refs.outputs.web_image }}
