@@ -112,6 +112,21 @@ class MlsService {
   /// finished tearing down, and the first one's cleanup must not unfreeze the second.
   int _callsInProgress = 0;
 
+  /// The recovery secret this session is unlocked with, held only in memory. It is what auto-backup
+  /// re-seals under; null means auto-backup is dormant (no secret to seal with). Set when a backup is
+  /// created, restored, or re-unlocked from the locally-stored code on relaunch — never persisted here
+  /// (the code itself lives in secure storage; see mls_device.dart).
+  String? _sessionPassphrase;
+
+  /// The pending debounced auto-backup, and the user it is for. One timer at a time: a burst of
+  /// messages coalesces into a single re-seal.
+  Timer? _autoBackupTimer;
+  String _autoBackupUser = '';
+
+  /// How long auto-backup waits after a change before re-sealing, so a burst of messages costs one
+  /// backup, not one per message.
+  static const _autoBackupDebounce = Duration(seconds: 20);
+
   // --- session ---------------------------------------------------------------------------------
 
   /// This device's session, loading it on first use.
@@ -947,6 +962,8 @@ class MlsService {
     );
 
     await _cache.cacheContent(conversation.id, message.id, content);
+    // A newly-sent body is only on this device until it is backed up; carry it into the backup.
+    autoBackupSoon(_sessionUserId);
     return message;
   }
 
@@ -1009,6 +1026,8 @@ class MlsService {
 
     final content = parseContent(plaintext);
     await _cache.cacheContent(conversationId, message.id, content);
+    // The decrypted body now lives only here (the message key is gone); back it up.
+    autoBackupSoon(_sessionUserId);
     return content;
   }
 
@@ -1040,6 +1059,7 @@ class MlsService {
     // Straight into the cache: we will never be able to decrypt it. Without this the caller — the one
     // person who knows the call went unanswered — would see its own record of it sealed.
     await _cache.cacheContent(conversationId, message.id, content);
+    autoBackupSoon(_sessionUserId);
   }
 
   // --- calls -----------------------------------------------------------------------------------
@@ -1240,81 +1260,204 @@ class MlsService {
     _restoreNeeded = false;
   }
 
-  /// Seals this device's state under [passphrase] and uploads it.
+  /// Seals this device's key state AND its message transcript under [passphrase] and uploads them.
+  ///
+  /// Two independent seals under one secret: the key state (what lets a restored device decrypt new
+  /// messages) and the transcript (the decrypted bodies — the only copy, since MLS destroys the
+  /// message key on decrypt). Without the transcript a restored device would come up able to follow
+  /// the conversation forward but showing a blank history. Also arms auto-backup with the secret, so
+  /// later messages are re-sealed without the user lifting a finger.
   Future<void> backupKeys(String userId, String passphrase) async {
     final session = await this.session(userId);
     final state = await session.exportState();
     if (state == null) throw Exception('no local key state to back up');
 
-    final blob = await rust.mlsBackupEncrypt(
-      passphrase: Uint8List.fromList(passphrase.codeUnits),
+    final passphraseBytes = Uint8List.fromList(passphrase.codeUnits);
+    final stateBlob = await rust.mlsBackupEncrypt(
+      passphrase: passphraseBytes,
       plaintext: state,
     );
+
+    // The transcript, sealed under its own salt/nonce. Empty when this device has read nothing yet —
+    // then there is simply no transcript blob to send.
+    final bodies = await _cache.exportAllContents();
+    ({Uint8List salt, Uint8List nonce, Uint8List ciphertext})? transcript;
+    if (bodies.isNotEmpty) {
+      final plaintext = Uint8List.fromList(
+        utf8.encode(jsonEncode({'v': 1, 'bodies': bodies})),
+      );
+      final blob = await rust.mlsBackupEncrypt(
+        passphrase: passphraseBytes,
+        plaintext: plaintext,
+      );
+      transcript = (
+        salt: blob.salt,
+        nonce: blob.nonce,
+        ciphertext: blob.ciphertext,
+      );
+    }
+
     await _repo.putKeyBackup(
       session.deviceId,
-      salt: blob.salt,
-      nonce: blob.nonce,
-      ciphertext: blob.ciphertext,
+      salt: stateBlob.salt,
+      nonce: stateBlob.nonce,
+      ciphertext: stateBlob.ciphertext,
+      transcriptSalt: transcript?.salt,
+      transcriptNonce: transcript?.nonce,
+      transcriptCiphertext: transcript?.ciphertext,
     );
+
+    // Keep the secret so auto-backup can carry later changes without prompting again.
+    _sessionPassphrase = passphrase;
   }
 
-  /// Recovers this device's state from the server backup.
+  /// Recovers a user's HISTORY from the server backup, onto a FRESH device identity.
   ///
-  /// Must run before the first [session] call, so a fresh identity is not minted in place of the
-  /// recovered one. Returns false when there is no backup; throws on a wrong passphrase (the GCM tag
-  /// fails).
+  /// Must run before the first [session] call. Returns false when there is no backup; throws on a
+  /// wrong passphrase (the GCM tag fails).
+  ///
+  /// It does NOT adopt the backed-up device's identity — it mints a brand-new one. Adopting it (a
+  /// "clone") was the parallel-device bug: restore onto a second device while the first is still
+  /// live, and both hold the SAME leaf. MLS advances the ratchet per leaf, so each message one sends
+  /// makes the other unable to decrypt — the "not available on this device" both people saw. A fresh
+  /// leaf, added to each group by external join and reconciliation, is the only correct shape.
+  ///
+  /// The passphrase's real job here is to open the transcript so the new device shows the old
+  /// history; the key-state blob is opened only to VALIDATE the passphrase (a wrong one fails the
+  /// GCM tag) and is then discarded, since this device gets its own keys, not the backup's.
   Future<bool> restoreKeys(String userId, String passphrase) async {
     final backup = await _repo.getKeyBackup();
     if (backup == null) return false;
 
-    // Another session may have set up an identity while the prompt sat open. Restoring would replace
-    // it with an older snapshot and strand whatever was said in between.
+    // Another session may have set up an identity while the prompt sat open. Coming up fresh now
+    // would strand it and whatever was said in between.
     if (await _store.readState() != null && await _store.owner() == userId) {
       throw const IdentityAlreadySetUpException();
     }
 
-    final state = await rust.mlsBackupDecrypt(
-      passphrase: Uint8List.fromList(passphrase.codeUnits),
+    final passphraseBytes = Uint8List.fromList(passphrase.codeUnits);
+
+    // Prove the passphrase by opening the state blob (throws on a wrong one), then discard it — this
+    // device does not adopt those keys.
+    await rust.mlsBackupDecrypt(
+      passphrase: passphraseBytes,
       salt: backup.salt,
       nonce: backup.nonce,
       ciphertext: backup.ciphertext,
     );
 
-    // KILL EVERY LIVE SESSION BEFORE TOUCHING THE RUST CLIENT, not after.
-    //
-    // There is one Rust client per process, and mlsLoad replaces it. A session's operations queue up
-    // behind its own mutex and check assertLive() before they run — but they check the GENERATION, and
-    // if the generation is still the old one when the client underneath has already been swapped, a
-    // queued operation sails through the check and then runs against the wrong client entirely. It
-    // would export that client's state and persist it under the old session's identity: one identity's
-    // key material, written to disk under another's name.
-    //
-    // Bumping first closes the window. Anything queued is refused; anything already inside a Rust call
-    // completes against the client it started with, because Rust's own mutex is still holding it.
-    _store.invalidate();
+    // Open the transcript too, before minting anything, so a bad blob fails cleanly. Its own seal
+    // under the same passphrase. A history that will not open must not fail the restore — the device
+    // still comes up working, just without the old scrollback.
+    Map<String, Map<String, String>>? bodies;
+    if (backup.hasTranscript) {
+      try {
+        final opened = await rust.mlsBackupDecrypt(
+          passphrase: passphraseBytes,
+          salt: backup.transcriptSalt!,
+          nonce: backup.transcriptNonce!,
+          ciphertext: backup.transcriptCiphertext!,
+        );
+        final parsed = jsonDecode(utf8.decode(opened));
+        if (parsed is Map && parsed['bodies'] is Map) {
+          bodies = (parsed['bodies'] as Map).map(
+            (conversationId, msgs) => MapEntry(
+              conversationId as String,
+              (msgs as Map).map(
+                (id, body) => MapEntry(id as String, body as String),
+              ),
+            ),
+          );
+        }
+      } on Object {
+        // Best effort — the device is already coming up; it just will not have the old history.
+      }
+    }
+
+    // Come up as a FRESH device. acceptFreshIdentity records the choice so _needsRestore stops
+    // demanding a restore, then the next session() call mints a new identity in the cleared store.
+    _restoreNeeded = null;
     _session = null;
     _sessionUserId = '';
     _settling.clear();
     _readableGroups.clear();
+    await clearMlsDeviceId(_storage, namespace: _ns);
+    await acceptFreshIdentity();
 
-    // Validate that the recovered blob really is a client state before committing to it — and read
-    // back WHICH DEVICE it belongs to.
-    await rust.mlsLoad(state: state);
-    final restoredDevice = deviceOf(await rust.mlsIdentity());
+    // Mint the fresh identity now, before importing history: loading the session may write to the
+    // store, and the history has to sit on top of an established identity, not be overwritten by it.
+    await session(userId);
 
-    await _store.writeState(state);
-    await _store.setOwner(userId);
-
-    // Adopt the identity we just restored. The groups inside that state hold leaves under the ORIGINAL
-    // device's name, and its published key packages are filed under it — so this device has to answer
-    // to that name, not to one of its own. Keeping a local id here would leave the restored client
-    // unable to be added to anything: publishing keys as one device and holding leaves as another.
-    if (restoredDevice.isNotEmpty) {
-      await saveMlsDeviceId(_storage, restoredDevice, namespace: _ns);
+    if (bodies != null) {
+      try {
+        await _cache.importContents(bodies);
+      } on Object {
+        // Already up and working without it.
+      }
     }
 
-    _restoreNeeded = false;
+    // Keep the secret so THIS fresh device's own backup stays current, and schedule a catch-up so the
+    // imported history is re-sealed under this device's identity rather than only the old one's.
+    _sessionPassphrase = passphrase;
+    autoBackupSoon(userId);
     return true;
+  }
+
+  /// Makes sure this device has a recovery backup, generating a one-time code the first time.
+  ///
+  /// Returns the freshly generated code to show ONCE (write it down), or null when nothing new needs
+  /// showing — either a backup already exists (in which case auto-backup is re-armed from the local
+  /// copy of the code, since the in-memory secret is lost on relaunch), or this device must restore
+  /// first (that is the restore gate's job, not auto-setup's).
+  Future<String?> ensureRecoveryBackup(String userId) async {
+    try {
+      // A fresh device with a backup waiting throws here — auto-setup is not our call then.
+      await session(userId);
+    } on Object {
+      return null;
+    }
+
+    if (await backupExists()) {
+      final localCode = await loadRecoveryCode(_storage, namespace: _ns);
+      if (localCode != null) {
+        _sessionPassphrase = normalizeRecoveryCode(localCode);
+        autoBackupSoon(userId);
+      }
+      return null;
+    }
+    return _sealUnderNewCode(userId);
+  }
+
+  /// Generates a fresh recovery code, seals this device's keys+transcript under it, and stores the
+  /// code locally so it can be shown again. Returns the code to display once.
+  Future<String> _sealUnderNewCode(String userId) async {
+    final code = generateRecoveryCode();
+    final secret = normalizeRecoveryCode(code);
+    await backupKeys(userId, secret); // sets _sessionPassphrase
+    await saveRecoveryCode(_storage, code, namespace: _ns);
+    return code;
+  }
+
+  /// Re-seals under a BRAND-NEW code, retiring the old one (a "regenerate"). Returns the new code.
+  Future<String> regenerateRecoveryCode(String userId) =>
+      _sealUnderNewCode(userId);
+
+  /// This device's stored recovery code, for showing it again. Null if none is stored here.
+  Future<String?> recoveryCode() => loadRecoveryCode(_storage, namespace: _ns);
+
+  /// Schedules a debounced re-seal of this device's backup, if auto-backup is armed (a secret is
+  /// held). Fire-and-forget: a failed auto-backup is not worth surfacing — the next change schedules
+  /// another, and the keys/transcript are safe locally regardless.
+  void autoBackupSoon(String userId) {
+    if (_sessionPassphrase == null || userId.isEmpty) return;
+    _autoBackupUser = userId;
+    if (_autoBackupTimer != null) return;
+    _autoBackupTimer = Timer(_autoBackupDebounce, () {
+      _autoBackupTimer = null;
+      final pass = _sessionPassphrase;
+      if (pass == null) return;
+      unawaited(backupKeys(_autoBackupUser, pass).catchError((_) {}));
+    });
   }
 
   /// Erases this device's keys and every decrypted body. Logout.
@@ -1336,9 +1479,16 @@ class MlsService {
     _readableGroups.clear();
     _waitingSince.clear();
 
+    // Disarm auto-backup and forget the secret, so nothing re-seals this identity after it is gone.
+    _autoBackupTimer?.cancel();
+    _autoBackupTimer = null;
+    _sessionPassphrase = null;
+    _autoBackupUser = '';
+
     await rust.mlsUnload();
     await _store.wipe();
     await _cache.wipe();
     await clearMlsDeviceId(_storage, namespace: _ns);
+    await clearRecoveryCode(_storage, namespace: _ns);
   }
 }

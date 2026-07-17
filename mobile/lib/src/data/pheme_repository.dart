@@ -693,12 +693,27 @@ class PhemeRepository {
     required Uint8List salt,
     required Uint8List nonce,
     required Uint8List ciphertext,
-  }) => _put('/v1/mls/key-backup', {
-    'deviceId': deviceId,
-    'salt': base64Encode(salt),
-    'nonce': base64Encode(nonce),
-    'ciphertext': base64Encode(ciphertext),
-  });
+    Uint8List? transcriptSalt,
+    Uint8List? transcriptNonce,
+    Uint8List? transcriptCiphertext,
+  }) {
+    final body = <String, dynamic>{
+      'deviceId': deviceId,
+      'salt': base64Encode(salt),
+      'nonce': base64Encode(nonce),
+      'ciphertext': base64Encode(ciphertext),
+    };
+    // The transcript seal travels whole or not at all — a ciphertext with no salt/nonce could
+    // never be opened, and the server rejects a partial one.
+    if (transcriptCiphertext != null &&
+        transcriptSalt != null &&
+        transcriptNonce != null) {
+      body['transcriptSalt'] = base64Encode(transcriptSalt);
+      body['transcriptNonce'] = base64Encode(transcriptNonce);
+      body['transcriptCiphertext'] = base64Encode(transcriptCiphertext);
+    }
+    return _put('/v1/mls/key-backup', body);
+  }
 
   /// The sealed backup, or null when there is none.
   Future<MLSKeyBackup?> getKeyBackup() async {

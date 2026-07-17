@@ -345,7 +345,11 @@ void main() {
 
       final conversation = await alice.repo.createDirectChat(bobPhone.userId);
       // Alice establishes the group and, in doing so, publishes GroupInfo. Then everyone goes quiet.
-      await alice.mls.sendMessage(conversation, alice.userId, 'the group exists');
+      await alice.mls.sendMessage(
+        conversation,
+        alice.userId,
+        'the group exists',
+      );
 
       // Bob's laptop: a brand new device, not in the group. It opens the chat — and NOTHING admits it.
       // Alice never reconciles; bobPhone does nothing. It joins entirely on its own.
@@ -536,6 +540,103 @@ void main() {
         reason:
             'a reply must point at a message id — a quote the sender supplied could say anything',
       );
+    });
+  });
+
+  group('a recovery code', () {
+    // THE PARALLEL-DEVICE BUG, AS A TEST.
+    //
+    // A user backs up on one device, then restores on a second while the first is still live. The
+    // wrong way to restore is to ADOPT the backed-up identity — then both devices hold the SAME leaf,
+    // MLS advances one ratchet between them, and each message one sends leaves the other unable to
+    // decrypt ("not available on this device", on both). The right way is a FRESH leaf plus the old
+    // transcript for history. This test asserts exactly that: a distinct identity, the history back,
+    // and both devices reading each other afterwards.
+    testWidgets('restores history to a FRESH device that works alongside the original', (
+      _,
+    ) async {
+      final aliceEmail = _email('alice');
+      final alice1 = await Device.signUp('alice1', aliceEmail);
+      final bob = await Device.signUp('bob', _email('bob'));
+      await alice1.publishKeys();
+      await bob.publishKeys();
+
+      final conversation = await alice1.repo.createDirectChat(bob.userId);
+      final m1 = await alice1.mls.sendMessage(
+        conversation,
+        alice1.userId,
+        'first',
+      );
+      expect((await bob.read(conversation.id))[m1.id], 'first');
+      final m2 = await bob.mls.sendMessage(
+        await bob.repo.getConversation(conversation.id),
+        bob.userId,
+        'second',
+      );
+      expect((await alice1.read(conversation.id))[m2.id], 'second');
+
+      // Alice sets up her recovery backup — this seals BOTH her key state and her transcript.
+      final code = await alice1.mls.ensureRecoveryBackup(alice1.userId);
+      expect(
+        code,
+        isNotNull,
+        reason: 'first setup must return a one-time code to show',
+      );
+      final alice1Device = (await alice1.mls.session(alice1.userId)).deviceId;
+
+      // A new phone. It restores from the code BEFORE it has any identity of its own.
+      final alice2 = await Device.signIn('alice2', aliceEmail);
+      final restored = await alice2.mls.restoreKeys(alice2.userId, code!);
+      expect(restored, isTrue);
+
+      // FRESH identity, not a clone of the backed-up one.
+      final alice2Device = (await alice2.mls.session(alice2.userId)).deviceId;
+      expect(
+        alice2Device,
+        isNot(alice1Device),
+        reason:
+            'restore must mint a fresh leaf — adopting the backed-up device id is the clone that '
+            'breaks both devices',
+      );
+
+      // The old history came across, sealed in the transcript and re-opened here.
+      await alice2.cache.load(conversation.id);
+      expect(
+        alice2.cache.content(conversation.id, m1.id)?.body,
+        'first',
+        reason:
+            'the transcript backup must carry pre-restore history to the new device',
+      );
+      expect(alice2.cache.content(conversation.id, m2.id)?.body, 'second');
+
+      // The new phone joins the live group (external join) and reads what follows.
+      await alice2.publishKeys();
+      final m3 = await bob.mls.sendMessage(
+        await bob.repo.getConversation(conversation.id),
+        bob.userId,
+        'third',
+      );
+      expect(
+        (await alice2.read(conversation.id))[m3.id],
+        'third',
+        reason: 'the restored device is a real member and reads new messages',
+      );
+
+      // THE CRUX: the new phone sends, and the ORIGINAL device — still live — reads it. A clone would
+      // make this impossible, because the two would be fighting over one ratchet.
+      final m4 = await alice2.mls.sendMessage(
+        await alice2.repo.getConversation(conversation.id),
+        alice2.userId,
+        'fourth',
+      );
+      expect(
+        (await alice1.read(conversation.id))[m4.id],
+        'fourth',
+        reason:
+            'the original device must read the restored device — two independent leaves, not one '
+            'shared one',
+      );
+      expect((await bob.read(conversation.id))[m4.id], 'fourth');
     });
   });
 }

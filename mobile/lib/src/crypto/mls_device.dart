@@ -48,6 +48,56 @@ Future<void> clearMlsDeviceId(
   String namespace = '',
 }) => storage.delete(key: _mlsDeviceIdKey(namespace), iOptions: _iosOptions);
 
+/// Where this device's recovery code lives, so the user can view it again and so auto-backup can
+/// re-unlock itself after a relaunch. NEVER leaves the device — the server sees only ciphertext
+/// sealed under a key derived from it, never the code.
+String _recoveryCodeKey(String namespace) => 'pheme.mlsRecoveryCode$namespace';
+
+Future<String?> loadRecoveryCode(
+  FlutterSecureStorage storage, {
+  String namespace = '',
+}) => storage.read(key: _recoveryCodeKey(namespace), iOptions: _iosOptions);
+
+Future<void> saveRecoveryCode(
+  FlutterSecureStorage storage,
+  String code, {
+  String namespace = '',
+}) => storage.write(
+  key: _recoveryCodeKey(namespace),
+  value: code,
+  iOptions: _iosOptions,
+);
+
+Future<void> clearRecoveryCode(
+  FlutterSecureStorage storage, {
+  String namespace = '',
+}) => storage.delete(key: _recoveryCodeKey(namespace), iOptions: _iosOptions);
+
+/// Crockford base32, minus I L O U — the alphabet the recovery code is drawn from.
+const _crockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/// A fresh recovery code: 125 bits of entropy as five dash-separated groups of five Crockford
+/// base32 characters (`XXXXX-XXXXX-XXXXX-XXXXX-XXXXX`). Mirrors the web client so a code made on
+/// one platform restores on the other.
+String generateRecoveryCode() {
+  final random = Random.secure();
+  final chars = List.generate(25, (_) => _crockford[random.nextInt(256) % 32]);
+  final groups = <String>[];
+  for (var i = 0; i < chars.length; i += 5) {
+    groups.add(chars.sublist(i, i + 5).join());
+  }
+  return groups.join('-');
+}
+
+/// Normalises a typed-in recovery code the way the web client does, so a loosely-entered code opens
+/// a backup sealed under its canonical form: upper-cased, the ambiguous I/L→1 and O→0, and every
+/// other non-alphanumeric character (dashes, spaces) dropped.
+String normalizeRecoveryCode(String input) => input
+    .toUpperCase()
+    .replaceAll(RegExp('[IL]'), '1')
+    .replaceAll('O', '0')
+    .replaceAll(RegExp('[^0-9A-Z]'), '');
+
 /// A leaf identity: `userId:deviceId`.
 String deviceIdentity(String userId, String deviceId) => '$userId:$deviceId';
 

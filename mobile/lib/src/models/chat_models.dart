@@ -403,20 +403,46 @@ class MLSKeyBackup {
     required this.salt,
     required this.nonce,
     required this.ciphertext,
+    this.transcriptSalt,
+    this.transcriptNonce,
+    this.transcriptCiphertext,
     this.updatedAt,
   });
 
   final Uint8List salt;
   final Uint8List nonce;
   final Uint8List ciphertext;
+
+  /// The sealed transcript, if this backup carries one. Its own salt and nonce: one recovery
+  /// secret, two independent seals, so either blob can be replaced without re-encrypting the other.
+  /// Null when the backup is key-state only (a legacy backup, or one taken before the transcript
+  /// was ever cached).
+  final Uint8List? transcriptSalt;
+  final Uint8List? transcriptNonce;
+  final Uint8List? transcriptCiphertext;
+
   final String? updatedAt;
 
-  factory MLSKeyBackup.fromJson(Map<String, dynamic> j) => MLSKeyBackup(
-    salt: _bytes(j['salt']),
-    nonce: _bytes(j['nonce']),
-    ciphertext: _bytes(j['ciphertext']),
-    updatedAt: j['updatedAt'] as String?,
-  );
+  /// True when this backup carries a transcript that can actually be opened.
+  bool get hasTranscript =>
+      (transcriptCiphertext?.isNotEmpty ?? false) &&
+      (transcriptSalt?.isNotEmpty ?? false) &&
+      (transcriptNonce?.isNotEmpty ?? false);
+
+  factory MLSKeyBackup.fromJson(Map<String, dynamic> j) {
+    final ts = _bytes(j['transcriptSalt']);
+    final tn = _bytes(j['transcriptNonce']);
+    final tc = _bytes(j['transcriptCiphertext']);
+    return MLSKeyBackup(
+      salt: _bytes(j['salt']),
+      nonce: _bytes(j['nonce']),
+      ciphertext: _bytes(j['ciphertext']),
+      transcriptSalt: ts.isEmpty ? null : ts,
+      transcriptNonce: tn.isEmpty ? null : tn,
+      transcriptCiphertext: tc.isEmpty ? null : tc,
+      updatedAt: j['updatedAt'] as String?,
+    );
+  }
 }
 
 // --- Calls -------------------------------------------------------------------------------------

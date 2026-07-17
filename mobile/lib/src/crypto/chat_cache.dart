@@ -162,6 +162,48 @@ class ChatCache {
     await temp.rename(file.path);
   }
 
+  /// Every conversation's bodies, raw (still-serialised) — the transcript half of the key backup,
+  /// and what a history offer seals for a newly-joined device.
+  ///
+  /// Raw on purpose: this is a copy of the cache, not a reading of it. Round-tripping each entry
+  /// through parse/serialise here could only lose information a future content version carried.
+  Future<Map<String, Map<String, String>>> exportAllContents() async {
+    final out = <String, Map<String, String>>{};
+    final dir = await _dir();
+    if (!await dir.exists()) return out;
+    await for (final entry in dir.list()) {
+      if (entry is! File || !entry.path.endsWith('.json')) continue;
+      final name = entry.uri.pathSegments.last;
+      final conversationId = name.substring(0, name.length - '.json'.length);
+      final bodies = await load(conversationId);
+      if (bodies.isNotEmpty) {
+        out[conversationId] = Map<String, String>.from(bodies);
+      }
+    }
+    return out;
+  }
+
+  /// Imports transcripts from a backup or a history offer — a device adopting bodies it holds none
+  /// of. Merged UNDER what this device already has: anything decrypted here was read more recently
+  /// than the snapshot was taken, so on a collision the local copy wins and is never overwritten.
+  Future<void> importContents(Map<String, Map<String, String>> all) async {
+    for (final entry in all.entries) {
+      final conversationId = entry.key;
+      final contents = await load(conversationId);
+      var changed = false;
+      entry.value.forEach((id, serialised) {
+        if (!contents.containsKey(id)) {
+          contents[id] = serialised;
+          changed = true;
+        }
+      });
+      if (!changed) continue;
+      final newest = contents.values.isNotEmpty ? contents.values.last : null;
+      if (newest != null) _previews[conversationId] = _previewOf(newest);
+      await _flush(conversationId, contents);
+    }
+  }
+
   /// Forgets a conversation's bodies — it was deleted.
   Future<void> forget(String conversationId) async {
     _contents.remove(conversationId);
