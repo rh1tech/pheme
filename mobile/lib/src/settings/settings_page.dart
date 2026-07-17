@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/providers.dart';
 import '../core/snackbar.dart';
+import '../crypto/recovery_gate.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/adaptive/adaptive.dart';
 import 'settings_controller.dart';
@@ -173,6 +174,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           onTap: () => context.push('/profile'),
         ),
         ListTile(
+          leading: const Icon(Icons.vpn_key_outlined),
+          title: Text(l10n.t('recovery.menuItem')),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => showRecoveryCodeSheet(context, ref),
+        ),
+        ListTile(
           leading: Icon(
             Icons.logout,
             color: Theme.of(context).colorScheme.error,
@@ -268,6 +275,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               title: Text(l10n.t('settings.profile')),
               trailing: const CupertinoListTileChevron(),
               onTap: () => context.push('/profile'),
+            ),
+            CupertinoListTile.notched(
+              leading: const Icon(CupertinoIcons.lock_shield),
+              title: Text(l10n.t('recovery.menuItem')),
+              trailing: const CupertinoListTileChevron(),
+              onTap: () => showRecoveryCodeSheet(context, ref),
             ),
             CupertinoListTile.notched(
               leading: const Icon(

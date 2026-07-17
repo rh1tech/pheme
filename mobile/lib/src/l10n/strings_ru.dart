@@ -369,6 +369,33 @@ const Map<String, String> ruStrings = {
   'backup.skip': 'Начать заново на этом устройстве',
   'backup.wrongPassphrase': 'Неверная фраза — попробуйте снова',
 
+  // recovery code (the automatic backup flow)
+  'recovery.setupTitle': 'Сохраните код восстановления',
+  'recovery.setupDescription':
+      'Ваши чаты копируются автоматически. Этот код — единственный способ восстановить их на новом устройстве. Запишите его и храните в надёжном месте.',
+  'recovery.setupWarning':
+      'Мы не можем показать этот код снова или сбросить его. Если вы его потеряете, восстановить историю будет невозможно.',
+  'recovery.saved': 'Я сохранил код восстановления',
+  'recovery.done': 'Готово',
+  'recovery.copy': 'Копировать',
+  'recovery.copied': 'Скопировано',
+  'recovery.viewTitle': 'Код восстановления',
+  'recovery.viewDescription':
+      'Храните его в надёжном месте. Он восстанавливает ваши чаты на новом устройстве.',
+  'recovery.notOnThisDevice':
+      'На этом устройстве нет кода восстановления — он был задан на другом устройстве. Вы можете создать новый, он заменит старый.',
+  'recovery.regenerate': 'Создать новый код',
+  'recovery.regenerateConfirm':
+      'Создать новый код восстановления? Старый перестанет работать.',
+  'recovery.regenerated': 'Новый код восстановления создан',
+  'recovery.regenerateFailed': 'Не удалось создать новый код',
+  'recovery.restoreTitle': 'Восстановить чаты',
+  'recovery.restoreDescription':
+      'На этом устройстве нет ключей чатов, но найдена резервная копия. Введите код восстановления, чтобы восстановить зашифрованные чаты.',
+  'recovery.codeLabel': 'Код восстановления',
+  'recovery.codePlaceholder': 'XXXXX-XXXXX-XXXXX-XXXXX-XXXXX',
+  'recovery.menuItem': 'Код восстановления',
+
   // calls
   'call.start': 'Позвонить',
   'call.incoming': 'Входящий звонок',

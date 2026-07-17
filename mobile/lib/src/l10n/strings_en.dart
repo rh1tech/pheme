@@ -370,6 +370,33 @@ const Map<String, String> enStrings = {
   'backup.skip': 'Start fresh on this device',
   'backup.wrongPassphrase': 'Wrong passphrase — try again',
 
+  // recovery code (the automatic backup flow)
+  'recovery.setupTitle': 'Save your recovery code',
+  'recovery.setupDescription':
+      'Your chats are backed up automatically. This code is the only way to restore them on a new device — write it down and keep it somewhere safe.',
+  'recovery.setupWarning':
+      'We cannot show this code again or reset it. If you lose it, your backed-up history cannot be recovered.',
+  'recovery.saved': 'I have saved my recovery code',
+  'recovery.done': 'Done',
+  'recovery.copy': 'Copy',
+  'recovery.copied': 'Copied',
+  'recovery.viewTitle': 'Recovery code',
+  'recovery.viewDescription':
+      'Keep this somewhere safe. It restores your chats on a new device.',
+  'recovery.notOnThisDevice':
+      'This device does not hold the recovery code — it was set on another device. You can generate a new one, which replaces the old.',
+  'recovery.regenerate': 'Generate a new code',
+  'recovery.regenerateConfirm':
+      'Generate a new recovery code? The old one will stop working.',
+  'recovery.regenerated': 'New recovery code generated',
+  'recovery.regenerateFailed': 'Could not generate a new code',
+  'recovery.restoreTitle': 'Restore your chats',
+  'recovery.restoreDescription':
+      'This device has no chat keys, but a backup was found. Enter your recovery code to restore your encrypted chats.',
+  'recovery.codeLabel': 'Recovery code',
+  'recovery.codePlaceholder': 'XXXXX-XXXXX-XXXXX-XXXXX-XXXXX',
+  'recovery.menuItem': 'Recovery code',
+
   // calls
   'call.start': 'Call',
   'call.incoming': 'Incoming call',

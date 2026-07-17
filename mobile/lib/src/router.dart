@@ -8,6 +8,7 @@ import 'channels/channel_page.dart';
 import 'channels/message_page.dart';
 import 'chat/conversation_chat_page.dart';
 import 'core/providers.dart';
+import 'crypto/recovery_gate.dart';
 import 'home_shell.dart';
 import 'profile/profile_page.dart';
 import 'settings/settings_page.dart';
@@ -38,7 +39,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/',
-        builder: (context, state) => const HomeShell(),
+        builder: (context, state) => const RecoveryGate(child: HomeShell()),
         routes: [
           GoRoute(
             path: 'settings',

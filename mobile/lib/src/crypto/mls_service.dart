@@ -1260,6 +1260,28 @@ class MlsService {
     _restoreNeeded = false;
   }
 
+  /// Whether the user already chose to start fresh on this device — so the restore gate does not nag
+  /// them to recover a backup they declined.
+  Future<bool> hasAcceptedFresh() => _store.freshAccepted();
+
+  /// Restores from a secret typed by the user, tolerating a loosely-entered recovery code.
+  ///
+  /// Tries the input verbatim first (a legacy passphrase, or a code already canonical), then its
+  /// normalised form (the code with dashes/spaces stripped and ambiguous letters folded). restoreKeys
+  /// validates before any side effect, so a first attempt that fails on the GCM tag leaves nothing to
+  /// undo. A wrong secret throws; [IdentityAlreadySetUpException] propagates unchanged.
+  Future<bool> restoreWithSecret(String userId, String input) async {
+    try {
+      return await restoreKeys(userId, input);
+    } on IdentityAlreadySetUpException {
+      rethrow;
+    } on Object {
+      final normalized = normalizeRecoveryCode(input);
+      if (normalized == input) rethrow; // nothing new to try
+      return restoreKeys(userId, normalized);
+    }
+  }
+
   /// Seals this device's key state AND its message transcript under [passphrase] and uploads them.
   ///
   /// Two independent seals under one secret: the key state (what lets a restored device decrypt new
