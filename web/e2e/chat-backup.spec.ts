@@ -246,7 +246,6 @@ test('auto-backup keeps later messages recoverable without a manual re-backup', 
   )
 
   const code = await readRecoveryCode(doomed.page)
-  const beforeLen = await backupTranscriptLen(doomed.page)
 
   // A message arrives AFTER; Bob reads it on the live page and auto-backup folds it in, unprompted.
   await send(alice.page, 'this arrived only after the backup')
@@ -254,9 +253,11 @@ test('auto-backup keeps later messages recoverable without a manual re-backup', 
     'this arrived only after the backup',
     { timeout: 25_000 },
   )
-  await expect
-    .poll(() => backupTranscriptLen(doomed.page), { timeout: 20_000, intervals: [500] })
-    .toBeGreaterThan(beforeLen)
+  // Guarantee the backup actually includes it before losing the device — flushBackup sends a marker
+  // AFTER 'this arrived' was read, then waits for the sealed transcript to grow past it, so a seal
+  // that lands then holds 'this arrived' too. (A bare "grew at all" poll can pass on an intermediate
+  // backup that predates the message, which flaked under CI load.)
+  await flushBackup(doomed.page, alice.page)
 
   // Bob's device is lost; he never re-backed-up. A fresh device restores and has the later message.
   await doomed.context.close()

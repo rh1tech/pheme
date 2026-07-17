@@ -97,6 +97,16 @@ jobs:
   e2e:
     name: E2E (Playwright)
     runs-on: [self-hosted, linux]
+    # Sharded across the self-hosted runners. Each shard runs its OWN App API
+    # (go run, in-memory drivers) via the Playwright webServer, so the in-memory
+    # server's state — every device's sealed backup and history-sync blob — only
+    # accumulates over HALF the suite. The whole-suite volume was slowing late
+    # logins past their timeout on a single server; splitting it keeps each
+    # server's working set small enough that logins stay fast to the last test.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     defaults:
       run:
         working-directory: web
@@ -113,13 +123,15 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
-      # The Playwright config starts the App API (go run, in-memory drivers,
-      # seeded admin) and the Vite dev server, then tears them down. CI=true
-      # disables server reuse so each run is isolated.
-      - run: npx playwright test
+      # The Playwright config builds the web bundle and serves it with `vite
+      # preview` (not the dev server — a fresh browser context under WASM load
+      # would race the dev server's module graph and abort requests), and starts
+      # the App API (in-memory drivers, seeded admin). CI=true disables server
+      # reuse so each shard is isolated.
+      - run: npx playwright test --shard=${{ matrix.shard }}/2
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
-          name: playwright-report
+          name: playwright-report-shard-${{ matrix.shard }}
           path: web/playwright-report/
           retention-days: 7

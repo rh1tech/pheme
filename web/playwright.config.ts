@@ -76,10 +76,16 @@ export default defineConfig({
       },
     },
     {
-      command: `npm run dev -- --port ${WEB_PORT} --strictPort`,
+      // The E2E runs against a PRODUCTION BUILD served statically, not the Vite dev server.
+      // The dev server transpiles per request and holds every module live; under this suite —
+      // dozens of real-WASM crypto contexts across many tests — it was choking and aborting
+      // navigations (net::ERR_ABORTED), which read as flaky test failures. A built bundle served
+      // by `vite preview` is static and far lighter, and it exercises the artifact we actually
+      // ship. VITE_API_BASE is baked in at build time (see src/lib/api.ts).
+      command: `npm run build && npm run preview -- --port ${WEB_PORT} --strictPort`,
       url: WEB_URL,
       reuseExistingServer: !isCI,
-      timeout: 120_000,
+      timeout: 180_000,
       env: { VITE_API_BASE: API_URL },
     },
   ],
