@@ -5,7 +5,10 @@
 FROM node:22-bookworm AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# The npm download cache, kept out of the image. The layer above already skips `npm ci` entirely
+# while the lockfile is unchanged; this is for the case that actually costs time — a dependency
+# bump, where without it every package is fetched from the network again.
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY . .
 # The release to stamp into the bundle (deploy.yml passes the git tag). Declared here, after the
 # dependency layers, so a new version does not invalidate `npm ci` — only the build below, which is
