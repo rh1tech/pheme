@@ -1,34 +1,39 @@
 name: Deploy
 
-# Push to main           -> build images, deploy DEV.
-# Push tag vX.Y.Z        -> build images, deploy PROD.
+# Push tag vX.Y.Z -> build images, deploy PROD. That is the only trigger.
+#
+# Pushing main used to deploy a DEV environment, and a tagged release pushes main AND the tag
+# together — so every release ran this workflow TWICE, and the concurrency group below made the
+# PROD run wait for the whole DEV run to finish first. About fifteen minutes of a twenty-minute
+# release was spent deploying an environment nobody uses.
 on:
   push:
-    branches: [main]
     tags: ["v*.*.*"]
 
 permissions:
   contents: read
   packages: write
 
-# One deploy at a time. A tagged release pushes main AND the tag together, firing two
-# Deploy runs at once — and on the self-hosted runners they share one Docker daemon and
-# one credential store, so two concurrent `docker login ghcr.io` clobber each other and a
-# push comes back "denied". Serialising the workflow removes the race; queued, never
-# cancelled, so both the DEV (main) and PROD (tag) deploys still run.
+# One deploy at a time. Two tags pushed close together would otherwise share the one box's Docker
+# daemon and credential store, and concurrent `docker login ghcr.io` clobber each other — the push
+# then comes back "denied". Queued, never cancelled: every tag that was pushed gets deployed.
 concurrency:
   group: deploy
   cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
+  # Persistent across runs, unlike the workspace. The layer cache lives here rather than in
+  # GitHub's cache service: on a SELF-HOSTED runner `type=gha` ships every layer over the
+  # internet and back on each build, which is most of what the API image's build time was.
+  BUILDX_CACHE: ${{ runner.tool_cache }}/pheme-buildx
   API_IMAGE_NAME: ${{ github.repository_owner }}/pheme-api
   WEB_IMAGE_NAME: ${{ github.repository_owner }}/pheme-web
 
 jobs:
   build:
     name: Build & push images
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, deploy]
     # A private credential store for this job, so a login here can never collide with
     # another workflow's on the same box. Belt to the concurrency group's braces.
     env:
@@ -42,11 +47,7 @@ jobs:
       - name: Compute image tag
         id: refs
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            TAG="${GITHUB_REF_NAME}"
-          else
-            TAG="main-${GITHUB_SHA::12}"
-          fi
+          TAG="${GITHUB_REF_NAME}"
           API="${REGISTRY,,}/${API_IMAGE_NAME,,}"
           WEB="${REGISTRY,,}/${WEB_IMAGE_NAME,,}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -56,6 +57,9 @@ jobs:
           echo "web_repo=${WEB}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
+
+      - name: Prepare the layer cache
+        run: mkdir -p "${BUILDX_CACHE}/api" "${BUILDX_CACHE}/web"
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -73,9 +77,9 @@ jobs:
           push: true
           tags: |
             ${{ steps.refs.outputs.api_image }}
-            ${{ steps.refs.outputs.api_repo }}:${{ github.ref_type == 'tag' && 'latest' || 'edge' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ steps.refs.outputs.api_repo }}:latest
+          cache-from: type=local,src=${{ env.BUILDX_CACHE }}/api
+          cache-to: type=local,dest=${{ env.BUILDX_CACHE }}/api-next,mode=max
 
       - name: Build & push Web image
         uses: docker/build-push-action@v7
@@ -88,15 +92,27 @@ jobs:
             PHEME_VERSION=${{ steps.refs.outputs.tag }}
           tags: |
             ${{ steps.refs.outputs.web_image }}
-            ${{ steps.refs.outputs.web_repo }}:${{ github.ref_type == 'tag' && 'latest' || 'edge' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ steps.refs.outputs.web_repo }}:latest
+          cache-from: type=local,src=${{ env.BUILDX_CACHE }}/web
+          cache-to: type=local,dest=${{ env.BUILDX_CACHE }}/web-next,mode=max
+
+      # Written to a sibling directory and swapped in, which is buildkit's own guidance: a cache
+      # exported over the directory it is simultaneously importing from grows without bound,
+      # because nothing ever drops the layers that stopped being referenced.
+      - name: Rotate the layer cache
+        run: |
+          for img in api web; do
+            if [ -d "${BUILDX_CACHE}/${img}-next" ]; then
+              rm -rf "${BUILDX_CACHE}/${img}"
+              mv "${BUILDX_CACHE}/${img}-next" "${BUILDX_CACHE}/${img}"
+            fi
+          done
 
   deploy:
-    name: Deploy ${{ github.ref_type == 'tag' && 'prod' || 'dev' }}
+    name: Deploy prod
     needs: build
-    runs-on: [self-hosted, linux]
-    environment: ${{ github.ref_type == 'tag' && 'prod' || 'dev' }}
+    runs-on: [self-hosted, linux, deploy]
+    environment: prod
     steps:
       - uses: actions/checkout@v7
 
@@ -136,7 +152,7 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          ENV_NAME: ${{ github.ref_type == 'tag' && 'prod' || 'dev' }}
+          ENV_NAME: prod
           API_IMAGE: ${{ needs.build.outputs.api_image }}
           WEB_IMAGE: ${{ needs.build.outputs.web_image }}
         run: |

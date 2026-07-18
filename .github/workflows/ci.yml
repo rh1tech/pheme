@@ -16,10 +16,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The `ci` label keeps test jobs off the runner reserved for releases. Without it a deploy waits
+# behind whatever the test suite happens to be doing, which is how a four-minute release became a
+# twenty-minute one — the work was never the slow part, the queue was.
+
 jobs:
   api:
     name: API (Go)
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, ci]
     defaults:
       run:
         working-directory: api
@@ -35,7 +39,7 @@ jobs:
 
   web:
     name: Web (Vite)
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, ci]
     defaults:
       run:
         working-directory: web
@@ -56,7 +60,7 @@ jobs:
 
   crypto:
     name: Crypto (Rust)
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, ci]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -83,7 +87,7 @@ jobs:
 
   mobile:
     name: Mobile (Flutter)
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, ci]
     defaults:
       run:
         working-directory: mobile
@@ -104,7 +108,7 @@ jobs:
 
   e2e:
     name: E2E (Playwright)
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, linux, ci]
     # Sharded across the self-hosted runners. Each shard runs its OWN App API
     # (go run, in-memory drivers) via the Playwright webServer, so the in-memory
     # server's state — every device's sealed backup and history-sync blob — only
