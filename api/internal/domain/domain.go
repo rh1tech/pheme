@@ -613,6 +613,15 @@ const (
 	// derived from the group (which the server cannot derive) and stored as a blob; this only
 	// points at it. Carries the requester identity, the epoch the key was derived at, and the id.
 	ContentTypeMLSHistoryOffer = "application/mls-history-offer"
+	// ContentTypeMembership records someone joining or leaving, so the change is visible in the
+	// conversation instead of the roster silently differing from what everyone remembers.
+	//
+	// PLAINTEXT, and the only message in a conversation that is. It has to be: the server writes it
+	// and the server holds no keys, so it could not encrypt one if it wanted to. That is acceptable
+	// here and nowhere else — it names who was added or removed, and every member can already read
+	// exactly that from the roster. It carries no message content, and nothing a person wrote ever
+	// takes this type.
+	ContentTypeMembership = "application/pheme-membership"
 	// ContentTypeCallEvent is the record a call leaves in the conversation when nobody
 	// answered it. Unlike the types above it IS user-visible — it is the "missed call" in
 	// the transcript — and it is encrypted like any other message, so the server knows only

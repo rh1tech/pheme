@@ -19,6 +19,11 @@ String userLabel(PublicUser user) {
   return 'User ${id.length > 6 ? id.substring(0, 6) : id}';
 }
 
+/// A stub for somebody no longer on the roster — a removed member, whose name the client has no
+/// way to look up any more. Matches the shape userLabel falls back to.
+String shortUserLabel(String userId) =>
+    'User ${userId.length > 6 ? userId.substring(0, 6) : userId}';
+
 /// A direct chat is named after the other person; a group after its title, falling back to the
 /// members' names so an untitled group is still recognisable.
 String conversationTitle(

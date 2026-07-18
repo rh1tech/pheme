@@ -17,6 +17,7 @@ import {
 } from '@tabler/icons-react'
 import type { KeyboardEvent } from 'react'
 import { useMediaQuery } from '@mantine/hooks'
+import { MembershipLine } from '../../components/chat/MembershipLine'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { notifications } from '@mantine/notifications'
@@ -28,7 +29,9 @@ import { PhotoGrid } from '../../components/chat/PhotoGrid'
 import { ReplyQuote } from '../../components/chat/ReplyQuote'
 import {
   MLS_APPLICATION,
+  MEMBERSHIP,
   MLS_CONTROL_TYPES,
+  parseMembership,
   MLS_DEVICE,
   PeerKeysMissingError,
   autoBackupSoon,
@@ -596,7 +599,14 @@ export function ConversationChatRoute() {
         return disk[messageId] ?? null
       }
       for (const m of messages) {
-        if (processedRef.current.has(m.id) || MLS_CONTROL_TYPES.has(m.contentType)) continue
+        // A membership note is written by the server in plaintext and has no key. Handing it to
+        // the decrypt path would burn a lookup and mark it unreadable, which hides it.
+        if (
+          processedRef.current.has(m.id) ||
+          MLS_CONTROL_TYPES.has(m.contentType) ||
+          m.contentType === MEMBERSHIP
+        )
+          continue
         // Claimed BEFORE the decrypt, not after. This effect can overlap itself — any dep change
         // starts a new pass while an old one is still awaiting — and two passes reaching the same
         // message is not duplicated work but destruction: the first decrypt destroys the key, the
@@ -1037,7 +1047,10 @@ export function ConversationChatRoute() {
   //     opens a clean conversation of what it CAN read, not a wall of apologies. A message
   //     still decrypting (body undefined) is kept — its bubble shows "…" until it lands.
   const visibleMessages = messages.filter(
-    (m) => !MLS_CONTROL_TYPES.has(m.contentType) && bodies[m.id] !== null,
+    (m) =>
+      !MLS_CONTROL_TYPES.has(m.contentType) &&
+      // A system line has no body to decrypt and must not be dropped for lacking one.
+      (m.contentType === MEMBERSHIP || bodies[m.id] !== null),
   )
 
   const title = header ? conversationTitle(header, userId ?? '') : ''
@@ -1234,6 +1247,20 @@ export function ConversationChatRoute() {
                     const senderName = isGroup
                       ? conversation?.members.find((mem) => mem.userId === m.senderId)?.user
                       : undefined
+                    // Somebody joined or left: a line the conversation says about itself, centred
+                    // and quiet, with no bubble and no sender — because nobody sent it.
+                    if (m.contentType === MEMBERSHIP) {
+                      const membership = parseMembership(base64ToBytes(m.ciphertext))
+                      if (!membership) return null
+                      return (
+                        <MembershipLine
+                          key={m.id}
+                          event={membership}
+                          members={conversation?.members ?? []}
+                          myUserId={userId ?? ''}
+                        />
+                      )
+                    }
                     const event =
                       m.contentType === CALL_EVENT && content != null
                         ? readCallEvent(content.body)

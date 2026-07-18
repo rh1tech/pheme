@@ -19,7 +19,7 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
     // The same gap the feed has to close: a reconnect means whatever arrived while the stream was
     // down was never delivered, so the list's last-message rows are stale until something else
     // happens to refresh them.
-    ref.listen(liveReconnectProvider, (_, __) => unawaited(refresh()));
+    ref.listen(liveReconnectProvider, (_, _) => unawaited(refresh()));
 
     ref.listen(liveEventsProvider, (_, next) {
       final event = next.value;

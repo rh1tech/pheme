@@ -153,7 +153,7 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     // and never will be. Go and fetch it — without this the conversation silently stops updating
     // until the app is restarted, which is exactly how a group chat looked dead while its push
     // notifications kept arriving.
-    ref.listen(liveReconnectProvider, (_, __) => unawaited(_resyncAfterGap()));
+    ref.listen(liveReconnectProvider, (_, _) => unawaited(_resyncAfterGap()));
 
     ref.onDispose(_stopAdmissionRetry);
 
@@ -433,6 +433,14 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     // The echo of a message we sent and already appended.
     if (state.messages.any((m) => m.id == message.id)) return;
 
+    // A system line — somebody joined or left. Rendered, never decrypted, and it does not move the
+    // read watermark: nobody sent it, so there is nothing to have read.
+    if (message.isSystem) {
+      state = state.copyWith(messages: [...state.messages, message]);
+      unawaited(_persistEnvelope());
+      return;
+    }
+
     // Decrypt BEFORE appending, so we can skip an unreadable echo of our OWN outgoing message rather
     // than flash it as "Not available" until the send path fills it in. A sender can never decrypt its
     // own message — its plaintext lives only in the local cache the send path writes — so an echo that
@@ -474,6 +482,9 @@ class MessageFeedController extends Notifier<MessageFeedState> {
 
     for (final message in messages) {
       if (state.contents.containsKey(message.id)) continue;
+      // A system line is written by the server in plaintext and has no key. Handing it to the
+      // decrypt path would consume a lookup and render it as "not available on this device".
+      if (message.isSystem) continue;
 
       ChatContent? content;
       try {

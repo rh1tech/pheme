@@ -33,6 +33,11 @@ abstract final class ContentType {
   /// A missed/declined/failed call, recorded as a real encrypted message.
   static const callEvent = 'application/pheme-call-event';
 
+  /// Someone joined or left. Written by the SERVER, in plaintext, because the server holds no keys
+  /// and a roster change is already visible to every member from the member list. It is the one
+  /// message in a conversation that is not encrypted, and it never carries anything a person wrote.
+  static const membership = 'application/pheme-membership';
+
   /// Control traffic: never rendered as a message, never decrypted as one.
   static const control = {
     mlsWelcome,
@@ -41,6 +46,11 @@ abstract final class ContentType {
     mlsHistoryRequest,
     mlsHistoryOffer,
   };
+
+  /// Rendered, but not as somebody's message: no bubble, no sender, no decryption. Kept OUT of
+  /// [control], because control traffic is filtered out of the feed entirely and this has to
+  /// appear in it.
+  static const system = {membership};
 }
 
 enum ConversationKind {
@@ -260,6 +270,16 @@ class ChatMessage {
 
   /// Control traffic, not something to render or decrypt as a message.
   bool get isControl => ContentType.control.contains(contentType);
+
+  /// A line the conversation shows about itself — someone joined, someone left. Not encrypted and
+  /// not written by a person, so it must never be handed to the decrypt path: doing so would burn
+  /// a lookup and render it as "not available on this device".
+  bool get isSystem => ContentType.system.contains(contentType);
+
+  /// The membership change this line describes, or null if it is not one.
+  MembershipEvent? get membershipEvent => contentType == ContentType.membership
+      ? MembershipEvent.tryParse(ciphertext)
+      : null;
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
     id: j['id'] as String? ?? '',
@@ -530,4 +550,45 @@ class IceServer {
 Uint8List _bytes(Object? v) {
   if (v is String && v.isNotEmpty) return base64Decode(v);
   return Uint8List(0);
+}
+
+/// A roster change, as written by the server in plaintext.
+///
+/// Parsed defensively: an unknown action or a malformed body yields null and the line is simply not
+/// shown, which is better than a conversation refusing to render because of a note about it.
+class MembershipEvent {
+  const MembershipEvent({
+    required this.action,
+    required this.actorId,
+    required this.userId,
+  });
+
+  /// "added", "removed", or "left".
+  final String action;
+
+  /// Who did it. Equal to [userId] when somebody left of their own accord.
+  final String actorId;
+
+  /// Who it happened to.
+  final String userId;
+
+  static const _actions = {'added', 'removed', 'left'};
+
+  static MembershipEvent? tryParse(Uint8List bytes) {
+    try {
+      final decoded = jsonDecode(utf8.decode(bytes));
+      if (decoded is! Map) return null;
+      final action = decoded['action'];
+      final userId = decoded['userId'];
+      if (action is! String || !_actions.contains(action)) return null;
+      if (userId is! String || userId.isEmpty) return null;
+      return MembershipEvent(
+        action: action,
+        actorId: decoded['actorId'] as String? ?? '',
+        userId: userId,
+      );
+    } on Object {
+      return null;
+    }
+  }
 }

@@ -285,6 +285,10 @@ const ru: Resources = {
     removeFailed: 'Не удалось удалить устройство',
   },
   chat: {
+    you: 'Вы',
+    memberAdded: '{{by}} добавил(а) {{name}}',
+    memberRemoved: '{{by}} удалил(а) {{name}}',
+    memberLeft: '{{name}} покинул(а) чат',
     reply: 'Ответить',
     replyUnknown: 'Кто-то',
     replyUnavailable: 'Недоступно на этом устройстве',

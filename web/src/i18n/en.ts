@@ -283,6 +283,10 @@ const en = {
     removeFailed: 'Could not remove that device',
   },
   chat: {
+    you: 'You',
+    memberAdded: '{{name}} was added by {{by}}',
+    memberRemoved: '{{name}} was removed by {{by}}',
+    memberLeft: '{{name}} left',
     reply: 'Reply',
     replyUnknown: 'Someone',
     replyUnavailable: 'Not available on this device',

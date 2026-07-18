@@ -750,6 +750,17 @@ class _Message extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final isOwn = message.senderId == myUserId;
 
+    // Somebody joined or left: a line the conversation says about itself, centred and quiet, with
+    // no bubble and no sender — because nobody sent it.
+    final membership = message.membershipEvent;
+    if (membership != null) {
+      return _MembershipLine(
+        event: membership,
+        conversation: conversation,
+        myUserId: myUserId,
+      );
+    }
+
     if (message.contentType == ContentType.callEvent) {
       final outcome = CallOutcome.parse(content?.body);
       if (outcome == null) return const SizedBox.shrink();
@@ -1166,5 +1177,58 @@ Future<void> _confirmLeaveGroup(
     context.go('/');
   } on Object catch (e) {
     if (context.mounted) notifyError(context, l10n.t('chat.deleteFailed'), e);
+  }
+}
+
+/// The centred line that marks somebody joining or leaving.
+class _MembershipLine extends StatelessWidget {
+  const _MembershipLine({
+    required this.event,
+    required this.conversation,
+    required this.myUserId,
+  });
+
+  final MembershipEvent event;
+  final Conversation conversation;
+  final String myUserId;
+
+  /// A member's name, or a short stub if they have since left and are no longer on the roster.
+  String _name(BuildContext context, String userId) {
+    if (userId == myUserId) return context.l10n.t('chat.you');
+    final member = conversation.memberOf(userId);
+    return member == null ? shortUserLabel(userId) : userLabel(member.user);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final subject = _name(context, event.userId);
+    final text = switch (event.action) {
+      'added' => l10n.tp('chat.memberAdded', {
+        'name': subject,
+        'by': _name(context, event.actorId),
+      }),
+      'removed' => l10n.tp('chat.memberRemoved', {
+        'name': subject,
+        'by': _name(context, event.actorId),
+      }),
+      'left' => l10n.tp('chat.memberLeft', {'name': subject}),
+      _ => '',
+    };
+    if (text.isEmpty) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: Center(
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
   }
 }

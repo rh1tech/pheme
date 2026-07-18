@@ -144,6 +144,38 @@ export const MLS_HISTORY_REQUEST = 'application/mls-history-request'
  */
 export const MLS_HISTORY_OFFER = 'application/mls-history-offer'
 
+/**
+ * Someone joined or left. Written by the SERVER, in plaintext, because the server holds no keys and
+ * a roster change is already visible to every member from the member list. It is the one message in
+ * a conversation that is not encrypted, and it never carries anything a person wrote.
+ */
+export const MEMBERSHIP = 'application/pheme-membership'
+
+/** The membership change a system line describes. */
+export interface MembershipEvent {
+  action: 'added' | 'removed' | 'left'
+  actorId: string
+  userId: string
+}
+
+/**
+ * Parses a membership note, defensively: an unknown action or a malformed body yields null and the
+ * line is simply not shown, which beats a conversation refusing to render because of a note about
+ * it.
+ */
+export function parseMembership(bytes: Uint8Array): MembershipEvent | null {
+  try {
+    const decoded: unknown = JSON.parse(new TextDecoder().decode(bytes))
+    if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) return null
+    const { action, actorId, userId } = decoded as Record<string, unknown>
+    if (action !== 'added' && action !== 'removed' && action !== 'left') return null
+    if (typeof userId !== 'string' || userId === '') return null
+    return { action, actorId: typeof actorId === 'string' ? actorId : '', userId }
+  } catch {
+    return null
+  }
+}
+
 /** The control types, which carry no user-visible text. */
 export const MLS_CONTROL_TYPES: ReadonlySet<string> = new Set([
   MLS_WELCOME,

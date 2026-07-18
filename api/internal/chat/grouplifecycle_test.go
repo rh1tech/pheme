@@ -343,3 +343,96 @@ func TestConcurrentGroupCommitsSerialise(t *testing.T) {
 			"where the group actually is", secondState.Epoch, firstState.Epoch)
 	}
 }
+
+// A roster change has to be VISIBLE in the conversation. Without it the member list silently
+// differs from what everyone remembers, and nobody can tell when or by whom.
+func TestMembershipChangesAppearInTheConversation(t *testing.T) {
+	f := newFixture(t)
+	adminID, adminTok := f.user(t, "note-admin@pheme.test")
+	joinerID, joinerTok := f.user(t, "note-joiner@pheme.test")
+	leaverID, leaverTok := f.user(t, "note-leaver@pheme.test")
+	conv := newGroup(t, f, adminTok, "Notes", leaverID)
+
+	notes := func(token string) []struct {
+		Action  string
+		ActorID string
+		UserID  string
+	} {
+		t.Helper()
+		rec := f.do(http.MethodGet, "/v1/conversations/"+conv+"/messages", token, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("messages: %d %s", rec.Code, rec.Body)
+		}
+		var page struct {
+			Messages []domain.ChatMessage `json:"messages"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		var out []struct {
+			Action  string
+			ActorID string
+			UserID  string
+		}
+		// The endpoint answers newest-first; read them in the order they happened.
+		for i := len(page.Messages) - 1; i >= 0; i-- {
+			m := page.Messages[i]
+			if m.ContentType != domain.ContentTypeMembership {
+				continue
+			}
+			var body struct {
+				Action  string `json:"action"`
+				ActorID string `json:"actorId"`
+				UserID  string `json:"userId"`
+			}
+			if err := json.Unmarshal(m.Ciphertext, &body); err != nil {
+				t.Fatalf("membership note is not readable json: %v (%q)", err, m.Ciphertext)
+			}
+			out = append(out, struct {
+				Action  string
+				ActorID string
+				UserID  string
+			}{body.Action, body.ActorID, body.UserID})
+		}
+		return out
+	}
+
+	// Added by an admin.
+	if rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/members", adminTok,
+		map[string]any{"userId": joinerID}); rec.Code != http.StatusCreated {
+		t.Fatalf("add: %d %s", rec.Code, rec.Body)
+	}
+	// Removed by an admin.
+	if rec := f.do(http.MethodDelete, "/v1/conversations/"+conv+"/members/"+joinerID, adminTok, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("remove: %d", rec.Code)
+	}
+	// And someone leaving of their own accord.
+	if rec := f.do(http.MethodDelete, "/v1/conversations/"+conv+"/members/"+leaverID, leaverTok, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("leave: %d", rec.Code)
+	}
+
+	got := notes(adminTok)
+	want := []struct{ action, actor, subject string }{
+		{"added", adminID, joinerID},
+		{"removed", adminID, joinerID},
+		{"left", leaverID, leaverID},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d membership notes, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i].Action != w.action || got[i].ActorID != w.actor || got[i].UserID != w.subject {
+			t.Errorf("note %d = %+v, want action=%s actor=%s user=%s", i, got[i], w.action, w.actor, w.subject)
+		}
+	}
+	_ = joinerTok
+}
+
+// A membership note is not a message somebody wrote, so it must not buzz anyone's phone.
+func TestMembershipNotesRaiseNoPushNotification(t *testing.T) {
+	if isControlContent(domain.ContentTypeMembership) {
+		return // already silent
+	}
+	t.Errorf("%s raises a push notification; a roster change is not something a person sent",
+		domain.ContentTypeMembership)
+}

@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -327,6 +328,10 @@ func isControlContent(contentType string) bool {
 	switch contentType {
 	case contentTypeMLSWelcome, contentTypeMLSCommit, contentTypeMLSDevice, contentTypeCallEvent:
 		return true
+	// A roster change is worth SEEING in the conversation and not worth being buzzed about. Nobody
+	// wrote it; the server did, because the membership changed.
+	case domain.ContentTypeMembership:
+		return true
 	default:
 		return false
 	}
@@ -389,7 +394,39 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not add member")
 		return
 	}
+	h.recordMembershipChange(r, convID, member.UserID, req.UserID, "added")
 	httpx.JSON(w, http.StatusCreated, added)
+}
+
+// recordMembershipChange writes the plaintext line that makes a roster change visible in the
+// conversation, and fans it out live.
+//
+// Best effort on purpose: the membership change itself has already been committed and reported, and
+// failing the request because the note about it could not be written would be the tail wagging the
+// dog. A missing line is a cosmetic loss; a failed add is not.
+//
+// See domain.ContentTypeMembership for why this one message is not encrypted.
+func (h *Handler) recordMembershipChange(r *http.Request, convID, actorID, subjectID, action string) {
+	payload, err := json.Marshal(map[string]string{
+		"action":  action,
+		"actorId": actorID,
+		"userId":  subjectID,
+	})
+	if err != nil {
+		return
+	}
+	msg, err := h.Store.AppendChatMessage(r.Context(), domain.ChatMessage{
+		ConversationID: convID,
+		SenderID:       actorID,
+		Ciphertext:     payload,
+		ContentType:    domain.ContentTypeMembership,
+		CreatedAt:      time.Now().UTC(),
+	})
+	if err != nil {
+		h.logger().Error("membership note", "conversation", convID, "action", action, "error", err)
+		return
+	}
+	h.Live.Publish(live.Event{ConversationID: convID, ChatMessage: &msg})
 }
 
 func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
@@ -407,6 +444,13 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "member not found")
 		return
 	}
+	// "left" when they removed themselves, "removed" when somebody else did — the same event to the
+	// roster, but not the same thing to read.
+	action := "removed"
+	if target == member.UserID {
+		action = "left"
+	}
+	h.recordMembershipChange(r, convID, member.UserID, target, action)
 	w.WriteHeader(http.StatusNoContent)
 }
 
