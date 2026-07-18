@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -42,9 +44,43 @@ function versionManifest(): Plugin {
   }
 }
 
+/**
+ * Serves the MLS WASM binary at a fixed URL for the service worker.
+ *
+ * The worker decrypts message previews and so needs the same crypto the app runs — but it is a
+ * classic script outside the bundle, so it cannot import the hashed asset Vite emits. It fetches
+ * /mls/pheme_mls_bg.wasm instead.
+ *
+ * This copies rather than duplicates on purpose. Committing a second 1.2 MB binary under public/
+ * would work today and drift tomorrow: two copies of the crypto, one rebuilt and one forgotten,
+ * with the worker quietly decrypting against a different build than the page. There is one file in
+ * the repo, and it is the one wasm-pack writes.
+ */
+function serviceWorkerWasm(): Plugin {
+  const wasmPath = fileURLToPath(new URL('./src/crypto/pkg/pheme_mls_bg.wasm', import.meta.url))
+  const url = '/mls/pheme_mls_bg.wasm'
+  return {
+    name: 'pheme-sw-wasm',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url?.split('?')[0] !== url) return next()
+        res.setHeader('Content-Type', 'application/wasm')
+        res.end(readFileSync(wasmPath))
+      })
+    },
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'mls/pheme_mls_bg.wasm',
+        source: readFileSync(wasmPath),
+      })
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), versionManifest()],
+  plugins: [react(), versionManifest(), serviceWorkerWasm()],
   define: {
     __BUILD_ID__: JSON.stringify(buildId),
     __APP_VERSION__: JSON.stringify(version),

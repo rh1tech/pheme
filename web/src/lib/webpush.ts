@@ -131,6 +131,11 @@ export async function registerWebPushDevice(): Promise<string> {
   const device = await api.createDevice({
     platform: 'web',
     webPushSub: JSON.stringify(subscription),
+    // This build ships a service worker that can decrypt a message and draw the notification
+    // itself, so say so — the server withholds previews from devices that do not. Safe to assert
+    // unconditionally here: the worker is deployed with this bundle, and it degrades to the
+    // server's generic text on its own if a decrypt does not land.
+    canRenderPreview: true,
   })
   return device.id
 }

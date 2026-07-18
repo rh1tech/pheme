@@ -9,6 +9,7 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../data/pheme_repository.dart';
+import 'notification_preview.dart';
 
 /// Background isolate handler. Must be a top-level, vm:entry-point function.
 ///
@@ -30,6 +31,20 @@ import '../data/pheme_repository.dart';
 @pragma('vm:entry-point')
 Future<void> phemeFirebaseBackgroundHandler(RemoteMessage message) async {
   final kind = message.data['kind'];
+
+  // A message carrying ciphertext is one the SERVER could not draw, because only this device can
+  // read it. It arrives data-only for exactly that reason — a notification payload would be drawn
+  // by the system tray before this handler ever ran — so if we do not draw it here, nothing does.
+  //
+  // That is a heavier obligation than the rest of this function has, and it is why the decrypt is
+  // wrapped so tightly: every failure inside it still ends in a notification, just a generic one.
+  // Note what is still NOT happening — no MLS client is loaded, no state is written. See
+  // notification_preview.dart.
+  if (kind == null && message.data['ciphertext'] is String) {
+    await _showDecryptedInBackground(message);
+    return;
+  }
+
   if (kind != 'call' && kind != 'call-cancel') return;
 
   final callId = message.data['callId'];
@@ -65,6 +80,85 @@ Future<void> phemeFirebaseBackgroundHandler(RemoteMessage message) async {
       ios: const IOSParams(supportsVideo: false, audioSessionMode: 'voiceChat'),
     ),
   );
+}
+
+/// The Android notification channel. Declared at top level because the background isolate needs it
+/// too and has no [PushService] instance to reach for.
+const _androidChannel = AndroidNotificationChannel(
+  'pheme_messages',
+  'Pheme messages',
+  description: 'Channel notifications from Pheme',
+  importance: Importance.high,
+);
+
+/// Draws a message notification from the background isolate, with its body decrypted if it can be.
+///
+/// The generic title and body ride in the DATA rather than a notification payload, because a
+/// data-only message has none — the same reason a call's caller name does. Without them a failed
+/// decrypt would have nothing at all to fall back to.
+@pragma('vm:entry-point')
+Future<void> _showDecryptedInBackground(RemoteMessage message) async {
+  final data = message.data;
+  final title = (data['title'] as String?) ?? 'Pheme';
+  final fallbackBody = (data['body'] as String?) ?? 'New message';
+  final conversationId = (data['conversationId'] as String?) ?? '';
+
+  String? preview;
+  try {
+    preview = await decryptNotificationPreview(
+      conversationId: conversationId,
+      ciphertextBase64: data['ciphertext'] as String?,
+    );
+  } on Object catch (e) {
+    // Never fatal: a notification that says "New message" is a working notification.
+    debugPrint('Pheme: background preview failed: $e');
+  }
+
+  final local = FlutterLocalNotificationsPlugin();
+  await local.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(),
+    ),
+  );
+  await local
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >()
+      ?.createNotificationChannel(_androidChannel);
+
+  await local.show(
+    id: _notificationIdFor(message),
+    title: title,
+    body: preview ?? fallbackBody,
+    notificationDetails: NotificationDetails(
+      android: AndroidNotificationDetails(
+        _androidChannel.id,
+        _androidChannel.name,
+        channelDescription: _androidChannel.description,
+        importance: Importance.high,
+        priority: Priority.high,
+        groupKey: conversationId.isEmpty ? null : conversationId,
+      ),
+      iOS: const DarwinNotificationDetails(),
+    ),
+  );
+}
+
+/// A stable, per-message notification id.
+///
+/// Derived from the message id where there is one, so that a retry or a duplicate delivery of the
+/// same message updates its notification instead of stacking a second copy, and two different
+/// messages never collide however alike their text.
+@pragma('vm:entry-point')
+int _notificationIdFor(RemoteMessage message) {
+  final messageId = message.data['messageId'];
+  final seed = (messageId is String && messageId.isNotEmpty)
+      ? messageId
+      : (message.messageId ?? message.hashCode.toString());
+  // Positive and within 32 bits: Android notification ids are signed ints, and a negative or
+  // oversized value is rejected outright on some OEM builds.
+  return seed.hashCode & 0x7fffffff;
 }
 
 /// Thrown when push is requested but Firebase isn't configured on this build.
@@ -126,13 +220,6 @@ class PushService {
     return ref;
   }
 
-  static const _androidChannel = AndroidNotificationChannel(
-    'pheme_messages',
-    'Pheme messages',
-    description: 'Channel notifications from Pheme',
-    importance: Importance.high,
-  );
-
   /// Best-effort initialization. Never throws; sets [available] accordingly.
   Future<void> init() async {
     if (_initialized) return;
@@ -181,10 +268,42 @@ class PushService {
         convId == activeConversationId) {
       return;
     }
-    _local.show(
-      id: n.hashCode,
+
+    // Group by conversation, so a busy chat arrives as one expandable stack instead of ten
+    // separate banners burying every other notification.
+    //
+    // Android has to be told here rather than by the server: FCM's AndroidNotification exposes a
+    // tag (which REPLACES a notification, losing the earlier one) but no group (which bundles
+    // them), so there is no server-side field to carry this. iOS is the opposite and is already
+    // grouped from the server via the APNs thread-id, which is why only the Android side is set
+    // below. See api/internal/push/push.go.
+    final groupKey = (convId is String && convId.isNotEmpty) ? convId : null;
+
+    // Decrypt for a preview, then draw. Done here rather than before the suppression check above,
+    // so a chat already on screen costs no key material at all.
+    unawaited(_showWithPreview(message, n, groupKey));
+  }
+
+  /// Draws a foreground notification, decrypting its body first if the push carried one.
+  Future<void> _showWithPreview(
+    RemoteMessage message,
+    RemoteNotification n,
+    String? groupKey,
+  ) async {
+    final preview = await decryptNotificationPreview(
+      conversationId: (message.data['conversationId'] as String?) ?? '',
+      ciphertextBase64: message.data['ciphertext'] as String?,
+    );
+
+    await _local.show(
+      // Keyed on the MESSAGE, not the notification object. n.hashCode is derived from the payload,
+      // so two messages with identical text — "ok", twice — would collide and the second would
+      // silently replace the first.
+      id: _notificationIdFor(message),
       title: n.title,
-      body: n.body,
+      // The server's generic body when there is no preview: no key material here, previews turned
+      // off, or a decrypt that did not land. All of them still deserve a notification.
+      body: preview ?? n.body,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           _androidChannel.id,
@@ -192,8 +311,12 @@ class PushService {
           channelDescription: _androidChannel.description,
           importance: Importance.high,
           priority: Priority.high,
+          groupKey: groupKey,
         ),
-        iOS: const DarwinNotificationDetails(),
+        // threadIdentifier is what iOS groups on. The server already sets it for pushes the
+        // system renders; this covers the foreground path, where we are drawing the notification
+        // ourselves and the server's aps payload is not what reaches the tray.
+        iOS: DarwinNotificationDetails(threadIdentifier: groupKey),
       ),
     );
   }
@@ -236,9 +359,26 @@ class PushService {
       platform: _platform,
       fcmToken: fcmToken,
       voipToken: voipToken,
+      canRenderPreview: _canRenderPreview,
     );
     return device.id;
   }
+
+  /// Whether THIS build can decrypt a message and draw the notification itself.
+  ///
+  /// Android only, for now, and the asymmetry is real rather than an oversight. Android renders a
+  /// preview from the FCM background isolate (see phemeFirebaseBackgroundHandler), which exists.
+  /// iOS would need a NotificationServiceExtension, which does not — so an iPhone says no and
+  /// keeps getting the server's generic text, which is correct and not a degradation: it is
+  /// exactly what it got before.
+  ///
+  /// Claiming the capability before it exists would be worse than not having it. The server sends
+  /// a preview data-only, and a device that cannot draw one shows NOTHING — so a premature `true`
+  /// here would silence every notification on iOS.
+  ///
+  /// Flip this to `Platform.isAndroid || Platform.isIOS` in the same change that adds the
+  /// extension, never before it.
+  bool get _canRenderPreview => Platform.isAndroid;
 
   /// This device's PushKit token, or null when there is none (Android, or iOS before it has been
   /// issued). Best effort: a missing VoIP token degrades an incoming call to a banner, which is worse

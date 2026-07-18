@@ -100,7 +100,13 @@ mod tests {
     fn round_trip_recovers_state() {
         let secret = b"exported client state bytes";
         let b = encrypt(b"correct horse battery staple", secret).unwrap();
-        let out = decrypt(b"correct horse battery staple", &b.salt, &b.nonce, &b.ciphertext).unwrap();
+        let out = decrypt(
+            b"correct horse battery staple",
+            &b.salt,
+            &b.nonce,
+            &b.ciphertext,
+        )
+        .unwrap();
         assert_eq!(out, secret);
     }
 
@@ -113,9 +119,6 @@ mod tests {
     #[test]
     fn ciphertext_hides_plaintext() {
         let b = encrypt(b"pw", b"the eagle lands at dawn").unwrap();
-        assert!(!b
-            .ciphertext
-            .windows(5)
-            .any(|w| w == b"eagle"));
+        assert!(!b.ciphertext.windows(5).any(|w| w == b"eagle"));
     }
 }

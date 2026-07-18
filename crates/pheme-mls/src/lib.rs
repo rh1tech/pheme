@@ -97,7 +97,9 @@ impl Client {
         let provider = OpenMlsRustCrypto::default();
         let signer =
             SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).map_err(err("signer"))?;
-        signer.store(provider.storage()).map_err(err("store signer"))?;
+        signer
+            .store(provider.storage())
+            .map_err(err("store signer"))?;
         let credential = BasicCredential::new(identity.clone());
         let credential_with_key = CredentialWithKey {
             credential: credential.into(),
@@ -161,9 +163,17 @@ impl Client {
                 ));
         }
         let bundle = builder
-            .build(CIPHERSUITE, &self.provider, &self.signer, self.credential_with_key.clone())
+            .build(
+                CIPHERSUITE,
+                &self.provider,
+                &self.signer,
+                self.credential_with_key.clone(),
+            )
             .map_err(err("key package"))?;
-        bundle.key_package().tls_serialize_detached().map_err(err("serialize kp"))
+        bundle
+            .key_package()
+            .tls_serialize_detached()
+            .map_err(err("serialize kp"))
     }
 
     /// Creates a new group. `group_id` is the opaque id the server minted for the
@@ -230,13 +240,16 @@ impl Client {
     /// decrypt gets ADDED to the existing group (see `stage_add`); the group is not torn
     /// down around them.
     pub fn delete_group(&self, group_id: &[u8]) -> Result<(), String> {
-        let mut group = match MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
-            .map_err(err("load group"))?
-        {
-            Some(g) => g,
-            None => return Ok(()), // nothing to discard
-        };
-        group.delete(self.provider.storage()).map_err(err("delete group"))?;
+        let mut group =
+            match MlsGroup::load(self.provider.storage(), &GroupId::from_slice(group_id))
+                .map_err(err("load group"))?
+            {
+                Some(g) => g,
+                None => return Ok(()), // nothing to discard
+            };
+        group
+            .delete(self.provider.storage())
+            .map_err(err("delete group"))?;
         Ok(())
     }
 
@@ -269,7 +282,11 @@ impl Client {
     /// Commit against the same epoch, only one of them can win, and a client that has
     /// already advanced its own ratchet on a Commit the group never accepted is forked
     /// from everyone else — permanently, and silently.
-    pub fn stage_add(&self, group_id: &[u8], key_packages: &[Vec<u8>]) -> Result<AddResult, String> {
+    pub fn stage_add(
+        &self,
+        group_id: &[u8],
+        key_packages: &[Vec<u8>],
+    ) -> Result<AddResult, String> {
         if key_packages.is_empty() {
             return Err("nothing to add".into());
         }
@@ -288,8 +305,12 @@ impl Client {
             .map_err(err("add members"))?;
 
         Ok(AddResult {
-            welcome: welcome.tls_serialize_detached().map_err(err("serialize welcome"))?,
-            commit: commit.tls_serialize_detached().map_err(err("serialize commit"))?,
+            welcome: welcome
+                .tls_serialize_detached()
+                .map_err(err("serialize welcome"))?,
+            commit: commit
+                .tls_serialize_detached()
+                .map_err(err("serialize commit"))?,
         })
     }
 
@@ -312,7 +333,11 @@ impl Client {
     /// the next time they reconcile.
     ///
     /// Not merged — the server decides. See `stage_add`.
-    pub fn stage_remove_users(&self, group_id: &[u8], user_ids: &[String]) -> Result<Vec<u8>, String> {
+    pub fn stage_remove_users(
+        &self,
+        group_id: &[u8],
+        user_ids: &[String],
+    ) -> Result<Vec<u8>, String> {
         let mut group = self.load_group(group_id)?;
         let me = user_of(&self.identity);
         let targets: Vec<Vec<u8>> = user_ids
@@ -334,7 +359,9 @@ impl Client {
         let (commit, _welcome, _group_info) = group
             .remove_members(&self.provider, &self.signer, &leaves)
             .map_err(err("remove members"))?;
-        commit.tls_serialize_detached().map_err(err("serialize commit"))
+        commit
+            .tls_serialize_detached()
+            .map_err(err("serialize commit"))
     }
 
     /// STAGES the removal of specific LEAVES, named by their full `userId:deviceId`.
@@ -372,14 +399,18 @@ impl Client {
         let (commit, _welcome, _group_info) = group
             .remove_members(&self.provider, &self.signer, &leaves)
             .map_err(err("remove members"))?;
-        commit.tls_serialize_detached().map_err(err("serialize commit"))
+        commit
+            .tls_serialize_detached()
+            .map_err(err("serialize commit"))
     }
 
     /// Applies a Commit this client staged, now that the server has accepted it as the
     /// group's next epoch. Only now does our ratchet advance.
     pub fn commit_accepted(&self, group_id: &[u8]) -> Result<(), String> {
         let mut group = self.load_group(group_id)?;
-        group.merge_pending_commit(&self.provider).map_err(err("merge commit"))
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(err("merge commit"))
     }
 
     /// Throws away a Commit the server refused (another member's landed first). The
@@ -387,7 +418,9 @@ impl Client {
     /// Commit and try again.
     pub fn commit_rejected(&self, group_id: &[u8]) -> Result<(), String> {
         let mut group = self.load_group(group_id)?;
-        group.clear_pending_commit(self.provider.storage()).map_err(err("clear pending"))
+        group
+            .clear_pending_commit(self.provider.storage())
+            .map_err(err("clear pending"))
     }
 
     /// The credential identity (`userId:deviceId`) of every leaf in the group.
@@ -435,7 +468,9 @@ impl Client {
         if self.has_group(staged.group_context().group_id().as_slice()) {
             return Err("already a member of this group".into());
         }
-        staged.into_group(&self.provider).map_err(err("join group"))?;
+        staged
+            .into_group(&self.provider)
+            .map_err(err("join group"))?;
         Ok(())
     }
 
@@ -449,7 +484,8 @@ impl Client {
         let msg = group
             .export_group_info(self.provider.crypto(), &self.signer, true)
             .map_err(err("export group info"))?;
-        msg.tls_serialize_detached().map_err(err("serialize group info"))
+        msg.tls_serialize_detached()
+            .map_err(err("serialize group info"))
     }
 
     /// Joins an existing group by EXTERNAL COMMIT: adds this client's own leaf, with no Welcome and
@@ -495,7 +531,9 @@ impl Client {
     pub fn apply_commit(&self, group_id: &[u8], commit: &[u8]) -> Result<(), String> {
         let mut group = self.load_group(group_id)?;
         let msg = MlsMessageIn::tls_deserialize(&mut &*commit).map_err(err("parse commit"))?;
-        let protocol = msg.try_into_protocol_message().map_err(err("not protocol"))?;
+        let protocol = msg
+            .try_into_protocol_message()
+            .map_err(err("not protocol"))?;
         let processed = match group.process_message(&self.provider, protocol) {
             Ok(p) => p,
             // Our own commit, already merged when we produced it — nothing to do.
@@ -505,7 +543,9 @@ impl Client {
             Err(e) => return Err(format!("process commit: {e:?}")),
         };
         if let ProcessedMessageContent::StagedCommitMessage(staged) = processed.into_content() {
-            group.merge_staged_commit(&self.provider, *staged).map_err(err("merge staged"))?;
+            group
+                .merge_staged_commit(&self.provider, *staged)
+                .map_err(err("merge staged"))?;
         }
         Ok(())
     }
@@ -591,14 +631,51 @@ impl Client {
     pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Vec<u8>>, String> {
         let mut group = self.load_group(group_id)?;
         let msg = MlsMessageIn::tls_deserialize(&mut &*ciphertext).map_err(err("parse msg"))?;
-        let protocol = msg.try_into_protocol_message().map_err(err("not protocol"))?;
-        let processed = group.process_message(&self.provider, protocol).map_err(err("decrypt"))?;
+        let protocol = msg
+            .try_into_protocol_message()
+            .map_err(err("not protocol"))?;
+        let processed = group
+            .process_message(&self.provider, protocol)
+            .map_err(err("decrypt"))?;
         match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(app) => Ok(Some(app.into_bytes())),
             ProcessedMessageContent::StagedCommitMessage(staged) => {
-                group.merge_staged_commit(&self.provider, *staged).map_err(err("merge staged"))?;
+                group
+                    .merge_staged_commit(&self.provider, *staged)
+                    .map_err(err("merge staged"))?;
                 Ok(None)
             }
+            _ => Ok(None),
+        }
+    }
+
+    /// Decrypts an application message WITHOUT merging anything.
+    ///
+    /// Same as [`Client::decrypt`] except that a Commit is refused rather than merged. It is
+    /// the decrypt a notification preview runs, and the difference is the whole point: a
+    /// preview must never move the epoch. See [`PreviewClient`], which is the only way to
+    /// reach this and cannot persist.
+    ///
+    /// This still mutates the IN-MEMORY provider — `process_message` consumes the message
+    /// key, and there is no way to ask OpenMLS not to. That is exactly why the caller must be
+    /// unable to write the result back: the mutation has to die with the process.
+    pub fn decrypt_no_merge(
+        &self,
+        group_id: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Option<Vec<u8>>, String> {
+        let mut group = self.load_group(group_id)?;
+        let msg = MlsMessageIn::tls_deserialize(&mut &*ciphertext).map_err(err("parse msg"))?;
+        let protocol = msg
+            .try_into_protocol_message()
+            .map_err(err("not protocol"))?;
+        let processed = group
+            .process_message(&self.provider, protocol)
+            .map_err(err("decrypt"))?;
+        match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(app) => Ok(Some(app.into_bytes())),
+            // Deliberately NOT merged. A preview that advanced the epoch in a copy of the state
+            // it then threw away would leave the real client behind by a commit it never saw.
             _ => Ok(None),
         }
     }
@@ -610,8 +687,14 @@ impl Client {
         // The MemoryStorage `serialize` helper is behind a test-utils feature, so
         // persist its public `values` map directly instead — a flat list of
         // (key, value) byte pairs, which is exactly what the store is.
-        let values = self.provider.storage().values.read().map_err(err("read store"))?;
-        let store: Vec<(Vec<u8>, Vec<u8>)> = values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let values = self
+            .provider
+            .storage()
+            .values
+            .read()
+            .map_err(err("read store"))?;
+        let store: Vec<(Vec<u8>, Vec<u8>)> =
+            values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let envelope = Envelope {
             store,
             public_key: self.signer.public().to_vec(),
@@ -625,7 +708,11 @@ impl Client {
         let envelope: Envelope = serde_json::from_slice(state).map_err(err("decode envelope"))?;
         let provider = OpenMlsRustCrypto::default();
         {
-            let mut dst = provider.storage().values.write().map_err(err("write store"))?;
+            let mut dst = provider
+                .storage()
+                .values
+                .write()
+                .map_err(err("write store"))?;
             for (k, v) in envelope.store {
                 dst.insert(k, v);
             }
@@ -647,6 +734,53 @@ impl Client {
             credential_with_key,
             identity: envelope.identity,
         })
+    }
+}
+
+/// A client that can read a message and can never write the ratchet back.
+///
+/// This is how a notification preview decrypts, on all three platforms, and it is a distinct
+/// TYPE rather than a rule because the rule is otherwise impossible to keep. A preview runs
+/// somewhere the real client does not — a service worker, an iOS NotificationServiceExtension,
+/// an Android background isolate — and every one of those is a second context holding the same
+/// key store. The single-client invariant everything here rests on says there must never be
+/// two writers.
+///
+/// So a preview is not made safe by being careful. It is made safe by being unable:
+///
+///   - It has no `export_state`. There is nowhere for the advanced ratchet to go, so it cannot
+///     be persisted by a later edit that "just needed to save something".
+///   - It refuses Commits (see [`Client::decrypt_no_merge`]), so it cannot move the epoch even
+///     in memory.
+///
+/// The consequence, and the thing that makes the whole design work: the real client's state is
+/// untouched, still holding an unconsumed key for that message, and decrypts it again for real
+/// when the app opens. "A message decrypts exactly once" is a property of a COPY of the state,
+/// not a global fact — so a copy that is thrown away costs nothing.
+///
+/// Drop this the moment the notification is shown. It holds plaintext.
+pub struct PreviewClient {
+    inner: Client,
+}
+
+impl PreviewClient {
+    /// Loads a read-only client from an exported state blob.
+    pub fn import_state(state: &[u8]) -> Result<Self, String> {
+        Ok(Self {
+            inner: Client::import_state(state)?,
+        })
+    }
+
+    /// Decrypts one application message for display. `None` means it was not an application
+    /// message — a Commit or other control traffic — and there is nothing to preview.
+    pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Vec<u8>>, String> {
+        self.inner.decrypt_no_merge(group_id, ciphertext)
+    }
+
+    /// Whether this client holds the group, so a caller can pick the right one without
+    /// attempting a decrypt against each.
+    pub fn has_group(&self, group_id: &[u8]) -> bool {
+        self.inner.has_group(group_id)
     }
 }
 
@@ -744,10 +878,16 @@ mod tests {
         establish(&alice, GID, &[&bob]);
 
         let ct = alice.encrypt(GID, b"the eagle lands at dawn").unwrap();
-        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"the eagle lands at dawn"[..]));
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"the eagle lands at dawn"[..])
+        );
 
         let ct2 = bob.encrypt(GID, b"acknowledged").unwrap();
-        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"acknowledged"[..]));
+        assert_eq!(
+            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            Some(&b"acknowledged"[..])
+        );
     }
 
     // THE BUG. Bob is signed in on two devices. Both must be leaves of the group, and
@@ -766,14 +906,23 @@ mod tests {
 
         // Alice speaks: BOTH of Bob's devices read it.
         let ct = alice.encrypt(GID, b"hello bob").unwrap();
-        assert_eq!(bob_phone.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"hello bob"[..]));
-        assert_eq!(bob_laptop.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"hello bob"[..]));
+        assert_eq!(
+            bob_phone.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"hello bob"[..])
+        );
+        assert_eq!(
+            bob_laptop.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"hello bob"[..])
+        );
 
         // Bob speaks from his phone: Alice reads it, AND so does Bob's own laptop —
         // a sender cannot decrypt their own message, but a different device of the
         // same person is a different leaf, so it can.
         let ct2 = bob_phone.encrypt(GID, b"sent from my phone").unwrap();
-        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"sent from my phone"[..]));
+        assert_eq!(
+            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            Some(&b"sent from my phone"[..])
+        );
         assert_eq!(
             bob_laptop.decrypt(GID, &ct2).unwrap().as_deref(),
             Some(&b"sent from my phone"[..]),
@@ -791,25 +940,42 @@ mod tests {
         establish(&alice, GID, &[&bob_phone]);
 
         let early = alice.encrypt(GID, b"before the laptop existed").unwrap();
-        assert_eq!(bob_phone.decrypt(GID, &early).unwrap().as_deref(), Some(&b"before the laptop existed"[..]));
+        assert_eq!(
+            bob_phone.decrypt(GID, &early).unwrap().as_deref(),
+            Some(&b"before the laptop existed"[..])
+        );
 
         // Bob signs in on a laptop. Alice notices the device is missing from the group
         // and adds it — one Commit, one Welcome.
         let bob_laptop = Client::new("bob", "laptop").unwrap();
-        let add = alice.stage_add(GID, &[bob_laptop.key_package().unwrap()]).unwrap();
+        let add = alice
+            .stage_add(GID, &[bob_laptop.key_package().unwrap()])
+            .unwrap();
         alice.commit_accepted(GID).unwrap();
         bob_laptop.join_from_welcome(&add.welcome).unwrap();
         bob_phone.apply_commit(GID, &add.commit).unwrap();
 
         // Everyone — old devices and new — reads what comes next.
         let ct = alice.encrypt(GID, b"now you both see this").unwrap();
-        assert_eq!(bob_phone.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"now you both see this"[..]));
-        assert_eq!(bob_laptop.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"now you both see this"[..]));
+        assert_eq!(
+            bob_phone.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"now you both see this"[..])
+        );
+        assert_eq!(
+            bob_laptop.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"now you both see this"[..])
+        );
 
         // And the laptop can speak; the phone and Alice both hear it.
         let ct2 = bob_laptop.encrypt(GID, b"laptop here").unwrap();
-        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"laptop here"[..]));
-        assert_eq!(bob_phone.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"laptop here"[..]));
+        assert_eq!(
+            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            Some(&b"laptop here"[..])
+        );
+        assert_eq!(
+            bob_phone.decrypt(GID, &ct2).unwrap().as_deref(),
+            Some(&b"laptop here"[..])
+        );
     }
 
     // Removing a member must remove EVERY device they have. Taking out one leaf and
@@ -833,8 +999,14 @@ mod tests {
         assert_eq!(alice.member_identities(GID).unwrap().len(), 2);
 
         let ct = alice.encrypt(GID, b"bob is gone").unwrap();
-        assert_eq!(carol.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"bob is gone"[..]));
-        assert!(bob_phone.decrypt(GID, &ct).is_err(), "removed device must not decrypt");
+        assert_eq!(
+            carol.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"bob is gone"[..])
+        );
+        assert!(
+            bob_phone.decrypt(GID, &ct).is_err(),
+            "removed device must not decrypt"
+        );
         assert!(
             bob_laptop.decrypt(GID, &ct).is_err(),
             "the removed member's OTHER device must not decrypt either",
@@ -860,7 +1032,9 @@ mod tests {
         // Both members stage an Add against epoch 1, concurrently.
         let base = alice.epoch(GID).unwrap();
         assert_eq!(base, bob.epoch(GID).unwrap());
-        let alice_add = alice.stage_add(GID, &[carol.key_package().unwrap()]).unwrap();
+        let alice_add = alice
+            .stage_add(GID, &[carol.key_package().unwrap()])
+            .unwrap();
         let _bob_add = bob.stage_add(GID, &[dave.key_package().unwrap()]).unwrap();
 
         // The server accepts Alice's (it got there first) and refuses Bob's.
@@ -874,8 +1048,14 @@ mod tests {
         assert_eq!(alice.epoch(GID).unwrap(), base + 1);
 
         let ct = alice.encrypt(GID, b"still one group").unwrap();
-        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"still one group"[..]));
-        assert_eq!(carol.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"still one group"[..]));
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"still one group"[..])
+        );
+        assert_eq!(
+            carol.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"still one group"[..])
+        );
 
         // And Bob can retry his add against the new epoch.
         let retry = bob.stage_add(GID, &[dave.key_package().unwrap()]).unwrap();
@@ -885,8 +1065,14 @@ mod tests {
         dave.join_from_welcome(&retry.welcome).unwrap();
 
         let ct2 = dave.encrypt(GID, b"dave made it in").unwrap();
-        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"dave made it in"[..]));
-        assert_eq!(bob.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"dave made it in"[..]));
+        assert_eq!(
+            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            Some(&b"dave made it in"[..])
+        );
+        assert_eq!(
+            bob.decrypt(GID, &ct2).unwrap().as_deref(),
+            Some(&b"dave made it in"[..])
+        );
     }
 
     // A new device joins an existing group with NOBODY'S help: no Welcome, no member admitting it.
@@ -922,13 +1108,25 @@ mod tests {
 
         // Carol reads what comes after, and the others read Carol.
         let after = alice.encrypt(GID, b"after carol").unwrap();
-        assert_eq!(carol.decrypt(GID, &after).unwrap().as_deref(), Some(&b"after carol"[..]));
+        assert_eq!(
+            carol.decrypt(GID, &after).unwrap().as_deref(),
+            Some(&b"after carol"[..])
+        );
         let from_carol = carol.encrypt(GID, b"carol is in").unwrap();
-        assert_eq!(alice.decrypt(GID, &from_carol).unwrap().as_deref(), Some(&b"carol is in"[..]));
-        assert_eq!(bob.decrypt(GID, &from_carol).unwrap().as_deref(), Some(&b"carol is in"[..]));
+        assert_eq!(
+            alice.decrypt(GID, &from_carol).unwrap().as_deref(),
+            Some(&b"carol is in"[..])
+        );
+        assert_eq!(
+            bob.decrypt(GID, &from_carol).unwrap().as_deref(),
+            Some(&b"carol is in"[..])
+        );
 
         // But not what was said before she arrived.
-        assert!(carol.decrypt(GID, &before).is_err(), "a newcomer must not read pre-join history");
+        assert!(
+            carol.decrypt(GID, &before).is_err(),
+            "a newcomer must not read pre-join history"
+        );
     }
 
     // Two newcomers external-join against the same epoch. Like any commit, only one can win the
@@ -966,8 +1164,14 @@ mod tests {
         // All four in one group.
         assert_eq!(alice.member_identities(GID).unwrap().len(), 4);
         let ct = dave.encrypt(GID, b"dave made it in too").unwrap();
-        assert_eq!(alice.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"dave made it in too"[..]));
-        assert_eq!(carol.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"dave made it in too"[..]));
+        assert_eq!(
+            alice.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"dave made it in too"[..])
+        );
+        assert_eq!(
+            carol.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"dave made it in too"[..])
+        );
     }
 
     // A message sent BEFORE a membership change must still decrypt AFTER it.
@@ -987,7 +1191,9 @@ mod tests {
 
         // Carol joins; Bob applies the Commit and moves to the new epoch.
         let carol = Client::new("carol", "dev-c").unwrap();
-        let add = alice.stage_add(GID, &[carol.key_package().unwrap()]).unwrap();
+        let add = alice
+            .stage_add(GID, &[carol.key_package().unwrap()])
+            .unwrap();
         alice.commit_accepted(GID).unwrap();
         bob.apply_commit(GID, &add.commit).unwrap();
         carol.join_from_welcome(&add.welcome).unwrap();
@@ -1014,10 +1220,16 @@ mod tests {
         let bob = Client::import_state(&saved).unwrap();
 
         let ct = alice.encrypt(GID, b"still works after reload").unwrap();
-        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"still works after reload"[..]));
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"still works after reload"[..])
+        );
 
         let ct2 = bob.encrypt(GID, b"reply from restored bob").unwrap();
-        assert_eq!(alice.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"reply from restored bob"[..]));
+        assert_eq!(
+            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            Some(&b"reply from restored bob"[..])
+        );
     }
 
     // The untrusted Delivery Service can replay an old Welcome. Re-joining would roll
@@ -1030,12 +1242,18 @@ mod tests {
         let add = establish(&alice, GID, &[&bob]);
 
         let ct = alice.encrypt(GID, b"before the replay").unwrap();
-        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"before the replay"[..]));
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"before the replay"[..])
+        );
 
         assert!(bob.join_from_welcome(&add.welcome).is_err());
 
         let ct2 = alice.encrypt(GID, b"after the replay").unwrap();
-        assert_eq!(bob.decrypt(GID, &ct2).unwrap().as_deref(), Some(&b"after the replay"[..]));
+        assert_eq!(
+            bob.decrypt(GID, &ct2).unwrap().as_deref(),
+            Some(&b"after the replay"[..])
+        );
     }
 
     // The safety number is what catches a malicious Delivery Service. Both honest
@@ -1053,7 +1271,9 @@ mod tests {
 
         let groups: Vec<&str> = from_alice.split(' ').collect();
         assert_eq!(groups.len(), 12);
-        assert!(groups.iter().all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
+        assert!(groups
+            .iter()
+            .all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
 
         // The server hands Alice an impostor's KeyPackage in place of Bob's.
         let mallory = Client::new("bob", "dev-b").unwrap(); // claims to be Bob's device
@@ -1109,9 +1329,17 @@ mod tests {
             .expect("a last-resort KeyPackage must still work after being used once");
 
         let ct = carol.encrypt(b"group-c", b"second group works").unwrap();
-        assert_eq!(bob.decrypt(b"group-c", &ct).unwrap().as_deref(), Some(&b"second group works"[..]));
-        let ct2 = alice.encrypt(b"group-a", b"first group still works").unwrap();
-        assert_eq!(bob.decrypt(b"group-a", &ct2).unwrap().as_deref(), Some(&b"first group still works"[..]));
+        assert_eq!(
+            bob.decrypt(b"group-c", &ct).unwrap().as_deref(),
+            Some(&b"second group works"[..])
+        );
+        let ct2 = alice
+            .encrypt(b"group-a", b"first group still works")
+            .unwrap();
+        assert_eq!(
+            bob.decrypt(b"group-a", &ct2).unwrap().as_deref(),
+            Some(&b"first group still works"[..])
+        );
     }
 
     // A forged Welcome burns the ordinary KeyPackage it names: OpenMLS deletes the
@@ -1165,7 +1393,10 @@ mod tests {
             .expect("a forged Welcome must not burn the last-resort key package");
 
         let ct = alice.encrypt(b"group-a", b"still reachable").unwrap();
-        assert_eq!(bob.decrypt(b"group-a", &ct).unwrap().as_deref(), Some(&b"still reachable"[..]));
+        assert_eq!(
+            bob.decrypt(b"group-a", &ct).unwrap().as_deref(),
+            Some(&b"still reachable"[..])
+        );
     }
 
     // A third client not in the group cannot decrypt — the whole point.
@@ -1194,7 +1425,9 @@ mod tests {
         // Bob cannot remove himself, on either device.
         assert!(bob.stage_remove_users(GID, &["bob".to_string()]).is_err());
         // Nor can he do it by sneaking his own id into a longer list.
-        assert!(bob.stage_remove_users(GID, &["bob".to_string(), "bob".to_string()]).is_err());
+        assert!(bob
+            .stage_remove_users(GID, &["bob".to_string(), "bob".to_string()])
+            .is_err());
 
         // Alice prunes him — both of his devices — and Bob is out.
         let commit = alice.stage_remove_users(GID, &["bob".to_string()]).unwrap();
@@ -1216,11 +1449,16 @@ mod tests {
         let bob = Client::new("bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
-        let err = alice.stage_remove_users(GID, &["nobody".to_string()]).unwrap_err();
+        let err = alice
+            .stage_remove_users(GID, &["nobody".to_string()])
+            .unwrap_err();
         assert!(err.contains("none of those users"), "got: {err}");
         // And the group is untouched — Alice can still talk to Bob.
         let ct = alice.encrypt(GID, b"unharmed").unwrap();
-        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"unharmed"[..]));
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"unharmed"[..])
+        );
     }
 
     // Pruning a ghost device must leave that person's LIVE devices alone.
@@ -1264,12 +1502,19 @@ mod tests {
         let bob = Client::new("bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
-        assert!(alice.stage_remove_devices(GID, &["alice:dev-a".to_string()]).is_err());
-        assert!(alice.stage_remove_users(GID, &["alice".to_string()]).is_err());
+        assert!(alice
+            .stage_remove_devices(GID, &["alice:dev-a".to_string()])
+            .is_err());
+        assert!(alice
+            .stage_remove_users(GID, &["alice".to_string()])
+            .is_err());
 
         // Still a healthy two-member group.
         let ct = alice.encrypt(GID, b"intact").unwrap();
-        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"intact"[..]));
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"intact"[..])
+        );
     }
 
     // The exporter is what makes a voice call end-to-end encrypted: every member device
@@ -1285,8 +1530,12 @@ mod tests {
 
         let call = b"call-abc";
         let from_alice = alice.export_secret(GID, "pheme-call-v1", call, 32).unwrap();
-        let from_phone = bob_phone.export_secret(GID, "pheme-call-v1", call, 32).unwrap();
-        let from_desktop = bob_desktop.export_secret(GID, "pheme-call-v1", call, 32).unwrap();
+        let from_phone = bob_phone
+            .export_secret(GID, "pheme-call-v1", call, 32)
+            .unwrap();
+        let from_desktop = bob_desktop
+            .export_secret(GID, "pheme-call-v1", call, 32)
+            .unwrap();
 
         assert_eq!(from_alice.len(), 32);
         assert_eq!(from_alice, from_phone);
@@ -1310,14 +1559,20 @@ mod tests {
         let bob_desktop = Client::new("bob", "desktop").unwrap();
         establish(&alice, GID, &[&bob_phone, &bob_desktop]);
 
-        let phone_key = alice.export_secret(GID, "pheme-call-v1", b"call-1|bob:phone", 32).unwrap();
-        let desktop_key = alice.export_secret(GID, "pheme-call-v1", b"call-1|bob:desktop", 32).unwrap();
+        let phone_key = alice
+            .export_secret(GID, "pheme-call-v1", b"call-1|bob:phone", 32)
+            .unwrap();
+        let desktop_key = alice
+            .export_secret(GID, "pheme-call-v1", b"call-1|bob:desktop", 32)
+            .unwrap();
         assert_ne!(phone_key, desktop_key);
 
         // And any member can derive the key of any sender, which is how they decrypt it.
         assert_eq!(
             phone_key,
-            bob_desktop.export_secret(GID, "pheme-call-v1", b"call-1|bob:phone", 32).unwrap(),
+            bob_desktop
+                .export_secret(GID, "pheme-call-v1", b"call-1|bob:phone", 32)
+                .unwrap(),
             "a member must be able to derive another device's key in order to read it",
         );
     }
@@ -1330,8 +1585,12 @@ mod tests {
         let bob = Client::new("bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
-        let one = alice.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap();
-        let two = alice.export_secret(GID, "pheme-call-v1", b"call-2", 32).unwrap();
+        let one = alice
+            .export_secret(GID, "pheme-call-v1", b"call-1", 32)
+            .unwrap();
+        let two = alice
+            .export_secret(GID, "pheme-call-v1", b"call-2", 32)
+            .unwrap();
         assert_ne!(one, two);
     }
 
@@ -1345,7 +1604,9 @@ mod tests {
         let mallory = Client::new("mallory", "dev-m").unwrap();
         establish(&alice, GID, &[&bob]);
 
-        assert!(mallory.export_secret(GID, "pheme-call-v1", b"call-1", 32).is_err());
+        assert!(mallory
+            .export_secret(GID, "pheme-call-v1", b"call-1", 32)
+            .is_err());
     }
 
     // The exporter is bound to the CURRENT epoch, so a membership change moves it. The call
@@ -1357,21 +1618,31 @@ mod tests {
         let bob = Client::new("bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
-        let before = alice.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap();
+        let before = alice
+            .export_secret(GID, "pheme-call-v1", b"call-1", 32)
+            .unwrap();
 
         // Somebody signs in on a new device: a Commit, and a new epoch.
         let carol = Client::new("carol", "dev-c").unwrap();
-        let add = alice.stage_add(GID, &[carol.key_package().unwrap()]).unwrap();
+        let add = alice
+            .stage_add(GID, &[carol.key_package().unwrap()])
+            .unwrap();
         alice.commit_accepted(GID).unwrap();
         bob.apply_commit(GID, &add.commit).unwrap();
 
-        let after = alice.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap();
+        let after = alice
+            .export_secret(GID, "pheme-call-v1", b"call-1", 32)
+            .unwrap();
         assert_ne!(
             before, after,
             "the exporter is per-epoch; a caller that re-derives mid-call would desync",
         );
         // And both members still agree with each other at the new epoch.
-        assert_eq!(after, bob.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap());
+        assert_eq!(
+            after,
+            bob.export_secret(GID, "pheme-call-v1", b"call-1", 32)
+                .unwrap()
+        );
     }
 
     // Deriving must not disturb the group: it is a read. If it consumed or advanced
@@ -1384,13 +1655,18 @@ mod tests {
 
         let epoch_before = alice.epoch(GID).unwrap();
         for _ in 0..5 {
-            alice.export_secret(GID, "pheme-call-v1", b"call-1", 32).unwrap();
+            alice
+                .export_secret(GID, "pheme-call-v1", b"call-1", 32)
+                .unwrap();
         }
         assert_eq!(alice.epoch(GID).unwrap(), epoch_before);
 
         // Chat still works in both directions afterwards.
         let ct = alice.encrypt(GID, b"still fine").unwrap();
-        assert_eq!(bob.decrypt(GID, &ct).unwrap().as_deref(), Some(&b"still fine"[..]));
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"still fine"[..])
+        );
     }
 
     #[test]
@@ -1400,5 +1676,108 @@ mod tests {
         // A credential with no device half (nothing mints these any more) still resolves.
         assert_eq!(user_of(b"bare-user"), b"bare-user".to_vec());
     }
-}
 
+    // THE PROPERTY THE WHOLE PREVIEW FEATURE RESTS ON.
+    //
+    // A notification preview decrypts in a second context — a service worker, an iOS
+    // NotificationServiceExtension, an Android background isolate — while the real client sits
+    // untouched on disk. MLS keys are single-use, so the obvious fear is that previewing a
+    // message burns it and the app renders a blank forever.
+    //
+    // It does not, and this is why: "decrypts exactly once" is a property of a COPY of the
+    // state, not a global fact. The preview client is imported from a snapshot and dropped
+    // without exporting, so the real client still holds an unconsumed key for that message.
+    //
+    // If this test ever fails, the read-only design is broken and previews must be turned off:
+    // the symptom in production would be silent, permanent message loss.
+    #[test]
+    fn a_preview_decrypt_leaves_the_real_client_able_to_read_the_message() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let ct = alice.encrypt(GID, b"the quick brown fox").unwrap();
+
+        // Bob's device is asleep. The extension wakes with a snapshot of his state.
+        let snapshot = bob.export_state().unwrap();
+        let preview = PreviewClient::import_state(&snapshot).unwrap();
+        assert_eq!(
+            preview.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"the quick brown fox"[..]),
+            "the preview must be able to read the message it is previewing",
+        );
+        // The notification is shown; the extension dies. Nothing was written back.
+        drop(preview);
+
+        // Bob opens the app. The message must still decrypt, for real, into the transcript.
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"the quick brown fox"[..]),
+            "the real client lost the message: previewing consumed the key it needed, which \
+             means every previewed message would render blank in the app",
+        );
+    }
+
+    // The preview must never move the epoch, even in the copy it throws away.
+    //
+    // Client::decrypt merges a staged Commit inline. If a preview did that, it would advance an
+    // epoch in state that is then discarded — and worse, invite somebody to "fix" the resulting
+    // inconsistency by persisting it, which is the two-writer race the single-client rule exists
+    // to prevent. A preview declines Commits entirely: there is nothing in one to show a user.
+    #[test]
+    fn a_preview_refuses_a_commit_and_leaves_the_epoch_alone() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let carol = Client::new("carol", "dev-c").unwrap();
+        let add = alice
+            .stage_add(GID, &[carol.key_package().unwrap()])
+            .unwrap();
+        alice.commit_accepted(GID).unwrap();
+
+        let snapshot = bob.export_state().unwrap();
+        let preview = PreviewClient::import_state(&snapshot).unwrap();
+        assert_eq!(
+            preview.decrypt(GID, &add.commit).unwrap(),
+            None,
+            "a Commit is not a message and has no preview: it must come back as nothing",
+        );
+        drop(preview);
+
+        // Bob has still never seen the Commit, so applying it for real must work.
+        bob.apply_commit(GID, &add.commit).unwrap();
+        assert_eq!(bob.member_identities(GID).unwrap().len(), 3);
+
+        // And a message in the NEW epoch decrypts, proving the ratchet is where it should be.
+        let ct = alice.encrypt(GID, b"after carol joined").unwrap();
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"after carol joined"[..])
+        );
+    }
+
+    // Previewing the same message twice — two devices, or a retried push — must also be safe.
+    #[test]
+    fn repeated_previews_are_harmless() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let ct = alice.encrypt(GID, b"delivered twice").unwrap();
+        let snapshot = bob.export_state().unwrap();
+
+        for _ in 0..3 {
+            let preview = PreviewClient::import_state(&snapshot).unwrap();
+            assert_eq!(
+                preview.decrypt(GID, &ct).unwrap().as_deref(),
+                Some(&b"delivered twice"[..]),
+            );
+        }
+
+        assert_eq!(
+            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            Some(&b"delivered twice"[..])
+        );
+    }
+}

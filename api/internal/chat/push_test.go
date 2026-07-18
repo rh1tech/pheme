@@ -195,3 +195,34 @@ func TestControlMessagesCannotBypassTheCommitEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// clearPrivacy removes a user's stored notification privacy value, reproducing an account row
+// created before the setting existed.
+//
+// It writes the empty value through UpdateUserProfile rather than re-creating the user, because
+// CreateUser deliberately fills the default in — that is the mechanism this test exists to
+// verify, so going around it would test nothing.
+func (f *fixture) clearPrivacy(t *testing.T, userID string) {
+	t.Helper()
+	legacy := domain.NotificationPrivacy("")
+	if _, err := f.store.UpdateUserProfile(context.Background(), userID, domain.UserProfileUpdate{
+		NotificationPrivacy: &legacy,
+	}); err != nil {
+		t.Fatalf("clear privacy: %v", err)
+	}
+}
+
+// capableDevice registers a device whose build can decrypt and draw a preview.
+func (f *fixture) capableDevice(t *testing.T, userID string) string {
+	t.Helper()
+	d, err := f.store.CreateDevice(context.Background(), domain.Device{
+		UserID:           userID,
+		Platform:         "android",
+		FCMToken:         "token-capable-" + userID,
+		CanRenderPreview: true,
+	})
+	if err != nil {
+		t.Fatalf("create capable device: %v", err)
+	}
+	return d.ID
+}

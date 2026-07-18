@@ -67,6 +67,73 @@ const (
 	UserBlocked UserStatus = "blocked"
 )
 
+// NotificationPrivacy is how much a user wants their own lock screen to reveal
+// about an incoming message before they unlock the device.
+//
+// It is a property of the RECIPIENT, not the sender: it answers "what may a
+// stranger glancing at my phone learn", and only the person holding that phone
+// can answer it. A push therefore cannot be built once and fanned out to a whole
+// conversation — see chat.notifyMembers, which groups recipients by this value
+// and sends one payload per group.
+type NotificationPrivacy string
+
+const (
+	// NotificationPrivacyPreview shows the message itself, decrypted on the device.
+	// The server never sees this text and cannot: it ships the ciphertext to the
+	// device, which decrypts it in a notification handler before drawing the banner.
+	NotificationPrivacyPreview NotificationPrivacy = "preview"
+	// NotificationPrivacySender shows who sent the message and their avatar, but not
+	// what they said.
+	NotificationPrivacySender NotificationPrivacy = "sender"
+	// NotificationPrivacyGeneric shows neither name nor avatar — only that something
+	// arrived. For a shared or overlooked screen, where the fact that a particular
+	// person is messaging you is itself the sensitive part.
+	NotificationPrivacyGeneric NotificationPrivacy = "generic"
+)
+
+// Effective resolves the stored value to the one to act on.
+//
+// The empty value means the account PREDATES this setting, and it resolves to sender —
+// which is exactly what those accounts did before the setting existed. It deliberately does
+// not resolve to preview: turning message text on for somebody's lock screen is not a
+// migration to perform on their behalf while they are not looking.
+//
+// New accounts get an explicit NotificationPrivacyPreview written at creation (see the
+// store's CreateUser), so "absent" only ever means "legacy" and never "new". That is why
+// there is no backfill: a backfill would have to run on every startup and could not tell a
+// brand-new account from an old one.
+func (p NotificationPrivacy) Effective() NotificationPrivacy {
+	if p == "" {
+		return NotificationPrivacySender
+	}
+	return p
+}
+
+// Valid reports whether p is a value a client may send. Unknown values are rejected at the
+// HTTP boundary rather than persisted, so a future client cannot write a setting an older
+// server would misread. The empty value is not valid INPUT — it is a legacy storage state,
+// and a client that means "sender" has to say so.
+func (p NotificationPrivacy) Valid() bool {
+	switch p {
+	case NotificationPrivacyPreview, NotificationPrivacySender, NotificationPrivacyGeneric:
+		return true
+	default:
+		return false
+	}
+}
+
+// ShowsSender reports whether a notification under this setting may name the sender and
+// show their avatar. A preview shows the message, so it necessarily shows who sent it.
+func (p NotificationPrivacy) ShowsSender() bool {
+	return p.Effective() != NotificationPrivacyGeneric
+}
+
+// ShowsPreview reports whether a push under this setting may carry the encrypted message
+// body for the device to decrypt and display.
+func (p NotificationPrivacy) ShowsPreview() bool {
+	return p.Effective() == NotificationPrivacyPreview
+}
+
 // User is an authenticated account that owns channels and devices.
 //
 // Username is an optional, system-wide unique public handle used for display
@@ -75,6 +142,7 @@ const (
 // be enforced case-insensitively (mirrors Channel.AliasLower). DisplayName, Bio,
 // Phone and Website are optional profile/contact fields. AvatarID references a
 // processed image in the blob store (served via the public GET /v1/images/{id}).
+// NotificationPrivacy is what this user's own devices may show on a lock screen.
 type User struct {
 	ID            string     `bson:"_id,omitempty" json:"id"`
 	Email         string     `bson:"email" json:"email"`
@@ -88,7 +156,10 @@ type User struct {
 	Phone         string     `bson:"phone,omitempty" json:"phone,omitempty"`
 	Website       string     `bson:"website,omitempty" json:"website,omitempty"`
 	AvatarID      string     `bson:"avatarId,omitempty" json:"avatarId,omitempty"`
-	CreatedAt     time.Time  `bson:"createdAt" json:"createdAt"`
+	// Empty means the account predates the setting and behaves as sender; see Effective.
+	// New accounts get an explicit value at creation, so absence never means "new".
+	NotificationPrivacy NotificationPrivacy `bson:"notificationPrivacy,omitempty" json:"notificationPrivacy,omitempty"`
+	CreatedAt           time.Time           `bson:"createdAt" json:"createdAt"`
 }
 
 // UserProfileUpdate carries the editable profile fields for UpdateUserProfile.
@@ -100,6 +171,30 @@ type UserProfileUpdate struct {
 	Bio         string
 	Phone       string
 	Website     string
+	// NotificationPrivacy is a POINTER while its neighbours are not, and the
+	// asymmetry is deliberate. The others are cleared by omission — that is the
+	// established contract of this struct, and every client sends the full set.
+	// This one cannot follow that rule: its meaningful default is the empty
+	// value, so "absent" and "set to sender" would be indistinguishable, and
+	// every profile save from a client that predates the setting would silently
+	// switch a user's lock screen back on. nil means leave it alone.
+	NotificationPrivacy *NotificationPrivacy
+}
+
+// WithNewUserDefaults fills in the settings a brand-new account starts with.
+//
+// It exists for one reason: NotificationPrivacy must be written EXPLICITLY at creation, so
+// that an absent value means "this account predates the setting" and nothing else. Every
+// store's CreateUser calls this, rather than each defaulting on its own, because the whole
+// scheme collapses the moment one of them forgets — absent would then mean two things, and
+// Effective() would have to guess which.
+func (u User) WithNewUserDefaults() User {
+	if u.NotificationPrivacy == "" {
+		// New accounts get message previews, matching what people expect of a messenger.
+		// Existing accounts are left alone: see Effective.
+		u.NotificationPrivacy = NotificationPrivacyPreview
+	}
+	return u
 }
 
 // PublicUser is the non-sensitive view of a user safe to expose to other
@@ -196,9 +291,22 @@ type Device struct {
 	VoIPToken string `bson:"voipToken,omitempty" json:"voipToken,omitempty"`
 	// WebPushEndpoint is the subscription's endpoint URL, stored separately so a
 	// web device can be uniquely identified (and upserted) by it.
-	WebPushEndpoint string    `bson:"webPushEndpoint,omitempty" json:"-"`
-	CreatedAt       time.Time `bson:"createdAt" json:"createdAt"`
-	LastSeenAt      time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
+	WebPushEndpoint string `bson:"webPushEndpoint,omitempty" json:"-"`
+	// CanRenderPreview is this device's build declaring that it can decrypt a message and draw
+	// the notification itself.
+	//
+	// It exists because the server otherwise has no way to know, and guessing is not survivable.
+	// A preview reaches Android as a DATA-ONLY message — it has to, or the system tray draws it
+	// before the app's handler can decrypt anything — and a build that predates that handler
+	// ignores a data-only message completely. Not "shows the generic text": shows NOTHING. So a
+	// server that assumed the capability would silently delete notifications for every user who
+	// had not yet updated, and the only signal would be users saying the app went quiet.
+	//
+	// Absent on every device registered before this shipped, which is exactly right: they cannot,
+	// and they say so by saying nothing.
+	CanRenderPreview bool      `bson:"canRenderPreview,omitempty" json:"canRenderPreview,omitempty"`
+	CreatedAt        time.Time `bson:"createdAt" json:"createdAt"`
+	LastSeenAt       time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
 }
 
 // Subscription links a device to a channel.
@@ -387,8 +495,8 @@ type ConversationReceipt struct {
 // goes.
 type Attachment struct {
 	// ID is the blob id, which is also the id the encrypted message refers to.
-	ID             string    `bson:"_id,omitempty" json:"id"`
-	ConversationID string    `bson:"conversationId" json:"conversationId"`
+	ID             string `bson:"_id,omitempty" json:"id"`
+	ConversationID string `bson:"conversationId" json:"conversationId"`
 	// Size of the ciphertext. The one thing the server does learn.
 	Size      int       `bson:"size" json:"size"`
 	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
@@ -419,6 +527,11 @@ type ChatMessage struct {
 // needs to tell protocol traffic from something a human sent, so that it does not push
 // a notification for it and can order a catch-up correctly.
 const (
+	// ContentTypeMLSApplication is an ordinary message — something a person actually wrote,
+	// encrypted. The only type whose ciphertext may ride a push notification for the recipient's
+	// device to decrypt and display; see push.ChatNotification.previewCiphertext, which uses
+	// this as its gate so that protocol traffic is never handed to a decrypt-and-display path.
+	ContentTypeMLSApplication = "application/mls"
 	// ContentTypeMLSWelcome admits new devices to the group.
 	ContentTypeMLSWelcome = "application/mls-welcome"
 	// ContentTypeMLSCommit advances every current member to the new epoch.

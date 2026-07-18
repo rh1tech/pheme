@@ -15,12 +15,14 @@
 // the call cannot be decrypted, and the very first call after every reboot fails. `first_unlock` is
 // what makes that work, and it is why it is spelled out here rather than left to the default.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:path_provider_foundation/path_provider_foundation.dart';
 
 import '../rust/api/vault.dart';
 
@@ -62,20 +64,78 @@ class MlsStore {
   /// belonged here.
   static const _domain = 'pheme.mls.state.v1';
 
+  /// The App Group shared by the app and its NotificationServiceExtension.
+  ///
+  /// The extension is a separate process with its OWN container: it cannot see the app's private
+  /// directory and cannot read the app's default keychain group. Both the state file and the data
+  /// key therefore live in the shared group instead, or an iPhone could never decrypt a message
+  /// preview. Must match the App Group on both Xcode targets' entitlements.
+  static const appGroup = 'group.tech.rh1.pheme';
+
   /// Readable once the user has unlocked the device at least since boot — not "while unlocked". An
-  /// incoming call has to be answerable from the lock screen.
+  /// incoming call has to be answerable from the lock screen, and a notification preview arrives
+  /// at exactly the same awkward moments.
+  ///
+  /// The app's own access group. Everything is stored here, and it always works.
   static const _iosOptions = IOSOptions(
     accessibility: KeychainAccessibility.first_unlock,
+  );
+
+  /// The SHARED access group, readable from the NotificationServiceExtension.
+  ///
+  /// Used only where sharing is actually needed, and never as the sole home for anything. An
+  /// access group the app is not entitled to makes the keychain call FAIL — errSecMissingEntitlement
+  /// — and the entitlement depends on the App Group being registered in the Apple Developer
+  /// portal and present in the provisioning profile, which is not something the code can
+  /// guarantee about the build it finds itself in.
+  ///
+  /// So the shared group is written to BEST-EFFORT alongside the app's own copy, never instead of
+  /// it. A build without the entitlement stores its keys exactly as it always did and simply does
+  /// not get previews; it does not lose the ability to store keys at all, which is what making
+  /// this the primary location would have risked.
+  static const _sharedIosOptions = IOSOptions(
+    accessibility: KeychainAccessibility.first_unlock,
+    groupId: appGroup,
   );
 
   final FlutterSecureStorage _storage;
   File? _file;
 
+  /// The state file, in the App Group container where the extension can reach it.
+  ///
+  /// Falls back to the app's private directory when there is no container — Android, which has no
+  /// App Groups and does not need them (the background isolate shares the app's own process and
+  /// UID), and an iOS build whose entitlement is missing, where a preview simply does not happen.
   Future<File> _stateFileHandle() async {
     final cached = _file;
     if (cached != null) return cached;
-    final dir = await getApplicationSupportDirectory();
+    final dir = await _sharedDir() ?? await getApplicationSupportDirectory();
     return _file = File('${dir.path}/$_stateFile');
+  }
+
+  Future<Directory?> _sharedDir() async {
+    if (!Platform.isIOS) return null;
+    try {
+      final path = await PathProviderFoundation().getContainerPath(
+        appGroupIdentifier: appGroup,
+      );
+      if (path == null) return null;
+      // The container's root is shared with anything else the group holds; keep our own corner
+      // of it so a future addition cannot collide with the key store.
+      final dir = Directory('$path/mls');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      return dir;
+    } on Object {
+      // No entitlement, or a build where the group is not configured. The store falls back to the
+      // app-private directory and previews simply do not happen on this device.
+      return null;
+    }
+  }
+
+  /// The state file's previous home, in the app's private container.
+  Future<File> _legacyStateFileHandle() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}/$_stateFile');
   }
 
   /// The sealed state, or null when this device holds no keys.
@@ -86,7 +146,16 @@ class MlsStore {
   /// their backup.
   Future<Uint8List?> readState() async {
     final file = await _stateFileHandle();
-    if (!await file.exists()) return null;
+    // The state moved into the App Group container so the extension could reach it. A device that
+    // predates that move still has its keys in the old place, so fall back to it — and note the
+    // fallback is a READ, never a delete. The old file is removed only after a successful write to
+    // the new one (see writeState), so there is no moment where neither location has the keys.
+    var source = file;
+    if (!await file.exists()) {
+      final legacy = await _legacyStateFileHandle();
+      if (legacy.path == file.path || !await legacy.exists()) return null;
+      source = legacy;
+    }
 
     final key = await _dataKey();
     if (key == null) return null;
@@ -95,7 +164,7 @@ class MlsStore {
       return await vaultOpen(
         domain: _domain,
         key: key,
-        sealed: await file.readAsBytes(),
+        sealed: await source.readAsBytes(),
       );
     } on Object {
       return null;
@@ -115,6 +184,49 @@ class MlsStore {
     final temp = File('${file.path}.tmp');
     await temp.writeAsBytes(sealed, flush: true);
     await temp.rename(file.path);
+
+    // Only now is the old copy safe to remove: the new location holds a complete, freshly sealed
+    // state, and the rename above was atomic. Deleting it any earlier — at read time, say — would
+    // open a window where a crash in between leaves the device with no key store at all, which is
+    // every group on it gone.
+    await _discardLegacyState(file);
+  }
+
+  /// Copies the data key into the shared access group, where the NotificationServiceExtension can
+  /// read it. Best-effort and deliberately silent.
+  ///
+  /// Never the only copy: see [_sharedIosOptions]. On a build whose provisioning profile does not
+  /// carry the App Group, this throws errSecMissingEntitlement and nothing else changes.
+  Future<void> _mirrorDataKeyForExtension(String encoded) async {
+    if (!Platform.isIOS) return;
+    try {
+      final existing = await _storage.read(
+        key: _dataKeyKey,
+        iOptions: _sharedIosOptions,
+      );
+      // Already there. Without this check every message would rewrite the keychain item.
+      if (existing == encoded) return;
+      await _storage.write(
+        key: _dataKeyKey,
+        value: encoded,
+        iOptions: _sharedIosOptions,
+      );
+    } on Object {
+      // No entitlement, or a keychain that will not share. Previews do not happen on this device
+      // and everything else carries on exactly as before.
+    }
+  }
+
+  /// Removes the pre-App-Group state file, once [current] is known good.
+  Future<void> _discardLegacyState(File current) async {
+    try {
+      final legacy = await _legacyStateFileHandle();
+      if (legacy.path == current.path) return;
+      if (await legacy.exists()) await legacy.delete();
+    } on Object {
+      // Leaving it costs nothing but disk: it is sealed, and nothing reads it once the new
+      // location exists. Failing the write over it would cost the message being sent.
+    }
   }
 
   /// The account the stored state belongs to.
@@ -222,11 +334,16 @@ class MlsStore {
   }
 
   Future<Uint8List?> _dataKey() async {
+    // The app's own group is the source of truth and is read first. It is never conditional on an
+    // entitlement, so this path cannot be broken by how the build was signed.
     final encoded = await _storage.read(
       key: _dataKeyKey,
       iOptions: _iosOptions,
     );
     if (encoded == null) return null;
+    // Best-effort mirror into the shared group, so the extension has something to read. Silent on
+    // failure by design: no entitlement means no previews, not a broken app.
+    unawaited(_mirrorDataKeyForExtension(encoded));
     final bytes = Uint8List.fromList(
       encoded.split(',').map(int.parse).toList(growable: false),
     );

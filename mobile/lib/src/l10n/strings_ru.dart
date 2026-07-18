@@ -236,6 +236,12 @@ const Map<String, String> ruStrings = {
   'settings.device': 'Это устройство',
   'settings.deviceRegistered': 'Зарегистрировано для push-уведомлений',
   'settings.deviceNotRegistered': 'Не зарегистрировано для push-уведомлений',
+  'settings.showSender': 'Показывать отправителя',
+  'settings.showSenderHint':
+      'Уведомления показывают имя и фото отправителя. Если выключить, они лишь '
+      'сообщат, что пришло сообщение. Текст сообщения не показывается в любом '
+      'случае — он зашифрован, и сервер не может его прочитать.',
+  'settings.notificationPrivacyFailed': 'Не удалось сохранить настройку',
   'settings.account': 'Аккаунт',
   'settings.profile': 'Профиль',
 

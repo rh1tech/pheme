@@ -99,6 +99,23 @@ type voipPayload struct {
 	Kind string `json:"kind"`
 }
 
+// voipPayloadFor builds the body of a VoIP push.
+//
+// Split out from SendCall so the privacy rule below can be tested without an APNs connection —
+// it was untestable, and it was wrong, and those two facts were not a coincidence.
+func voipPayloadFor(n ChatNotification) voipPayload {
+	return voipPayload{
+		CallID:         n.CallID,
+		ConversationID: n.ConversationID,
+		// Via displayName, never SenderName. This is a CallKit screen: it takes over the whole
+		// device, ahead of the lock screen, and announcing the caller there is the loudest thing
+		// this app can do. A recipient who asked not to be told who is messaging them has, if
+		// anything, asked harder not to be told this. They get the real name once they answer.
+		CallerName: n.displayName(),
+		Kind:       string(n.Kind),
+	}
+}
+
 // SendCall delivers a VoIP push to every device that has a PushKit token.
 //
 // Devices without one are SKIPPED, not failed: an Android phone or a browser has no PushKit token and
@@ -108,17 +125,7 @@ func (s *APNsVoIPSender) SendCall(
 	n ChatNotification,
 	devices []domain.Device,
 ) ([]Result, error) {
-	callerName := n.SenderName
-	if callerName == "" {
-		callerName = "Pheme"
-	}
-
-	payload, err := json.Marshal(voipPayload{
-		CallID:         n.CallID,
-		ConversationID: n.ConversationID,
-		CallerName:     callerName,
-		Kind:           string(n.Kind),
-	})
+	payload, err := json.Marshal(voipPayloadFor(n))
 	if err != nil {
 		return nil, fmt.Errorf("apns: marshal payload: %w", err)
 	}

@@ -392,6 +392,10 @@ type createDeviceRequest struct {
 	// VoIPToken is the iOS PushKit token. A separate token from FCMToken, and both are sent: the FCM
 	// one carries messages, and this one carries calls, because only it can reach PushKit.
 	VoIPToken string `json:"voipToken,omitempty"`
+	// CanRenderPreview is the client declaring that this build can decrypt a message and draw the
+	// notification itself. Absent from every older client, which is the answer. See
+	// domain.Device.CanRenderPreview for why guessing it is not survivable.
+	CanRenderPreview bool `json:"canRenderPreview,omitempty"`
 }
 
 func (h *AppHandler) createDevice(w http.ResponseWriter, r *http.Request) {
@@ -404,13 +408,14 @@ func (h *AppHandler) createDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := h.Store.CreateDevice(r.Context(), domain.Device{
-		UserID:     uid,
-		Platform:   req.Platform,
-		FCMToken:   req.FCMToken,
-		WebPushSub: req.WebPushSub,
-		VoIPToken:  req.VoIPToken,
-		CreatedAt:  time.Now().UTC(),
-		LastSeenAt: time.Now().UTC(),
+		UserID:           uid,
+		Platform:         req.Platform,
+		FCMToken:         req.FCMToken,
+		WebPushSub:       req.WebPushSub,
+		VoIPToken:        req.VoIPToken,
+		CanRenderPreview: req.CanRenderPreview,
+		CreatedAt:        time.Now().UTC(),
+		LastSeenAt:       time.Now().UTC(),
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not register device")

@@ -21,15 +21,40 @@
   --pheme-sheet-bg: #f7f6fb;
   --pheme-unread-bg: rgba(119, 64, 238, 0.1);
   --pheme-unread-fg: var(--mantine-color-iris-7);
-  /* OPAQUE, not a tint. The feed now has a wallpaper under it (--pheme-chat-wallpaper), and a
-     12%-alpha bubble over a tinted ground is the ground — it stopped reading as a bubble at all. */
-  --pheme-own-bubble-bg: #e7ddfb;
+  /* Still a pastel, and now carrying its own weight without an outline.
+     This was #e7ddfb on a wallpaper compositing to #e3d0f7 — 1.10:1, the same colour, so the
+     bubble had no edge and a screenful of messages read as one violet field.
+     With no border to draw the edge, the FILL is the only chromatic separator, and the two
+     bubbles pull in opposite directions: the pale violet one wants a light ground, the white one
+     wants a dark ground. So the value here is the point where the WORSE of the two peaks — both
+     land on 1.44:1 against the wallpaper, and neither is left behind. Going lighter or darker
+     from here helps one bubble by exactly as much as it costs the other.
+     That balance is also why the wallpaper is back to its original strength: easing it off (which
+     an earlier pass did) helps this bubble and quietly abandons the white one.
+     Foreground travels with the fill — `dimmed` grey is 1.97:1 on this, and the read tick at
+     iris-6 was 3.31:1. Both corrected below. */
+  --pheme-own-bubble-bg: #c0a8f1;
+  --pheme-own-bubble-fg: var(--mantine-color-text);
+  /* 5.01:1 — a desaturated violet rather than grey, so it reads as part of the bubble rather
+     than something dropped on it. */
+  --pheme-own-bubble-muted: #473864;
+  --pheme-own-bubble-hover: rgba(45, 25, 90, 0.1);
+  /* iris-9. The tick sits ON the pastel, so it has to be deeper than the accent used against a
+     white row: iris-6 was 3.31:1 here, iris-9 is 4.81:1. */
+  --pheme-own-bubble-accent: var(--mantine-color-iris-9);
+  /* A violet-tinted shadow rather than a neutral one. On a violet ground a grey shadow reads as
+     dirt; this reads as lift, and lift is the whole job now that there is no outline. */
+  --pheme-bubble-shadow: 0 1px 2px rgba(58, 30, 120, 0.13), 0 2px 6px rgba(58, 30, 120, 0.07);
   /* The wallpaper behind the messages, and the whole reason a white bubble is legible: the pane it
      sits on is 72% white over #fcfcfe, so a #fff bubble on it was white on white. Telegram solves
      this with a wallpaper rather than by greying the bubbles, and it is the better answer — the
      bubbles stay clean and the surface gains some depth. This one is the brand's own iris/magenta
      rather than a copy of anyone's artwork. */
   --pheme-chat-wallpaper-bg: #f5f2fc;
+  /* Unchanged, and that is a decision rather than an omission. Easing these washes makes the
+     violet bubble read better and the white one worse, one for one — the ground cannot move
+     towards either bubble without moving away from the other. The bubble fill is where the
+     balance was struck instead; see --pheme-own-bubble-bg. */
   --pheme-chat-wallpaper: url('/chat-pattern-light.svg'),
     radial-gradient(900px 600px at 12% 0%, rgba(119, 64, 238, 0.11), transparent 60%),
     radial-gradient(760px 520px at 100% 100%, rgba(190, 75, 219, 0.1), transparent 55%);
@@ -38,7 +63,11 @@
 [data-mantine-color-scheme='dark'] {
   --pheme-pane-bg: rgba(22, 23, 26, 0.72);
   --pheme-pane-border: rgba(255, 255, 255, 0.08);
-  --pheme-bubble-bg: #1f2126;
+  /* Lifted from #1f2126, and then again to #343841 once the borders came off. It was the same
+     luminance as the ground it sits on (1.02:1) — the other half of the same problem, in grey
+     rather than violet. A dark surface has to be LIGHTER than its background to read as
+     something on top of it, and with no outline it has to do that on its own. */
+  --pheme-bubble-bg: #343841;
   --pheme-row-hover: rgba(255, 255, 255, 0.06);
   --pheme-chip-bg: rgba(168, 136, 245, 0.14);
   --pheme-chip-bg-hover: rgba(168, 136, 245, 0.24);
@@ -47,11 +76,27 @@
   --pheme-sheet-bg: #141517;
   --pheme-unread-bg: rgba(168, 136, 245, 0.16);
   --pheme-unread-fg: var(--mantine-color-iris-2);
-  --pheme-own-bubble-bg: #3a2f5e;
+  /* Dark had the same bug and worse: #3a2f5e on a wallpaper compositing to #422660 is 1.04:1.
+     The remedy differs from light's, because a shadow barely registers on a dark ground — there
+     is no lift to be had, so the separation has to come from the surfaces themselves. Hence the
+     eased wallpaper below (which in dark costs the incoming bubble nothing, since that one is
+     lifted rather than white) and a bubble that sits clearly above it: 1.68:1. */
+  --pheme-own-bubble-bg: #4a3d78;
+  --pheme-own-bubble-fg: var(--mantine-color-text);
+  --pheme-own-bubble-muted: #bfb3dd;
+  --pheme-own-bubble-hover: rgba(255, 255, 255, 0.1);
+  --pheme-own-bubble-accent: var(--mantine-color-iris-2);
+  /* Barely visible in dark, and that is expected — kept so the rule has one shape in both
+     themes rather than a conditional. */
+  --pheme-bubble-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   --pheme-chat-wallpaper-bg: #15161a;
+  /* The washes were 0.22/0.16, which made the wallpaper #422660 — brighter than BOTH bubbles.
+     In a dark interface a surface should lift as it comes forward, and here the ground was the
+     brightest thing on screen with the messages sunk into it. Eased so the bubbles sit above
+     their background instead of below it. */
   --pheme-chat-wallpaper: url('/chat-pattern-dark.svg'),
-    radial-gradient(900px 600px at 12% 0%, rgba(119, 64, 238, 0.22), transparent 60%),
-    radial-gradient(760px 520px at 100% 100%, rgba(190, 75, 219, 0.16), transparent 55%);
+    radial-gradient(900px 600px at 12% 0%, rgba(119, 64, 238, 0.1), transparent 60%),
+    radial-gradient(760px 520px at 100% 100%, rgba(190, 75, 219, 0.06), transparent 55%);
 }
 
 .pheme-shell {
@@ -399,6 +444,21 @@
   font-weight: 600;
 }
 
+/* The timestamp on an INCOMING bubble, in both themes.
+   Mantine's dimmed grey is tuned against the page, not against a bubble sitting on it, and on
+   both it lands under WCAG AA for text this small: #868e96 on white is 3.32:1, and #909296 on the
+   dark bubble is 4.06:1 (lifting that surface for the wallpaper fix cost it the rest). These are
+   the nearest greys that clear 4.5:1 while staying obviously quieter than the message itself.
+   Explicitly NOT own bubbles — those are filled brand violet and take their muted foreground from
+   --pheme-own-bubble-muted. Without the :not() the two rules would have equal specificity and the
+   winner would depend on which came later in the file. */
+.pheme-chat-bubble:not([data-own='true']) {
+  --mantine-color-dimmed: #6b7178;
+}
+[data-mantine-color-scheme='dark'] .pheme-chat-bubble:not([data-own='true']) {
+  --mantine-color-dimmed: #a1a4a9;
+}
+
 /* --- Bubble ------------------------------------------------------------- */
 
 .pheme-bubble {
@@ -408,7 +468,9 @@
   border-radius: var(--mantine-radius-lg);
   border-bottom-left-radius: var(--mantine-radius-xs);
   background-color: var(--pheme-bubble-bg);
-  box-shadow: var(--mantine-shadow-xs);
+  /* No outline: the shadow is the only thing separating this from the wallpaper, so it is a
+     little stronger than Mantine's xs and tinted towards the ground it falls on. */
+  box-shadow: var(--pheme-bubble-shadow);
 }
 
 /* No virtualisation, and no content-visibility either — both were measured, and
@@ -903,8 +965,36 @@
   align-self: flex-end;
   margin-left: auto;
   background-color: var(--pheme-own-bubble-bg);
+  color: var(--pheme-own-bubble-fg);
   border-bottom-left-radius: var(--mantine-radius-lg);
   border-bottom-right-radius: var(--mantine-radius-xs);
+}
+
+/* Everything INSIDE a filled bubble has to be repainted, and this is the part that is easy to
+   half-do. The bubble is now brand violet, so any descendant still carrying a colour picked for a
+   pale background vanishes into it. The read tick is the clearest case: it was `iris-6`, which on
+   an iris-6 bubble is exactly the bubble.
+   These are REDEFINITIONS of Mantine's own variables rather than `color:` rules, because that is
+   how the components read them — `c="dimmed"` compiles to `var(--mantine-color-dimmed)` and an
+   ActionIcon to `var(--ai-color)`, both resolved in the descendant. Redefining them here means
+   the timestamp, the delivered tick and the reply button are all corrected by one declaration
+   and cannot drift apart later. */
+.pheme-chat-bubble[data-own='true'] {
+  --mantine-color-dimmed: var(--pheme-own-bubble-muted);
+  --ai-color: var(--pheme-own-bubble-muted);
+  --ai-hover: var(--pheme-own-bubble-hover);
+  --ai-hover-color: var(--pheme-own-bubble-fg);
+}
+
+/* The read tick keeps its accent — it is the one state worth catching the eye — but a DEEPER one,
+   because it now sits on a tinted bubble rather than a white row. iris-6 was 3.31:1 against the
+   pastel; the token is iris-8 in light and iris-2 in dark. */
+.pheme-chat-bubble[data-own='true'] .pheme-ticks[data-read='true'] {
+  color: var(--pheme-own-bubble-accent);
+}
+
+.pheme-chat-bubble[data-own='true'] a {
+  color: var(--pheme-own-bubble-accent);
 }
 
 /* --- The record a call leaves ---------------------------------------------- */

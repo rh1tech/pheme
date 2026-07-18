@@ -567,6 +567,89 @@ export class MlsClient {
 if (Symbol.dispose) MlsClient.prototype[Symbol.dispose] = MlsClient.prototype.free;
 
 /**
+ * A read-only client for rendering notification previews in a service worker.
+ *
+ * Separate from `MlsClient` on purpose, and this is the whole reason it exists: a service
+ * worker is a SECOND context holding the same key store as the page, and the single-client
+ * rule says there must never be two writers. This one has no `exportState`, so there is
+ * nowhere for an advanced ratchet to go — the worker physically cannot persist, however a
+ * later edit is written. See `crate::PreviewClient`.
+ *
+ * The page's own copy of the state is untouched and decrypts the message again for real when
+ * the app opens, so nothing is lost by previewing it here.
+ *
+ * Drop it as soon as the notification is shown: it holds plaintext.
+ */
+export class MlsPreviewClient {
+    static __wrap(ptr) {
+        const obj = Object.create(MlsPreviewClient.prototype);
+        obj.__wbg_ptr = ptr;
+        MlsPreviewClientFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        MlsPreviewClientFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_mlspreviewclient_free(ptr, 0);
+    }
+    /**
+     * Decrypts one application message for display. `undefined` means there was nothing to
+     * preview — control traffic, or a message this client cannot read.
+     * @param {Uint8Array} group_id
+     * @param {Uint8Array} ciphertext
+     * @returns {Uint8Array | undefined}
+     */
+    decrypt(group_id, ciphertext) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(ciphertext, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.mlspreviewclient_decrypt(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        let v3;
+        if (ret[0] !== 0) {
+            v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v3;
+    }
+    /**
+     * Loads a read-only client from a state blob read out of IndexedDB.
+     * @param {Uint8Array} state
+     * @returns {MlsPreviewClient}
+     */
+    static fromState(state) {
+        const ptr0 = passArray8ToWasm0(state, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlspreviewclient_fromState(ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return MlsPreviewClient.__wrap(ret[0]);
+    }
+    /**
+     * Whether this client holds the group, so the caller can pick the right one without
+     * attempting a decrypt against each in turn.
+     * @param {Uint8Array} group_id
+     * @returns {boolean}
+     */
+    hasGroup(group_id) {
+        const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.mlspreviewclient_hasGroup(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+}
+if (Symbol.dispose) MlsPreviewClient.prototype[Symbol.dispose] = MlsPreviewClient.prototype.free;
+
+/**
  * Recovers client state from a sealed backup. Errors on a wrong passphrase.
  * @param {Uint8Array} passphrase
  * @param {Uint8Array} salt
@@ -768,6 +851,9 @@ const BackupBlobFinalization = (typeof FinalizationRegistry === 'undefined')
 const MlsClientFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_mlsclient_free(ptr, 1));
+const MlsPreviewClientFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_mlspreviewclient_free(ptr, 1));
 
 function addToExternrefTable0(obj) {
     const idx = wasm.__externref_table_alloc();

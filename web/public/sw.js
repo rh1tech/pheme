@@ -4,6 +4,43 @@
 // notification. Registered by the web client after VAPID subscription; the
 // server (dispatcher) delivers via the Web Push protocol.
 
+// Message previews: decrypting a push's ciphertext, in here, to show what was actually said.
+//
+// The server cannot do this — it holds only ciphertext — so it ships the ciphertext and this
+// worker decrypts it against a SNAPSHOT of the device's MLS state, which it never writes back.
+// See mls/preview.js for why that is safe; the short version is that the page keeps its own
+// unconsumed copy of the key and reads the message again for real when the app opens.
+//
+// Loaded lazily, on the first push that actually carries a preview: it pulls in 1.2 MB of WASM,
+// and a user who has previews turned off — or a browser with no key material — must never pay
+// for it. importScripts is synchronous, so it happens inside the handler rather than at top level.
+let previewLoaded = false
+function loadPreview() {
+  if (previewLoaded) return true
+  try {
+    importScripts('/mls/preview.js')
+    previewLoaded = true
+  } catch {
+    previewLoaded = false
+  }
+  return previewLoaded
+}
+
+// The message text for a push, or null to fall back to the server's generic body.
+//
+// Every failure here is silent and ends in that fallback: no key material, a group this device
+// cannot read, a browser that cannot run the WASM. A notification that says "New message" is a
+// working notification; one that says nothing because a decrypt threw is not.
+async function previewBody(data) {
+  if (!data.ciphertext || !data.conversationId) return null
+  if (!loadPreview() || typeof self.phemeDecryptPreview !== 'function') return null
+  try {
+    return await self.phemeDecryptPreview(data.conversationId, data.ciphertext)
+  } catch {
+    return null
+  }
+}
+
 // Activate immediately so an updated worker takes control without a manual
 // unregister.
 self.addEventListener('install', () => self.skipWaiting())
@@ -60,10 +97,22 @@ self.addEventListener('push', (event) => {
   // Suppress a message notification for a chat the user is already looking at: it is on their
   // screen over the live stream, so a second buzz is only noise. See isViewing. Calls are exempt —
   // a ringing call must always surface, even from inside the chat.
+  // The same `image` field means two different things depending on what sent the push, and the two
+  // must not be rendered the same way.
+  //
+  // A CHAT push carries the sender's avatar — a face, which belongs in the small round slot beside
+  // the title (`icon`). A CHANNEL push carries the post's own photograph, which is the point of the
+  // notification and belongs in the large hero slot below the text (`image`). Putting an avatar in
+  // `image` blows a 40px face up to full width; putting a photo in `icon` shrinks it to a thumbnail
+  // nobody can read.
+  const isChat = Boolean(data.conversationId)
   const title = payload.title || 'Pheme'
   const options = {
     body: payload.body || '',
-    image: payload.image || undefined,
+    // Absent on a chat when the sender has no avatar, or when the recipient asked not to be told
+    // who is messaging them — the server decides which, and simply sends nothing.
+    icon: isChat ? payload.image || undefined : undefined,
+    image: isChat ? undefined : payload.image || undefined,
     // One notification per call, per conversation, or per channel — replaced as newer ones
     // arrive. A call is tagged by the CALL, not the conversation: it has to be closable on its
     // own when it stops ringing, and it must not be replaced by an ordinary message.
@@ -81,6 +130,14 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
       if (!isCall && (await isViewing(data))) return
+      // Decrypt AFTER the isViewing check, never before: a user already looking at the chat gets
+      // no notification, so decrypting for them would be work done to throw away — and it would
+      // mean touching key material on every message of an open conversation rather than only on
+      // the ones that actually raise a banner.
+      if (!isCall) {
+        const decrypted = await previewBody(data)
+        if (decrypted) options.body = decrypted
+      }
       await self.registration.showNotification(title, options)
     })(),
   )

@@ -121,6 +121,7 @@ func (m *Mongo) CreateUser(ctx context.Context, u domain.User) (domain.User, err
 	if u.ID == "" {
 		u.ID = mongoID()
 	}
+	u = u.WithNewUserDefaults()
 	_, err := m.db.Collection("users").InsertOne(ctx, u)
 	return u, err
 }
@@ -188,11 +189,22 @@ func (m *Mongo) UpdateUserProfile(ctx context.Context, userID string, p domain.U
 		"website":     strings.TrimSpace(p.Website),
 	}
 	update := bson.M{"$set": set}
+	unset := bson.M{}
 	if lower == "" {
-		update["$unset"] = bson.M{"username": "", "usernameLower": ""}
+		unset["username"] = ""
+		unset["usernameLower"] = ""
 	} else {
 		set["username"] = trimmed
 		set["usernameLower"] = lower
+	}
+	// nil means "not supplied, leave it": see UserProfileUpdate. Always written EXPLICITLY,
+	// never unset back to empty — an absent field means "this account predates the setting"
+	// and must keep meaning only that. See domain.NotificationPrivacy.Effective.
+	if p.NotificationPrivacy != nil {
+		set["notificationPrivacy"] = string(*p.NotificationPrivacy)
+	}
+	if len(unset) > 0 {
+		update["$unset"] = unset
 	}
 	res, err := m.db.Collection("users").UpdateOne(ctx, bson.M{"_id": userID}, update)
 	if err != nil {
@@ -576,13 +588,23 @@ func (m *Mongo) CreateDevice(ctx context.Context, d domain.Device) (domain.Devic
 		var existing domain.Device
 		err := m.db.Collection("devices").FindOne(ctx, filter).Decode(&existing)
 		if err == nil {
+			// canRenderPreview is refreshed here and not only written on first registration, because
+			// it is the one field that legitimately CHANGES for an existing device: the browser is
+			// the same, the subscription is the same, and the app it is running has been updated.
+			// Leaving it out would pin every device that already existed to the answer it gave
+			// before the feature shipped, which is the same as never shipping it.
 			_, uerr := m.db.Collection("devices").UpdateOne(ctx, bson.M{"_id": existing.ID},
-				bson.M{"$set": bson.M{"webPushSub": d.WebPushSub, "lastSeenAt": d.LastSeenAt}})
+				bson.M{"$set": bson.M{
+					"webPushSub":       d.WebPushSub,
+					"lastSeenAt":       d.LastSeenAt,
+					"canRenderPreview": d.CanRenderPreview,
+				}})
 			if uerr != nil {
 				return domain.Device{}, uerr
 			}
 			existing.WebPushSub = d.WebPushSub
 			existing.LastSeenAt = d.LastSeenAt
+			existing.CanRenderPreview = d.CanRenderPreview
 			return existing, nil
 		}
 		if !errors.Is(err, mongo.ErrNoDocuments) {

@@ -42,7 +42,7 @@ func (s *FCMSender) Send(ctx context.Context, msg domain.Message, devices []doma
 
 // SendChat delivers a conversation notification — who sent it, never what it said.
 func (s *FCMSender) SendChat(ctx context.Context, n ChatNotification, devices []domain.Device) ([]Result, error) {
-	return s.send(ctx, chatNotificationPayload(n), devices)
+	return s.send(ctx, chatNotificationPayload(s.publicBaseURL, n), devices)
 }
 
 // send delivers one notification to every device with an FCM token, using a single
@@ -115,12 +115,25 @@ func buildMessage(token string, n notification) *messaging.Message {
 
 	msg := &messaging.Message{Token: token, Data: n.Data}
 
+	// A notification payload is what makes Android's system tray draw the push itself, and that is
+	// exactly what has to NOT happen when the device is the only thing that can read the message.
+	// Two different reasons to withhold it, with the same mechanics:
+	//
+	//   - a CALL must start the background handler that raises the ringer;
+	//   - a PREVIEW must start the handler that decrypts the body.
+	//
+	// Both then need high priority too, or Doze holds the data message until the phone next wakes
+	// and the notification arrives an hour late.
+	//
+	// iOS is unaffected either way: its alert lives in the APNs payload below, not here, so an
+	// iPhone still gets a banner it can show without any of this.
+	trayRendered := !n.Urgent && !n.ClientRendered
+
 	priority := "normal"
-	if n.Urgent {
+	if n.Urgent || n.ClientRendered {
 		priority = "high"
-	} else {
-		// Only a non-urgent push gets a notification payload. See above: on a call, this payload is
-		// precisely what would stop the ringer from ever being raised.
+	}
+	if trayRendered {
 		msg.Notification = &messaging.Notification{
 			Title:    n.Title,
 			Body:     n.Body,
@@ -132,6 +145,11 @@ func buildMessage(token string, n notification) *messaging.Message {
 		Priority:    priority,
 		TTL:         &ttl,
 		CollapseKey: n.CollapseKey,
+	}
+	if trayRendered && n.Image != "" {
+		// The sender's avatar, shown as the notification's large image. Only set alongside a
+		// notification payload: a data-only push (a call) is rendered by the client, not the tray.
+		msg.Android.Notification = &messaging.AndroidNotification{ImageURL: n.Image}
 	}
 
 	apsAlert := &messaging.ApsAlert{Title: n.Title, Body: n.Body}
@@ -146,7 +164,17 @@ func buildMessage(token string, n notification) *messaging.Message {
 		headers["apns-collapse-id"] = n.CollapseKey
 	}
 
-	aps := &messaging.Aps{Alert: apsAlert, Sound: "default"}
+	// ThreadID is what makes iOS file ten messages from one chat as a single expandable
+	// stack instead of ten banners that bury everything else on the lock screen. Empty for
+	// a call, which must stand alone so it can be replaced and dismissed on its own.
+	aps := &messaging.Aps{Alert: apsAlert, Sound: "default", ThreadID: n.ThreadID}
+	// Lets the NotificationServiceExtension rewrite this alert before it is shown — which is how
+	// an iPhone displays a message only it can decrypt. The alert above stays as written, so a
+	// device with no extension, or one whose extension fails or runs out of time, still shows the
+	// server's generic text rather than nothing.
+	if n.ClientRendered {
+		aps.MutableContent = true
+	}
 	if n.Urgent {
 		// iOS 15+. Lets a call cut through a Focus mode, which is the whole point of a call.
 		aps.CustomData = map[string]any{"interruption-level": "time-sensitive"}

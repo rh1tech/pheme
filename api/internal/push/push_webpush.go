@@ -43,7 +43,7 @@ func (s *WebPushSender) Send(ctx context.Context, msg domain.Message, devices []
 
 // SendChat delivers a conversation notification — who sent it, never what it said.
 func (s *WebPushSender) SendChat(ctx context.Context, n ChatNotification, devices []domain.Device) ([]Result, error) {
-	return s.send(ctx, chatNotificationPayload(n), devices)
+	return s.send(ctx, chatNotificationPayload(s.publicBaseURL, n), devices)
 }
 
 // send delivers one notification to each device with a Web Push subscription.

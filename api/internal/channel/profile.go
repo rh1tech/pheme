@@ -31,6 +31,10 @@ type updateProfileRequest struct {
 	Bio         string `json:"bio"`
 	Phone       string `json:"phone"`
 	Website     string `json:"website"`
+	// A pointer, unlike its neighbours, so that a client which does not know about
+	// the setting leaves it alone rather than resetting it on every profile save.
+	// See domain.UserProfileUpdate.
+	NotificationPrivacy *string `json:"notificationPrivacy"`
 }
 
 // maxBioLen / maxFieldLen bound free-text profile fields so a single document
@@ -84,12 +88,25 @@ func (h *AppHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Reject an unrecognised value rather than storing it. A setting this server
+	// cannot interpret would be read back as the zero value — which is the most
+	// revealing option — so a typo would quietly turn a user's lock screen on.
+	var privacy *domain.NotificationPrivacy
+	if req.NotificationPrivacy != nil {
+		p := domain.NotificationPrivacy(strings.TrimSpace(*req.NotificationPrivacy))
+		if !p.Valid() {
+			httpx.Error(w, http.StatusBadRequest, "unknown notification privacy setting")
+			return
+		}
+		privacy = &p
+	}
 	u, err := h.Store.UpdateUserProfile(r.Context(), uid, domain.UserProfileUpdate{
-		Username:    username,
-		DisplayName: req.DisplayName,
-		Bio:         req.Bio,
-		Phone:       req.Phone,
-		Website:     req.Website,
+		Username:            username,
+		DisplayName:         req.DisplayName,
+		Bio:                 req.Bio,
+		Phone:               req.Phone,
+		Website:             req.Website,
+		NotificationPrivacy: privacy,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrUsernameTaken) {

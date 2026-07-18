@@ -166,6 +166,40 @@ Future<Opened> mlsDecrypt({
   ciphertext: ciphertext,
 );
 
+/// Decrypts one message for a NOTIFICATION PREVIEW, and touches nothing else.
+///
+/// This is the one MLS call that does not go through `CLIENT`, and that is the entire point.
+///
+/// A preview runs where the app is not: an Android background isolate, an iOS
+/// NotificationServiceExtension. Both are contexts the single-client rule was written to keep away
+/// from the key store — a background isolate that called `mls_load` would swap the client out from
+/// under the foreground one, and a second process would race it to disk. Either way the older state
+/// can land last: a ratchet saved as though it had not moved, which is every message after that
+/// point permanently unreadable.
+///
+/// So this borrows nothing. It takes the state blob by value, builds a throwaway
+/// `PreviewClient` from it, reads one message, and drops the lot. `PreviewClient` has no
+/// `export_state`, so there is nowhere for the advanced ratchet to go and no way for a later edit
+/// to persist it by accident. The real client — in whichever isolate or process owns it — is
+/// untouched and still holds an unconsumed key for that message, and decrypts it again for real
+/// when the app opens.
+///
+/// Note what is NOT returned: a state blob. Every other mutating call here hands one back to
+/// persist. This one deliberately cannot, and the asymmetry in the signature is the API telling
+/// the caller what it is.
+///
+/// `None` means there was nothing to preview — control traffic, or a message this device cannot
+/// read. Both are ordinary outcomes on this path, not errors.
+Future<Uint8List?> mlsDecryptPreview({
+  required List<int> state,
+  required List<Uint8List> groupIds,
+  required List<int> ciphertext,
+}) => RustLib.instance.api.crateApiMlsMlsDecryptPreview(
+  state: state,
+  groupIds: groupIds,
+  ciphertext: ciphertext,
+);
+
 /// Derives a secret from the group for a purpose outside MLS's own messaging — Pheme keys voice-call
 /// signalling with it, so the server cannot read the SDP and therefore cannot swap the DTLS
 /// fingerprint inside it and sit in the middle of the call.

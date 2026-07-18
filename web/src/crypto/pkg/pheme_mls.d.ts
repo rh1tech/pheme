@@ -156,6 +156,40 @@ export class MlsClient {
 }
 
 /**
+ * A read-only client for rendering notification previews in a service worker.
+ *
+ * Separate from `MlsClient` on purpose, and this is the whole reason it exists: a service
+ * worker is a SECOND context holding the same key store as the page, and the single-client
+ * rule says there must never be two writers. This one has no `exportState`, so there is
+ * nowhere for an advanced ratchet to go — the worker physically cannot persist, however a
+ * later edit is written. See `crate::PreviewClient`.
+ *
+ * The page's own copy of the state is untouched and decrypts the message again for real when
+ * the app opens, so nothing is lost by previewing it here.
+ *
+ * Drop it as soon as the notification is shown: it holds plaintext.
+ */
+export class MlsPreviewClient {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Decrypts one application message for display. `undefined` means there was nothing to
+     * preview — control traffic, or a message this client cannot read.
+     */
+    decrypt(group_id: Uint8Array, ciphertext: Uint8Array): Uint8Array | undefined;
+    /**
+     * Loads a read-only client from a state blob read out of IndexedDB.
+     */
+    static fromState(state: Uint8Array): MlsPreviewClient;
+    /**
+     * Whether this client holds the group, so the caller can pick the right one without
+     * attempting a decrypt against each in turn.
+     */
+    hasGroup(group_id: Uint8Array): boolean;
+}
+
+/**
  * Recovers client state from a sealed backup. Errors on a wrong passphrase.
  */
 export function decryptBackup(passphrase: Uint8Array, salt: Uint8Array, nonce: Uint8Array, ciphertext: Uint8Array): Uint8Array;
@@ -205,10 +239,14 @@ export interface InitOutput {
     readonly mlsclient_stageAdd: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly mlsclient_stageRemoveDevices: (a: number, b: number, c: number, d: any) => [number, number, number, number];
     readonly mlsclient_stageRemoveUsers: (a: number, b: number, c: number, d: any) => [number, number, number, number];
+    readonly mlspreviewclient_decrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly mlspreviewclient_fromState: (a: number, b: number) => [number, number, number];
     readonly __wbg_get_backupblob_nonce: (a: number) => [number, number];
     readonly __wbg_get_backupblob_salt: (a: number) => [number, number];
     readonly __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;
     readonly __wbg_set_backupblob_salt: (a: number, b: number, c: number) => void;
+    readonly __wbg_mlspreviewclient_free: (a: number, b: number) => void;
+    readonly mlspreviewclient_hasGroup: (a: number, b: number, c: number) => number;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

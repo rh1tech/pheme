@@ -171,30 +171,95 @@ func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage)
 			return
 		}
 
-		if _, err := h.Push.SendChat(ctx, push.ChatNotification{
-			ConversationID: convID,
-			MessageID:      msg.ID,
-			SenderName:     h.senderName(ctx, senderID),
-		}, devices); err != nil {
-			log.Error("chat push: send", "conversation", convID, "error", err)
+		name, avatarID := h.senderIdentity(ctx, senderID)
+		// One send per privacy setting, not one per conversation. What a push may say is the
+		// RECIPIENT's decision, and two members of the same chat can decide differently, so the
+		// devices are split by their owner's setting and each group gets the payload it asked
+		// for. Almost always this is a single group — the loop costs nothing when everyone
+		// agrees, and is the only correct thing to do when they do not.
+		for key, group := range h.devicesByPrivacy(ctx, recipients, devices) {
+			if _, err := h.Push.SendChat(ctx, push.ChatNotification{
+				ConversationID:       convID,
+				MessageID:            msg.ID,
+				SenderName:           name,
+				SenderAvatarID:       avatarID,
+				Privacy:              key.privacy,
+				DeviceRendersPreview: key.rendersPreview,
+				// Passed to every group; the payload builder attaches it only for the group that
+				// asked for previews. Deciding here instead would mean each caller re-deriving
+				// the same rule, and one of them eventually getting it wrong.
+				Ciphertext:  msg.Ciphertext,
+				ContentType: msg.ContentType,
+			}, group); err != nil {
+				log.Error("chat push: send", "conversation", convID, "privacy", string(key.privacy), "error", err)
+			}
 		}
 	}()
 }
 
-// senderName resolves the display name shown in the notification. It comes from
-// the user's profile, never from the message.
-func (h *Handler) senderName(ctx context.Context, userID string) string {
+// devicesByPrivacy groups recipients' devices by their owner's notification privacy setting.
+//
+// A user whose profile cannot be loaded is treated as the most private option rather than the
+// default one. The failure mode matters: guessing "show everything" for a user we know nothing
+// about puts a name on a lock screen that its owner may have explicitly asked to keep off it,
+// and a transient database error is not a good reason to override that. Guessing the other way
+// costs them one vague notification.
+// pushGroup is the set of recipients a single payload can serve: everyone who wants the same
+// thing AND runs a build that can render it.
+type pushGroup struct {
+	privacy        domain.NotificationPrivacy
+	rendersPreview bool
+}
+
+func (h *Handler) devicesByPrivacy(
+	ctx context.Context, recipients []string, devices []domain.Device,
+) map[pushGroup][]domain.Device {
+	// One lookup for the whole conversation, not one per member: this runs on every message
+	// sent, and a busy group chat would otherwise turn each one into a query per recipient.
+	users, err := h.Store.UsersByIDs(ctx, recipients)
+	if err != nil {
+		h.logger().Warn("chat push: load recipients, assuming private", "error", err)
+		users = nil
+	}
+
+	groups := make(map[pushGroup][]domain.Device, 2)
+	for _, d := range devices {
+		// A recipient we could not load — the whole lookup failed, or UsersByIDs omitted them —
+		// is treated as the most private option rather than the default one. Guessing "show
+		// everything" for a user we know nothing about puts a name on a lock screen its owner may
+		// have explicitly asked to keep off it, and a transient database error is not a good
+		// reason to override that. Guessing the other way costs them one vague notification.
+		p := domain.NotificationPrivacyGeneric
+		if u, ok := users[d.UserID]; ok {
+			// Effective(), not the raw value: a legacy account stores "" and every consumer would
+			// otherwise have to remember to resolve it. Normalising here also stops a conversation
+			// that mixes legacy and explicit-sender recipients from splitting into two groups and
+			// sending the same payload twice.
+			p = u.NotificationPrivacy.Effective()
+		}
+		key := pushGroup{privacy: p, rendersPreview: d.CanRenderPreview}
+		groups[key] = append(groups[key], d)
+	}
+	return groups
+}
+
+// senderIdentity resolves the name and avatar a notification may show for the sender. Both
+// come from the user's profile, never from the message — the server cannot read the message.
+//
+// Whether they are actually shown is not decided here: that is the recipient's setting, applied
+// when the payload is built. This only answers what there is to show.
+func (h *Handler) senderIdentity(ctx context.Context, userID string) (name, avatarID string) {
 	u, err := h.Store.UserByID(ctx, userID)
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	if u.DisplayName != "" {
-		return u.DisplayName
+	switch {
+	case u.DisplayName != "":
+		name = u.DisplayName
+	case u.Username != "":
+		name = "@" + u.Username
 	}
-	if u.Username != "" {
-		return "@" + u.Username
-	}
-	return ""
+	return name, u.AvatarID
 }
 
 // isControlContent reports whether a content type must not raise a push notification.

@@ -42,6 +42,9 @@ dependencies:
   flutter_riverpod: ^3.3.2
   dio: ^5.9.2
   flutter_secure_storage: ^10.3.1
+  # Direct, for getContainerPath: the App Group container is where the MLS state lives so the
+  # NotificationServiceExtension can read it. path_provider itself does not expose it.
+  path_provider_foundation: ^2.4.1
   go_router: ^17.3.0
   firebase_core: ^4.11.0
   firebase_messaging: ^16.4.1

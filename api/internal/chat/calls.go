@@ -280,13 +280,22 @@ func (h *Handler) ringMembers(convID, callerID, callID string, kind push.Kind) {
 		if err != nil || len(devices) == 0 {
 			return
 		}
-		if _, err := h.Push.SendChat(ctx, push.ChatNotification{
-			ConversationID: convID,
-			SenderName:     h.senderName(ctx, callerID),
-			Kind:           kind,
-			CallID:         callID,
-		}, devices); err != nil {
-			log.Error("call ring: send", "conversation", convID, "error", err)
+		name, avatarID := h.senderIdentity(ctx, callerID)
+		// Split by the recipient's privacy setting, exactly as a message is. A ringing phone is
+		// the most conspicuous notification there is, so somebody who does not want their lock
+		// screen naming the people who message them certainly does not want it announcing, at
+		// volume, who is calling. See devicesByPrivacy.
+		for key, group := range h.devicesByPrivacy(ctx, recipients, devices) {
+			if _, err := h.Push.SendChat(ctx, push.ChatNotification{
+				ConversationID: convID,
+				SenderName:     name,
+				SenderAvatarID: avatarID,
+				Kind:           kind,
+				CallID:         callID,
+				Privacy:        key.privacy,
+			}, group); err != nil {
+				log.Error("call ring: send", "conversation", convID, "privacy", string(key.privacy), "error", err)
+			}
 		}
 	}()
 }

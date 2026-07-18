@@ -74,12 +74,19 @@ class PhemeRepository {
 
   /// Updates the caller's username and contact fields. An empty [username]
   /// clears it. The server returns 409 when the username is taken.
+  ///
+  /// [notificationPrivacy] is `'preview'`, `'sender'` or `'generic'`; omitting it leaves the
+  /// setting alone. That is the server's contract for this one field and not for its neighbours
+  /// (which clear on omission), because its default IS its empty value — so if absence
+  /// meant "set to sender", every profile save would quietly switch a user's lock screen
+  /// back on. The server rejects any other value with a 400.
   Future<User> updateMe({
     String? username,
     String? displayName,
     String? bio,
     String? phone,
     String? website,
+    String? notificationPrivacy,
   }) {
     final body = <String, dynamic>{};
     if (username != null) body['username'] = username;
@@ -87,6 +94,9 @@ class PhemeRepository {
     if (bio != null) body['bio'] = bio;
     if (phone != null) body['phone'] = phone;
     if (website != null) body['website'] = website;
+    if (notificationPrivacy != null) {
+      body['notificationPrivacy'] = notificationPrivacy;
+    }
     return _patch('/v1/me', body).then((d) => User.fromJson(d));
   }
 
@@ -277,16 +287,22 @@ class PhemeRepository {
   /// [voipToken] is the iOS PushKit token, and it is a DIFFERENT token from [fcmToken] — both are
   /// sent. FCM carries messages; only PushKit can carry a call that rings a sleeping iPhone, and FCM
   /// has no way to reach it.
+  /// [canRenderPreview] declares that this BUILD can decrypt a message and draw the notification
+  /// itself. The server withholds previews from devices that do not say so, because a preview
+  /// arrives data-only and a build without the handler ignores it completely — showing nothing at
+  /// all rather than the generic text.
   Future<Device> createDevice({
     required String platform,
     String? fcmToken,
     String? voipToken,
+    bool canRenderPreview = false,
   }) {
     final body = <String, dynamic>{'platform': platform};
     if (fcmToken != null) body['fcmToken'] = fcmToken;
     if (voipToken != null && voipToken.isNotEmpty) {
       body['voipToken'] = voipToken;
     }
+    if (canRenderPreview) body['canRenderPreview'] = true;
     return _post('/v1/devices', body).then((d) => Device.fromJson(d));
   }
 

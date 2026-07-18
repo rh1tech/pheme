@@ -5,6 +5,9 @@ import { defineConfig } from 'vitest/config'
 // for reasons that have nothing to do with the code.
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts'],
+    // `test/` is for specs that need Node itself — reading the WASM binary off disk, for one.
+    // They live outside src/ so that app code keeps its narrow `types: ["vite/client"]` and
+    // cannot quietly start depending on Node globals that do not exist in a browser.
+    include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
   },
 })

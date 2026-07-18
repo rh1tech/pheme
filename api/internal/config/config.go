@@ -46,7 +46,7 @@ type Config struct {
 
 	VAPIDPublicKey  string
 	VAPIDPrivateKey string
-	VAPIDSubject       string // VAPID contact: an https: URL or mailto: address. Apple Web Push requires an https: URL (it rejects mailto: with 403 BadJwtToken).
+	VAPIDSubject    string // VAPID contact: an https: URL or mailto: address. Apple Web Push requires an https: URL (it rejects mailto: with 403 BadJwtToken).
 
 	// PublicAPIURL is the externally reachable base URL of the App API (e.g.
 	// "https://pheme-api.rh1.tech"), used to build absolute image URLs for push

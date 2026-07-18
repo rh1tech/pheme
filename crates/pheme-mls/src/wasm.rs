@@ -162,7 +162,9 @@ impl MlsClient {
         context: &[u8],
         length: usize,
     ) -> Result<Vec<u8>, JsError> {
-        self.inner.export_secret(group_id, label, context, length).map_err(js)
+        self.inner
+            .export_secret(group_id, label, context, length)
+            .map_err(js)
     }
 
     /// Every leaf's `userId:deviceId`, so the caller can spot member devices that are
@@ -247,6 +249,47 @@ pub struct BackupBlob {
     pub salt: Vec<u8>,
     pub nonce: Vec<u8>,
     pub ciphertext: Vec<u8>,
+}
+
+/// A read-only client for rendering notification previews in a service worker.
+///
+/// Separate from `MlsClient` on purpose, and this is the whole reason it exists: a service
+/// worker is a SECOND context holding the same key store as the page, and the single-client
+/// rule says there must never be two writers. This one has no `exportState`, so there is
+/// nowhere for an advanced ratchet to go — the worker physically cannot persist, however a
+/// later edit is written. See `crate::PreviewClient`.
+///
+/// The page's own copy of the state is untouched and decrypts the message again for real when
+/// the app opens, so nothing is lost by previewing it here.
+///
+/// Drop it as soon as the notification is shown: it holds plaintext.
+#[wasm_bindgen]
+pub struct MlsPreviewClient {
+    inner: crate::PreviewClient,
+}
+
+#[wasm_bindgen]
+impl MlsPreviewClient {
+    /// Loads a read-only client from a state blob read out of IndexedDB.
+    #[wasm_bindgen(js_name = fromState)]
+    pub fn from_state(state: &[u8]) -> Result<MlsPreviewClient, JsError> {
+        Ok(MlsPreviewClient {
+            inner: crate::PreviewClient::import_state(state).map_err(js)?,
+        })
+    }
+
+    /// Whether this client holds the group, so the caller can pick the right one without
+    /// attempting a decrypt against each in turn.
+    #[wasm_bindgen(js_name = hasGroup)]
+    pub fn has_group(&self, group_id: &[u8]) -> bool {
+        self.inner.has_group(group_id)
+    }
+
+    /// Decrypts one application message for display. `undefined` means there was nothing to
+    /// preview — control traffic, or a message this client cannot read.
+    pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Vec<u8>>, JsError> {
+        self.inner.decrypt(group_id, ciphertext).map_err(js)
+    }
 }
 
 /// Seals exported client state under a recovery passphrase (Argon2id + AES-256-GCM).

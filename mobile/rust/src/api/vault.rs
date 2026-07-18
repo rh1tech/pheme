@@ -73,7 +73,10 @@ pub fn vault_open(domain: String, key: Vec<u8>, sealed: Vec<u8>) -> Result<Vec<u
 
 fn cipher(key: &[u8]) -> Result<Aes256Gcm> {
     if key.len() != KEY_LEN {
-        return Err(anyhow!("vault: key must be {KEY_LEN} bytes, got {}", key.len()));
+        return Err(anyhow!(
+            "vault: key must be {KEY_LEN} bytes, got {}",
+            key.len()
+        ));
     }
     Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("vault: bad key"))
 }
@@ -94,8 +97,12 @@ mod tests {
 
     #[test]
     fn a_sealed_blob_does_not_open_with_another_key() {
-        let sealed =
-            vault_seal(STATE.into(), random_bytes(KEY_LEN).unwrap(), b"state".to_vec()).unwrap();
+        let sealed = vault_seal(
+            STATE.into(),
+            random_bytes(KEY_LEN).unwrap(),
+            b"state".to_vec(),
+        )
+        .unwrap();
         assert!(vault_open(STATE.into(), random_bytes(KEY_LEN).unwrap(), sealed).is_err());
     }
 

@@ -35,6 +35,7 @@ import type {
   MLSDevice,
   MLSDeviceRef,
   MLSGroupState,
+  NotificationPrivacy,
   Platform,
   PublicUser,
   Role,
@@ -253,12 +254,17 @@ export const api = {
 
   // Profile (self)
   getMe: () => request<User>('/v1/me'),
+  // Every field here is cleared by omission EXCEPT notificationPrivacy, which is left unchanged
+  // when absent. The asymmetry is the server's (see domain.UserProfileUpdate): that setting's
+  // default is its empty value, so "not sent" and "set to sender" would otherwise be the same
+  // request, and any caller that forgot it would silently switch a user's lock screen back on.
   updateMe: (body: {
     username?: string
     displayName?: string
     bio?: string
     phone?: string
     website?: string
+    notificationPrivacy?: NotificationPrivacy
   }) => request<User>('/v1/me', { method: 'PATCH', body }),
   uploadAvatar: (file: File) => {
     const form = new FormData()
@@ -616,8 +622,16 @@ export const api = {
   },
 
   // Devices & subscriptions
-  createDevice: (body: { platform: Platform; fcmToken?: string; webPushSub?: string }) =>
-    request<Device>('/v1/devices', { method: 'POST', body }),
+  // canRenderPreview declares that THIS build's service worker can decrypt a message and draw the
+  // notification itself. The server withholds message previews from devices that do not say so,
+  // because a device that cannot render one would show nothing at all. Always true from here: if
+  // this code is running, the worker that goes with it is deployed alongside it.
+  createDevice: (body: {
+    platform: Platform
+    fcmToken?: string
+    webPushSub?: string
+    canRenderPreview?: boolean
+  }) => request<Device>('/v1/devices', { method: 'POST', body }),
   subscribe: (channelId: string, deviceId: string) =>
     request<unknown>(`/v1/channels/${channelId}/subscribe`, { method: 'POST', body: { deviceId } }),
   unsubscribe: (channelId: string, deviceId: string) =>

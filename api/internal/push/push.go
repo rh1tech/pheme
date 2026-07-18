@@ -4,6 +4,8 @@ package push
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"log/slog"
 	"strings"
 
@@ -19,16 +21,26 @@ type Result struct {
 
 // ChatNotification is the push for a conversation message.
 //
-// It deliberately has NO field for message content. Chat messages are end-to-end
-// encrypted and the server holds only ciphertext, so a notification can say who
-// sent a message but never what it said. Expressing that as a property of the type
-// means no future change can leak plaintext into a lock screen by accident — there
-// is nowhere to put it. The sender's name comes from conversation membership, not
-// from the message.
+// It has no field for message CONTENT, and still does not. What it gained is a field for
+// the message's CIPHERTEXT, and the distinction is the entire safety property: the server
+// holds only ciphertext, cannot read it, and passes it through untouched for the recipient's
+// own device to decrypt in a notification handler. A lock screen can now show the message,
+// and the server still has no idea what it says.
+//
+// That is worth stating plainly because the type's original promise was "there is nowhere to
+// put plaintext", and that promise is unchanged — Ciphertext is []byte straight off
+// domain.ChatMessage, and nothing on the server ever decodes it. If a future change finds
+// itself wanting to put a readable string here, it has gone wrong.
+//
+// The sender's name comes from conversation membership, not from the message.
 type ChatNotification struct {
 	ConversationID string
 	MessageID      string
 	SenderName     string
+	// SenderAvatarID is the blob id of the sender's profile picture, or "" if they have
+	// none. It is an id and not a URL because only a transport knows the public base to
+	// resolve it against.
+	SenderAvatarID string
 	// Kind separates "you have a message" from "your phone is ringing". They are the same
 	// push transport but not the same event: a call is worth waking a device for and stops
 	// mattering in thirty seconds, whereas a message can wait and should not expire.
@@ -38,6 +50,104 @@ type ChatNotification struct {
 	// cancelled call close its own notification instead of leaving a live-looking ring that
 	// deep-links into a call nobody is on any more.
 	CallID string
+	// Privacy is the RECIPIENT's setting, and it is why this struct describes a push to one
+	// group of people rather than to a conversation. Two members of the same conversation can
+	// want different things on their lock screens, so the caller partitions recipients by this
+	// value and builds one notification per group (see chat.notifyMembers).
+	Privacy domain.NotificationPrivacy
+	// Ciphertext is the encrypted message body, passed through for the recipient's device to
+	// decrypt and display. Opaque here: the server cannot read it and never tries.
+	//
+	// It is attached only for a recipient whose setting asks for previews, and only for an
+	// ordinary application message — see previewCiphertext, which is the single place that
+	// decides, so the gate cannot be half-applied by one transport and not another.
+	Ciphertext []byte
+	// ContentType is the message's MLS content type. It is here purely as a gate: only an
+	// ordinary application message may be previewed, and protocol traffic must never be shipped
+	// to a notification handler that would try to decrypt it.
+	ContentType string
+	// DeviceRendersPreview is whether the devices in THIS group run a build that can decrypt a
+	// message and draw the notification itself.
+	//
+	// A second reason the fan-out partitions, and one that has nothing to do with privacy: a
+	// preview reaches Android data-only, and a build that predates the handler ignores a
+	// data-only message entirely — showing nothing at all rather than the generic text. So the
+	// recipients are grouped by capability as well as by preference, and a user with two phones
+	// on different app versions gets a preview on the updated one and the old notification on
+	// the other, rather than silence on both.
+	DeviceRendersPreview bool
+}
+
+// maxPreviewCiphertext caps how much ciphertext a push may carry.
+//
+// Web Push, APNs and FCM all cap a payload at 4 KB, and base64 inflates by a third. This
+// leaves room for the title, body, ids and JSON scaffolding around it. A message too long to
+// fit simply travels without its ciphertext and arrives as "New message" — a preview is a
+// convenience, and dropping the push entirely because somebody wrote an essay would not be.
+const maxPreviewCiphertext = 2400
+
+// maxPushPayload is what a push service will accept, with room for the encryption Web Push
+// applies on top: aes128gcm adds a record header, a 16-byte auth tag and padding, and the 4 KB
+// cap is measured AFTER that. Measuring the plaintext against 4096 would put the real payload
+// over the line.
+const maxPushPayload = 4096 - 128
+
+// payloadFits reports whether an assembled payload will survive delivery.
+//
+// It measures the Web Push JSON shape because that is the tightest of the three transports, and
+// a payload sized for it fits FCM and APNs as well. Measuring rather than reasoning is the point:
+// every field here is either user-supplied or built from user-supplied parts, and JSON escaping
+// can multiply any of them by six.
+func payloadFits(title, body, image string, data map[string]string) bool {
+	encoded, err := json.Marshal(webPushPayload{Title: title, Body: body, Image: image, Data: data})
+	if err != nil {
+		return false
+	}
+	return len(encoded) <= maxPushPayload
+}
+
+// previewCiphertext returns the ciphertext this notification may carry, or nil.
+//
+// Every condition that gates a preview lives here, in one place, because the failure mode of
+// spreading them out is a transport that forgets one and ships message bodies to a device
+// whose owner asked for a bare lock screen.
+func (n ChatNotification) previewCiphertext() []byte {
+	switch {
+	case !n.Privacy.ShowsPreview():
+		return nil // the recipient did not ask for previews
+	case !n.DeviceRendersPreview:
+		return nil // this build cannot draw one, and sending it anyway shows nothing at all
+	case n.Kind != KindMessage:
+		return nil // a call has no body to preview
+	case n.ContentType != domain.ContentTypeMLSApplication:
+		return nil // protocol traffic: never hand it to a decrypt-and-display path
+	case len(n.Ciphertext) == 0 || len(n.Ciphertext) > maxPreviewCiphertext:
+		return nil // nothing to send, or too big to fit
+	default:
+		return n.Ciphertext
+	}
+}
+
+// identifies reports whether this notification may name the sender. A generic push still
+// has to say something arrived, so the user knows to open the app; what it must not do is
+// say who it was from, or show their face.
+func (n ChatNotification) identifies() bool {
+	return n.Privacy.ShowsSender()
+}
+
+// displayName is the name this notification may show, which is not the same thing as the
+// name of the person who sent it: a recipient who asked not to be told gets the fallback.
+//
+// Every transport must go through this rather than reading SenderName directly. That rule
+// exists because it was already broken once — the PushKit path built its own fallback, and
+// so kept announcing the real caller on the CallKit screen of exactly the users who had
+// asked it not to. A single accessor is what makes the setting hold everywhere by default
+// instead of everywhere somebody remembered.
+func (n ChatNotification) displayName() string {
+	if !n.identifies() || n.SenderName == "" {
+		return fallbackTitle
+	}
+	return n.SenderName
 }
 
 // Kind is what a chat push is telling the device about.
@@ -97,6 +207,28 @@ type notification struct {
 	// and its cancellation share one, so hanging up before an answer takes the ring back off the
 	// other person's lock screen instead of leaving a dead call sitting there looking live.
 	CollapseKey string
+	// ThreadID groups notifications that belong to the same conversation, so ten messages from
+	// one chat arrive as one expandable stack rather than ten separate banners burying
+	// everything else. Distinct from CollapseKey: collapsing REPLACES a notification and loses
+	// the earlier one, grouping keeps them all and merely files them together.
+	ThreadID string
+	// ClientRendered means the DEVICE draws this notification rather than the system tray,
+	// because only the device can read the message it is going to show.
+	//
+	// It costs something, which is why it is not simply always on. On Android it forces a
+	// DATA-ONLY high-priority message: a payload carrying a `notification` is drawn by the tray
+	// while the app is backgrounded and does not reliably start the handler that would decrypt
+	// it, and a normal-priority data message is held by Doze until the device next wakes. So a
+	// preview means waking a dozing phone — which is the behaviour "a message can wait"
+	// deliberately avoids for everybody else.
+	//
+	// Hence: set only for recipients who asked for previews. Everyone else keeps exactly the
+	// delivery they had, and nobody pays in battery for a feature they did not turn on.
+	//
+	// On iOS it means mutable-content, which lets the NotificationServiceExtension rewrite the
+	// alert before it is shown. The alert payload stays, so a device whose extension fails or
+	// does not exist still shows the server's generic text.
+	ClientRendered bool
 }
 
 func messageNotification(publicBaseURL string, msg domain.Message) notification {
@@ -117,13 +249,18 @@ const (
 	missedCallBody = "Missed call"
 )
 
+// fallbackTitle is what a notification is titled when it may not name anyone — either
+// because the sender has no name to show, or because the recipient asked not to be told.
+const fallbackTitle = "Pheme"
+
 // defaultTTL is how long a push that is not time-critical may sit in a queue.
 const defaultTTL = 60
 
-func chatNotificationPayload(n ChatNotification) notification {
-	title := n.SenderName
-	if title == "" {
-		title = "Pheme"
+func chatNotificationPayload(publicBaseURL string, n ChatNotification) notification {
+	title := n.displayName()
+	image := ""
+	if n.identifies() {
+		image = avatarURL(publicBaseURL, n.SenderAvatarID)
 	}
 	body := chatBody
 	switch n.Kind {
@@ -136,6 +273,60 @@ func chatNotificationPayload(n ChatNotification) notification {
 	// carries its id, so the service worker can replace an earlier ring for the same call
 	// and close it again when the call ends.
 	data := map[string]string{"conversationId": n.ConversationID, "messageId": n.MessageID}
+	// Android groups client-side off conversationId, already above: FCM has no server-side
+	// field for it (AndroidNotification exposes Tag, which REPLACES, but no group, which
+	// bundles), so the client applies it. iOS is the opposite and groups from the server via
+	// Aps.ThreadID — see buildMessage.
+	//
+	// The avatar travels in the data as well as in the notification payload, because the
+	// Android client re-renders the notification itself when the app is foregrounded and has
+	// no other way to reach it.
+	if image != "" {
+		data["senderAvatar"] = image
+	}
+	// The encrypted body, for the device to decrypt and show. Base64 because a push payload is
+	// JSON; still ciphertext, and still unreadable to everything it passes through — this
+	// server, Apple, Google, Mozilla. Absent unless every condition in previewCiphertext holds.
+	//
+	// The body stays the "New message" constant alongside it. A device that cannot decrypt —
+	// an old client, a browser with no key material, a failed decrypt — then still shows
+	// something sensible instead of a blank notification.
+	clientRendered := false
+	if ct := n.previewCiphertext(); ct != nil {
+		data["ciphertext"] = base64.StdEncoding.EncodeToString(ct)
+		clientRendered = true
+		// The title and body have to be IN THE DATA too, for the same reason a call's caller name
+		// is: this goes out data-only so the client's handler runs at all, and a data-only message
+		// has no notification payload to read them from. Without them a device that cannot decrypt
+		// would have nothing to fall back to and would draw a blank notification — the one outcome
+		// worse than a generic one.
+		data["title"] = title
+		data["body"] = body
+		// Then MEASURE, and drop it again if the whole payload will not fit.
+		//
+		// A byte cap on the ciphertext alone is not enough, because it is not the only thing
+		// competing for the 4 KB. A display name is bounded at 200 BYTES, but JSON escapes `<`
+		// to `<` — so 200 of those become 1200 bytes in the payload, and a sender could
+		// set such a name deliberately. The push service rejects an oversized payload WHOLESALE,
+		// which would take down the entire notification rather than just its preview: a sender
+		// could silence every recipient who had opted into previews, in every conversation they
+		// were in, by editing their own profile.
+		//
+		// So nothing here is trusted to be the size it looks. The payload is built, weighed, and
+		// the preview — the one part that is a convenience rather than the notification itself —
+		// is what gives way.
+		if !payloadFits(title, body, image, data) {
+			// Unwind the whole preview, not just its ciphertext: the data copies of the title and
+			// body exist only to serve a client-rendered notification, and leaving them behind
+			// would keep paying for a feature that is no longer happening.
+			delete(data, "ciphertext")
+			delete(data, "title")
+			delete(data, "body")
+			// Back to a tray-rendered notification with it: there is nothing left for the device to
+			// draw that the server has not already said.
+			clientRendered = false
+		}
+	}
 
 	isCall := n.Kind != KindMessage
 	collapseKey := ""
@@ -146,6 +337,11 @@ func chatNotificationPayload(n ChatNotification) notification {
 		// data-only message precisely so it starts the client's background handler, and a data-only
 		// message has no title to read — so a name left only up there would reach nobody, and the
 		// phone would ring for an anonymous stranger.
+		//
+		// The privacy setting applies here too: a recipient who does not want to be told who is
+		// messaging them does not want their phone announcing who is calling them either, and the
+		// call screen is the most conspicuous surface of the lot. They get "Pheme", and the real
+		// name once they answer and the app is in front of them.
 		data["callerName"] = title
 		// One key per call, shared by the ring and its cancellation, so the cancel replaces the ring
 		// rather than stacking a second notification under it.
@@ -155,11 +351,33 @@ func chatNotificationPayload(n ChatNotification) notification {
 	return notification{
 		Title:       title,
 		Body:        body,
+		Image:       image,
 		Data:        data,
 		TTL:         n.ttl(),
 		Urgent:      isCall,
 		CollapseKey: collapseKey,
+		// Group by conversation, not by call: a ring has to stand on its own so it can be
+		// replaced and closed independently of the chat's message stack.
+		ThreadID:       threadID(n, isCall),
+		ClientRendered: clientRendered,
 	}
+}
+
+// threadID is the conversation a notification files itself under, or "" for a call.
+func threadID(n ChatNotification, isCall bool) string {
+	if isCall {
+		return ""
+	}
+	return n.ConversationID
+}
+
+// avatarURL returns the absolute URL of a user's avatar blob, or "" when they have none
+// or no public base URL is configured.
+func avatarURL(publicBaseURL, avatarID string) string {
+	if publicBaseURL == "" || avatarID == "" {
+		return ""
+	}
+	return strings.TrimRight(publicBaseURL, "/") + "/v1/images/" + avatarID
 }
 
 // imageURL returns the absolute URL of a message's first image, or "" when the
@@ -204,12 +422,13 @@ func (s *LogSender) Send(_ context.Context, msg domain.Message, devices []domain
 }
 
 // SendChat logs a chat notification. Only the conversation and sender are logged —
-// there is no content to log, by design.
+// there is no content to log, by design. The sender goes through displayName like every
+// real transport, so a dev log shows what the device would actually have shown.
 func (s *LogSender) SendChat(_ context.Context, n ChatNotification, devices []domain.Device) ([]Result, error) {
 	results := make([]Result, 0, len(devices))
 	for _, d := range devices {
 		slog.Info("chat push (dev no-op)",
-			"conversation", n.ConversationID, "sender", n.SenderName, "device", d.ID, "platform", d.Platform)
+			"conversation", n.ConversationID, "sender", n.displayName(), "device", d.ID, "platform", d.Platform)
 		results = append(results, Result{DeviceID: d.ID, Status: domain.DeliverySkipped})
 	}
 	return results, nil

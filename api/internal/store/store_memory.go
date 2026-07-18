@@ -16,22 +16,22 @@ import (
 // Memory is an in-memory Store implementation for local development and tests.
 // It is safe for concurrent use. Data does not survive a restart.
 type Memory struct {
-	mu            sync.RWMutex
-	users         map[string]domain.User
-	channels      map[string]domain.Channel
-	apiKeys       map[string]domain.APIKey
-	devices       map[string]domain.Device
-	subscriptions map[string]domain.Subscription
-	members       map[string]domain.ChannelMember
-	messages      map[string]domain.Message
-	deliveries    map[string]domain.Delivery
-	comments      map[string]domain.Comment
-	conversations map[string]domain.Conversation
-	convMembers   map[string]domain.ConversationMember
-	chatMessages  map[string]domain.ChatMessage
-	attachments   map[string]domain.Attachment
-	keyPackages   map[string]domain.MLSKeyPackage
-	keyBackups    map[string]domain.MLSKeyBackup // by userId (one per user)
+	mu              sync.RWMutex
+	users           map[string]domain.User
+	channels        map[string]domain.Channel
+	apiKeys         map[string]domain.APIKey
+	devices         map[string]domain.Device
+	subscriptions   map[string]domain.Subscription
+	members         map[string]domain.ChannelMember
+	messages        map[string]domain.Message
+	deliveries      map[string]domain.Delivery
+	comments        map[string]domain.Comment
+	conversations   map[string]domain.Conversation
+	convMembers     map[string]domain.ConversationMember
+	chatMessages    map[string]domain.ChatMessage
+	attachments     map[string]domain.Attachment
+	keyPackages     map[string]domain.MLSKeyPackage
+	keyBackups      map[string]domain.MLSKeyBackup // by userId (one per user)
 	mlsDevices      map[string]domain.MLSDevice    // by userId + ":" + deviceId
 	revokedSessions map[string]time.Time           // sid -> expiry (terminated sessions)
 	mlsGroupInfo    map[string]domain.MLSGroupInfo // by conversationId (one per group)
@@ -42,21 +42,21 @@ type Memory struct {
 // is used to remove a deleted message's images during cascade deletes.
 func NewMemory(blobs blob.Store) *Memory {
 	return &Memory{
-		users:         map[string]domain.User{},
-		channels:      map[string]domain.Channel{},
-		apiKeys:       map[string]domain.APIKey{},
-		devices:       map[string]domain.Device{},
-		subscriptions: map[string]domain.Subscription{},
-		members:       map[string]domain.ChannelMember{},
-		messages:      map[string]domain.Message{},
-		deliveries:    map[string]domain.Delivery{},
-		comments:      map[string]domain.Comment{},
-		conversations: map[string]domain.Conversation{},
-		convMembers:   map[string]domain.ConversationMember{},
-		chatMessages:  map[string]domain.ChatMessage{},
-		attachments:   map[string]domain.Attachment{},
-		keyPackages:   map[string]domain.MLSKeyPackage{},
-		keyBackups:    map[string]domain.MLSKeyBackup{},
+		users:           map[string]domain.User{},
+		channels:        map[string]domain.Channel{},
+		apiKeys:         map[string]domain.APIKey{},
+		devices:         map[string]domain.Device{},
+		subscriptions:   map[string]domain.Subscription{},
+		members:         map[string]domain.ChannelMember{},
+		messages:        map[string]domain.Message{},
+		deliveries:      map[string]domain.Delivery{},
+		comments:        map[string]domain.Comment{},
+		conversations:   map[string]domain.Conversation{},
+		convMembers:     map[string]domain.ConversationMember{},
+		chatMessages:    map[string]domain.ChatMessage{},
+		attachments:     map[string]domain.Attachment{},
+		keyPackages:     map[string]domain.MLSKeyPackage{},
+		keyBackups:      map[string]domain.MLSKeyBackup{},
 		mlsDevices:      map[string]domain.MLSDevice{},
 		revokedSessions: map[string]time.Time{},
 		mlsGroupInfo:    map[string]domain.MLSGroupInfo{},
@@ -76,6 +76,7 @@ func (m *Memory) CreateUser(_ context.Context, u domain.User) (domain.User, erro
 	if u.ID == "" {
 		u.ID = newID()
 	}
+	u = u.WithNewUserDefaults()
 	m.users[u.ID] = u
 	return u, nil
 }
@@ -147,6 +148,10 @@ func (m *Memory) UpdateUserProfile(_ context.Context, userID string, p domain.Us
 	u.Bio = strings.TrimSpace(p.Bio)
 	u.Phone = strings.TrimSpace(p.Phone)
 	u.Website = strings.TrimSpace(p.Website)
+	// nil means "not supplied, leave it": see domain.UserProfileUpdate.
+	if p.NotificationPrivacy != nil {
+		u.NotificationPrivacy = *p.NotificationPrivacy
+	}
 	m.users[userID] = u
 	return u, nil
 }

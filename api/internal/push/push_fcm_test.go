@@ -8,7 +8,7 @@ import (
 // A call has to wake a sleeping phone. On Android that means two things at once, and getting either
 // one wrong means the phone does not ring — with nothing in any log to say why.
 func TestBuildMessage_CallIsHighPriorityAndDataOnly(t *testing.T) {
-	n := chatNotificationPayload(ChatNotification{
+	n := chatNotificationPayload("", ChatNotification{
 		ConversationID: "conv-1",
 		MessageID:      "msg-1",
 		SenderName:     "Ada",
@@ -49,7 +49,7 @@ func TestBuildMessage_CallIsHighPriorityAndDataOnly(t *testing.T) {
 // An ordinary message is the opposite case in every respect, and must not be dragged along with the
 // call settings: waking a dozing phone for a chat message is exactly the behaviour Doze exists to stop.
 func TestBuildMessage_MessageIsNormalPriorityWithNotification(t *testing.T) {
-	n := chatNotificationPayload(ChatNotification{
+	n := chatNotificationPayload("", ChatNotification{
 		ConversationID: "conv-1",
 		MessageID:      "msg-1",
 		SenderName:     "Ada",
@@ -76,8 +76,8 @@ func TestBuildMessage_MessageIsNormalPriorityWithNotification(t *testing.T) {
 // dead call sitting on the other person's lock screen looking live — and tapping it deep-links into a
 // call nobody is on.
 func TestBuildMessage_CallAndCancelShareACollapseKey(t *testing.T) {
-	ring := chatNotificationPayload(ChatNotification{Kind: KindCall, CallID: "call-1"})
-	cancel := chatNotificationPayload(ChatNotification{Kind: KindCallCancel, CallID: "call-1"})
+	ring := chatNotificationPayload("", ChatNotification{Kind: KindCall, CallID: "call-1"})
+	cancel := chatNotificationPayload("", ChatNotification{Kind: KindCallCancel, CallID: "call-1"})
 
 	if ring.CollapseKey == "" {
 		t.Fatal("a ring has no collapse key, so its cancellation cannot replace it")
@@ -95,7 +95,7 @@ func TestBuildMessage_CallAndCancelShareACollapseKey(t *testing.T) {
 // The iOS fallback for a phone with no PushKit token: not a call screen, but at least a prompt banner
 // that can cut through a Focus mode.
 func TestBuildMessage_CallSetsTimeSensitiveAPNs(t *testing.T) {
-	n := chatNotificationPayload(ChatNotification{Kind: KindCall, CallID: "call-1"})
+	n := chatNotificationPayload("", ChatNotification{Kind: KindCall, CallID: "call-1"})
 	msg := buildMessage("token", n)
 
 	if msg.APNS.Headers["apns-priority"] != "10" {
@@ -109,7 +109,7 @@ func TestBuildMessage_CallSetsTimeSensitiveAPNs(t *testing.T) {
 // A message must never carry a push the server cannot justify. The body is a constant, and the type
 // makes it impossible to put content there — this pins that it stays that way.
 func TestChatNotification_CarriesNoMessageContent(t *testing.T) {
-	n := chatNotificationPayload(ChatNotification{
+	n := chatNotificationPayload("", ChatNotification{
 		ConversationID: "conv-1",
 		MessageID:      "msg-1",
 		SenderName:     "Ada",

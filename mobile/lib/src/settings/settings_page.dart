@@ -23,6 +23,49 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     text: ref.read(settingsControllerProvider).baseUrl,
   );
 
+  /// Whether notifications on this account may name the sender.
+  ///
+  /// It lives here and not in [SettingsState] because it is a property of the ACCOUNT, not
+  /// of this handset: it has to hold on every device the user signs in on, and SettingsState
+  /// is device-local secure storage that never reaches the server. Null while loading, and
+  /// if the load fails — the switch stays hidden rather than showing a default that might be
+  /// the opposite of the truth and silently rewriting it on the first tap.
+  bool? _showSender;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadShowSender();
+  }
+
+  Future<void> _loadShowSender() async {
+    try {
+      final me = await ref.read(repositoryProvider).getMe();
+      if (mounted) setState(() => _showSender = me.showsSender);
+    } on Object {
+      // Leave it null: better no switch than one showing a state we could not confirm.
+    }
+  }
+
+  Future<void> _setShowSender(bool value) async {
+    final previous = _showSender;
+    // Optimistic: a privacy switch that lags behind the finger feels broken. Rolled back below
+    // if the server refuses, so it can never end up showing something the account does not say.
+    setState(() => _showSender = value);
+    try {
+      await ref
+          .read(repositoryProvider)
+          .updateMe(notificationPrivacy: value ? 'sender' : 'generic');
+    } on Object {
+      if (!mounted) return;
+      setState(() => _showSender = previous);
+      notifyError(
+        context,
+        context.l10n.t('settings.notificationPrivacyFailed'),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _baseUrl.dispose();
@@ -165,6 +208,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 : l10n.t('settings.deviceNotRegistered'),
           ),
         ),
+        if (_showSender != null)
+          SwitchListTile.adaptive(
+            secondary: const Icon(Icons.visibility_outlined),
+            title: Text(l10n.t('settings.showSender')),
+            subtitle: Text(l10n.t('settings.showSenderHint')),
+            value: _showSender!,
+            onChanged: _setShowSender,
+          ),
         const Divider(height: 24),
         _SectionHeader(title: l10n.t('settings.account')),
         ListTile(
@@ -271,6 +322,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     : l10n.t('settings.deviceNotRegistered'),
               ),
             ),
+            if (_showSender != null)
+              CupertinoListTile.notched(
+                leading: const Icon(CupertinoIcons.eye),
+                title: Text(l10n.t('settings.showSender')),
+                subtitle: Text(l10n.t('settings.showSenderHint')),
+                trailing: CupertinoSwitch(
+                  value: _showSender!,
+                  onChanged: _setShowSender,
+                ),
+              ),
           ],
         ),
         CupertinoListSection.insetGrouped(

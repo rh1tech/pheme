@@ -328,6 +328,7 @@ class User {
     this.phone,
     this.website,
     this.avatarId,
+    this.notificationPrivacy,
   });
 
   final String id;
@@ -340,6 +341,18 @@ class User {
   final String? website;
   final String? avatarId;
 
+  /// How much this user's own notifications may reveal before the device is unlocked:
+  /// `'generic'` to show only that a message arrived, anything else (including null,
+  /// which is what the server sends for the default) to show the sender and their photo.
+  ///
+  /// It withholds identity, never content — a chat push has never carried content and
+  /// cannot, since the server holds only ciphertext.
+  final String? notificationPrivacy;
+
+  /// Whether notifications on this account may name the sender. Null means the default,
+  /// which is yes.
+  bool get showsSender => notificationPrivacy != 'generic';
+
   factory User.fromJson(Map<String, dynamic> j) => User(
     id: j['id'] as String? ?? '',
     email: j['email'] as String? ?? '',
@@ -350,6 +363,7 @@ class User {
     phone: j['phone'] as String?,
     website: j['website'] as String?,
     avatarId: j['avatarId'] as String?,
+    notificationPrivacy: j['notificationPrivacy'] as String?,
   );
 }
 
