@@ -102,7 +102,24 @@ export function ChatShell() {
         data-view={activeId ? 'chat' : 'list'}
         data-keyboard={keyboardOpen ? 'open' : undefined}
         style={
-          viewport === null
+          // ONLY while the keyboard is up. The rest of the time the height comes from CSS
+          // (`100dvh`), and that is the point.
+          //
+          // This used to be pinned to visualViewport.height unconditionally, and the failure mode
+          // was severe: the height is a JavaScript-held pixel value, so ANY missed viewport update
+          // left the app rendering into part of the screen with page background under it. iOS drops
+          // those updates — around the keyboard, on resume from background — and once the number was
+          // stale nothing recomputed it. A third of an iPhone screen, until the app was relaunched.
+          //
+          // `100dvh` cannot go stale. It is the browser's own measurement, re-evaluated as the
+          // dynamic toolbar comes and goes, and it needs no listener to stay right. The keyboard is
+          // the one case it does NOT cover on iOS — Safari does not honour interactive-widget, so
+          // the keyboard overlays the layout viewport rather than shrinking it, and only
+          // visualViewport sees it. So that is the only case JS is trusted for.
+          //
+          // The blast radius of a stale value is now bounded by how long the keyboard is open, and
+          // it self-corrects the moment the keyboard closes.
+          !keyboardOpen || viewport === null
             ? undefined
             : ({
                 position: 'fixed',

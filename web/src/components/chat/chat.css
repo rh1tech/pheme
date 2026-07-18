@@ -110,11 +110,15 @@
 
   display: grid;
   grid-template-columns: var(--pheme-sidebar-w) minmax(0, 1fr);
-  /* The shell is fixed-height, so its panes scroll internally rather than the
-     document. ChatShell pins it to the VISUAL viewport (position:fixed with an
-     inline top/height from useVisualViewportRect) so the iOS keyboard and dynamic
-     toolbar cannot push the composer out of sight. This static + 100dvh pair is only
-     the fallback for a browser with no visualViewport. */
+  /* The shell is fixed-height, so its panes scroll internally rather than the document.
+     100dvh is the NORMAL case, not a fallback — it is the browser's own measurement, re-evaluated
+     as the dynamic toolbar comes and goes, and it needs no listener to stay correct. ChatShell
+     overrides it inline ONLY while the keyboard is up, which is the one thing dvh cannot see on
+     iOS (Safari does not honour interactive-widget, so the keyboard overlays the layout viewport
+     instead of shrinking it).
+     It used to be overridden unconditionally, and a single missed viewport update then left the
+     app rendering into two-thirds of the screen with page background beneath it. A number JS has
+     to keep up to date can fall behind; this one cannot. */
   position: fixed;
   top: 0;
   left: 0;
