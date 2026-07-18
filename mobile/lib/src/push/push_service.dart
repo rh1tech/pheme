@@ -7,6 +7,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../data/pheme_repository.dart';
@@ -151,11 +152,48 @@ Future<void> _showDecryptedInBackground(RemoteMessage message) async {
         channelDescription: _androidChannel.description,
         importance: Importance.high,
         priority: Priority.high,
+        largeIcon: await _avatarIcon(data['senderAvatar'] as String?),
         groupKey: conversationId.isEmpty ? null : conversationId,
       ),
       iOS: const DarwinNotificationDetails(),
     ),
   );
+}
+
+/// The sender's avatar, as the small round icon beside a notification.
+///
+/// Android draws nothing unless the client supplies the bytes: the URL travels in the payload but
+/// there is no field that makes the system fetch it, which is why these notifications had no
+/// picture at all. FCM's own `image` field is the wrong slot — that is the hero-photograph one, and
+/// an avatar put there renders full-width across the notification.
+///
+/// Best effort in every direction. It runs on the push path, where a slow or missing image must
+/// cost the notification nothing, so it is capped in both time and size and every failure returns
+/// null to draw the notification without a picture.
+Future<AndroidBitmap<Object>?> _avatarIcon(String? url) async {
+  if (url == null || url.isEmpty) return null;
+  try {
+    final res = await Dio().get<List<int>>(
+      url,
+      options: Options(
+        responseType: ResponseType.bytes,
+        // The image endpoint is unauthenticated, so no token is needed here — which is just as
+        // well, because the background isolate has no session to borrow one from.
+        sendTimeout: const Duration(seconds: 3),
+        receiveTimeout: const Duration(seconds: 3),
+      ),
+    );
+    final bytes = res.data;
+    // An avatar is a thumbnail. Anything past this is not one, and is not worth the memory in a
+    // background isolate that the system is entitled to kill.
+    if (bytes == null || bytes.isEmpty || bytes.length > 512 * 1024) {
+      return null;
+    }
+    return ByteArrayAndroidBitmap(Uint8List.fromList(bytes));
+  } on Object catch (e) {
+    debugPrint('Pheme: notification avatar unavailable: $e');
+    return null;
+  }
 }
 
 /// A stable, per-message notification id.
@@ -347,6 +385,7 @@ class PushService {
           channelDescription: _androidChannel.description,
           importance: Importance.high,
           priority: Priority.high,
+          largeIcon: await _avatarIcon(message.data['senderAvatar'] as String?),
           groupKey: groupKey,
         ),
         // threadIdentifier is what iOS groups on. The server already sets it for pushes the
