@@ -367,6 +367,28 @@ func (m *Memory) RevokedDeviceIDs(_ context.Context, userIDs []string) (map[stri
 	return out, nil
 }
 
+func (m *Memory) RevokeUserTokensBefore(_ context.Context, userID string, cutoff, expiresAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.revokedUsers == nil {
+		m.revokedUsers = map[string]userRevocation{}
+	}
+	m.revokedUsers[userID] = userRevocation{Cutoff: cutoff, ExpiresAt: expiresAt}
+	return nil
+}
+
+func (m *Memory) ActiveUserRevocations(_ context.Context, now time.Time) (map[string]time.Time, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := map[string]time.Time{}
+	for userID, rev := range m.revokedUsers {
+		if rev.ExpiresAt.After(now) {
+			out[userID] = rev.Cutoff
+		}
+	}
+	return out, nil
+}
+
 func (m *Memory) DeleteDevice(_ context.Context, deviceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -422,4 +444,11 @@ func (m *Memory) ResetMLSGroup(_ context.Context, conversationID string) (domain
 	c.MLS = domain.MLSGroupState{PriorGroupIDs: prior}
 	m.conversations[conversationID] = c
 	return c.MLS, nil
+}
+
+// userRevocation is a per-user token cutoff: every token issued before Cutoff is refused, until
+// ExpiresAt (past which the tokens would be rejected for expiry anyway).
+type userRevocation struct {
+	Cutoff    time.Time
+	ExpiresAt time.Time
 }

@@ -59,6 +59,12 @@ func main() {
 		logger.Error("session revoker hydrate", "error", err)
 		os.Exit(1)
 	}
+	// Per-user cutoffs too, for the devices a session id cannot name. A revocation that did not
+	// survive a restart would be undone by the next deploy.
+	if err := revoker.HydrateUsers(ctx); err != nil {
+		logger.Error("user revocation hydrate", "error", err)
+		os.Exit(1)
+	}
 	tokens.UseRevoker(revoker)
 	codes := b.Codes()
 	sender, err := b.Mailer()
@@ -82,12 +88,12 @@ func main() {
 
 	mux := http.NewServeMux()
 	(&channel.AuthHandler{
-		Store:        db,
-		Tokens:       tokens,
-		Codes:        codes,
-		Mailer:       sender,
-		AdminEmails:  adminEmails,
-		Logger:       logger,
+		Store:       db,
+		Tokens:      tokens,
+		Codes:       codes,
+		Mailer:      sender,
+		AdminEmails: adminEmails,
+		Logger:      logger,
 		// The refresh endpoint is public, so it checks revocation itself — otherwise a
 		// terminated session could refresh its way back in past the middleware.
 		Revoker:      revoker,

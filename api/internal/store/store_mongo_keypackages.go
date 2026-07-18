@@ -447,6 +447,38 @@ func (m *Mongo) RevokedDeviceIDs(ctx context.Context, userIDs []string) (map[str
 	return out, cur.Err()
 }
 
+// RevokeUserTokensBefore refuses every token this user holds that was issued before cutoff.
+func (m *Mongo) RevokeUserTokensBefore(ctx context.Context, userID string, cutoff, expiresAt time.Time) error {
+	_, err := m.db.Collection("revokedUsers").UpdateOne(
+		ctx,
+		bson.M{"userId": userID},
+		bson.M{"$set": bson.M{"cutoff": cutoff, "expiresAt": expiresAt}},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
+// ActiveUserRevocations returns the per-user cutoffs that have not yet expired.
+func (m *Mongo) ActiveUserRevocations(ctx context.Context, now time.Time) (map[string]time.Time, error) {
+	out := map[string]time.Time{}
+	cur, err := m.db.Collection("revokedUsers").Find(ctx, bson.M{"expiresAt": bson.M{"$gt": now}})
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	for cur.Next(ctx) {
+		var row struct {
+			UserID string    `bson:"userId"`
+			Cutoff time.Time `bson:"cutoff"`
+		}
+		if err := cur.Decode(&row); err != nil {
+			return nil, err
+		}
+		out[row.UserID] = row.Cutoff
+	}
+	return out, cur.Err()
+}
+
 // DeleteDevice removes one push device by id.
 func (m *Mongo) DeleteDevice(ctx context.Context, deviceID string) error {
 	_, err := m.db.Collection("devices").DeleteOne(ctx, bson.M{"_id": deviceID})

@@ -21,6 +21,7 @@ type Memory struct {
 	channels        map[string]domain.Channel
 	apiKeys         map[string]domain.APIKey
 	devices         map[string]domain.Device
+	revokedUsers    map[string]userRevocation
 	subscriptions   map[string]domain.Subscription
 	members         map[string]domain.ChannelMember
 	messages        map[string]domain.Message
@@ -46,6 +47,7 @@ func NewMemory(blobs blob.Store) *Memory {
 		channels:        map[string]domain.Channel{},
 		apiKeys:         map[string]domain.APIKey{},
 		devices:         map[string]domain.Device{},
+		revokedUsers:    map[string]userRevocation{},
 		subscriptions:   map[string]domain.Subscription{},
 		members:         map[string]domain.ChannelMember{},
 		messages:        map[string]domain.Message{},

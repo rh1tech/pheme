@@ -37,6 +37,9 @@ type Claims struct {
 // it; the field is optional so a TokenManager with no revoker simply never revokes.
 type sessionChecker interface {
 	IsRevoked(sessionID string) bool
+	// IsUserRevoked covers the device that IsRevoked cannot: one registered before session ids
+	// existed has none, so no revocation could ever match it. See SessionRevoker.userCutoff.
+	IsUserRevoked(userID string, issuedAt time.Time) bool
 }
 
 // TokenManager issues and verifies signed JWTs.

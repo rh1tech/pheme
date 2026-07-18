@@ -375,6 +375,12 @@ type Store interface {
 	// anyway. RevokeSession adds (or extends) an entry; ActiveRevokedSessions lists the
 	// ids still within their expiry, to hydrate the in-memory deny set at startup.
 	RevokeSession(ctx context.Context, sessionID string, expiresAt time.Time) error
+
+	// RevokeUserTokensBefore refuses every token a user holds that was issued before cutoff.
+	// The only thing that reaches a device whose session id was never recorded.
+	RevokeUserTokensBefore(ctx context.Context, userID string, cutoff, expiresAt time.Time) error
+	// ActiveUserRevocations returns the per-user cutoffs still in force.
+	ActiveUserRevocations(ctx context.Context, now time.Time) (map[string]time.Time, error)
 	ActiveRevokedSessions(ctx context.Context, now time.Time) ([]string, error)
 
 	// Admin

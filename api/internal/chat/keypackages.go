@@ -193,13 +193,31 @@ func (h *Handler) terminateDevice(w http.ResponseWriter, r *http.Request) {
 
 	// Revoke its login. Best effort past the KeyPackage delete: if this fails the device is
 	// already crypto-severed (no leaf, no keys), and its token dies on its own expiry.
-	if h.Revoker != nil && target.SessionID != "" {
+	if h.Revoker != nil {
 		ttl := h.SessionTTL
 		if ttl <= 0 {
 			ttl = 24 * time.Hour
 		}
-		if err := h.Revoker.Revoke(r.Context(), target.SessionID, time.Now().Add(ttl)); err != nil {
-			h.logger().Error("terminate device: revoke session", "error", err)
+		now := time.Now()
+		if target.SessionID != "" {
+			if err := h.Revoker.Revoke(r.Context(), target.SessionID, now.Add(ttl)); err != nil {
+				h.logger().Error("terminate device: revoke session", "error", err)
+			}
+		} else {
+			// No session id to name — this device registered before they were recorded, so there
+			// is nothing a per-session revocation can match and it would keep its API access
+			// indefinitely. With a live session it can still fetch ciphertext, which is what turns
+			// a leaf that outlived its pruning from inert into a way to go on reading.
+			//
+			// So end them all for this user. It signs their other devices out too, which is
+			// heavy-handed and is the honest answer to "remove a device I cannot identify" —
+			// better than reporting success while the device carries on.
+			if err := h.Revoker.RevokeUserBefore(r.Context(), uid, now, now.Add(ttl)); err != nil {
+				h.logger().Error("terminate device: revoke user sessions", "user", uid, "error", err)
+			} else {
+				h.logger().Warn("terminate device: no session id, signed out every session for this user",
+					"user", uid, "device", deviceID)
+			}
 		}
 	}
 

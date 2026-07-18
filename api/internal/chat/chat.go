@@ -58,6 +58,10 @@ type Handler struct {
 	// terminating a device then still severs its crypto, but its token lives out its TTL.
 	Revoker interface {
 		Revoke(ctx context.Context, sessionID string, expiresAt time.Time) error
+		// RevokeUserBefore ends EVERY session a user holds that predates the cutoff. The only
+		// thing that reaches a device registered before session ids were recorded: it has none,
+		// so no per-session revocation can match it and it could not be signed out at all.
+		RevokeUserBefore(ctx context.Context, userID string, cutoff, expiresAt time.Time) error
 	}
 	// SessionTTL is how far ahead a revoked session's deny entry is kept — the refresh
 	// token's lifetime, past which the token is rejected on expiry anyway.

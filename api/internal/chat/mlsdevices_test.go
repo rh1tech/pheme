@@ -288,3 +288,51 @@ func TestTerminatedDeviceIsAdvertisedAsRevoked(t *testing.T) {
 		t.Errorf("the owner still sees a terminated device in their own list: %s", rec.Body)
 	}
 }
+
+// The device a per-session revocation cannot reach.
+//
+// Session ids are recorded on registration, but a device that registered before that field existed
+// has none — so there is nothing for a revocation to match, and "terminate this device" left it
+// with working API access indefinitely. Every other defence assumes that access is gone: the MLS
+// leaf may outlive its pruning in a group, and a device that can still call the API can fetch the
+// ciphertext its leaf still opens.
+//
+// Unable to name the one session, terminating it ends them all for that user. Heavy-handed, and
+// the honest answer to "remove a device I cannot identify".
+func TestTerminatingASessionlessDeviceSignsTheUserOut(t *testing.T) {
+	f := newFixture(t)
+	uid, tok := f.user(t, "sessionless@pheme.test")
+
+	// A token carrying NO session id, which is what a client issued before session ids existed
+	// holds. Registering with it is what records the device with a blank SessionID — writing a
+	// blank one afterwards does not work, because UpsertMLSDevice deliberately refuses to erase a
+	// known session id.
+	sessionless, _, err := f.tokens.IssueWithSession(uid, string(domain.RoleUser), "")
+	if err != nil {
+		t.Fatalf("issue sessionless: %v", err)
+	}
+	f.publishDevice(t, sessionless, "dev-old", "Ancient browser")
+
+	// Both tokens work before.
+	if rec := f.do(http.MethodGet, "/v1/mls/devices", sessionless, nil); rec.Code != http.StatusOK {
+		t.Fatalf("pre-terminate sessionless: got %d", rec.Code)
+	}
+	if rec := f.do(http.MethodGet, "/v1/mls/devices", tok, nil); rec.Code != http.StatusOK {
+		t.Fatalf("pre-terminate: got %d", rec.Code)
+	}
+
+	if rec := f.do(http.MethodDelete, "/v1/mls/devices/dev-old", tok, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("terminate: got %d", rec.Code)
+	}
+
+	// The terminated device's own token is dead — the point of the whole exercise.
+	if rec := f.do(http.MethodGet, "/v1/mls/devices", sessionless, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("the terminated sessionless device is still signed in: got %d, want 401", rec.Code)
+	}
+
+	// And so is every other session this user holds, which is the cost of not being able to name
+	// the one. Documented here so the bluntness is a decision rather than a surprise.
+	if rec := f.do(http.MethodGet, "/v1/mls/devices", tok, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("post-terminate: got %d, want 401 — the user's other sessions should end too", rec.Code)
+	}
+}

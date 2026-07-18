@@ -75,6 +75,14 @@ func (m *TokenManager) Middleware(next http.Handler) http.Handler {
 			unauthorized(w)
 			return
 		}
+		// ...or if every token this user holds from before a cutoff was refused. That is the only
+		// thing that reaches a device whose session id was never recorded, which no per-session
+		// revocation can match.
+		if m.revoker != nil && claims.IssuedAt != nil &&
+			m.revoker.IsUserRevoked(claims.Subject, claims.IssuedAt.Time) {
+			unauthorized(w)
+			return
+		}
 		ctx := WithUserID(r.Context(), claims.Subject)
 		ctx = WithRole(ctx, claims.Role)
 		ctx = WithSessionID(ctx, claims.SID)
