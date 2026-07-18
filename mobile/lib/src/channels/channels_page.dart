@@ -178,10 +178,14 @@ class ChannelsPage extends ConsumerWidget {
     final l10n = context.l10n;
     return SliverFillRemaining(
       hasScrollBody: false,
+      // Sat mid-screen, by way of a hardcoded 96px top padding, while pointing at a button in the
+      // bottom corner — the reader had to travel the length of the screen to connect the sentence
+      // to the thing it names. Held to the bottom instead, just above the button it refers to.
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 96, 24, 24),
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 96),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.end,
           children: [
             Icon(
               isCupertino(context)
