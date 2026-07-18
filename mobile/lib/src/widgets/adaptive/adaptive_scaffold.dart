@@ -73,7 +73,14 @@ class AdaptiveScaffold extends StatelessWidget {
         actions: trailing.isEmpty ? null : trailing,
       ),
       floatingActionButton: floatingActionButton,
-      body: body,
+      // The iOS branch above has always wrapped its body; this one did not, and under the
+      // edge-to-edge enforcement that Flutter applies on Android the last rows of any scrolling
+      // page render underneath the system gesture bar. On Settings that is the Logout button,
+      // which is what "the settings screen is truncated" was.
+      //
+      // top: false because the AppBar already handles the status bar — adding it here would inset
+      // the body twice.
+      body: SafeArea(top: false, child: body),
     );
   }
 }

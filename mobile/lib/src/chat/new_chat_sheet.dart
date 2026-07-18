@@ -26,6 +26,9 @@ Future<void> showNewChatSheet(BuildContext context) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
+    // Without this the sheet runs under the status bar and the notch on a tall screen, which is
+    // visible the moment it is given a fixed near-full height.
+    useSafeArea: true,
     showDragHandle: true,
     builder: (_) => const _NewChatSheet(),
   );
@@ -142,107 +145,113 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
-    final insets = MediaQuery.viewInsetsOf(context).bottom;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: insets),
-      child: SafeArea(
-        top: false,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * 0.85,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      l10n.t(
-                        _groupMode ? 'chat.newGroupTitle' : 'chat.newChatTitle',
-                      ),
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+    // A FIXED height, and the keyboard is left to overlay it rather than to resize it.
+    //
+    // Before, the sheet was as tall as its contents (mainAxisSize.min over a Flexible results
+    // area) and the keyboard's height was subtracted from its box. So it opened nearly full
+    // screen, and the moment the user typed, it collapsed to around 60% — partly because the
+    // keyboard appeared, partly because the results area shrinks to a placeholder while the query
+    // is under two characters. The sheet jumped about while being typed into.
+    //
+    // Now it stays where it opened. The results list carries the keyboard inset as bottom padding,
+    // so everything can still be scrolled out from behind the keyboard.
+    return SafeArea(
+      top: false,
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.92,
+        child: Column(
+          mainAxisSize: MainAxisSize.max,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    l10n.t(
+                      _groupMode ? 'chat.newGroupTitle' : 'chat.newChatTitle',
                     ),
-                    const SizedBox(height: 12),
-                    SegmentedButton<bool>(
-                      segments: [
-                        ButtonSegment(
-                          value: false,
-                          label: Text(l10n.t('chat.newChat')),
-                        ),
-                        ButtonSegment(
-                          value: true,
-                          label: Text(l10n.t('chat.newGroup')),
-                        ),
-                      ],
-                      selected: {_groupMode},
-                      onSelectionChanged: (s) => setState(() {
-                        _groupMode = s.first;
-                        _picked.clear();
-                      }),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
-                    if (_groupMode) ...[
-                      const SizedBox(height: 12),
-                      AdaptiveTextField(
-                        controller: _groupTitle,
-                        placeholder: l10n.t('chat.groupNamePlaceholder'),
-                        onChanged: (_) => setState(() {}),
+                  ),
+                  const SizedBox(height: 12),
+                  SegmentedButton<bool>(
+                    segments: [
+                      ButtonSegment(
+                        value: false,
+                        label: Text(l10n.t('chat.newChat')),
                       ),
-                      if (_picked.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            for (final user in _picked)
-                              Chip(
-                                label: Text(userLabel(user)),
-                                onDeleted: () =>
-                                    setState(() => _picked.remove(user)),
-                              ),
-                          ],
-                        ),
-                      ],
+                      ButtonSegment(
+                        value: true,
+                        label: Text(l10n.t('chat.newGroup')),
+                      ),
                     ],
+                    selected: {_groupMode},
+                    onSelectionChanged: (s) => setState(() {
+                      _groupMode = s.first;
+                      _picked.clear();
+                    }),
+                  ),
+                  if (_groupMode) ...[
                     const SizedBox(height: 12),
                     AdaptiveTextField(
-                      controller: _query,
-                      placeholder: l10n.t('chat.searchPeople'),
-                      onChanged: _onQueryChanged,
+                      controller: _groupTitle,
+                      placeholder: l10n.t('chat.groupNamePlaceholder'),
+                      onChanged: (_) => setState(() {}),
                     ),
+                    if (_picked.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final user in _picked)
+                            Chip(
+                              label: Text(userLabel(user)),
+                              onDeleted: () =>
+                                  setState(() => _picked.remove(user)),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
+                  const SizedBox(height: 12),
+                  AdaptiveTextField(
+                    controller: _query,
+                    placeholder: l10n.t('chat.searchPeople'),
+                    onChanged: _onQueryChanged,
+                  ),
+                ],
+              ),
+            ),
+            Expanded(child: _results_(l10n, theme)),
+            if (_groupMode)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: AdaptiveButton.filled(
+                  onPressed:
+                      _busy ||
+                          _picked.isEmpty ||
+                          _groupTitle.text.trim().isEmpty
+                      ? null
+                      : _createGroup,
+                  child: _busy
+                      ? const AdaptiveProgress(size: 18)
+                      : Text(l10n.t('chat.createGroup')),
                 ),
               ),
-              Flexible(child: _results_(l10n, theme)),
-              if (_groupMode)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                  child: AdaptiveButton.filled(
-                    onPressed:
-                        _busy ||
-                            _picked.isEmpty ||
-                            _groupTitle.text.trim().isEmpty
-                        ? null
-                        : _createGroup,
-                    child: _busy
-                        ? const AdaptiveProgress(size: 18)
-                        : Text(l10n.t('chat.createGroup')),
-                  ),
-                ),
-            ],
-          ),
+          ],
         ),
       ),
     );
   }
 
   Widget _results_(AppLocalizations l10n, ThemeData theme) {
+    // The sheet no longer shrinks for the keyboard, so the list has to make room for it itself.
+    final insets = MediaQuery.viewInsetsOf(context).bottom;
     if (_searching) {
       return const Padding(
         padding: EdgeInsets.all(24),
@@ -266,7 +275,7 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
     }
 
     return ListView.builder(
-      shrinkWrap: true,
+      padding: EdgeInsets.only(bottom: insets),
       itemCount: _results.length,
       itemBuilder: (context, i) {
         final user = _results[i];

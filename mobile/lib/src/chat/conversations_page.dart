@@ -1,5 +1,6 @@
 // The conversation list.
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -72,6 +73,16 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
           icon: Icons.add,
           semanticLabel: l10n.t('chat.newChat'),
           onPressed: () => showNewChatSheet(context),
+        ),
+        // Settings used to live only on the Channels tab, so someone who only uses Chats had no
+        // route to them at all — including to the notification-preview setting, which is about
+        // chats. /settings is a top-level route; both tabs can reach the same screen.
+        AdaptiveIconButton(
+          icon: isCupertino(context)
+              ? CupertinoIcons.settings
+              : Icons.settings_outlined,
+          semanticLabel: l10n.t('common.settings'),
+          onPressed: () => context.push('/settings'),
         ),
       ],
       body: Column(
