@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Group, Text } from '@mantine/core'
 import { IconBellOff } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
-import { getWebPushState, registerWebPushDevice } from '../lib/webpush'
+import { getWebPushState, registerWebPushDevice, syncWebPushDevice } from '../lib/webpush'
 import { saveWebDeviceId } from '../lib/device'
 import { notifyError, notifySuccess } from '../lib/notify'
 
@@ -19,6 +19,11 @@ export function NotificationsBanner() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
+    // Bring an already-subscribed browser's device record up to date with what this build can do.
+    // Not the banner's own job conceptually, but this is the one component that runs on every
+    // authenticated page and already knows about push. Guarded to once per load inside.
+    void syncWebPushDevice()
+
     let active = true
     getWebPushState()
       .then((s) => {

@@ -3,6 +3,7 @@
 // for the Pheme device registry.
 
 import { api } from './api'
+import { saveWebDeviceId } from './device'
 import { SERVICE_WORKER_URL } from './sw'
 
 /** Reports whether the browser supports Web Push. */
@@ -94,6 +95,41 @@ function subscriptionMatchesKey(sub: PushSubscription, vapidPublicKey: string): 
     if (a[i] !== b[i]) return false
   }
   return true
+}
+
+/**
+ * Re-registers a browser whose push is ALREADY on, so its device record catches up with what this
+ * build can do.
+ *
+ * A device record is not just an address, it is a statement of capability — the server withholds
+ * message previews from any device that has not said it can decrypt one, because sending a
+ * data-only push to a client that cannot render it shows the user nothing at all.
+ *
+ * That gate had no way to ever open on web. `registerWebPushDevice` was only reachable from the
+ * enable-notifications banner, and the banner renders nothing once notifications are on — so every
+ * browser that had already enabled them kept whatever capability it declared the day it first
+ * subscribed, forever. Previews were shipped and silently withheld from everyone who had been
+ * using the app the longest.
+ *
+ * Safe to call on every load: the subscription is reused rather than recreated, and the server
+ * upserts the device by its push endpoint rather than making a second one. Once per page load
+ * regardless, because two components render the banner.
+ */
+let syncStarted = false
+
+export async function syncWebPushDevice(): Promise<void> {
+  if (syncStarted) return
+  syncStarted = true
+  try {
+    const state = await getWebPushState()
+    // Only for a browser that is already subscribed. This must never be the thing that ASKS for
+    // permission — that is the banner's job, on a deliberate click.
+    if (!state.supported || state.permission !== 'granted' || !state.subscribed) return
+    saveWebDeviceId(await registerWebPushDevice())
+  } catch {
+    // Nothing here is worth interrupting a page load for. The cost of failing is that previews
+    // stay off for this browser until the next attempt.
+  }
 }
 
 /**
