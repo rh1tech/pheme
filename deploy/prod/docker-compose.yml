@@ -63,7 +63,16 @@ services:
       PHEME_BROKER_DRIVER: rabbit
       PHEME_LIVE_DRIVER: redis
       PHEME_RATELIMIT_DRIVER: redis
-      PHEME_PUSH_DRIVER: webpush
+      # The APP sends chat notifications itself — a conversation message is pushed straight from
+      # the request path (chat.notifyMembers), not handed to the dispatcher. So the app needs FCM
+      # too, and for a long time it did not: this was hardcoded to `webpush`, the FCM sender was
+      # therefore never built here, and EVERY Android device was silently skipped for every chat
+      # message. Web push worked, so nothing looked broken.
+      #
+      # The dispatcher's comment ("only the dispatcher fans out") was true when it was written and
+      # stopped being true when chat arrived.
+      PHEME_PUSH_DRIVER: ${PHEME_PUSH_DRIVER:-webpush}
+      PHEME_FCM_CREDENTIALS: /run/secrets/fcm-service-account.json
       PHEME_MONGO_URI: "mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/?authSource=admin"
       PHEME_MONGO_DB: pheme
       # Absolute App API base for image URLs in push notifications (reuses the
@@ -100,6 +109,11 @@ services:
     ports:
       - "127.0.0.1:${APP_HOST_PORT}:8080"
 
+    volumes:
+      # The same Firebase service-account key the dispatcher mounts. See the note there for the
+      # ownership the distroless non-root user (uid 65532) needs.
+      - ${PHEME_FCM_CREDENTIALS_HOST:-/opt/pheme/fcm-service-account.json}:/run/secrets/fcm-service-account.json:ro
+
   ingest:
     image: ${API_IMAGE}
     restart: unless-stopped
@@ -122,10 +136,9 @@ services:
       redis: { condition: service_healthy }
     environment:
       <<: *service_env
-      # Mobile push via FCM (in addition to Web Push). Only the dispatcher fans
-      # out, so FCM credentials live here and nowhere else. Enabled per-env by
-      # setting PHEME_PUSH_DRIVER=both in that env's stack.env; defaults to
-      # webpush so environments without FCM configured are unaffected.
+      # Mobile push via FCM, in addition to Web Push. Enabled per-env by setting
+      # PHEME_PUSH_DRIVER=both in that env's stack.env; defaults to webpush so an environment
+      # without FCM configured is unaffected. The app service needs the same pair — see there.
       PHEME_PUSH_DRIVER: ${PHEME_PUSH_DRIVER:-webpush}
       PHEME_FCM_CREDENTIALS: /run/secrets/fcm-service-account.json
     volumes:
