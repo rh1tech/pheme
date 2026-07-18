@@ -11,19 +11,28 @@
 // See mls/preview.js for why that is safe; the short version is that the page keeps its own
 // unconsumed copy of the key and reads the message again for real when the app opens.
 //
-// Loaded lazily, on the first push that actually carries a preview: it pulls in 1.2 MB of WASM,
-// and a user who has previews turned off — or a browser with no key material — must never pay
-// for it. importScripts is synchronous, so it happens inside the handler rather than at top level.
+// AT TOP LEVEL, and it has to be. This was loaded lazily inside the push handler, on the reasoning
+// that a user without previews should not pay for the code — and it silently never worked.
+//
+// A service worker's importScripts() may only fetch a URL that is already in its script resource
+// map, and a URL only gets there by being imported during initial evaluation or the install event
+// (Service Workers spec §6.3.2). Called from a push handler, on a worker that is "activated", it
+// throws NetworkError. The catch below turned that into a generic notification, so every preview
+// quietly degraded to "New message" with nothing anywhere to say why.
+//
+// The 1.2 MB of WASM is still lazy, which is the part that actually mattered: it is fetched by
+// wasm_bindgen inside preview.js, and fetch() has no such lifecycle restriction.
+//
+// Wrapped, because a service worker whose top-level script throws does not install AT ALL — and
+// that would take calls and every other notification down with it. Previews are worth having;
+// they are not worth the whole worker.
 let previewLoaded = false
-function loadPreview() {
-  if (previewLoaded) return true
-  try {
-    importScripts('/mls/preview.js')
-    previewLoaded = true
-  } catch {
-    previewLoaded = false
-  }
-  return previewLoaded
+try {
+  importScripts('/mls/preview.js')
+  previewLoaded = true
+} catch (e) {
+  // An old deploy, a 404, a cache miss. Notifications carry on without previews.
+  console.warn('pheme sw: previews unavailable', e)
 }
 
 // The message text for a push, or null to fall back to the server's generic body.
@@ -33,7 +42,7 @@ function loadPreview() {
 // working notification; one that says nothing because a decrypt threw is not.
 async function previewBody(data) {
   if (!data.ciphertext || !data.conversationId) return null
-  if (!loadPreview() || typeof self.phemeDecryptPreview !== 'function') return null
+  if (!previewLoaded || typeof self.phemeDecryptPreview !== 'function') return null
   try {
     return await self.phemeDecryptPreview(data.conversationId, data.ciphertext)
   } catch {

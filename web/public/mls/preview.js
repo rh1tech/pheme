@@ -31,20 +31,26 @@ const DB_STORE = 'mls'
 const STATE_KEY = 'client-state'
 const GROUPS_KEY = 'group-ids'
 
+// The wasm-bindgen GLUE, imported at top level for the same reason sw.js imports this file at top
+// level: a service worker may only importScripts a URL already in its script resource map, and a
+// URL only gets there during initial evaluation or install. Called later — from a push handler —
+// it throws NetworkError. See Service Workers spec §6.3.2.
+//
+// 43 KB of JavaScript, which is the cost of being correct here. The 1.2 MB BINARY stays lazy: it
+// is fetched by wasm_bindgen() below, and fetch() carries no such restriction.
+importScripts(WASM_GLUE)
+
 let wasmReady = null
 
-// Loads the MLS WASM once per worker lifetime. The worker is short-lived and restarted freely, so
-// this may run again on the next push; that is fine and costs a fetch the browser has cached.
+// Instantiates the MLS WASM once per worker lifetime. The worker is short-lived and restarted
+// freely, so this may run again on the next push; that costs a fetch the browser has cached.
 function ensureWasm() {
   if (!wasmReady) {
-    wasmReady = (async () => {
-      importScripts(WASM_GLUE)
-      // The glue normally infers the binary's URL from document.currentScript, which does not exist
-      // in a worker — so it is passed explicitly. Same binary the app uses: the two wasm-pack
-      // targets differ only in their JavaScript glue, so there is one .wasm and no chance of the
-      // worker running a different build of the crypto than the page.
-      await wasm_bindgen({ module_or_path: WASM_BINARY })
-    })().catch((e) => {
+    // The glue normally infers the binary's URL from document.currentScript, which does not exist
+    // in a worker — so it is passed explicitly. Same binary the app uses: the two wasm-pack
+    // targets differ only in their JavaScript glue, so there is one .wasm and no chance of the
+    // worker running a different build of the crypto than the page.
+    wasmReady = wasm_bindgen({ module_or_path: WASM_BINARY }).catch((e) => {
       wasmReady = null // let a later push retry rather than being poisoned by one bad load
       throw e
     })
