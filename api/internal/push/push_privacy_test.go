@@ -25,13 +25,19 @@ func TestChatPayload_DefaultShowsSenderAndAvatar(t *testing.T) {
 	if n.Title != "Ada" {
 		t.Errorf("title = %q, want Ada", n.Title)
 	}
-	if want := "https://pheme.example/v1/images/img-1"; n.Image != want {
-		t.Errorf("image = %q, want %q", n.Image, want)
+	// ICON, not Image. An avatar is a face and belongs in the small round slot; Image is the
+	// hero-picture slot, and an avatar put there renders full-width — which is exactly what
+	// Android did with it.
+	if want := "https://pheme.example/v1/images/img-1"; n.Icon != want {
+		t.Errorf("icon = %q, want %q", n.Icon, want)
 	}
-	if n.Data["senderAvatar"] != n.Image {
-		t.Errorf("Data[senderAvatar] = %q, want it to match Image %q — the Android client re-renders "+
-			"foreground notifications itself and has no other way to reach the avatar",
-			n.Data["senderAvatar"], n.Image)
+	if n.Image != "" {
+		t.Errorf("image = %q, want empty: a chat push carries a face, never a photograph, and "+
+			"FCM renders Image full-width", n.Image)
+	}
+	if n.Data["senderAvatar"] != n.Icon {
+		t.Errorf("Data[senderAvatar] = %q, want it to match Icon %q — the Android client draws the "+
+			"avatar itself and has no other way to reach it", n.Data["senderAvatar"], n.Icon)
 	}
 }
 
@@ -50,9 +56,9 @@ func TestChatPayload_GenericRevealsNoIdentity(t *testing.T) {
 	if n.Title != fallbackTitle {
 		t.Errorf("title = %q, want %q — a generic push must not name the sender", n.Title, fallbackTitle)
 	}
-	if n.Image != "" {
-		t.Errorf("image = %q, want empty: an avatar is a picture of the sender, so showing it "+
-			"identifies them just as surely as their name does", n.Image)
+	if n.Icon != "" {
+		t.Errorf("icon = %q, want empty: an avatar is a picture of the sender, so showing it "+
+			"identifies them just as surely as their name does", n.Icon)
 	}
 	if n.Data["senderAvatar"] != "" {
 		t.Errorf("Data[senderAvatar] = %q, want empty", n.Data["senderAvatar"])
@@ -129,8 +135,8 @@ func TestChatPayload_CallIsNotGroupedWithMessages(t *testing.T) {
 // image on a lock screen looks like a broken app.
 func TestChatPayload_NoAvatarWithoutPublicBaseURL(t *testing.T) {
 	n := chatNotificationPayload("", ChatNotification{SenderName: "Ada", SenderAvatarID: "img-1"})
-	if n.Image != "" {
-		t.Errorf("image = %q, want empty when no public base URL is configured", n.Image)
+	if n.Icon != "" {
+		t.Errorf("icon = %q, want empty when no public base URL is configured", n.Icon)
 	}
 }
 
@@ -362,7 +368,7 @@ func TestChatPayload_MaximumPayloadFitsPushLimits(t *testing.T) {
 	})
 
 	encoded, err := json.Marshal(webPushPayload{
-		Title: n.Title, Body: n.Body, Image: n.Image, Data: n.Data,
+		Title: n.Title, Body: n.Body, Icon: n.Icon, Data: n.Data,
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -418,7 +424,7 @@ func TestChatPayload_HostileDisplayNameCannotSuppressTheNotification(t *testing.
 	})
 
 	encoded, err := json.Marshal(webPushPayload{
-		Title: n.Title, Body: n.Body, Image: n.Image, Data: n.Data,
+		Title: n.Title, Body: n.Body, Icon: n.Icon, Data: n.Data,
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -453,7 +459,7 @@ func TestChatPayload_HostileDisplayNameStillDeliversWithoutPreview(t *testing.T)
 		Privacy:        domain.NotificationPrivacySender,
 	})
 	encoded, _ := json.Marshal(webPushPayload{
-		Title: n.Title, Body: n.Body, Image: n.Image, Data: n.Data,
+		Title: n.Title, Body: n.Body, Icon: n.Icon, Data: n.Data,
 	})
 	if len(encoded) > maxPushPayload {
 		t.Errorf("payload is %d bytes, over the %d-byte limit even with no preview", len(encoded), maxPushPayload)

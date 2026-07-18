@@ -98,8 +98,8 @@ const maxPushPayload = 4096 - 128
 // a payload sized for it fits FCM and APNs as well. Measuring rather than reasoning is the point:
 // every field here is either user-supplied or built from user-supplied parts, and JSON escaping
 // can multiply any of them by six.
-func payloadFits(title, body, image string, data map[string]string) bool {
-	encoded, err := json.Marshal(webPushPayload{Title: title, Body: body, Image: image, Data: data})
+func payloadFits(title, body, icon string, data map[string]string) bool {
+	encoded, err := json.Marshal(webPushPayload{Title: title, Body: body, Icon: icon, Data: data})
 	if err != nil {
 		return false
 	}
@@ -190,8 +190,18 @@ type Sender interface {
 type notification struct {
 	Title string
 	Body  string
+	// Image is a PHOTOGRAPH — a channel post's picture, which IS the notification and belongs in
+	// the big hero slot below the text.
 	Image string
-	Data  map[string]string
+	// Icon is a FACE — the sender's avatar, which belongs in the small round slot beside the title.
+	//
+	// Separate from Image because the platforms take them differently and putting one where the
+	// other goes looks broken in both directions: an avatar in the hero slot fills the notification
+	// with a blown-up 40px face, and a photo in the icon slot shrinks to an unreadable thumbnail.
+	// The web service worker already distinguished these; FCM did not, which is how a chat push
+	// came to render the sender's avatar full-width on Android.
+	Icon string
+	Data map[string]string
 	// TTL is how long the push service should keep trying to deliver this, in seconds. A
 	// ringing call is worthless once it has stopped ringing — delivering it two minutes late
 	// shows somebody an incoming call that no longer exists.
@@ -258,9 +268,9 @@ const defaultTTL = 60
 
 func chatNotificationPayload(publicBaseURL string, n ChatNotification) notification {
 	title := n.displayName()
-	image := ""
+	icon := ""
 	if n.identifies() {
-		image = avatarURL(publicBaseURL, n.SenderAvatarID)
+		icon = avatarURL(publicBaseURL, n.SenderAvatarID)
 	}
 	body := chatBody
 	switch n.Kind {
@@ -281,8 +291,8 @@ func chatNotificationPayload(publicBaseURL string, n ChatNotification) notificat
 	// The avatar travels in the data as well as in the notification payload, because the
 	// Android client re-renders the notification itself when the app is foregrounded and has
 	// no other way to reach it.
-	if image != "" {
-		data["senderAvatar"] = image
+	if icon != "" {
+		data["senderAvatar"] = icon
 	}
 	// The encrypted body, for the device to decrypt and show. Base64 because a push payload is
 	// JSON; still ciphertext, and still unreadable to everything it passes through — this
@@ -315,7 +325,7 @@ func chatNotificationPayload(publicBaseURL string, n ChatNotification) notificat
 		// So nothing here is trusted to be the size it looks. The payload is built, weighed, and
 		// the preview — the one part that is a convenience rather than the notification itself —
 		// is what gives way.
-		if !payloadFits(title, body, image, data) {
+		if !payloadFits(title, body, icon, data) {
 			// Unwind the whole preview, not just its ciphertext: the data copies of the title and
 			// body exist only to serve a client-rendered notification, and leaving them behind
 			// would keep paying for a feature that is no longer happening.
@@ -349,9 +359,10 @@ func chatNotificationPayload(publicBaseURL string, n ChatNotification) notificat
 	}
 
 	return notification{
-		Title:       title,
-		Body:        body,
-		Image:       image,
+		Title: title,
+		Body:  body,
+		// A chat push carries a face, never a photo.
+		Icon:        icon,
 		Data:        data,
 		TTL:         n.ttl(),
 		Urgent:      isCall,

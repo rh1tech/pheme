@@ -236,11 +236,16 @@ const Map<String, String> enStrings = {
   'settings.device': 'This device',
   'settings.deviceRegistered': 'Registered for push notifications',
   'settings.deviceNotRegistered': 'Not registered for push notifications',
-  'settings.showSender': 'Show who messaged you',
-  'settings.showSenderHint':
-      'Notifications show the sender’s name and picture. Turn this off and they '
-      'only say a message arrived. Message text is never shown either way — it '
-      'is encrypted, and the server cannot read it.',
+  'settings.lockScreenHint':
+      'Your device decrypts messages itself. The server only ever holds encrypted '
+      'text and cannot read your messages whichever option you pick.',
+  'settings.previewMessage': 'The message',
+  'settings.previewMessageHint': 'Sender, picture, and what they said.',
+  'settings.previewSender': 'Just who sent it',
+  'settings.previewSenderHint': 'Their name and picture, but not the message.',
+  'settings.previewGeneric': 'Nothing',
+  'settings.previewGenericHint':
+      'Only that a message arrived. Best for a shared or overlooked screen.',
   'settings.notificationPrivacyFailed': 'Could not save that setting',
   'settings.account': 'Account',
   'settings.profile': 'Profile',

@@ -135,8 +135,12 @@ func buildMessage(token string, n notification) *messaging.Message {
 	}
 	if trayRendered {
 		msg.Notification = &messaging.Notification{
-			Title:    n.Title,
-			Body:     n.Body,
+			Title: n.Title,
+			Body:  n.Body,
+			// Image ONLY — never Icon. FCM's image is the full-width hero picture, and an avatar
+			// put there fills the notification with an enlarged face. FCM has no field for a small
+			// round icon from a URL at all, so a chat's avatar is carried in the data instead and
+			// drawn by the client as a largeIcon (see push_service.dart).
 			ImageURL: n.Image,
 		}
 	}
@@ -147,8 +151,6 @@ func buildMessage(token string, n notification) *messaging.Message {
 		CollapseKey: n.CollapseKey,
 	}
 	if trayRendered && n.Image != "" {
-		// The sender's avatar, shown as the notification's large image. Only set alongside a
-		// notification payload: a data-only push (a call) is rendered by the client, not the tray.
 		msg.Android.Notification = &messaging.AndroidNotification{ImageURL: n.Image}
 	}
 

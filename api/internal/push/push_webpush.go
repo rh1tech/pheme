@@ -30,10 +30,13 @@ func NewWebPushSender(vapidPublic, vapidPrivate, subscriber, publicBaseURL strin
 }
 
 type webPushPayload struct {
-	Title string            `json:"title"`
-	Body  string            `json:"body"`
-	Image string            `json:"image,omitempty"`
-	Data  map[string]string `json:"data,omitempty"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	// A channel post's photograph, for the notification's hero slot.
+	Image string `json:"image,omitempty"`
+	// A sender's avatar, for the small round slot. See notification.Icon.
+	Icon string            `json:"icon,omitempty"`
+	Data map[string]string `json:"data,omitempty"`
 }
 
 // Send delivers a channel message to each device with a Web Push subscription.
@@ -49,7 +52,9 @@ func (s *WebPushSender) SendChat(ctx context.Context, n ChatNotification, device
 // send delivers one notification to each device with a Web Push subscription.
 // Devices without one are reported as skipped.
 func (s *WebPushSender) send(ctx context.Context, n notification, devices []domain.Device) ([]Result, error) {
-	payload, err := json.Marshal(webPushPayload{Title: n.Title, Body: n.Body, Image: n.Image, Data: n.Data})
+	payload, err := json.Marshal(webPushPayload{
+		Title: n.Title, Body: n.Body, Image: n.Image, Icon: n.Icon, Data: n.Data,
+	})
 	if err != nil {
 		return nil, err
 	}

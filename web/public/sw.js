@@ -110,22 +110,17 @@ self.addEventListener('push', (event) => {
   // Suppress a message notification for a chat the user is already looking at: it is on their
   // screen over the live stream, so a second buzz is only noise. See isViewing. Calls are exempt —
   // a ringing call must always surface, even from inside the chat.
-  // The same `image` field means two different things depending on what sent the push, and the two
-  // must not be rendered the same way.
-  //
-  // A CHAT push carries the sender's avatar — a face, which belongs in the small round slot beside
-  // the title (`icon`). A CHANNEL push carries the post's own photograph, which is the point of the
-  // notification and belongs in the large hero slot below the text (`image`). Putting an avatar in
-  // `image` blows a 40px face up to full width; putting a photo in `icon` shrinks it to a thumbnail
-  // nobody can read.
-  const isChat = Boolean(data.conversationId)
+  // Two separate fields now, decided by the server rather than inferred here. A chat sends `icon`
+  // (the sender's face, for the small round slot); a channel sends `image` (the post's photograph,
+  // for the hero slot). This used to be one field that the worker guessed the meaning of — and FCM,
+  // which had no such guess, rendered avatars full-width on Android.
   const title = payload.title || 'Pheme'
   const options = {
     body: payload.body || '',
     // Absent on a chat when the sender has no avatar, or when the recipient asked not to be told
     // who is messaging them — the server decides which, and simply sends nothing.
-    icon: isChat ? payload.image || undefined : undefined,
-    image: isChat ? undefined : payload.image || undefined,
+    icon: payload.icon || undefined,
+    image: payload.image || undefined,
     // One notification per call, per conversation, or per channel — replaced as newer ones
     // arrive. A call is tagged by the CALL, not the conversation: it has to be closable on its
     // own when it stops ringing, and it must not be replaced by an ordinary message.

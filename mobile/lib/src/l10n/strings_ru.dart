@@ -236,11 +236,16 @@ const Map<String, String> ruStrings = {
   'settings.device': 'Это устройство',
   'settings.deviceRegistered': 'Зарегистрировано для push-уведомлений',
   'settings.deviceNotRegistered': 'Не зарегистрировано для push-уведомлений',
-  'settings.showSender': 'Показывать отправителя',
-  'settings.showSenderHint':
-      'Уведомления показывают имя и фото отправителя. Если выключить, они лишь '
-      'сообщат, что пришло сообщение. Текст сообщения не показывается в любом '
-      'случае — он зашифрован, и сервер не может его прочитать.',
+  'settings.lockScreenHint':
+      'Расшифровка происходит на вашем устройстве. Сервер хранит только '
+      'зашифрованный текст и не может прочитать ваши сообщения ни при одном из вариантов.',
+  'settings.previewMessage': 'Сообщение',
+  'settings.previewMessageHint': 'Отправитель, фото и текст сообщения.',
+  'settings.previewSender': 'Только отправителя',
+  'settings.previewSenderHint': 'Имя и фото, но без текста сообщения.',
+  'settings.previewGeneric': 'Ничего',
+  'settings.previewGenericHint':
+      'Только факт, что пришло сообщение. Подходит для общего или видного экрана.',
   'settings.notificationPrivacyFailed': 'Не удалось сохранить настройку',
   'settings.account': 'Аккаунт',
   'settings.profile': 'Профиль',

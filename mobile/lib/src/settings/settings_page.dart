@@ -23,42 +23,57 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     text: ref.read(settingsControllerProvider).baseUrl,
   );
 
-  /// Whether notifications on this account may name the sender.
+  /// How much this account's notifications may reveal: 'preview', 'sender' or 'generic'.
   ///
   /// It lives here and not in [SettingsState] because it is a property of the ACCOUNT, not
   /// of this handset: it has to hold on every device the user signs in on, and SettingsState
   /// is device-local secure storage that never reaches the server. Null while loading, and
-  /// if the load fails — the switch stays hidden rather than showing a default that might be
+  /// if the load fails — the control stays hidden rather than showing a default that might be
   /// the opposite of the truth and silently rewriting it on the first tap.
-  bool? _showSender;
+  ///
+  /// This was a BOOLEAN, and that was a bug rather than a simplification: a switch can only
+  /// express two of the three options, so it wrote 'sender' or 'generic' and there was no way
+  /// to ask for a message preview at all. Turning it on and getting no preview was the correct
+  /// behaviour of the wrong control.
+  String? _privacy;
+
+  /// The three options, in order of how much they reveal. Declared once so the Material and
+  /// Cupertino trees cannot come to disagree about what the choices are — which is precisely how
+  /// the previous control ended up unable to express one of them.
+  static const _privacyOptions = <(String, String, String)>[
+    ('preview', 'settings.previewMessage', 'settings.previewMessageHint'),
+    ('sender', 'settings.previewSender', 'settings.previewSenderHint'),
+    ('generic', 'settings.previewGeneric', 'settings.previewGenericHint'),
+  ];
 
   @override
   void initState() {
     super.initState();
-    _loadShowSender();
+    _loadPrivacy();
   }
 
-  Future<void> _loadShowSender() async {
+  Future<void> _loadPrivacy() async {
     try {
       final me = await ref.read(repositoryProvider).getMe();
-      if (mounted) setState(() => _showSender = me.showsSender);
+      // Absent means the account predates the setting, which behaves as 'sender'.
+      if (mounted) {
+        setState(() => _privacy = me.notificationPrivacy ?? 'sender');
+      }
     } on Object {
-      // Leave it null: better no switch than one showing a state we could not confirm.
+      // Leave it null: better no control than one showing a state we could not confirm.
     }
   }
 
-  Future<void> _setShowSender(bool value) async {
-    final previous = _showSender;
-    // Optimistic: a privacy switch that lags behind the finger feels broken. Rolled back below
+  Future<void> _setPrivacy(String value) async {
+    final previous = _privacy;
+    // Optimistic: a privacy control that lags behind the finger feels broken. Rolled back below
     // if the server refuses, so it can never end up showing something the account does not say.
-    setState(() => _showSender = value);
+    setState(() => _privacy = value);
     try {
-      await ref
-          .read(repositoryProvider)
-          .updateMe(notificationPrivacy: value ? 'sender' : 'generic');
+      await ref.read(repositoryProvider).updateMe(notificationPrivacy: value);
     } on Object {
       if (!mounted) return;
-      setState(() => _showSender = previous);
+      setState(() => _privacy = previous);
       notifyError(
         context,
         context.l10n.t('settings.notificationPrivacyFailed'),
@@ -208,14 +223,29 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 : l10n.t('settings.deviceNotRegistered'),
           ),
         ),
-        if (_showSender != null)
-          SwitchListTile.adaptive(
-            secondary: const Icon(Icons.visibility_outlined),
-            title: Text(l10n.t('settings.showSender')),
-            subtitle: Text(l10n.t('settings.showSenderHint')),
-            value: _showSender!,
-            onChanged: _setShowSender,
+        if (_privacy != null) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Text(
+              l10n.t('settings.lockScreenHint'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
+          // A tapped row with a check, rather than RadioListTile: the Radio group API is
+          // deprecated in favour of a RadioGroup ancestor, and this matches the Cupertino tree
+          // exactly, so the two cannot drift into looking like different features.
+          for (final option in _privacyOptions)
+            ListTile(
+              leading: Icon(
+                option.$1 == _privacy
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+              ),
+              title: Text(l10n.t(option.$2)),
+              subtitle: Text(l10n.t(option.$3)),
+              onTap: () => _setPrivacy(option.$1),
+            ),
+        ],
         const Divider(height: 24),
         _SectionHeader(title: l10n.t('settings.account')),
         ListTile(
@@ -322,16 +352,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     : l10n.t('settings.deviceNotRegistered'),
               ),
             ),
-            if (_showSender != null)
-              CupertinoListTile.notched(
-                leading: const Icon(CupertinoIcons.eye),
-                title: Text(l10n.t('settings.showSender')),
-                subtitle: Text(l10n.t('settings.showSenderHint')),
-                trailing: CupertinoSwitch(
-                  value: _showSender!,
-                  onChanged: _setShowSender,
+            if (_privacy != null)
+              for (final option in _privacyOptions)
+                CupertinoListTile.notched(
+                  leading: Icon(
+                    option.$1 == _privacy
+                        ? CupertinoIcons.checkmark_circle_fill
+                        : CupertinoIcons.circle,
+                  ),
+                  title: Text(l10n.t(option.$2)),
+                  subtitle: Text(l10n.t(option.$3)),
+                  onTap: () => _setPrivacy(option.$1),
                 ),
-              ),
           ],
         ),
         CupertinoListSection.insetGrouped(
