@@ -18,8 +18,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path_provider_foundation/path_provider_foundation.dart';
@@ -153,12 +153,23 @@ class MlsStore {
     var source = file;
     if (!await file.exists()) {
       final legacy = await _legacyStateFileHandle();
-      if (legacy.path == file.path || !await legacy.exists()) return null;
+      if (legacy.path == file.path || !await legacy.exists()) {
+        // No key store at all: a fresh install, or one whose keys have not been restored yet.
+        // Said out loud because all three nulls below look identical to a caller, and telling them
+        // apart from the outside previously took a device and a guess.
+        debugPrint('Pheme: MLS state absent — no key store on this device');
+        return null;
+      }
       source = legacy;
     }
 
     final key = await _dataKey();
-    if (key == null) return null;
+    if (key == null) {
+      // The blob is here but its key is not: the keystore entry was lost, or on iOS the device has
+      // not been unlocked since boot and the accessibility class makes it unreadable right now.
+      debugPrint('Pheme: MLS state present but the data key is unreadable');
+      return null;
+    }
 
     try {
       return await vaultOpen(
@@ -166,7 +177,8 @@ class MlsStore {
         key: key,
         sealed: await source.readAsBytes(),
       );
-    } on Object {
+    } on Object catch (e) {
+      debugPrint('Pheme: MLS state will not open: $e');
       return null;
     }
   }
