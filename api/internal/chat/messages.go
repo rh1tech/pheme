@@ -127,6 +127,28 @@ var pushSlots = make(chan struct{}, maxConcurrentPushes)
 // in the background: a slow push service must not slow down sending a message, and
 // a failed push must not fail it either, since the message is already stored and
 // the live stream has it.
+// pruneDeadDevices removes push addresses the push service has declared permanently dead.
+//
+// Nothing used to. FCM answered UNREGISTERED for a token that had been rotated or whose app had
+// been uninstalled, the web push service answered 410 for a dropped subscription, and both were
+// recorded in a Result that no one read — so the row stayed and was pushed to on every message for
+// the life of the account. One phone had four rows, three of which could never receive anything.
+//
+// Only on GONE, never on a plain failure: a device must not lose its registration because the
+// network was down or a push service had a bad minute.
+func (h *Handler) pruneDeadDevices(ctx context.Context, results []push.Result) {
+	for _, r := range results {
+		if !r.Gone || r.DeviceID == "" {
+			continue
+		}
+		if err := h.Store.DeleteDevice(ctx, r.DeviceID); err != nil {
+			h.logger().Error("chat push: prune dead device", "device", r.DeviceID, "error", err)
+			continue
+		}
+		h.logger().Info("chat push: pruned a dead push address", "device", r.DeviceID, "reason", r.Error)
+	}
+}
+
 func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage) {
 	// Control messages (the MLS Welcome that lets a member join) are protocol
 	// traffic, not something a human sent. Never notify for them.
@@ -208,7 +230,7 @@ func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage)
 			if key.privacy.ShowsPreview() && key.rendersPreview {
 				preview = loadGroupIDs()
 			}
-			if _, err := h.Push.SendChat(ctx, push.ChatNotification{
+			results, err := h.Push.SendChat(ctx, push.ChatNotification{
 				ConversationID:       convID,
 				MessageID:            msg.ID,
 				SenderName:           name,
@@ -221,9 +243,11 @@ func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage)
 				Ciphertext:  msg.Ciphertext,
 				ContentType: msg.ContentType,
 				GroupIDs:    preview,
-			}, group); err != nil {
+			}, group)
+			if err != nil {
 				log.Error("chat push: send", "conversation", convID, "privacy", string(key.privacy), "error", err)
 			}
+			h.pruneDeadDevices(ctx, results)
 		}
 	}()
 }

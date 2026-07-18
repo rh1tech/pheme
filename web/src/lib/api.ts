@@ -338,10 +338,17 @@ export const api = {
    * a word of the conversation. It cannot be answered by claiming, because claiming
    * destroys what it hands back.
    */
+  /**
+   * Which devices each co-member has, and which of them have been REVOKED.
+   *
+   * The revoked set is what lets a leaf be pruned after its device was terminated. Terminating a
+   * device deletes its KeyPackages, so it otherwise looks identical to a device that has simply
+   * never published any — and that case is deliberately left alone.
+   */
   mlsDevices: (conversationId: string) =>
-    request<{ devices: Record<string, string[]> }>(
+    request<{ devices: Record<string, string[]>; revoked?: Record<string, string[]> }>(
       `/v1/conversations/${conversationId}/mls/devices`,
-    ).then((r) => r.devices ?? {}),
+    ).then((r) => ({ published: r.devices ?? {}, revoked: r.revoked ?? {} })),
 
   /**
    * Claims one KeyPackage per named DEVICE, so each can be added to a group as its own

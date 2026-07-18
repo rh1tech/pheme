@@ -17,6 +17,15 @@ type Result struct {
 	DeviceID string
 	Status   domain.DeliveryStatus
 	Error    string
+	// Gone means the push service says this ADDRESS is permanently dead — the app was
+	// uninstalled, the token was rotated, the browser subscription was dropped — as opposed to a
+	// delivery that merely failed and might work next time.
+	//
+	// Nothing used to act on this. A dead address stayed in the collection and was pushed to on
+	// every message forever, which is how one account accumulated four Android rows for one phone.
+	// Only the newest could ever receive anything; the other three were pure waste, retried for
+	// the life of the account.
+	Gone bool
 }
 
 // ChatNotification is the push for a conversation message.

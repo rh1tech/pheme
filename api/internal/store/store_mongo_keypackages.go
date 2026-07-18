@@ -407,6 +407,52 @@ func (m *Mongo) DeletePushDevicesForMLSDevice(ctx context.Context, userID, mlsDe
 	return res.DeletedCount, nil
 }
 
+// RevokeMLSDevice marks a device terminated, keeping the row as a tombstone.
+func (m *Mongo) RevokeMLSDevice(ctx context.Context, userID, deviceID string, at time.Time) error {
+	res, err := m.db.Collection("mlsDevices").UpdateOne(
+		ctx,
+		bson.M{"userId": userID, "deviceId": deviceID},
+		bson.M{"$set": bson.M{"revokedAt": at}},
+	)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RevokedDeviceIDs returns the terminated device ids per user.
+func (m *Mongo) RevokedDeviceIDs(ctx context.Context, userIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(userIDs))
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	cur, err := m.db.Collection("mlsDevices").Find(ctx, bson.M{
+		"userId":    bson.M{"$in": userIDs},
+		"revokedAt": bson.M{"$exists": true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	for cur.Next(ctx) {
+		var d domain.MLSDevice
+		if err := cur.Decode(&d); err != nil {
+			return nil, err
+		}
+		out[d.UserID] = append(out[d.UserID], d.DeviceID)
+	}
+	return out, cur.Err()
+}
+
+// DeleteDevice removes one push device by id.
+func (m *Mongo) DeleteDevice(ctx context.Context, deviceID string) error {
+	_, err := m.db.Collection("devices").DeleteOne(ctx, bson.M{"_id": deviceID})
+	return err
+}
+
 // RevokeSession records a terminated session's id in the deny list, keyed by the id so a
 // repeat revoke just refreshes its expiry. The token is rejected on expiry regardless, so
 // the stored expiry is only there to let entries be reaped once they can no longer matter.

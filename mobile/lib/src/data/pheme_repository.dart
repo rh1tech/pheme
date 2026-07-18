@@ -648,15 +648,28 @@ class PhemeRepository {
 
   /// Every device every member has published, as `userId -> [deviceId]`. Consumes nothing — this is
   /// the directory reconciliation diffs against.
-  Future<Map<String, List<String>>> mlsDevices(String conversationId) async {
+  /// Which devices each co-member has, and which of them have been REVOKED.
+  ///
+  /// The revoked set is what lets a leaf be pruned after its device was terminated. Terminating a
+  /// device deletes its KeyPackages, so it otherwise looks identical to a device that has simply
+  /// never published any — and that case is deliberately left alone.
+  Future<
+    ({Map<String, List<String>> published, Map<String, List<String>> revoked})
+  >
+  mlsDevices(String conversationId) async {
     final d = await _get('/v1/conversations/$conversationId/mls/devices');
-    final devices = (d['devices'] as Map?) ?? const {};
-    return devices.map(
-      (k, v) => MapEntry(
-        k as String,
-        ((v as List?) ?? const []).map((e) => e as String).toList(),
-      ),
-    );
+    Map<String, List<String>> parse(Object? raw) {
+      final map = (raw as Map?) ?? const {};
+      return map.map(
+        (k, v) => MapEntry(
+          k as String,
+          ((v as List?) ?? const []).map((e) => e as String).toList(),
+        ),
+      );
+    }
+
+    // An older server sends no "revoked" key at all; an empty map prunes exactly as much as before.
+    return (published: parse(d['devices']), revoked: parse(d['revoked']));
   }
 
   /// Claims one KeyPackage per named device. Each is single-use, so this consumes stock.

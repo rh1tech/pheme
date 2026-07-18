@@ -226,3 +226,58 @@ func (f *fixture) capableDevice(t *testing.T, userID string) string {
 	}
 	return d.ID
 }
+
+// A push address the push service has declared permanently dead has to be removed, or it is
+// retried on every message for the life of the account.
+//
+// Nothing used to read the Result. FCM answered UNREGISTERED for rotated tokens and uninstalled
+// apps, the web push service answered 410 for dropped subscriptions, and the rows stayed — one
+// phone accumulated four, three of which could never receive anything.
+func TestDeadPushAddressesArePruned(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	dead, err := f.store.CreateDevice(ctx, domain.Device{
+		UserID:   "u1",
+		Platform: domain.PlatformAndroid,
+		FCMToken: "rotated-away",
+	})
+	if err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+	live, err := f.store.CreateDevice(ctx, domain.Device{
+		UserID:   "u1",
+		Platform: domain.PlatformAndroid,
+		FCMToken: "still-good",
+	})
+	if err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+
+	f.handler.pruneDeadDevices(ctx, []push.Result{
+		{DeviceID: dead.ID, Status: domain.DeliveryFailed, Gone: true, Error: "UNREGISTERED"},
+		// A plain failure must NOT cost a device its registration: the network being down for a
+		// moment is not the same as the address being dead.
+		{DeviceID: live.ID, Status: domain.DeliveryFailed, Error: "timeout"},
+	})
+
+	devices, err := f.store.DevicesForUsers(ctx, []string{"u1"})
+	if err != nil {
+		t.Fatalf("devices: %v", err)
+	}
+	var sawDead, sawLive bool
+	for _, d := range devices {
+		if d.ID == dead.ID {
+			sawDead = true
+		}
+		if d.ID == live.ID {
+			sawLive = true
+		}
+	}
+	if sawDead {
+		t.Error("a permanently dead push address survived; it will be retried forever")
+	}
+	if !sawLive {
+		t.Error("a device was pruned for a transient failure")
+	}
+}

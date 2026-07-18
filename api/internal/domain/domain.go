@@ -727,6 +727,19 @@ type MLSDevice struct {
 	SessionID  string    `bson:"sessionId,omitempty" json:"-"`
 	CreatedAt  time.Time `bson:"createdAt" json:"createdAt"`
 	LastSeenAt time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
+	// RevokedAt is set when the device was terminated. The row is KEPT rather than deleted,
+	// because its absence is precisely what could not be distinguished from "a device that never
+	// existed".
+	//
+	// Co-members prune a revoked device's leaf out of the group, and the only signal they had was
+	// published KeyPackages: a device with none was treated as unknowable and left alone, on the
+	// reasoning that it might belong to someone who had never opened Pheme. But terminating a
+	// device DELETES its KeyPackages — so a terminated device looked exactly like a brand-new one,
+	// and the pruning that was supposed to sever its access skipped it. Deleting every device on an
+	// account made that certain rather than likely.
+	//
+	// A tombstone says the difference out loud.
+	RevokedAt *time.Time `bson:"revokedAt,omitempty" json:"revokedAt,omitempty"`
 }
 
 // RevokedSession records one auth session that has been terminated before its token

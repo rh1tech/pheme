@@ -80,6 +80,11 @@ func (s *FCMSender) send(ctx context.Context, n notification, devices []domain.D
 			res.Status = domain.DeliveryFailed
 			if r.Error != nil {
 				res.Error = r.Error.Error()
+				// UNREGISTERED is FCM saying this token will never work again: the app was
+				// uninstalled, or the token was rotated and this is the old one. A sender-id
+				// mismatch is the same finality from a different cause — the token belongs to
+				// another Firebase project and cannot ever be delivered to by this one.
+				res.Gone = messaging.IsUnregistered(r.Error) || messaging.IsSenderIDMismatch(r.Error)
 			}
 		}
 		results = append(results, res)

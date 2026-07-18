@@ -88,6 +88,10 @@ func (s *WebPushSender) send(ctx context.Context, n notification, devices []doma
 				DeviceID: d.ID,
 				Status:   domain.DeliveryFailed,
 				Error:    fmt.Sprintf("push service returned %d: %s", resp.StatusCode, string(body)),
+				// 404 and 410 are the Web Push spec's way of saying the subscription is gone for
+				// good — the user cleared site data, or the browser dropped it. Every other status
+				// may be transient and must not cost the device its registration.
+				Gone: resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone,
 			})
 			continue
 		}

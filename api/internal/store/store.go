@@ -350,6 +350,14 @@ type Store interface {
 	ListMLSDevices(ctx context.Context, userID string) ([]domain.MLSDevice, error)
 	DeleteMLSDevice(ctx context.Context, userID, deviceID string) error
 
+	// RevokeMLSDevice tombstones a device rather than forgetting it, so co-members can tell a
+	// terminated device from one that has simply never published keys. See domain.MLSDevice.
+	RevokeMLSDevice(ctx context.Context, userID, deviceID string, at time.Time) error
+
+	// RevokedDeviceIDs returns the terminated device ids for each of the given users, so their
+	// co-members know which leaves to prune out of a group.
+	RevokedDeviceIDs(ctx context.Context, userIDs []string) (map[string][]string, error)
+
 	// DeletePushDevicesForMLSDevice removes the push addresses belonging to one MLS device, so that
 	// terminating a device actually stops it being pushed to.
 	//
@@ -357,6 +365,10 @@ type Store interface {
 	// and there was no field joining the two registries, so a revoked device kept its subscription
 	// and kept receiving messages. Returns the number removed, for the audit line.
 	DeletePushDevicesForMLSDevice(ctx context.Context, userID, mlsDeviceID string) (int64, error)
+
+	// DeleteDevice removes one push device by id. Used to prune an address the push service has
+	// told us is permanently dead; see push.Result.Gone.
+	DeleteDevice(ctx context.Context, deviceID string) error
 
 	// Auth session revocation — the deny list behind "terminate this device". Auth tokens
 	// are stateless, so revoking one means recording its session id until it would expire

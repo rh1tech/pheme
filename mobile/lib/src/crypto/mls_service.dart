@@ -504,7 +504,7 @@ class MlsService {
     Conversation conversation,
     String myUserId,
   ) async {
-    final published = await _repo.mlsDevices(conversation.id);
+    final published = (await _repo.mlsDevices(conversation.id)).published;
     final targets = _missingDevices(session, published, const []);
 
     // Nobody else is reachable. For a direct chat that is the whole conversation, and the user needs
@@ -575,7 +575,18 @@ class MlsService {
     for (var attempt = 0; attempt < _commitAttempts; attempt++) {
       final members = await _repo.listConversationMembers(conversationId);
       final memberIds = members.map((m) => m.userId).toSet();
-      final published = await _repo.mlsDevices(conversationId);
+      final directory = await _repo.mlsDevices(conversationId);
+      final revoked = directory.revoked;
+      // Never ADD back a device that has been revoked. Its KeyPackages are deleted on termination,
+      // so normally it is not here at all — but that delete is one step of several, and a revoked
+      // device that still had a claimable package would otherwise be welcomed straight back in by
+      // the very reconciliation meant to be removing it.
+      final published = <String, List<String>>{
+        for (final e in directory.published.entries)
+          e.key: e.value
+              .where((id) => !(revoked[e.key] ?? const <String>[]).contains(id))
+              .toList(),
+      };
       final leaves = await session.memberIdentities(groupId);
 
       // Prune first — a leaf that should not be there must not still be in the group when we go and
@@ -587,7 +598,7 @@ class MlsService {
       // missing, which is the part somebody is actually waiting on.
       final stale = refused.isNotEmpty
           ? const <String>[]
-          : _staleLeaves(session, leaves, memberIds, published);
+          : _staleLeaves(session, leaves, memberIds, published, revoked);
 
       if (stale.isNotEmpty) {
         final CommitOutcome outcome;
@@ -703,6 +714,7 @@ class MlsService {
     List<String> leaves,
     Set<String> memberIds,
     Map<String, List<String>> published,
+    Map<String, List<String>> revoked,
   ) {
     final out = <String>[];
     for (final leaf in leaves) {
@@ -719,6 +731,15 @@ class MlsService {
 
       if (!memberIds.contains(userId)) {
         out.add(leaf); // departed member
+        continue;
+      }
+      // A REVOKED device, said so by the server. Checked BEFORE the bail below: terminating a
+      // device deletes its KeyPackages, so a revoked device has none published and would otherwise
+      // be waved through as "cannot tell" — which is how a device whose access had just been
+      // removed kept its leaf, and with it everything sent afterwards. Deleting every device on an
+      // account made that certain rather than merely likely.
+      if ((revoked[userId] ?? const <String>[]).contains(deviceOf(leaf))) {
+        out.add(leaf);
         continue;
       }
       final devices = published[userId] ?? const <String>[];
@@ -945,7 +966,7 @@ class MlsService {
 
     await _repo.addConversationMember(conversationId, newUserId);
 
-    final devices = await _repo.mlsDevices(conversationId);
+    final devices = (await _repo.mlsDevices(conversationId)).published;
     if ((devices[newUserId] ?? const []).isEmpty) {
       await _repo
           .removeConversationMember(conversationId, newUserId)

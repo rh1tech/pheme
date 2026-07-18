@@ -170,7 +170,21 @@ func (h *Handler) terminateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete its KeyPackages first, so that even if a later step fails the device can no
+	// Tombstone FIRST, before anything else is taken away.
+	//
+	// The order matters more than it looks. Deleting the KeyPackages is what makes a terminated
+	// device indistinguishable from one that never published any — and "never published any" is
+	// treated by every co-member as "leave its leaf alone". So if the tombstone were written last
+	// and failed, the device would be invisible to BOTH signals, which is exactly the broken state
+	// this is meant to end. Written first, a failure anywhere later leaves a device that is
+	// tombstoned but still has claimable packages, which reconciliation recovers from.
+	if err := h.Store.RevokeMLSDevice(r.Context(), uid, deviceID, time.Now().UTC()); err != nil {
+		h.logger().Error("terminate device: tombstone", "device", deviceID, "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not terminate device")
+		return
+	}
+
+	// Delete its KeyPackages next, so that even if a later step fails the device can no
 	// longer be handed out to a group and re-added behind the user's back.
 	if err := h.Store.DeleteKeyPackages(r.Context(), uid, deviceID); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not terminate device")
@@ -203,9 +217,8 @@ func (h *Handler) terminateDevice(w http.ResponseWriter, r *http.Request) {
 		h.logger().Info("terminate device: push addresses removed", "device", deviceID, "count", removed)
 	}
 
-	if err := h.Store.DeleteMLSDevice(r.Context(), uid, deviceID); err != nil {
-		h.logger().Error("terminate device: forget device", "error", err)
-	}
+	// The row itself STAYS, as the tombstone written at the top. Forgetting it is what made a
+	// revoked device look new, and a device that looks new keeps its leaf in every group.
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -222,7 +235,16 @@ func (h *Handler) listMyDevices(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not list devices")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"devices": devices})
+	// Terminated devices are kept as tombstones now, so they have to be filtered out here or a
+	// device the user just removed would reappear in their own list — which reads as the removal
+	// having failed.
+	live := make([]domain.MLSDevice, 0, len(devices))
+	for _, d := range devices {
+		if d.RevokedAt == nil {
+			live = append(live, d)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"devices": live})
 }
 
 type registerDeviceRequest struct {
@@ -386,7 +408,18 @@ func (h *Handler) listDevices(w http.ResponseWriter, r *http.Request) {
 			devices[uid] = []string{}
 		}
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"devices": devices})
+	// The terminated ones, so co-members can prune their leaves. Sent ALONGSIDE the existing map
+	// rather than folded into it: an older client reads only "devices" and is unaffected.
+	//
+	// A device id is not a secret — it names a leaf that every member of the group can already
+	// enumerate from the group state itself.
+	revoked, err := h.Store.RevokedDeviceIDs(r.Context(), userIDs)
+	if err != nil {
+		// Not fatal. Without it a co-member prunes exactly as much as it did before.
+		h.logger().Error("list devices: revoked", "error", err)
+		revoked = map[string][]string{}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"devices": devices, "revoked": revoked})
 }
 
 // memberIDs is the conversation's membership as a set, for authorization checks.

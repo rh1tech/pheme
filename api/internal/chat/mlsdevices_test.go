@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"slices"
+	"strings"
 )
 
 // publishDevice registers a device under the given token's session, so its KeyPackages and its
@@ -237,5 +239,52 @@ func TestTerminateDeviceRemovesItsPushAddresses(t *testing.T) {
 	}
 	if kept != 1 {
 		t.Errorf("kept push addresses for the surviving device = %d, want 1", kept)
+	}
+}
+
+// A terminated device must be visible to its co-members as REVOKED, so they can prune its leaf.
+//
+// Termination deletes the device's KeyPackages, which is what made this impossible: a revoked
+// device then looks identical to one that has never published any, and that case is deliberately
+// left alone (it may be someone who has not opened Pheme yet). So the pruning meant to sever a
+// revoked device's access skipped it — guaranteed, not merely likely, when a user deletes ALL
+// their devices, because then nobody has any published packages at all.
+func TestTerminatedDeviceIsAdvertisedAsRevoked(t *testing.T) {
+	f := newFixture(t)
+	uid, tok := f.user(t, "revoker@pheme.test")
+	_, peerTok := f.user(t, "peer@pheme.test")
+	conv := f.createDirect(t, peerTok, uid)
+
+	f.publishDevice(t, tok, "dev-live", "Laptop")
+	f.publishDevice(t, tok, "dev-dead", "Old browser")
+	publish(t, f, tok, "dev-dead", [][]byte{[]byte("kp-1")})
+
+	if rec := f.do(http.MethodDelete, "/v1/mls/devices/dev-dead", tok, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("terminate: got %d", rec.Code)
+	}
+
+	rec := f.do(http.MethodGet, "/v1/conversations/"+conv+"/mls/devices", peerTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list devices: got %d", rec.Code)
+	}
+	var got struct {
+		Devices map[string][]string `json:"devices"`
+		Revoked map[string][]string `json:"revoked"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !slices.Contains(got.Revoked[uid], "dev-dead") {
+		t.Errorf("revoked = %v, want it to name dev-dead — without this a co-member cannot tell a "+
+			"terminated device from one that never published keys, and leaves its leaf in place",
+			got.Revoked)
+	}
+	if slices.Contains(got.Revoked[uid], "dev-live") {
+		t.Errorf("revoked = %v, want it to name ONLY the terminated device", got.Revoked)
+	}
+	// And the owner's own list must not show it, or the removal reads as having failed.
+	rec = f.do(http.MethodGet, "/v1/mls/devices", tok, nil)
+	if strings.Contains(rec.Body.String(), "dev-dead") {
+		t.Errorf("the owner still sees a terminated device in their own list: %s", rec.Body)
 	}
 }

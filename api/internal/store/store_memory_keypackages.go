@@ -334,6 +334,46 @@ func (m *Memory) DeletePushDevicesForMLSDevice(_ context.Context, userID, mlsDev
 	return removed, nil
 }
 
+func (m *Memory) RevokeMLSDevice(_ context.Context, userID, deviceID string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := mlsDeviceKey(userID, deviceID)
+	d, ok := m.mlsDevices[key]
+	if !ok {
+		return ErrNotFound
+	}
+	d.RevokedAt = &at
+	m.mlsDevices[key] = d
+	return nil
+}
+
+func (m *Memory) RevokedDeviceIDs(_ context.Context, userIDs []string) (map[string][]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	wanted := make(map[string]struct{}, len(userIDs))
+	for _, id := range userIDs {
+		wanted[id] = struct{}{}
+	}
+	out := make(map[string][]string, len(userIDs))
+	for _, d := range m.mlsDevices {
+		if d.RevokedAt == nil {
+			continue
+		}
+		if _, ok := wanted[d.UserID]; !ok {
+			continue
+		}
+		out[d.UserID] = append(out[d.UserID], d.DeviceID)
+	}
+	return out, nil
+}
+
+func (m *Memory) DeleteDevice(_ context.Context, deviceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.devices, deviceID)
+	return nil
+}
+
 func (m *Memory) RevokeSession(_ context.Context, sessionID string, expiresAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

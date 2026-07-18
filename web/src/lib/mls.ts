@@ -1025,7 +1025,7 @@ async function establishGroup(
   conversation: Conversation,
   myUserId: string,
 ): Promise<string | null> {
-  const published = await api.mlsDevices(conversation.id)
+  const { published } = await api.mlsDevices(conversation.id)
   const targets = missingDevices(session, published, [])
 
   // Nobody else is reachable. For a direct chat that is the whole conversation, and the
@@ -1099,7 +1099,17 @@ async function reconcileDevices(
   for (let attempt = 0; attempt < COMMIT_ATTEMPTS; attempt++) {
     const members = await api.listConversationMembers(conversationId)
     const memberIds = members.map((m) => m.userId)
-    const published = await api.mlsDevices(conversationId)
+    const { published: allPublished, revoked } = await api.mlsDevices(conversationId)
+    // Never ADD back a device that has been revoked. Its KeyPackages are deleted on termination,
+    // so normally it is not here at all — but that delete is one step of several, and a revoked
+    // device that still has a claimable package would otherwise be welcomed straight back into the
+    // group by the very reconciliation that is meant to be removing it.
+    const published = Object.fromEntries(
+      Object.entries(allPublished).map(([userId, deviceIds]) => [
+        userId,
+        deviceIds.filter((id) => !(revoked[userId] ?? []).includes(id)),
+      ]),
+    )
     const leaves = await session.memberIdentities(groupId)
 
     // Prune first — a leaf that should not be there must not still be in the group when we
@@ -1109,7 +1119,7 @@ async function reconcileDevices(
     // is refused, and that is fine — pruning a departed member or a ghost device is
     // hygiene, and it waits for an admin. What must NOT happen is the refusal stopping us
     // from ADDING the devices that are missing, which is the part somebody is waiting on.
-    const stale = pruned.length > 0 ? [] : staleLeaves(session, leaves, memberIds, published)
+    const stale = pruned.length > 0 ? [] : staleLeaves(session, leaves, memberIds, published, revoked)
     if (stale.length > 0) {
       let result: 'accepted' | 'conflict'
       try {
@@ -1179,6 +1189,7 @@ function staleLeaves(
   leaves: string[],
   memberIds: string[],
   published: Record<string, string[]>,
+  revoked: Record<string, string[]>,
 ): string[] {
   const members = new Set(memberIds)
   const out: string[] = []
@@ -1198,6 +1209,15 @@ function staleLeaves(
     const userId = leaf.slice(0, sep)
     if (!members.has(userId)) {
       out.push(leaf) // departed member
+      continue
+    }
+    // A REVOKED device, said so by the server. This has to be checked before the bail below:
+    // terminating a device deletes its KeyPackages, so a revoked device has none published and
+    // would otherwise be waved through as "cannot tell" — which is how a device that had just had
+    // its access removed kept its leaf, and with it the ability to read everything sent afterwards.
+    // Deleting every device on an account made that certain rather than merely likely.
+    if ((revoked[userId] ?? []).includes(deviceOf(leaf))) {
+      out.push(leaf)
       continue
     }
     const devices = published[userId] ?? []
@@ -1629,7 +1649,7 @@ export async function addGroupMember(
   // them back off the roster, so an admin is told they could not be reached rather than
   // being left with a member who can never read anything.
   await api.addConversationMember(conversationId, newUserId)
-  const devices = await api.mlsDevices(conversationId)
+  const { published: devices } = await api.mlsDevices(conversationId)
   if ((devices[newUserId] ?? []).length === 0) {
     await api.removeConversationMember(conversationId, newUserId).catch(() => {})
     throw new PeerKeysMissingError()
