@@ -27,6 +27,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../crypto/chat_cache.dart';
+import '../crypto/chat_content.dart';
 import '../crypto/mls_store.dart';
 import '../rust/api/mls.dart' as rust;
 import '../rust/frb_generated.dart';
@@ -61,6 +63,7 @@ Future<String?> decryptNotificationPreview({
   required String conversationId,
   required String? ciphertextBase64,
   String? groupIdsCsv,
+  String? messageId,
 }) async {
   if (ciphertextBase64 == null || ciphertextBase64.isEmpty) return null;
   if (conversationId.isEmpty) return null;
@@ -121,6 +124,19 @@ Future<String?> decryptNotificationPreview({
         'Pheme: no preview — held ${outcome.groupsHeld} of '
         '${outcome.groupsOffered} offered group(s), none could read it',
       );
+      // Holding the group and still failing usually means the APP GOT THERE FIRST. A running app
+      // stays connected, receives the message over SSE, decrypts it for real — which destroys the
+      // message key, because that is what forward secrecy is — and writes the advanced ratchet to
+      // disk. This snapshot then has nothing left to decrypt with.
+      //
+      // Which is not a loss, because the app wrote the body down. It has to: a message decrypts
+      // exactly once, so the cache is the only copy that will ever exist. Reading it back is
+      // strictly better than showing "New message" about a message this device has already read.
+      //
+      // Same sealed-at-rest data key as the state, and still a pure read.
+      if (outcome.groupsHeld > 0) {
+        return await _cachedBody(conversationId, messageId);
+      }
       return null;
     }
 
@@ -129,6 +145,33 @@ Future<String?> decryptNotificationPreview({
     // Deliberately broad. Anything at all here — no key material, a state blob from a newer build,
     // a malformed payload — must degrade to the generic notification rather than lose it.
     debugPrint('Pheme: notification preview unavailable: $e');
+    return null;
+  }
+}
+
+/// The body this device already decrypted and wrote down, if it is there.
+///
+/// Returns null for a photo with no caption, for the same reason _bodyOf does: a preview is one
+/// line on a lock screen, and inventing the word "Photo" is a claim about content this path should
+/// not be making.
+Future<String?> _cachedBody(String conversationId, String? messageId) async {
+  if (messageId == null || messageId.isEmpty) return null;
+  try {
+    final cache = ChatCache(const FlutterSecureStorage());
+    final bodies = await cache.load(conversationId);
+    final serialised = bodies[messageId];
+    if (serialised == null) {
+      debugPrint(
+        'Pheme: no preview — the app has not read that message either',
+      );
+      return null;
+    }
+    final body = parseContent(Uint8List.fromList(utf8.encode(serialised))).body;
+    if (body.isEmpty) return null;
+    debugPrint('Pheme: preview served from the body the app already decrypted');
+    return body;
+  } on Object catch (e) {
+    debugPrint('Pheme: cached body unavailable: $e');
     return null;
   }
 }
