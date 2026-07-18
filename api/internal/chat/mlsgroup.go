@@ -127,7 +127,15 @@ func (h *Handler) listMLSCommits(w http.ResponseWriter, r *http.Request) {
 		}
 		since = n
 	}
-	msgs, err := h.Store.MLSControlMessagesSince(r.Context(), convID, since)
+	// Scoped to the CURRENT group. An epoch is unique only within a group, and a re-established
+	// conversation starts counting again — so without this the retired group's history comes back
+	// alongside the live one, sharing epoch numbers, and the caller applies both.
+	state, err := h.Store.MLSGroupState(r.Context(), convID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not load commits")
+		return
+	}
+	msgs, err := h.Store.MLSControlMessagesSince(r.Context(), convID, state.GroupID, since)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not load commits")
 		return
@@ -294,7 +302,10 @@ func (h *Handler) postMLSCommit(w http.ResponseWriter, r *http.Request) {
 			Ciphertext:     req.Welcome,
 			ContentType:    contentTypeMLSWelcome,
 			MLSEpoch:       epoch,
-			CreatedAt:      now,
+			// Which group this belongs to. An epoch is unique only within a group, and a
+			// re-established conversation restarts the count — see domain.ChatMessage.MLSGroupID.
+			MLSGroupID: req.GroupID,
+			CreatedAt:  now,
 		})
 	}
 	msgs = append(msgs, domain.ChatMessage{
@@ -303,6 +314,7 @@ func (h *Handler) postMLSCommit(w http.ResponseWriter, r *http.Request) {
 		Ciphertext:     req.Commit,
 		ContentType:    contentTypeMLSCommit,
 		MLSEpoch:       epoch,
+		MLSGroupID:     req.GroupID,
 		CreatedAt:      now,
 	})
 

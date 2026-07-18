@@ -296,7 +296,14 @@ type Store interface {
 	// A member that has fallen behind cannot decrypt anything until it applies the
 	// Commits it missed, and those may be far outside the page of history the client
 	// loads. Asking by epoch makes catching up exact and bounded instead of a trawl.
-	MLSControlMessagesSince(ctx context.Context, conversationID string, sinceEpoch int64) ([]domain.ChatMessage, error)
+	//
+	// groupID scopes the answer to ONE group's history. An epoch is unique only within a group,
+	// and a re-established conversation starts counting again — so without it the retired group's
+	// epoch 1 and the live group's epoch 1 come back together, in no defined order, and a member
+	// catching up applies both to whichever group it holds. Control messages written before that
+	// field existed carry no group and are returned regardless, or every conversation that predates
+	// this would be unable to catch up at all.
+	MLSControlMessagesSince(ctx context.Context, conversationID, groupID string, sinceEpoch int64) ([]domain.ChatMessage, error)
 
 	// SetMLSGroupInfo records the latest GroupInfo (RFC 9420 §11.2.1) a joiner can external-join
 	// against. Kept only for the CURRENT group and only if at least as new as what is stored, so a

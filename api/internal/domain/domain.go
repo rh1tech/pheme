@@ -571,6 +571,19 @@ type ChatMessage struct {
 	// Commits are still inside the last page; a member that misses one can never decrypt
 	// anything again.
 	MLSEpoch int64 `bson:"mlsEpoch,omitempty" json:"mlsEpoch,omitempty"`
+	// MLSGroupID is the group a control message belongs to. Empty on ordinary messages, and on
+	// every control message written before this field existed.
+	//
+	// Catching up used to filter on epoch ALONE, and an epoch is only unique WITHIN a group. When a
+	// conversation is re-established the new group starts counting from zero again, so its epoch 1
+	// and the retired group's epoch 1 are different moments wearing the same number. A member
+	// catching up got both, in an order decided by nothing, and fed each to a group it did not
+	// belong to.
+	//
+	// The cost was not only correctness. One real conversation had 287 control messages across two
+	// group lifetimes, and every catch-up — which is every send — fetched and replayed all of them,
+	// because from epoch 0 there was no way to say "only this group's".
+	MLSGroupID string `bson:"mlsGroupId,omitempty" json:"mlsGroupId,omitempty"`
 }
 
 // The content types clients use for MLS protocol traffic. They mirror the MLS_*

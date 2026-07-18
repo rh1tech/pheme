@@ -16,6 +16,11 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
   Future<List<Conversation>> build() async {
     // Patch the list from the live stream rather than refetching it. A new message must move a
     // conversation to the top of the list whether or not that chat is open.
+    // The same gap the feed has to close: a reconnect means whatever arrived while the stream was
+    // down was never delivered, so the list's last-message rows are stale until something else
+    // happens to refresh them.
+    ref.listen(liveReconnectProvider, (_, __) => unawaited(refresh()));
+
     ref.listen(liveEventsProvider, (_, next) {
       final event = next.value;
       if (event == null) return;

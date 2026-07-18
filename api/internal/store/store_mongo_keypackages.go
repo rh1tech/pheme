@@ -120,15 +120,30 @@ func (m *Mongo) DevicesWithKeyPackages(ctx context.Context, userIDs []string) (m
 // first — the order a member catching up must apply them in. Within one epoch the
 // Welcome sorts before the Commit, or a device being admitted would meet the Commit for
 // a group it has not joined yet.
-func (m *Mongo) MLSControlMessagesSince(ctx context.Context, conversationID string, sinceEpoch int64) ([]domain.ChatMessage, error) {
+func (m *Mongo) MLSControlMessagesSince(ctx context.Context, conversationID, groupID string, sinceEpoch int64) ([]domain.ChatMessage, error) {
+	filter := bson.M{"conversationId": conversationID, "mlsEpoch": bson.M{"$gt": sinceEpoch}}
+	if groupID != "" {
+		// This group's own history, plus anything written before control messages recorded which
+		// group they belonged to. Excluding the untagged ones would leave every conversation that
+		// predates the field unable to catch up at all.
+		filter["$or"] = []bson.M{
+			{"mlsGroupId": groupID},
+			{"mlsGroupId": bson.M{"$exists": false}},
+			{"mlsGroupId": ""},
+		}
+	}
 	cur, err := m.db.Collection("chatMessages").Find(
 		ctx,
-		bson.M{"conversationId": conversationID, "mlsEpoch": bson.M{"$gt": sinceEpoch}},
+		filter,
 		options.Find().SetSort(bson.D{
 			{Key: "mlsEpoch", Value: 1},
 			// "application/mls-welcome" < "application/mls-commit" is false alphabetically,
 			// so sort descending on contentType to put the Welcome first.
 			{Key: "contentType", Value: -1},
+			// Within one epoch and one type, oldest first. Without this the order of two commits
+			// that share an epoch — which is what a re-established conversation produces among its
+			// untagged history — is whatever the storage engine feels like.
+			{Key: "createdAt", Value: 1},
 		}),
 	)
 	if err != nil {

@@ -126,7 +126,7 @@ func (m *Memory) DevicesWithKeyPackages(_ context.Context, userIDs []string) (ma
 
 // MLSControlMessagesSince returns the Welcomes and Commits past `sinceEpoch`, oldest
 // first — the order a member catching up must apply them in.
-func (m *Memory) MLSControlMessagesSince(_ context.Context, conversationID string, sinceEpoch int64) ([]domain.ChatMessage, error) {
+func (m *Memory) MLSControlMessagesSince(_ context.Context, conversationID, groupID string, sinceEpoch int64) ([]domain.ChatMessage, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -135,15 +135,25 @@ func (m *Memory) MLSControlMessagesSince(_ context.Context, conversationID strin
 		if msg.ConversationID != conversationID || msg.MLSEpoch <= sinceEpoch {
 			continue
 		}
+		// This group's own history, plus anything written before control messages recorded which
+		// group they belonged to — see MLSControlMessagesSince in the Store interface.
+		if groupID != "" && msg.MLSGroupID != "" && msg.MLSGroupID != groupID {
+			continue
+		}
 		out = append(out, msg)
 	}
 	// By epoch, then by type: within one Commit the Welcome must come first, or a device
-	// being admitted would see the Commit for a group it has not joined yet.
+	// being admitted would see the Commit for a group it has not joined yet. Then oldest first,
+	// so two commits sharing an epoch — what a re-established conversation's untagged history
+	// produces — have a defined order rather than a map's.
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].MLSEpoch != out[j].MLSEpoch {
 			return out[i].MLSEpoch < out[j].MLSEpoch
 		}
-		return out[i].ContentType == domain.ContentTypeMLSWelcome
+		if out[i].ContentType != out[j].ContentType {
+			return out[i].ContentType == domain.ContentTypeMLSWelcome
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
 	})
 	return out, nil
 }

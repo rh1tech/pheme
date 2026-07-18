@@ -1,10 +1,11 @@
 // One conversation's messages: loading them, decrypting them, and keeping up with the live stream.
 
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/providers.dart';
-import 'dart:async';
-import 'dart:typed_data';
 
 import '../crypto/chat_content.dart';
 import '../crypto/mls_errors.dart';
@@ -147,6 +148,12 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       final message = event?.chatMessage;
       if (message != null) _onLiveMessage(message);
     });
+
+    // A reconnect means the stream was down, and anything sent during the gap was never delivered
+    // and never will be. Go and fetch it — without this the conversation silently stops updating
+    // until the app is restarted, which is exactly how a group chat looked dead while its push
+    // notifications kept arriving.
+    ref.listen(liveReconnectProvider, (_, __) => unawaited(_resyncAfterGap()));
 
     ref.onDispose(_stopAdmissionRetry);
 
@@ -331,6 +338,33 @@ class MessageFeedController extends Notifier<MessageFeedState> {
     state = state.copyWith(contents: contents);
 
     await _decrypt(pending);
+  }
+
+  /// Re-fetches the newest page after a live-stream gap, and decrypts whatever is new.
+  ///
+  /// Deliberately the same merge the first load uses, so a message that arrived twice — once over
+  /// the stream, once here — appears once. Silent on failure: the next reconnect, or the next open,
+  /// tries again.
+  Future<void> _resyncAfterGap() async {
+    if (state.loading) return;
+    try {
+      final page = await ref
+          .read(repositoryProvider)
+          .listChatMessages(_conversationId, limit: _pageSize);
+      final fetched = page.messages.reversed
+          .where((m) => !m.isControl)
+          .toList(growable: false);
+      if (fetched.isEmpty) return;
+
+      final merged = _reconcile(state.messages, fetched);
+      state = state.copyWith(messages: merged);
+      // Only the ones with no body yet: a message that already decrypted must never be decrypted
+      // twice, because the key is gone.
+      await _decryptUnread();
+      unawaited(_persistEnvelope());
+    } on Object {
+      // Leave it. Another reconnect or the next open will pick it up.
+    }
   }
 
   Future<void> loadOlder() async {

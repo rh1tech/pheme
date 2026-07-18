@@ -17,6 +17,28 @@ const _streamTokenFloor = Duration(minutes: 2);
 /// Deliberately NOT autoDispose, unlike everything else here: an incoming call has to ring whether
 /// or not a screen happens to be listening. If this stream only existed while some widget watched
 /// it, the phone would go quiet exactly when the app was idle.
+/// Bumped every time the live stream RECONNECTS.
+///
+/// A server-sent event stream has no replay: anything published while the socket was down is gone
+/// for good. And the socket goes down routinely — the token that opened it expires after about
+/// fifteen minutes, the app is backgrounded, the network changes. So after every reconnect there is
+/// a hole, and whoever is showing live data has to go and fetch what it missed.
+///
+/// Nothing did. SseClient has always had an `onReconnect` hook and nobody ever set it, so a message
+/// sent during a gap simply never appeared: the recipient got the push notification, the open
+/// conversation stayed silent, and only restarting the app revealed it. That is not a rare race —
+/// it is every reconnect, all day.
+class LiveReconnect extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void bump() => state = state + 1;
+}
+
+final liveReconnectProvider = NotifierProvider<LiveReconnect, int>(
+  LiveReconnect.new,
+);
+
 final liveEventsProvider = StreamProvider<LiveEvent>((ref) {
   final auth = ref.watch(authControllerProvider);
   if (!auth.isAuthenticated) return const Stream<LiveEvent>.empty();
@@ -51,7 +73,12 @@ final liveEventsProvider = StreamProvider<LiveEvent>((ref) {
     }
   }
 
-  final client = SseClient(baseUrl: baseUrl, freshToken: freshToken);
+  final client = SseClient(
+    baseUrl: baseUrl,
+    freshToken: freshToken,
+    // Tell everyone showing live data to go and fetch what the gap swallowed.
+    onReconnect: () => ref.read(liveReconnectProvider.notifier).bump(),
+  );
   client.start();
   ref.onDispose(client.close);
   return client.events;
