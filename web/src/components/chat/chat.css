@@ -196,7 +196,13 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 0.45rem 0.25rem calc(0.45rem + env(safe-area-inset-bottom, 0px));
+  padding: 0.45rem 0.25rem;
+  /* max(), not calc(base + inset). The home indicator needs clearing, but it does not need
+     clearing IN ADDITION to the tab's own padding — added together they leave a band of dead
+     space below the labels about as tall as the labels themselves.
+     Every other bottom-pinned element here already absorbs the inset rather than stacking on it
+     (see .pheme-composer and .pheme-readonly); this one stacked, and it is the only one that did. */
+  padding-bottom: max(0.45rem, env(safe-area-inset-bottom, 0px));
   border: none;
   background: none;
   cursor: pointer;
@@ -578,6 +584,13 @@
 .pheme-shell[data-keyboard='open'] .pheme-composer,
 .pheme-shell[data-keyboard='open'] .pheme-readonly {
   padding-bottom: 0.5rem;
+}
+
+/* The sidebar's tabs need the same escape hatch, for the same reason: the search field raises the
+   keyboard over the chat list, and the tabs then sit above it with an inset worth of dead space
+   clearing a home indicator the keyboard is already covering. */
+.pheme-shell[data-keyboard='open'] .pheme-sidebar-tab {
+  padding-bottom: 0.45rem;
 }
 
 /* Attachments are a footnote to the message being written, so they stay a strip
