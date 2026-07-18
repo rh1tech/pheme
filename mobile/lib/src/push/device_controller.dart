@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,6 +27,15 @@ class DeviceController extends Notifier<String?> {
   /// Registers this device with the server, with a push token if we can get one and without if we
   /// cannot. Returns the device id.
   Future<String> register() async {
+    // A rotated token has to reach the server, and the only way it does is by registering again.
+    // See PushService.onTokenRefresh — without this the app holds a device id forever and never
+    // notices that the address behind it stopped working.
+    ref.read(pushServiceProvider).onTokenRefresh((_) {
+      state =
+          null; // force the next ensureRegistered to re-register with the new token
+      unawaited(ensureRegistered());
+    });
+
     final existing = state;
     if (existing != null) return existing;
 

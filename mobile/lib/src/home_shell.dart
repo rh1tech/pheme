@@ -8,23 +8,45 @@
 // An IndexedStack rather than a switch, so each tab keeps its scroll position, its loaded pages and
 // its open keyboard when the user moves between them.
 
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'channels/channels_page.dart';
+import 'core/providers.dart';
 import 'chat/conversations_page.dart';
 import 'l10n/app_localizations.dart';
 import 'widgets/adaptive/platform.dart';
 
-class HomeShell extends StatefulWidget {
+class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
   @override
-  State<HomeShell> createState() => _HomeShellState();
+  ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends ConsumerState<HomeShell> {
   int _tab = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Register this device the moment the user reaches the app, rather than when they happen to
+    // press a bell on the Channels tab.
+    //
+    // That bell was the ONLY path to it, and a device with no registration gets no push at all —
+    // so anyone who only used Chats never had notifications and the settings screen told them, in
+    // as many words, that the device was not registered. There was nothing they could do about it
+    // from any surface they visited.
+    //
+    // Best-effort and silent: ensureRegistered swallows failures, and a device still registers
+    // WITHOUT a push token if permission is refused — which matters, because the id is also what
+    // the call answer-lock is keyed on. Nothing here shows a toast; this is not an action the user
+    // asked for and should not report back to them.
+    unawaited(ref.read(deviceControllerProvider.notifier).ensureRegistered());
+  }
 
   @override
   Widget build(BuildContext context) {

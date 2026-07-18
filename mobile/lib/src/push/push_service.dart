@@ -212,6 +212,16 @@ class PushService {
   bool _initialized = false;
   MessageRef? _initial;
 
+  /// Called when FCM issues this device a new token, so the server can be told. Set by the
+  /// controller that owns registration; null before the app has one.
+  void Function(String token)? _onTokenRefresh;
+
+  /// Registers [handler] to receive rotated push tokens.
+  // ignore: use_setters_to_change_properties
+  void onTokenRefresh(void Function(String token) handler) {
+    _onTokenRefresh = handler;
+  }
+
   /// The conversation the user is currently looking at, kept in sync by the app from
   /// [activeConversationIdProvider]. A foreground message for this conversation is
   /// suppressed: it is already in the open feed over the live stream, so a second buzz
@@ -251,6 +261,17 @@ class PushService {
 
       FirebaseMessaging.onBackgroundMessage(phemeFirebaseBackgroundHandler);
       FirebaseMessaging.onMessage.listen(_showForeground);
+
+      // A token is not permanent. It changes on reinstall, on a data clear, and whenever Firebase
+      // decides to rotate it — and the server has no way to learn that on its own: it keeps
+      // pushing to the old address and FCM answers UNREGISTERED into a void.
+      //
+      // That is not hypothetical. It is what happened here: the device registered once, the token
+      // rotated under it, and the phone received nothing at all afterwards while everything looked
+      // correctly configured from both ends.
+      FirebaseMessaging.instance.onTokenRefresh.listen((token) {
+        _onTokenRefresh?.call(token);
+      });
 
       // Notification taps: while backgrounded (onMessageOpenedApp) and the tap
       // that cold-started the app (getInitialMessage).
