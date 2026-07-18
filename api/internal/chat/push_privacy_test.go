@@ -284,3 +284,69 @@ func TestChatPushSplitsByDeviceCapability(t *testing.T) {
 		t.Error("the old device must not; it would show nothing at all")
 	}
 }
+
+// One phone, one notification.
+//
+// Registering a device used to INSERT unconditionally for anything that was not a web push, and
+// the mobile app registers on every launch — so a phone accumulated a row per start, the fan-out
+// pushed to each of them, and the user got the same message twice, then three times. Web was safe
+// only because it happened to key on its push endpoint.
+func TestChatPushDoesNotDuplicateForARelaunchedApp(t *testing.T) {
+	f := newFixture(t)
+	pusher := newFakePush()
+	f.setPush(pusher)
+
+	_, aliceToken := f.user(t, "alice-dup@pheme.test")
+	bobID, _ := f.user(t, "bob-dup@pheme.test")
+
+	// The same handset registering three times, as three app launches would.
+	for i := 0; i < 3; i++ {
+		if _, err := f.store.CreateDevice(context.Background(), domain.Device{
+			UserID:           bobID,
+			Platform:         "android",
+			FCMToken:         "the-same-handset",
+			CanRenderPreview: true,
+		}); err != nil {
+			t.Fatalf("register %d: %v", i, err)
+		}
+	}
+
+	conv := f.createDirect(t, aliceToken, bobID)
+	f.sendMessage(t, conv, aliceToken)
+
+	if !pusher.waitForPush(t) {
+		t.Fatal("expected a chat push")
+	}
+	pusher.mu.Lock()
+	devices := 0
+	for _, group := range pusher.toDevs {
+		devices += len(group)
+	}
+	pusher.mu.Unlock()
+
+	if devices != 1 {
+		t.Errorf("pushed to %d device rows for one handset — the user gets the message %d times",
+			devices, devices)
+	}
+}
+
+// A device with no push address at all — a Mac, or a browser that declined notifications — must
+// still get its own row. The device id is what the call answer-lock is keyed on, so collapsing
+// them would make one machine unable to answer because another had claimed the call.
+func TestDevicesWithoutPushAreNotCollapsed(t *testing.T) {
+	f := newFixture(t)
+	_, _ = f.user(t, "alice-nopush@pheme.test")
+	bobID, _ := f.user(t, "bob-nopush@pheme.test")
+
+	first, err := f.store.CreateDevice(context.Background(), domain.Device{UserID: bobID, Platform: "macos"})
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	second, err := f.store.CreateDevice(context.Background(), domain.Device{UserID: bobID, Platform: "macos"})
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if first.ID == second.ID {
+		t.Error("two push-less devices were merged into one; each needs its own id to answer a call")
+	}
+}

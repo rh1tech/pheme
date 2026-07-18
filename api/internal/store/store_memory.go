@@ -614,16 +614,30 @@ func (m *Memory) RevokeAPIKey(_ context.Context, keyID string) error {
 func (m *Memory) CreateDevice(_ context.Context, d domain.Device) (domain.Device, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if endpoint := webPushEndpoint(d.WebPushSub); endpoint != "" {
-		for id, existing := range m.devices {
-			if existing.UserID == d.UserID && existing.WebPushEndpoint == endpoint {
-				existing.WebPushSub = d.WebPushSub
-				existing.LastSeenAt = d.LastSeenAt
-				m.devices[id] = existing
-				return existing, nil
-			}
+	// Mirrors Mongo: a device IS its push address, so re-registering the same one updates rather
+	// than duplicating. Two rows for one phone means the fan-out pushes to it twice.
+	for id, existing := range m.devices {
+		if existing.UserID != d.UserID {
+			continue
 		}
-		d.WebPushEndpoint = endpoint
+		same := (d.WebPushSub != "" && existing.WebPushSub == d.WebPushSub) ||
+			(d.FCMToken != "" && existing.FCMToken == d.FCMToken)
+		if !same {
+			continue
+		}
+		existing.LastSeenAt = d.LastSeenAt
+		existing.CanRenderPreview = d.CanRenderPreview
+		if d.WebPushSub != "" {
+			existing.WebPushSub = d.WebPushSub
+		}
+		if d.FCMToken != "" {
+			existing.FCMToken = d.FCMToken
+		}
+		if d.VoIPToken != "" {
+			existing.VoIPToken = d.VoIPToken
+		}
+		m.devices[id] = existing
+		return existing, nil
 	}
 	if d.ID == "" {
 		d.ID = newID()

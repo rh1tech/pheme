@@ -73,10 +73,17 @@ func mongoID() string {
 
 func (m *Mongo) ensureIndexes(ctx context.Context) error {
 	specs := map[string][]mongo.IndexModel{
-		"users":          {{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "usernameLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"usernameLower": bson.M{"$exists": true}})}},
-		"channels":       {{Keys: bson.D{{Key: "publicId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "ownerId", Value: 1}}}, {Keys: bson.D{{Key: "aliasLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"aliasLower": bson.M{"$exists": true}})}},
-		"apiKeys":        {{Keys: bson.D{{Key: "channelId", Value: 1}}}},
-		"devices":        {{Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}, {Key: "webPushEndpoint", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"webPushEndpoint": bson.M{"$exists": true}})}},
+		"users":    {{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "usernameLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"usernameLower": bson.M{"$exists": true}})}},
+		"channels": {{Keys: bson.D{{Key: "publicId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "ownerId", Value: 1}}}, {Keys: bson.D{{Key: "aliasLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"aliasLower": bson.M{"$exists": true}})}},
+		"apiKeys":  {{Keys: bson.D{{Key: "channelId", Value: 1}}}},
+		"devices": {
+			{Keys: bson.D{{Key: "userId", Value: 1}}},
+			{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "webPushEndpoint", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"webPushEndpoint": bson.M{"$exists": true}})},
+			// The mobile half of the same idea. NOT unique: two rows already exist in the wild
+			// from before dedupe (that is the bug this indexes for), and a unique index would
+			// refuse to build until they were cleaned up — turning a fix into an outage.
+			{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "fcmToken", Value: 1}}, Options: options.Index().SetPartialFilterExpression(bson.M{"fcmToken": bson.M{"$exists": true}})},
+		},
 		"subscriptions":  {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "deviceId", Value: 1}}}},
 		"channelMembers": {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}}}},
 		"messages":       {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "createdAt", Value: -1}}}},
@@ -580,43 +587,76 @@ func (m *Mongo) RevokeAPIKey(ctx context.Context, keyID string) error {
 }
 
 func (m *Mongo) CreateDevice(ctx context.Context, d domain.Device) (domain.Device, error) {
-	// Web devices are identified by their push endpoint: re-registering the same
-	// browser subscription updates the existing device instead of creating a
-	// duplicate (and refreshes the stored subscription after a key change).
-	if endpoint := webPushEndpoint(d.WebPushSub); endpoint != "" {
-		filter := bson.M{"userId": d.UserID, "webPushEndpoint": endpoint}
+	// A device IS its push address. Registering the same address again updates the row rather than
+	// adding another, because two rows for one phone means the fan-out sends to it twice and the
+	// user gets every message twice — which is exactly what happened: mobile had no dedupe at all,
+	// so every app start left another row behind, and only web (keyed on its endpoint) was safe.
+	if filter := devicePushIdentity(d); filter != nil {
 		var existing domain.Device
 		err := m.db.Collection("devices").FindOne(ctx, filter).Decode(&existing)
 		if err == nil {
-			// canRenderPreview is refreshed here and not only written on first registration, because
-			// it is the one field that legitimately CHANGES for an existing device: the browser is
-			// the same, the subscription is the same, and the app it is running has been updated.
-			// Leaving it out would pin every device that already existed to the answer it gave
-			// before the feature shipped, which is the same as never shipping it.
-			_, uerr := m.db.Collection("devices").UpdateOne(ctx, bson.M{"_id": existing.ID},
-				bson.M{"$set": bson.M{
-					"webPushSub":       d.WebPushSub,
-					"lastSeenAt":       d.LastSeenAt,
-					"canRenderPreview": d.CanRenderPreview,
-				}})
-			if uerr != nil {
+			// Everything that legitimately CHANGES for a device that is otherwise the same one:
+			// a refreshed subscription or token, and the capability its current build reports.
+			// Pinning any of these to first-registration values is how a device ends up
+			// permanently described by the app version it was first seen with.
+			set := bson.M{
+				"lastSeenAt":       d.LastSeenAt,
+				"canRenderPreview": d.CanRenderPreview,
+			}
+			if d.WebPushSub != "" {
+				set["webPushSub"] = d.WebPushSub
+			}
+			if d.FCMToken != "" {
+				set["fcmToken"] = d.FCMToken
+			}
+			if d.VoIPToken != "" {
+				set["voipToken"] = d.VoIPToken
+			}
+			if _, uerr := m.db.Collection("devices").
+				UpdateOne(ctx, bson.M{"_id": existing.ID}, bson.M{"$set": set}); uerr != nil {
 				return domain.Device{}, uerr
 			}
-			existing.WebPushSub = d.WebPushSub
 			existing.LastSeenAt = d.LastSeenAt
 			existing.CanRenderPreview = d.CanRenderPreview
+			if d.WebPushSub != "" {
+				existing.WebPushSub = d.WebPushSub
+			}
+			if d.FCMToken != "" {
+				existing.FCMToken = d.FCMToken
+			}
+			if d.VoIPToken != "" {
+				existing.VoIPToken = d.VoIPToken
+			}
 			return existing, nil
 		}
 		if !errors.Is(err, mongo.ErrNoDocuments) {
 			return domain.Device{}, err
 		}
-		d.WebPushEndpoint = endpoint
+		if endpoint := webPushEndpoint(d.WebPushSub); endpoint != "" {
+			d.WebPushEndpoint = endpoint
+		}
 	}
 	if d.ID == "" {
 		d.ID = mongoID()
 	}
 	_, err := m.db.Collection("devices").InsertOne(ctx, d)
 	return d, err
+}
+
+// devicePushIdentity is the query that finds an already-registered device, or nil when this
+// registration carries no push address to recognise it by.
+//
+// A device with NO push address (a Mac, a browser that declined notifications) is deliberately
+// never matched: it has nothing unique to match on, and collapsing them would merge distinct
+// devices into one — and the device id is what the call answer-lock is keyed on.
+func devicePushIdentity(d domain.Device) bson.M {
+	if endpoint := webPushEndpoint(d.WebPushSub); endpoint != "" {
+		return bson.M{"userId": d.UserID, "webPushEndpoint": endpoint}
+	}
+	if d.FCMToken != "" {
+		return bson.M{"userId": d.UserID, "fcmToken": d.FCMToken}
+	}
+	return nil
 }
 
 func (m *Mongo) Subscribe(ctx context.Context, s domain.Subscription) (domain.Subscription, error) {
