@@ -91,13 +91,17 @@ Future<String?> decryptNotificationPreview({
       return null;
     }
 
+    // BEFORE reading the state, not after. Opening the key store is itself a Rust call — the blob
+    // is sealed with vaultOpen — so a readState() on an uninitialised isolate throws "flutter_rust
+    // _bridge has not been initialized", which this catches and reports as no key material at all.
+    // The keys were always there; the library that opens them was not.
+    await _ensureRust();
+
     final state = await store.readState();
     if (state == null) {
       debugPrint('Pheme: no preview, this device holds no MLS key material');
       return null;
     }
-
-    await _ensureRust();
 
     final plaintext = await rust.mlsDecryptPreview(
       state: state,
