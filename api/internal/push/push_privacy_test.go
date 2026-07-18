@@ -572,3 +572,92 @@ func TestBuildMessage_OversizedPreviewFallsBackToTrayRendering(t *testing.T) {
 		t.Error("a push with no preview must not still be waking a dozing phone")
 	}
 }
+
+// A device learns which MLS group a conversation uses only by OPENING the chat. A freshly
+// installed one therefore knows it for nothing, and every preview it received fell back to the
+// generic text until the user happened to visit each conversation in turn — a preview feature that
+// silently does not work on exactly the devices most likely to be testing it.
+func TestChatPayload_PreviewCarriesGroupIDs(t *testing.T) {
+	n := chatNotificationPayload(testBaseURL, ChatNotification{
+		ConversationID:       "conv-1",
+		MessageID:            "msg-1",
+		SenderName:           "Ada",
+		Privacy:              domain.NotificationPrivacyPreview,
+		DeviceRendersPreview: true,
+		Kind:                 KindMessage,
+		ContentType:          domain.ContentTypeMLSApplication,
+		Ciphertext:           []byte("ciphertext"),
+		GroupIDs:             []string{"group-now", "group-retired"},
+	})
+
+	if got := n.Data["groupIds"]; got != "group-now,group-retired" {
+		t.Errorf("Data[groupIds] = %q, want the current group first then the retired ones", got)
+	}
+}
+
+// The ids are only useful to a device that is going to decrypt. Sending them to one that is not
+// tells it which group a conversation uses for no reason at all.
+func TestChatPayload_NoGroupIDsWithoutAPreview(t *testing.T) {
+	n := chatNotificationPayload(testBaseURL, ChatNotification{
+		ConversationID: "conv-1",
+		MessageID:      "msg-1",
+		SenderName:     "Ada",
+		Privacy:        domain.NotificationPrivacySender,
+		Kind:           KindMessage,
+		ContentType:    domain.ContentTypeMLSApplication,
+		Ciphertext:     []byte("ciphertext"),
+		GroupIDs:       []string{"group-now"},
+	})
+
+	if got, ok := n.Data["groupIds"]; ok {
+		t.Errorf("Data[groupIds] = %q on a notification with no preview, want it absent", got)
+	}
+}
+
+// When the payload will not fit, the preview is unwound — and the group ids are part of the
+// preview, not of the notification. Leaving them behind would keep paying bytes for a feature that
+// is no longer happening, in the one situation where there are no bytes to spare.
+func TestChatPayload_OversizeDropsGroupIDsWithTheRest(t *testing.T) {
+	n := chatNotificationPayload(testBaseURL, ChatNotification{
+		ConversationID:       "conv-1",
+		MessageID:            "msg-1",
+		SenderName:           strings.Repeat("<", 200),
+		Privacy:              domain.NotificationPrivacyPreview,
+		DeviceRendersPreview: true,
+		Kind:                 KindMessage,
+		ContentType:          domain.ContentTypeMLSApplication,
+		Ciphertext:           []byte(strings.Repeat("x", maxPreviewCiphertext-1)),
+		GroupIDs:             []string{"group-now"},
+	})
+
+	if _, ok := n.Data["ciphertext"]; ok {
+		t.Fatal("ciphertext survived an oversize payload; this test no longer tests the unwind")
+	}
+	if got, ok := n.Data["groupIds"]; ok {
+		t.Errorf("Data[groupIds] = %q after the preview was unwound, want it dropped too", got)
+	}
+}
+
+// The retired-group list only ever grows. Unbounded, it would eventually crowd out the ciphertext
+// it exists to serve.
+func TestChatPayload_GroupIDsAreBounded(t *testing.T) {
+	many := make([]string, 0, maxPreviewGroups+5)
+	for i := 0; i < maxPreviewGroups+5; i++ {
+		many = append(many, "group")
+	}
+	n := chatNotificationPayload(testBaseURL, ChatNotification{
+		ConversationID:       "conv-1",
+		MessageID:            "msg-1",
+		SenderName:           "Ada",
+		Privacy:              domain.NotificationPrivacyPreview,
+		DeviceRendersPreview: true,
+		Kind:                 KindMessage,
+		ContentType:          domain.ContentTypeMLSApplication,
+		Ciphertext:           []byte("ciphertext"),
+		GroupIDs:             many,
+	})
+
+	if got := len(strings.Split(n.Data["groupIds"], ",")); got != maxPreviewGroups {
+		t.Errorf("sent %d groups, want it capped at %d", got, maxPreviewGroups)
+	}
+}

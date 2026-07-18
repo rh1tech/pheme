@@ -177,7 +177,37 @@ func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage)
 		// devices are split by their owner's setting and each group gets the payload it asked
 		// for. Almost always this is a single group — the loop costs nothing when everyone
 		// agrees, and is the only correct thing to do when they do not.
+		// The conversation's groups, loaded ONCE and only if some recipient actually wants a
+		// preview. Everybody else's notification does not depend on it, and a chat where nobody
+		// opted in should not pay for a lookup it will not use.
+		var groupIDs []string
+		groupsLoaded := false
+		loadGroupIDs := func() []string {
+			if groupsLoaded {
+				return groupIDs
+			}
+			groupsLoaded = true
+			state, err := h.Store.MLSGroupState(ctx, convID)
+			if err != nil {
+				// Not fatal. Without the ids the device falls back to the mapping it learned by
+				// opening the chat, and failing that to the generic notification.
+				log.Warn("chat push: load group state for preview", "conversation", convID, "error", err)
+				return nil
+			}
+			if state.GroupID != "" {
+				groupIDs = append(groupIDs, state.GroupID)
+			}
+			// Newest first: a retired group still decrypts its own old messages, but the message
+			// that just arrived is overwhelmingly likely to belong to the current one.
+			groupIDs = append(groupIDs, state.PriorGroupIDs...)
+			return groupIDs
+		}
+
 		for key, group := range h.devicesByPrivacy(ctx, recipients, devices) {
+			var preview []string
+			if key.privacy.ShowsPreview() && key.rendersPreview {
+				preview = loadGroupIDs()
+			}
 			if _, err := h.Push.SendChat(ctx, push.ChatNotification{
 				ConversationID:       convID,
 				MessageID:            msg.ID,
@@ -190,6 +220,7 @@ func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage)
 				// the same rule, and one of them eventually getting it wrong.
 				Ciphertext:  msg.Ciphertext,
 				ContentType: msg.ContentType,
+				GroupIDs:    preview,
 			}, group); err != nil {
 				log.Error("chat push: send", "conversation", convID, "privacy", string(key.privacy), "error", err)
 			}

@@ -60,6 +60,7 @@ Future<bool> _ensureRust() async {
 Future<String?> decryptNotificationPreview({
   required String conversationId,
   required String? ciphertextBase64,
+  String? groupIdsCsv,
 }) async {
   if (ciphertextBase64 == null || ciphertextBase64.isEmpty) return null;
   if (conversationId.isEmpty) return null;
@@ -71,11 +72,30 @@ Future<String?> decryptNotificationPreview({
     // before the user has unlocked since a reboot.
     final store = MlsStore(const FlutterSecureStorage());
 
-    final groupIds = await store.groupIds(conversationId);
-    if (groupIds.isEmpty) return null;
+    // Which groups to try. The push names them, because the ONLY other source is a mapping this
+    // device writes when it opens a chat — so a freshly installed one knows nothing, and every
+    // preview fell back to "New message" until the user had visited each conversation in turn.
+    //
+    // The server's list is not trusted, only used: a group id is a routing label it already holds,
+    // and a wrong one fails to decrypt exactly as no id would. The locally learned mapping is still
+    // the fallback, for pushes sent by a server that predates this.
+    var groupIds = (groupIdsCsv ?? '')
+        .split(',')
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (groupIds.isEmpty) {
+      groupIds = await store.groupIds(conversationId);
+    }
+    if (groupIds.isEmpty) {
+      debugPrint('Pheme: no preview, no known MLS group for $conversationId');
+      return null;
+    }
 
     final state = await store.readState();
-    if (state == null) return null;
+    if (state == null) {
+      debugPrint('Pheme: no preview, this device holds no MLS key material');
+      return null;
+    }
 
     await _ensureRust();
 
@@ -87,7 +107,12 @@ Future<String?> decryptNotificationPreview({
       ciphertext: base64Decode(ciphertextBase64),
     );
     // Control traffic, or a message this device cannot read.
-    if (plaintext == null) return null;
+    if (plaintext == null) {
+      debugPrint(
+        'Pheme: no preview, none of ${groupIds.length} group(s) could read it',
+      );
+      return null;
+    }
 
     return _bodyOf(plaintext);
   } on Object catch (e) {

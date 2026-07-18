@@ -61,6 +61,19 @@ type ChatNotification struct {
 	// It is attached only for a recipient whose setting asks for previews, and only for an
 	// ordinary application message — see previewCiphertext, which is the single place that
 	// decides, so the gate cannot be half-applied by one transport and not another.
+	// GroupIDs are the MLS groups this conversation uses, newest first, sent alongside the
+	// ciphertext so the device can decrypt it without having to already know which group the
+	// message belongs to.
+	//
+	// A device only learns that mapping by OPENING a chat, so a freshly installed one knows it for
+	// nothing and every preview fell back to "New message" until the user happened to visit each
+	// conversation. Naming the group here removes the dependency: the recipient still needs the key
+	// material, which only it has.
+	//
+	// Not a secret and not trusted. A group id is a routing label the server already holds; a wrong
+	// one simply fails to decrypt, which is the same outcome as not sending it.
+	GroupIDs []string
+
 	Ciphertext []byte
 	// ContentType is the message's MLS content type. It is here purely as a gate: only an
 	// ordinary application message may be previewed, and protocol traffic must never be shipped
@@ -111,6 +124,23 @@ func payloadFits(title, body, icon string, data map[string]string) bool {
 // Every condition that gates a preview lives here, in one place, because the failure mode of
 // spreading them out is a transport that forgets one and ships message bodies to a device
 // whose owner asked for a bare lock screen.
+// maxPreviewGroups bounds how many groups travel with a preview. A conversation keeps its retired
+// groups so their old messages still decrypt, and that list only ever grows — left unbounded it
+// would eventually crowd out the ciphertext it exists to serve. Newest first, so the cut falls on
+// the groups least likely to be carrying a message that has just been sent.
+const maxPreviewGroups = 8
+
+// previewGroupIDs renders the groups to try as a comma-separated list, or "" when there are none.
+// Comma-separated because a push payload is flat strings; a group id is base64url and so cannot
+// contain a comma.
+func (n ChatNotification) previewGroupIDs() string {
+	ids := n.GroupIDs
+	if len(ids) > maxPreviewGroups {
+		ids = ids[:maxPreviewGroups]
+	}
+	return strings.Join(ids, ",")
+}
+
 func (n ChatNotification) previewCiphertext() []byte {
 	switch {
 	case !n.Privacy.ShowsPreview():
@@ -305,6 +335,11 @@ func chatNotificationPayload(publicBaseURL string, n ChatNotification) notificat
 	if ct := n.previewCiphertext(); ct != nil {
 		data["ciphertext"] = base64.StdEncoding.EncodeToString(ct)
 		clientRendered = true
+		// Which groups to try. Without this a device that has never opened the chat has no way to
+		// know, and falls back to the generic text — see ChatNotification.GroupIDs.
+		if ids := n.previewGroupIDs(); ids != "" {
+			data["groupIds"] = ids
+		}
 		// The title and body have to be IN THE DATA too, for the same reason a call's caller name
 		// is: this goes out data-only so the client's handler runs at all, and a data-only message
 		// has no notification payload to read them from. Without them a device that cannot decrypt
@@ -330,6 +365,7 @@ func chatNotificationPayload(publicBaseURL string, n ChatNotification) notificat
 			// body exist only to serve a client-rendered notification, and leaving them behind
 			// would keep paying for a feature that is no longer happening.
 			delete(data, "ciphertext")
+			delete(data, "groupIds")
 			delete(data, "title")
 			delete(data, "body")
 			// Back to a tray-rendered notification with it: there is nothing left for the device to

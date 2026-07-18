@@ -32,7 +32,7 @@ try {
   // back and invalidate a response a browser has already stored — and every device that loaded the
   // app during the four-hour window has the old copy. Changing the URL is the only thing that
   // bypasses it. Bump this whenever preview.js changes in a way the worker depends on.
-  importScripts('/mls/preview.js?v=4')
+  importScripts('/mls/preview.js?v=5')
   previewLoaded = true
 } catch (e) {
   // An old deploy, a 404, a cache miss. Notifications carry on without previews.
@@ -48,7 +48,11 @@ async function previewBody(data) {
   if (!data.ciphertext || !data.conversationId) return null
   if (!previewLoaded || typeof self.phemeDecryptPreview !== 'function') return null
   try {
-    return await self.phemeDecryptPreview(data.conversationId, data.ciphertext)
+    return await self.phemeDecryptPreview(
+      data.conversationId,
+      data.ciphertext,
+      data.groupIds,
+    )
   } catch {
     return null
   }

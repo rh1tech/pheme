@@ -119,6 +119,7 @@ Future<void> _showDecryptedInBackground(RemoteMessage message) async {
     preview = await decryptNotificationPreview(
       conversationId: conversationId,
       ciphertextBase64: data['ciphertext'] as String?,
+      groupIdsCsv: data['groupIds'] as String?,
     );
   } on Object catch (e) {
     // Never fatal: a notification that says "New message" is a working notification.
@@ -325,6 +326,7 @@ class PushService {
     final preview = await decryptNotificationPreview(
       conversationId: (message.data['conversationId'] as String?) ?? '',
       ciphertextBase64: message.data['ciphertext'] as String?,
+      groupIdsCsv: message.data['groupIds'] as String?,
     );
 
     await _local.show(

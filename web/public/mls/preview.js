@@ -140,14 +140,23 @@ function bodyOf(bytes) {
  *
  * @param {string} conversationId
  * @param {string} ciphertextBase64
+ * @param {string} [groupIdsCsv] groups named by the push, tried before the locally learned map
  * @returns {Promise<string|null>} the message text, or null if it could not be read
  */
-async function decryptPreview(conversationId, ciphertextBase64) {
+async function decryptPreview(conversationId, ciphertextBase64, groupIdsCsv) {
   try {
     const [state, rawGroups] = await idbGetMany([STATE_KEY, GROUPS_KEY])
-    if (!state || !rawGroups) return null
+    if (!state) return null
 
-    const groups = groupsFor(rawGroups, conversationId)
+    // The push names the groups, because the only other source is a map this browser writes when it
+    // opens a chat — so a browser that has just been granted push knows nothing, and every preview
+    // falls back to the generic text until each conversation has been visited. Not trusted, only
+    // used: a group id is a routing label the server already holds, and a wrong one fails to
+    // decrypt exactly as no id would.
+    let groups = (groupIdsCsv || '').split(',').filter(Boolean)
+    if (groups.length === 0 && rawGroups) {
+      groups = groupsFor(rawGroups, conversationId)
+    }
     if (groups.length === 0) return null
 
     await ensureWasm()
