@@ -332,7 +332,20 @@ class PushService {
 
   void _showForeground(RemoteMessage message) {
     final n = message.notification;
-    if (n == null) return;
+    // A PREVIEW ARRIVES DATA-ONLY — no notification payload — because the tray must not draw it
+    // before this app has had a chance to decrypt it. So `n` is null for exactly the messages this
+    // device asked to render itself, and returning here drew nothing at all whenever the app
+    // happened to be in the foreground. Backgrounded it worked, because that is a different
+    // handler entirely, which is why this looked like "notifications stopped" rather than
+    // "notifications stopped in one specific state".
+    //
+    // Calls are also data-only but carry a `kind` and are handled natively by CallKit before
+    // reaching here, so they must not be drawn as banners.
+    if (n == null) {
+      final isMessage =
+          message.data['kind'] == null && message.data['title'] is String;
+      if (!isMessage) return;
+    }
     // Suppress a message notification for the chat that is already on screen — the message is in the
     // open feed over the live stream, so a duplicate banner is only noise. Calls are exempt: they
     // arrive data-only (no notification payload) and never reach here, so they always ring.
@@ -361,7 +374,7 @@ class PushService {
   /// Draws a foreground notification, decrypting its body first if the push carried one.
   Future<void> _showWithPreview(
     RemoteMessage message,
-    RemoteNotification n,
+    RemoteNotification? n,
     String? groupKey,
   ) async {
     final preview = await decryptNotificationPreview(
@@ -376,10 +389,12 @@ class PushService {
       // so two messages with identical text — "ok", twice — would collide and the second would
       // silently replace the first.
       id: _notificationIdFor(message),
-      title: n.title,
+      // The data copies are the ONLY source when the push came data-only, which is every push
+      // carrying a preview. The server sends both for exactly this reason.
+      title: n?.title ?? message.data['title'] as String?,
       // The server's generic body when there is no preview: no key material here, previews turned
       // off, or a decrypt that did not land. All of them still deserve a notification.
-      body: preview ?? n.body,
+      body: preview ?? n?.body ?? message.data['body'] as String?,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           _androidChannel.id,

@@ -127,6 +127,9 @@ class MessageFeedController extends Notifier<MessageFeedState> {
   /// The web client has had this loop since it hit the same wall; the Flutter client never got it.
   Timer? _admissionRetry;
 
+  /// Guards against a slow settle stacking up behind itself on a 15-second timer.
+  bool _settling = false;
+
   @override
   MessageFeedState build() {
     // Live messages, including the MLS control traffic that admits a new device to the group.
@@ -280,12 +283,28 @@ class MessageFeedController extends Notifier<MessageFeedState> {
   void _startAdmissionRetry() {
     if (_admissionRetry != null) return;
     _admissionRetry = Timer.periodic(_admissionRetryInterval, (_) async {
+      // A timer outlives the thing that started it. Leaving this screen disposes the notifier, and
+      // touching `ref` after that throws "Using ref when a widget ... has been unmounted" — which
+      // is what it did: an exception on every tick, for as long as the timer ran.
+      //
+      // onDispose cancels it, but a tick already in flight when disposal happens still has to check
+      // for itself, because `_settle` awaits between reads.
+      if (!ref.mounted) {
+        _stopAdmissionRetry();
+        return;
+      }
       // Settled in the meantime, by the live channel or anything else: stop asking.
       if (state.joined == true) {
         _stopAdmissionRetry();
         return;
       }
-      await _settle();
+      if (_settling) return; // a slow settle must not stack up behind itself
+      _settling = true;
+      try {
+        await _settle();
+      } finally {
+        _settling = false;
+      }
     });
   }
 
