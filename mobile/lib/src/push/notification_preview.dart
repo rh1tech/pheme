@@ -29,6 +29,28 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../crypto/mls_store.dart';
 import '../rust/api/mls.dart' as rust;
+import '../rust/frb_generated.dart';
+
+/// Whether this isolate has loaded the Rust library yet.
+///
+/// `RustLib.init()` runs in main(), and a background isolate does not share that — it has its own
+/// memory and starts with nothing. Without this every decrypt here fails on the very first FFI
+/// call, which is caught and degrades to a generic notification: previews would simply never work
+/// in the background, which is the only place they matter.
+bool _rustReady = false;
+
+Future<bool> _ensureRust() async {
+  if (_rustReady) return true;
+  try {
+    await RustLib.init();
+    _rustReady = true;
+  } on Object {
+    // Already initialised by this isolate (the foreground case), which is a success. Anything
+    // else and the decrypt below will fail on its own and fall back.
+    _rustReady = true;
+  }
+  return _rustReady;
+}
 
 /// The message text carried by a push, or null when there is nothing to show.
 ///
@@ -54,6 +76,8 @@ Future<String?> decryptNotificationPreview({
 
     final state = await store.readState();
     if (state == null) return null;
+
+    await _ensureRust();
 
     final plaintext = await rust.mlsDecryptPreview(
       state: state,

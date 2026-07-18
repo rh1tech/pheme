@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:ui' show DartPluginRegistrant;
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -30,6 +31,16 @@ import 'notification_preview.dart';
 /// so the phone would show a banner and never ring.
 @pragma('vm:entry-point')
 Future<void> phemeFirebaseBackgroundHandler(RemoteMessage message) async {
+  // A background isolate starts with NO plugins registered. Nothing here that talks to the
+  // platform — drawing a notification, reading a file, opening the keystore — works until this is
+  // called, and the failure is silent: the handler runs, throws inside a plugin channel, and the
+  // push produces nothing at all.
+  //
+  // That is exactly what happened. The isolate started (FlutterFirebaseMessagingBackgroundService
+  // logs it), the ringer path had never needed a Dart plugin so calls kept working, and the first
+  // thing to actually need one — showing a message notification ourselves — quietly did nothing.
+  DartPluginRegistrant.ensureInitialized();
+
   final kind = message.data['kind'];
 
   // A message carrying ciphertext is one the SERVER could not draw, because only this device can
