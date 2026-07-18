@@ -39,7 +39,19 @@ const GROUP_ID = 'grp-preview-spec'
 const CONVERSATION_ID = 'conv-preview-spec'
 const MESSAGE = 'decrypted in the service worker'
 
-test('the service worker decrypts a push into the notification body', async ({ page, context }) => {
+test('the service worker decrypts a push into the notification body', async ({ page, context, browserName }) => {
+  // Chromium only, because Playwright exposes service workers on Chromium ALONE: context
+  // .serviceWorkers() is empty everywhere else and waitForEvent('serviceworker') never fires. Under
+  // WebKit this failed on every run, on every retry, from the day it was written.
+  //
+  // It was called flake twice before anyone read the error. It was not flake — it was a test that
+  // could not pass, and the retries dutifully proved it three times each run. Skipping here is not
+  // papering over a real failure; it is saying out loud which browser the test can observe.
+  //
+  // What that leaves uncovered is real: Safari is where these previews matter most, and no test
+  // here can see its worker. That gap belongs to on-device testing.
+  test.skip(browserName !== 'chromium', 'Playwright exposes service workers on Chromium only')
+
   await page.goto(WEB_URL, { waitUntil: 'domcontentloaded' })
 
   // Build a real group and a real ciphertext with the same WASM the worker loads, and store the
