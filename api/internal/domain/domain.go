@@ -102,6 +102,37 @@ const (
 // store's CreateUser), so "absent" only ever means "legacy" and never "new". That is why
 // there is no backfill: a backfill would have to run on every startup and could not tell a
 // brand-new account from an old one.
+// DefaultDisplayName is the name an account starts with, derived from the local part of its email.
+//
+// Every account used to be born nameless: signup asks for an email and a password and nothing else,
+// so DisplayName and Username were never set at all. The clients then rendered the only thing they
+// had — "User 3a7119", six characters of a database id — and that is what the other side of a chat
+// saw, indefinitely, unless the user happened to find the profile screen.
+//
+// A name derived from the email is not a good name, but it is a name the person recognises, and it
+// is theirs to change. Nothing here is shown to anyone until they send a message, and the local
+// part is not more private than the address it comes from, which they gave us.
+func DefaultDisplayName(email string) string {
+	local, _, found := strings.Cut(strings.TrimSpace(email), "@")
+	if !found {
+		return ""
+	}
+	// Punctuation an address may carry but a name should not lead or trail with.
+	local = strings.Trim(local, ".-_+")
+	// A "+tag" suffix is addressing, not identity.
+	if base, _, ok := strings.Cut(local, "+"); ok {
+		local = base
+	}
+	if len(local) > maxDisplayNameLen {
+		local = local[:maxDisplayNameLen]
+	}
+	return local
+}
+
+// maxDisplayNameLen bounds a derived name. The profile endpoint enforces its own, larger limit on
+// names a person chooses; this one only has to keep a pathological address from becoming a name.
+const maxDisplayNameLen = 64
+
 func (p NotificationPrivacy) Effective() NotificationPrivacy {
 	if p == "" {
 		return NotificationPrivacySender
@@ -163,21 +194,28 @@ type User struct {
 }
 
 // UserProfileUpdate carries the editable profile fields for UpdateUserProfile.
-// Username is the canonical (display-cased) handle; an empty Username clears it.
+// Username is the canonical (display-cased) handle; a non-nil empty Username clears it.
 // The store derives and persists the lowercased uniqueness key.
 type UserProfileUpdate struct {
-	Username    string
-	DisplayName string
-	Bio         string
-	Phone       string
-	Website     string
-	// NotificationPrivacy is a POINTER while its neighbours are not, and the
-	// asymmetry is deliberate. The others are cleared by omission — that is the
-	// established contract of this struct, and every client sends the full set.
-	// This one cannot follow that rule: its meaningful default is the empty
-	// value, so "absent" and "set to sender" would be indistinguishable, and
-	// every profile save from a client that predates the setting would silently
-	// switch a user's lock screen back on. nil means leave it alone.
+	// ALL POINTERS. nil means "not supplied, leave it alone"; a non-nil empty string means
+	// "clear it", and the two are different requests.
+	//
+	// They used to be plain strings, cleared by omission, on the stated assumption that every
+	// client sends the full set. One did not: the settings screen saves the notification-privacy
+	// choice on its own, so PATCH /v1/me arrived carrying that field and nothing else — and the
+	// server dutifully blanked the display name, bio, phone and website of anyone who touched the
+	// setting. That is how a real account came to render as "User 3a7119".
+	//
+	// An API whose correctness depends on every caller sending fields it does not care about will
+	// be got wrong eventually, and was.
+	Username    *string
+	DisplayName *string
+	Bio         *string
+	Phone       *string
+	Website     *string
+	// nil means leave it alone, like every field above. This one was a pointer first, because its
+	// meaningful default is the empty value and "absent" could not be allowed to read as "set to
+	// sender" — the rest have since caught up for a related reason.
 	NotificationPrivacy *NotificationPrivacy
 }
 

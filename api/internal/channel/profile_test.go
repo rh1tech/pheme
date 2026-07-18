@@ -95,12 +95,12 @@ func TestUsernameValidationRejected(t *testing.T) {
 func TestProfileRejectsNonHTTPWebsite(t *testing.T) {
 	f := newAppFixture(t)
 	token, _ := f.tokenFor(t, "w@b.com")
-	rec := f.do(http.MethodPatch, "/v1/me", token, map[string]any{"website": "javascript:alert(1)"})
+	rec := f.do(http.MethodPatch, "/v1/me", token, map[string]any{"displayName": "Ada", "website": "javascript:alert(1)"})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("javascript website status = %d, want 400; body=%s", rec.Code, rec.Body)
 	}
 	// A normal https URL is accepted.
-	rec = f.do(http.MethodPatch, "/v1/me", token, map[string]any{"website": "https://example.com"})
+	rec = f.do(http.MethodPatch, "/v1/me", token, map[string]any{"displayName": "Ada", "website": "https://example.com"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("https website status = %d, want 200; body=%s", rec.Code, rec.Body)
 	}
@@ -149,5 +149,92 @@ func TestAvatarUploadServeAndReplace(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &afterDelete)
 	if afterDelete.AvatarID != "" {
 		t.Fatalf("expected cleared avatar, got %q", afterDelete.AvatarID)
+	}
+}
+
+// An account has to be callable something. With both fields blank the clients have nothing to
+// render but six characters of a database id — "User 3a7119" — and that is what everyone else in a
+// conversation sees, indefinitely.
+//
+// The state was easy to reach without meaning to: the profile screen initialises its display-name
+// field from an account that never had one, so saving a bio and nothing else wrote the name back as
+// an empty string.
+func TestProfileRejectsBlankNameAndUsername(t *testing.T) {
+	f := newAppFixture(t)
+	token, _ := f.tokenFor(t, "nameless@example.com")
+
+	rec := f.do(http.MethodPatch, "/v1/me", token, map[string]any{"displayName": "  ", "username": ""})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("blank name and username status = %d, want 400; body=%s", rec.Code, rec.Body)
+	}
+
+	// A username alone is a perfectly good identity — the display name is not the only way to be
+	// nameable, and demanding both would be inventing a requirement.
+	rec = f.do(http.MethodPatch, "/v1/me", token, map[string]any{"displayName": "", "username": "ada"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("username-only status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+}
+
+// The bug that produced "User 3a7119" on a real account.
+//
+// The mobile settings screen saves the notification-privacy choice on its own, so PATCH /v1/me
+// arrives carrying that one field. Every other profile field used to be cleared by omission, so
+// turning message previews on silently erased the user's display name — and their bio, phone and
+// website — and everyone they chatted with started seeing six characters of a database id.
+func TestProfilePartialUpdateKeepsEverythingElse(t *testing.T) {
+	f := newAppFixture(t)
+	token, _ := f.tokenFor(t, "partial@b.com")
+
+	rec := f.do(http.MethodPatch, "/v1/me", token, map[string]any{
+		"displayName": "Ada Lovelace",
+		"bio":         "counting",
+		"website":     "https://example.com",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initial save status = %d; body=%s", rec.Code, rec.Body)
+	}
+
+	// Exactly what the settings screen sends: one field, nothing else.
+	rec = f.do(http.MethodPatch, "/v1/me", token, map[string]any{"notificationPrivacy": "preview"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("privacy-only save status = %d; body=%s", rec.Code, rec.Body)
+	}
+
+	var u domain.User
+	if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if u.DisplayName != "Ada Lovelace" {
+		t.Errorf("displayName = %q after a privacy-only save, want it untouched", u.DisplayName)
+	}
+	if u.Bio != "counting" {
+		t.Errorf("bio = %q after a privacy-only save, want it untouched", u.Bio)
+	}
+	if u.Website != "https://example.com" {
+		t.Errorf("website = %q after a privacy-only save, want it untouched", u.Website)
+	}
+	if u.NotificationPrivacy != domain.NotificationPrivacyPreview {
+		t.Errorf("notificationPrivacy = %q, want the change to have applied", u.NotificationPrivacy)
+	}
+}
+
+// Clearing is still possible — it just has to be asked for.
+func TestProfileCanStillClearAField(t *testing.T) {
+	f := newAppFixture(t)
+	token, _ := f.tokenFor(t, "clearing@b.com")
+
+	f.do(http.MethodPatch, "/v1/me", token, map[string]any{"displayName": "Ada", "bio": "counting"})
+	rec := f.do(http.MethodPatch, "/v1/me", token, map[string]any{"bio": ""})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear bio status = %d; body=%s", rec.Code, rec.Body)
+	}
+	var u domain.User
+	_ = json.Unmarshal(rec.Body.Bytes(), &u)
+	if u.Bio != "" {
+		t.Errorf("bio = %q, want it cleared when explicitly set to empty", u.Bio)
+	}
+	if u.DisplayName != "Ada" {
+		t.Errorf("displayName = %q, want it untouched", u.DisplayName)
 	}
 }

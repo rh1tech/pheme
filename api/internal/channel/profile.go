@@ -25,16 +25,25 @@ func (h *AppHandler) me(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, u)
 }
 
+// Every field is a pointer so that ABSENT and BLANK stay different requests. A client that sends
+// only the field it changed must not have the rest cleared underneath it — which is exactly what
+// happened to anyone who used the notification-privacy setting on mobile: it PATCHes that one
+// field, and the display name, bio, phone and website went with it.
 type updateProfileRequest struct {
-	Username    string `json:"username"`
-	DisplayName string `json:"displayName"`
-	Bio         string `json:"bio"`
-	Phone       string `json:"phone"`
-	Website     string `json:"website"`
-	// A pointer, unlike its neighbours, so that a client which does not know about
-	// the setting leaves it alone rather than resetting it on every profile save.
-	// See domain.UserProfileUpdate.
+	Username            *string `json:"username"`
+	DisplayName         *string `json:"displayName"`
+	Bio                 *string `json:"bio"`
+	Phone               *string `json:"phone"`
+	Website             *string `json:"website"`
 	NotificationPrivacy *string `json:"notificationPrivacy"`
+}
+
+// deref returns the trimmed value of an optional field, and whether it was supplied at all.
+func deref(v *string) (string, bool) {
+	if v == nil {
+		return "", false
+	}
+	return strings.TrimSpace(*v), true
 }
 
 // maxBioLen / maxFieldLen bound free-text profile fields so a single document
@@ -56,7 +65,7 @@ func (h *AppHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	username := strings.TrimSpace(req.Username)
+	username, usernameGiven := deref(req.Username)
 	if username != "" {
 		if err := domain.ValidateUsername(username); err != nil {
 			httpx.Error(w, http.StatusBadRequest, err.Error())
@@ -71,17 +80,37 @@ func (h *AppHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(req.Bio) > maxBioLen {
+	bio, _ := deref(req.Bio)
+	displayName, displayNameGiven := deref(req.DisplayName)
+	phone, _ := deref(req.Phone)
+	website, _ := deref(req.Website)
+	if len(bio) > maxBioLen {
 		httpx.Error(w, http.StatusBadRequest, "bio is too long")
 		return
 	}
-	if len(req.DisplayName) > maxFieldLen || len(req.Phone) > maxFieldLen || len(req.Website) > maxFieldLen {
+	if len(displayName) > maxFieldLen || len(phone) > maxFieldLen || len(website) > maxFieldLen {
 		httpx.Error(w, http.StatusBadRequest, "a profile field is too long")
 		return
 	}
+	// An account has to be callable something, so refuse to clear the last name it has. Only when
+	// the caller actually ASKED to blank the display name — a partial update that never mentions it
+	// is not a request to erase anything, which is the whole reason these fields are pointers now.
+	if displayNameGiven && displayName == "" {
+		clearingUsername := usernameGiven && username == ""
+		current, err := h.Store.UserByID(r.Context(), uid)
+		if err != nil {
+			h.writeStoreErr(w, err, "could not update profile")
+			return
+		}
+		keepsUsername := current.Username != "" && !clearingUsername
+		if username == "" && !keepsUsername {
+			httpx.Error(w, http.StatusBadRequest, "choose a display name or a username")
+			return
+		}
+	}
 	// Reject non-http(s) website values so a client rendering the profile link
 	// cannot be tricked into a javascript:/data: scheme (stored-XSS guard).
-	if site := strings.TrimSpace(req.Website); site != "" {
+	if site := website; site != "" {
 		u, perr := url.Parse(site)
 		if perr != nil || (u.Scheme != "http" && u.Scheme != "https") {
 			httpx.Error(w, http.StatusBadRequest, "website must be an http or https URL")
@@ -101,7 +130,7 @@ func (h *AppHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		privacy = &p
 	}
 	u, err := h.Store.UpdateUserProfile(r.Context(), uid, domain.UserProfileUpdate{
-		Username:            username,
+		Username:            req.Username,
 		DisplayName:         req.DisplayName,
 		Bio:                 req.Bio,
 		Phone:               req.Phone,

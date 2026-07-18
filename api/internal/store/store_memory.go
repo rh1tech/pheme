@@ -134,20 +134,32 @@ func (m *Memory) UpdateUserProfile(_ context.Context, userID string, p domain.Us
 	if !ok {
 		return domain.User{}, ErrNotFound
 	}
-	lower := strings.ToLower(strings.TrimSpace(p.Username))
-	if lower != "" {
-		for id, other := range m.users {
-			if id != userID && other.UsernameLower == lower {
-				return domain.User{}, ErrUsernameTaken
+	// nil means "not supplied, leave it": see domain.UserProfileUpdate.
+	lower := ""
+	if p.Username != nil {
+		lower = strings.ToLower(strings.TrimSpace(*p.Username))
+		if lower != "" {
+			for id, other := range m.users {
+				if id != userID && other.UsernameLower == lower {
+					return domain.User{}, ErrUsernameTaken
+				}
 			}
 		}
+		u.Username = strings.TrimSpace(*p.Username)
+		u.UsernameLower = lower
 	}
-	u.Username = strings.TrimSpace(p.Username)
-	u.UsernameLower = lower
-	u.DisplayName = strings.TrimSpace(p.DisplayName)
-	u.Bio = strings.TrimSpace(p.Bio)
-	u.Phone = strings.TrimSpace(p.Phone)
-	u.Website = strings.TrimSpace(p.Website)
+	if p.DisplayName != nil {
+		u.DisplayName = strings.TrimSpace(*p.DisplayName)
+	}
+	if p.Bio != nil {
+		u.Bio = strings.TrimSpace(*p.Bio)
+	}
+	if p.Phone != nil {
+		u.Phone = strings.TrimSpace(*p.Phone)
+	}
+	if p.Website != nil {
+		u.Website = strings.TrimSpace(*p.Website)
+	}
 	// nil means "not supplied, leave it": see domain.UserProfileUpdate.
 	if p.NotificationPrivacy != nil {
 		u.NotificationPrivacy = *p.NotificationPrivacy

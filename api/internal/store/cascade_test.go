@@ -143,19 +143,19 @@ func TestUpdateUserProfileUsernameUniqueness(t *testing.T) {
 	a, _ := db.CreateUser(ctx, domain.User{Email: "a@x.com", Role: domain.RoleUser, Status: domain.UserActive, CreatedAt: time.Now()})
 	b, _ := db.CreateUser(ctx, domain.User{Email: "b@x.com", Role: domain.RoleUser, Status: domain.UserActive, CreatedAt: time.Now()})
 
-	if _, err := db.UpdateUserProfile(ctx, a.ID, domain.UserProfileUpdate{Username: "News"}); err != nil {
+	if _, err := db.UpdateUserProfile(ctx, a.ID, domain.UserProfileUpdate{Username: ptr("News")}); err != nil {
 		t.Fatalf("set username: %v", err)
 	}
 	if got, _ := db.UserByUsername(ctx, "news"); got.ID != a.ID {
 		t.Fatalf("UserByUsername(news) = %q, want %q", got.ID, a.ID)
 	}
-	if _, err := db.UpdateUserProfile(ctx, b.ID, domain.UserProfileUpdate{Username: "news"}); !errors.Is(err, ErrUsernameTaken) {
+	if _, err := db.UpdateUserProfile(ctx, b.ID, domain.UserProfileUpdate{Username: ptr("news")}); !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("duplicate username err = %v, want ErrUsernameTaken", err)
 	}
-	if _, err := db.UpdateUserProfile(ctx, a.ID, domain.UserProfileUpdate{Username: ""}); err != nil {
+	if _, err := db.UpdateUserProfile(ctx, a.ID, domain.UserProfileUpdate{Username: ptr("")}); err != nil {
 		t.Fatalf("clear username: %v", err)
 	}
-	if _, err := db.UpdateUserProfile(ctx, b.ID, domain.UserProfileUpdate{Username: "news"}); err != nil {
+	if _, err := db.UpdateUserProfile(ctx, b.ID, domain.UserProfileUpdate{Username: ptr("news")}); err != nil {
 		t.Fatalf("reuse freed username: %v", err)
 	}
 }
@@ -220,3 +220,7 @@ func TestDeleteUserCascadesImageBlobs(t *testing.T) {
 		t.Fatalf("blob still present after user delete (err=%v)", err)
 	}
 }
+
+// ptr makes an optional profile field explicit: see domain.UserProfileUpdate, where nil means
+// "leave it alone" and a non-nil empty string means "clear it".
+func ptr(v string) *string { return &v }

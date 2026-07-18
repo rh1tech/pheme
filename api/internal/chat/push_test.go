@@ -76,7 +76,7 @@ func (f *fixture) device(t *testing.T, userID string) string {
 func (f *fixture) setDisplayName(t *testing.T, userID, name string) {
 	t.Helper()
 	_, err := f.store.UpdateUserProfile(context.Background(), userID, domain.UserProfileUpdate{
-		DisplayName: name,
+		DisplayName: &name,
 	})
 	if err != nil {
 		t.Fatalf("set display name: %v", err)

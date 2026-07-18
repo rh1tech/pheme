@@ -224,9 +224,13 @@ func (h *AuthHandler) verify(w http.ResponseWriter, r *http.Request) {
 	u, err := h.Store.CreateUser(r.Context(), domain.User{
 		Email:        email,
 		PasswordHash: s.PasswordHash,
-		Role:         h.roleForEmail(email),
-		Status:       domain.UserActive,
-		CreatedAt:    time.Now().UTC(),
+		// Signup asks for an email and a password, so without this every account is created with
+		// no name of any kind and the person on the other side of a chat sees "User 3a7119" — six
+		// characters of a database id — until the user finds the profile screen. Theirs to change.
+		DisplayName: domain.DefaultDisplayName(email),
+		Role:        h.roleForEmail(email),
+		Status:      domain.UserActive,
+		CreatedAt:   time.Now().UTC(),
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "verification failed")

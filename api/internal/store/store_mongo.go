@@ -174,7 +174,11 @@ func (m *Mongo) UsersByIDs(ctx context.Context, ids []string) (map[string]domain
 }
 
 func (m *Mongo) UpdateUserProfile(ctx context.Context, userID string, p domain.UserProfileUpdate) (domain.User, error) {
-	trimmed := strings.TrimSpace(p.Username)
+	// nil means "leave it alone" for every field: see domain.UserProfileUpdate.
+	trimmed := ""
+	if p.Username != nil {
+		trimmed = strings.TrimSpace(*p.Username)
+	}
 	lower := strings.ToLower(trimmed)
 	if lower != "" {
 		// Clean ErrUsernameTaken instead of a raw duplicate-key error; the unique
@@ -189,20 +193,30 @@ func (m *Mongo) UpdateUserProfile(ctx context.Context, userID string, p domain.U
 			return domain.User{}, err
 		}
 	}
-	set := bson.M{
-		"displayName": strings.TrimSpace(p.DisplayName),
-		"bio":         strings.TrimSpace(p.Bio),
-		"phone":       strings.TrimSpace(p.Phone),
-		"website":     strings.TrimSpace(p.Website),
+	set := bson.M{}
+	for field, value := range map[string]*string{
+		"displayName": p.DisplayName,
+		"bio":         p.Bio,
+		"phone":       p.Phone,
+		"website":     p.Website,
+	} {
+		if value != nil {
+			set[field] = strings.TrimSpace(*value)
+		}
 	}
 	update := bson.M{"$set": set}
 	unset := bson.M{}
-	if lower == "" {
-		unset["username"] = ""
-		unset["usernameLower"] = ""
-	} else {
-		set["username"] = trimmed
-		set["usernameLower"] = lower
+	// Only touch the username if the caller said something about it. Clearing it is still possible
+	// — that is a non-nil empty string — but no longer the accidental consequence of not mentioning
+	// it.
+	if p.Username != nil {
+		if lower == "" {
+			unset["username"] = ""
+			unset["usernameLower"] = ""
+		} else {
+			set["username"] = trimmed
+			set["usernameLower"] = lower
+		}
 	}
 	// nil means "not supplied, leave it": see UserProfileUpdate. Always written EXPLICITLY,
 	// never unset back to empty — an absent field means "this account predates the setting"
@@ -212,6 +226,14 @@ func (m *Mongo) UpdateUserProfile(ctx context.Context, userID string, p domain.U
 	}
 	if len(unset) > 0 {
 		update["$unset"] = unset
+	}
+	// An update that changes nothing is a valid request — a client may send only the fields it
+	// knows about — but Mongo rejects an empty $set outright.
+	if len(set) == 0 {
+		delete(update, "$set")
+	}
+	if len(update) == 0 {
+		return m.UserByID(ctx, userID)
 	}
 	res, err := m.db.Collection("users").UpdateOne(ctx, bson.M{"_id": userID}, update)
 	if err != nil {
