@@ -185,3 +185,57 @@ func TestTerminateDeviceIsOwnerScoped(t *testing.T) {
 		t.Fatalf("A still works: got %d", rec.Code)
 	}
 }
+
+// Terminating a device has to take away its PUSH addresses too, not just its keys and its session.
+//
+// It did not, and there was no field joining the two device registries, so nothing could even find
+// the push row to delete. A revoked browser therefore kept its subscription and went on receiving
+// messages — and since previews shipped, those pushes carry the CIPHERTEXT of the very messages it
+// had just been told it could no longer read. A user who deletes a device is told it is gone; that
+// has to be true of every way the device can still be reached.
+func TestTerminateDeviceRemovesItsPushAddresses(t *testing.T) {
+	f := newFixture(t)
+	uid, tok := f.user(t, "pushy@pheme.test")
+
+	f.publishDevice(t, tok, "dev-keep", "Laptop")
+	f.publishDevice(t, tok, "dev-gone", "Old browser")
+
+	push := func(mlsDeviceID, endpoint string) {
+		t.Helper()
+		dev := domain.Device{
+			UserID:          uid,
+			Platform:        domain.PlatformWeb,
+			WebPushEndpoint: endpoint,
+			MLSDeviceID:     mlsDeviceID,
+		}
+		if _, err := f.store.CreateDevice(context.Background(), dev); err != nil {
+			t.Fatalf("create push device: %v", err)
+		}
+	}
+	push("dev-keep", "https://push.example/keep")
+	push("dev-gone", "https://push.example/gone")
+
+	if rec := f.do(http.MethodDelete, "/v1/mls/devices/dev-gone", tok, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("terminate: got %d", rec.Code)
+	}
+
+	devices, err := f.store.DevicesForUsers(context.Background(), []string{uid})
+	if err != nil {
+		t.Fatalf("devices: %v", err)
+	}
+	for _, d := range devices {
+		if d.MLSDeviceID == "dev-gone" {
+			t.Fatalf("a terminated device still has a push address: %s", d.WebPushEndpoint)
+		}
+	}
+	// And the device that was NOT terminated keeps its own.
+	var kept int
+	for _, d := range devices {
+		if d.MLSDeviceID == "dev-keep" {
+			kept++
+		}
+	}
+	if kept != 1 {
+		t.Errorf("kept push addresses for the surviving device = %d, want 1", kept)
+	}
+}

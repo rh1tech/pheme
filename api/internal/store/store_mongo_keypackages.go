@@ -390,6 +390,23 @@ func (m *Mongo) DeleteMLSDevice(ctx context.Context, userID, deviceID string) er
 	return err
 }
 
+// DeletePushDevicesForMLSDevice removes the push addresses belonging to one MLS device.
+//
+// Scoped by userId as well as the device id, so a caller cannot delete another account's push rows
+// by naming a device id it does not own.
+func (m *Mongo) DeletePushDevicesForMLSDevice(ctx context.Context, userID, mlsDeviceID string) (int64, error) {
+	if mlsDeviceID == "" {
+		// A blank id would match every legacy row for this user, which is the whole account rather
+		// than the one device that was terminated.
+		return 0, nil
+	}
+	res, err := m.db.Collection("devices").DeleteMany(ctx, bson.M{"userId": userID, "mlsDeviceId": mlsDeviceID})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
+
 // RevokeSession records a terminated session's id in the deny list, keyed by the id so a
 // repeat revoke just refreshes its expiry. The token is rejected on expiry regardless, so
 // the stored expiry is only there to let entries be reaped once they can no longer matter.

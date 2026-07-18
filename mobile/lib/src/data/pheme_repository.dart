@@ -291,13 +291,21 @@ class PhemeRepository {
   /// itself. The server withholds previews from devices that do not say so, because a preview
   /// arrives data-only and a build without the handler ignores it completely — showing nothing at
   /// all rather than the generic text.
+  /// [mlsDeviceId] ties this push address to this device's MLS identity, so that revoking the
+  /// device can find and delete it. Without the link the two registries share no field at all, and
+  /// a revoked device keeps its subscription — and keeps being sent the ciphertext of messages it
+  /// is no longer allowed to read.
   Future<Device> createDevice({
     required String platform,
     String? fcmToken,
     String? voipToken,
+    String? mlsDeviceId,
     bool canRenderPreview = false,
   }) {
     final body = <String, dynamic>{'platform': platform};
+    if (mlsDeviceId != null && mlsDeviceId.isNotEmpty) {
+      body['mlsDeviceId'] = mlsDeviceId;
+    }
     if (fcmToken != null) body['fcmToken'] = fcmToken;
     if (voipToken != null && voipToken.isNotEmpty) {
       body['voipToken'] = voipToken;

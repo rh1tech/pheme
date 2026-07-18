@@ -317,6 +317,23 @@ func (m *Memory) DeleteMLSDevice(_ context.Context, userID, deviceID string) err
 	return nil
 }
 
+func (m *Memory) DeletePushDevicesForMLSDevice(_ context.Context, userID, mlsDeviceID string) (int64, error) {
+	if mlsDeviceID == "" {
+		// A blank id would match every legacy row for this user: the account, not the one device.
+		return 0, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var removed int64
+	for id, d := range m.devices {
+		if d.UserID == userID && d.MLSDeviceID == mlsDeviceID {
+			delete(m.devices, id)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
 func (m *Memory) RevokeSession(_ context.Context, sessionID string, expiresAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

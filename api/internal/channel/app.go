@@ -396,6 +396,9 @@ type createDeviceRequest struct {
 	// notification itself. Absent from every older client, which is the answer. See
 	// domain.Device.CanRenderPreview for why guessing it is not survivable.
 	CanRenderPreview bool `json:"canRenderPreview,omitempty"`
+	// MLSDeviceID ties this push address to the caller's MLS device, so that terminating that
+	// device can find and remove it. See domain.Device.MLSDeviceID.
+	MLSDeviceID string `json:"mlsDeviceId,omitempty"`
 }
 
 func (h *AppHandler) createDevice(w http.ResponseWriter, r *http.Request) {
@@ -414,6 +417,7 @@ func (h *AppHandler) createDevice(w http.ResponseWriter, r *http.Request) {
 		WebPushSub:       req.WebPushSub,
 		VoIPToken:        req.VoIPToken,
 		CanRenderPreview: req.CanRenderPreview,
+		MLSDeviceID:      req.MLSDeviceID,
 		CreatedAt:        time.Now().UTC(),
 		LastSeenAt:       time.Now().UTC(),
 	})

@@ -189,6 +189,20 @@ func (h *Handler) terminateDevice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Take away its push addresses too. Nothing used to, so a terminated device kept its
+	// subscription and went on being pushed to — and since previews shipped, those pushes carry the
+	// ciphertext of the messages it had just been told it could no longer read. The comment above
+	// about being "crypto-severed" was only ever true if the client-side leaf removal succeeded,
+	// which it silently does not in several ordinary cases.
+	//
+	// Best effort, and deliberately after the crypto steps: a failure here leaves a device that is
+	// noisy rather than one that is still trusted.
+	if removed, err := h.Store.DeletePushDevicesForMLSDevice(r.Context(), uid, deviceID); err != nil {
+		h.logger().Error("terminate device: delete push addresses", "device", deviceID, "error", err)
+	} else if removed > 0 {
+		h.logger().Info("terminate device: push addresses removed", "device", deviceID, "count", removed)
+	}
+
 	if err := h.Store.DeleteMLSDevice(r.Context(), uid, deviceID); err != nil {
 		h.logger().Error("terminate device: forget device", "error", err)
 	}

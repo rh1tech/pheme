@@ -102,11 +102,30 @@ String? feedNoticeKey(MessageFeedState feed) {
   return null;
 }
 
+/// How often to re-try admission while this device is waiting to be let into a group.
+///
+/// Matches the web client's loop. Long enough that a chat left open is not hammering the server,
+/// short enough that being admitted feels immediate rather than like a bug.
+const _admissionRetryInterval = Duration(seconds: 15);
+
 class MessageFeedController extends Notifier<MessageFeedState> {
   /// Riverpod 3 has no FamilyNotifier — a family hands its argument to the notifier's constructor.
   MessageFeedController(this._conversationId);
 
   final String _conversationId;
+
+  /// Re-settles while this device is still waiting to be let into the group.
+  ///
+  /// The on-open path decrypts BEFORE the group is settled, deliberately, and its whole
+  /// compensation is the two _decryptUnread() calls that a single _settle() run triggers. When that
+  /// run ends in "announced, waiting to be admitted" — the ordinary state for a device that was not
+  /// in the conversation's founding Commit — there was nothing left to try. Every historical
+  /// message stayed unreadable until a Commit happened to arrive on the live channel, which in
+  /// practice meant when the other person next sent something. That is exactly the reported
+  /// symptom: a new chat shows nothing until the first message sent while it is open.
+  ///
+  /// The web client has had this loop since it hit the same wall; the Flutter client never got it.
+  Timer? _admissionRetry;
 
   @override
   MessageFeedState build() {
@@ -125,6 +144,8 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       final message = event?.chatMessage;
       if (message != null) _onLiveMessage(message);
     });
+
+    ref.onDispose(_stopAdmissionRetry);
 
     Future.microtask(_load);
     return const MessageFeedState();
@@ -237,13 +258,40 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       // The settle may have caught up on commits that let us read messages we could not read a moment
       // ago — the very Welcome that admits this device, for instance. Try the ones we gave up on.
       await _decryptUnread();
+
+      if (groupId == null) {
+        _startAdmissionRetry();
+      } else {
+        _stopAdmissionRetry();
+      }
     } on PeerKeysMissingException {
       state = state.copyWith(joined: false, peerNotReady: true);
+      // The peer has published no keys yet. They will; keep looking, or this conversation stays
+      // blank until something else happens to nudge it.
+      _startAdmissionRetry();
     } on Object {
       // The network is down, or the settle failed. If we HOLD the group, none of that matters: we can
       // read and we can send, and telling the user encryption is being set up would be a lie. Leave
       // whatever primeGroup concluded.
     }
+  }
+
+  /// Starts the admission retry, unless one is already running.
+  void _startAdmissionRetry() {
+    if (_admissionRetry != null) return;
+    _admissionRetry = Timer.periodic(_admissionRetryInterval, (_) async {
+      // Settled in the meantime, by the live channel or anything else: stop asking.
+      if (state.joined == true) {
+        _stopAdmissionRetry();
+        return;
+      }
+      await _settle();
+    });
+  }
+
+  void _stopAdmissionRetry() {
+    _admissionRetry?.cancel();
+    _admissionRetry = null;
   }
 
   /// Re-tries the messages that would not decrypt, after a catch-up may have made them readable.

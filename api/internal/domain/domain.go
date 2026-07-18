@@ -342,9 +342,22 @@ type Device struct {
 	//
 	// Absent on every device registered before this shipped, which is exactly right: they cannot,
 	// and they say so by saying nothing.
-	CanRenderPreview bool      `bson:"canRenderPreview,omitempty" json:"canRenderPreview,omitempty"`
-	CreatedAt        time.Time `bson:"createdAt" json:"createdAt"`
-	LastSeenAt       time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
+	CanRenderPreview bool `bson:"canRenderPreview,omitempty" json:"canRenderPreview,omitempty"`
+	// MLSDeviceID is the client-minted id of the MLS device this push address belongs to — the same
+	// id that names its leaf in every encrypted group.
+	//
+	// The two device registries used to have NOTHING in common: a push row was found by user id, an
+	// MLS device by its own uuid, and no field joined them. So "delete this device" could revoke the
+	// MLS side and had no way to even FIND the push address to remove, which is why a browser whose
+	// access had been revoked went on receiving pushes — carrying, since previews shipped, the
+	// ciphertext of the messages it was no longer supposed to read.
+	//
+	// Empty on rows registered before this shipped. Those cannot be matched to an MLS device and are
+	// treated as legacy: see previewCiphertext, which will not hand ciphertext to a push address it
+	// cannot account for.
+	MLSDeviceID string    `bson:"mlsDeviceId,omitempty" json:"mlsDeviceId,omitempty"`
+	CreatedAt   time.Time `bson:"createdAt" json:"createdAt"`
+	LastSeenAt  time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
 }
 
 // Subscription links a device to a channel.

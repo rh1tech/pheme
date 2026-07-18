@@ -631,6 +631,8 @@ export const api = {
     fcmToken?: string
     webPushSub?: string
     canRenderPreview?: boolean
+    /** This browser's MLS device id, so revoking the device can remove this push address too. */
+    mlsDeviceId?: string
   }) => request<Device>('/v1/devices', { method: 'POST', body }),
   subscribe: (channelId: string, deviceId: string) =>
     request<unknown>(`/v1/channels/${channelId}/subscribe`, { method: 'POST', body: { deviceId } }),

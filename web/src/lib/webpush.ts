@@ -3,7 +3,7 @@
 // for the Pheme device registry.
 
 import { api } from './api'
-import { saveWebDeviceId } from './device'
+import { saveWebDeviceId, loadMlsDeviceId } from './device'
 import { SERVICE_WORKER_URL } from './sw'
 
 /** Reports whether the browser supports Web Push. */
@@ -172,6 +172,11 @@ export async function registerWebPushDevice(): Promise<string> {
     // unconditionally here: the worker is deployed with this bundle, and it degrades to the
     // server's generic text on its own if a decrypt does not land.
     canRenderPreview: true,
+    // Ties this push address to this browser's MLS device, so that revoking the device can find
+    // and delete it. Without the link the two registries share no field at all, and a revoked
+    // browser keeps its subscription — and keeps being sent the ciphertext of messages it is no
+    // longer allowed to read.
+    mlsDeviceId: loadMlsDeviceId() ?? undefined,
   })
   return device.id
 }

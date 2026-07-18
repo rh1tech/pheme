@@ -9,7 +9,9 @@ import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../crypto/mls_device.dart';
 import '../data/pheme_repository.dart';
 import 'notification_preview.dart';
 
@@ -430,10 +432,15 @@ class PushService {
       voipToken = await _voipToken();
     }
 
+    // Best effort: a device that has not minted an MLS identity yet still needs a push address,
+    // and will send the link on its next registration.
+    final mlsDeviceId = await loadMlsDeviceId(const FlutterSecureStorage());
+
     final device = await repo.createDevice(
       platform: _platform,
       fcmToken: fcmToken,
       voipToken: voipToken,
+      mlsDeviceId: mlsDeviceId,
       canRenderPreview: _canRenderPreview,
     );
     return device.id;
