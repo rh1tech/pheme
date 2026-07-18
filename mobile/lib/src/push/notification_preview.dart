@@ -103,17 +103,23 @@ Future<String?> decryptNotificationPreview({
       return null;
     }
 
-    final plaintext = await rust.mlsDecryptPreview(
+    final outcome = await rust.mlsDecryptPreview(
       state: state,
       groupIds: groupIds
           .map((id) => Uint8List.fromList(utf8.encode(id)))
           .toList(),
       ciphertext: base64Decode(ciphertextBase64),
     );
-    // Control traffic, or a message this device cannot read.
+    final plaintext = outcome.plaintext;
+    // Control traffic, or a message this device cannot read — and which of those matters, so say
+    // it. Holding NONE of the offered groups means this device never joined the group the message
+    // was sent in. Holding one and still failing means the key material is there but this snapshot
+    // cannot open THIS message: the state on disk lags the epoch it was sent in, or the app has
+    // already consumed the key.
     if (plaintext == null) {
       debugPrint(
-        'Pheme: no preview, none of ${groupIds.length} group(s) could read it',
+        'Pheme: no preview — held ${outcome.groupsHeld} of '
+        '${outcome.groupsOffered} offered group(s), none could read it',
       );
       return null;
     }

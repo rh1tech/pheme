@@ -114,7 +114,7 @@ abstract class RustLibApi extends BaseApi {
     required List<int> ciphertext,
   });
 
-  Future<Uint8List?> crateApiMlsMlsDecryptPreview({
+  Future<MlsPreviewOutcome> crateApiMlsMlsDecryptPreview({
     required List<int> state,
     required List<Uint8List> groupIds,
     required List<int> ciphertext,
@@ -498,7 +498,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
-  Future<Uint8List?> crateApiMlsMlsDecryptPreview({
+  Future<MlsPreviewOutcome> crateApiMlsMlsDecryptPreview({
     required List<int> state,
     required List<Uint8List> groupIds,
     required List<int> ciphertext,
@@ -518,7 +518,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
+          decodeSuccessData: sse_decode_mls_preview_outcome,
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiMlsMlsDecryptPreviewConstMeta,
@@ -1324,6 +1324,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MlsPreviewOutcome dco_decode_mls_preview_outcome(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return MlsPreviewOutcome(
+      plaintext: dco_decode_opt_list_prim_u_8_strict(arr[0]),
+      groupsHeld: dco_decode_u_32(arr[1]),
+      groupsOffered: dco_decode_u_32(arr[2]),
+    );
+  }
+
+  @protected
   Opened dco_decode_opened(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1352,6 +1365,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       commit: dco_decode_list_prim_u_8_strict(arr[1]),
       state: dco_decode_list_prim_u_8_strict(arr[2]),
     );
+  }
+
+  @protected
+  int dco_decode_u_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -1467,6 +1486,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MlsPreviewOutcome sse_decode_mls_preview_outcome(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_plaintext = sse_decode_opt_list_prim_u_8_strict(deserializer);
+    var var_groupsHeld = sse_decode_u_32(deserializer);
+    var var_groupsOffered = sse_decode_u_32(deserializer);
+    return MlsPreviewOutcome(
+      plaintext: var_plaintext,
+      groupsHeld: var_groupsHeld,
+      groupsOffered: var_groupsOffered,
+    );
+  }
+
+  @protected
   Opened sse_decode_opened(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_plaintext = sse_decode_opt_list_prim_u_8_strict(deserializer);
@@ -1492,6 +1526,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_commit = sse_decode_list_prim_u_8_strict(deserializer);
     var var_state = sse_decode_list_prim_u_8_strict(deserializer);
     return Staged(welcome: var_welcome, commit: var_commit, state: var_state);
+  }
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint32();
   }
 
   @protected
@@ -1609,6 +1649,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_mls_preview_outcome(
+    MlsPreviewOutcome self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_opt_list_prim_u_8_strict(self.plaintext, serializer);
+    sse_encode_u_32(self.groupsHeld, serializer);
+    sse_encode_u_32(self.groupsOffered, serializer);
+  }
+
+  @protected
   void sse_encode_opened(Opened self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_opt_list_prim_u_8_strict(self.plaintext, serializer);
@@ -1634,6 +1685,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_prim_u_8_strict(self.welcome, serializer);
     sse_encode_list_prim_u_8_strict(self.commit, serializer);
     sse_encode_list_prim_u_8_strict(self.state, serializer);
+  }
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint32(self);
   }
 
   @protected

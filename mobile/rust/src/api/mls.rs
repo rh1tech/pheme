@@ -301,23 +301,52 @@ pub fn mls_decrypt(group_id: Vec<u8>, ciphertext: Vec<u8>) -> Result<Opened> {
 ///
 /// `None` means there was nothing to preview — control traffic, or a message this device cannot
 /// read. Both are ordinary outcomes on this path, not errors.
+/// What came of a preview attempt.
+///
+/// A bare `Option` said only "no preview", which is true of three different situations that want
+/// three different responses: a device that does not hold the group at all (the conversation was
+/// re-established and this device never joined the new one), a device that holds it but cannot read
+/// the message (the on-disk state lags the epoch the message was sent in, or the app already
+/// consumed the key), and control traffic that was never meant to be shown.
+///
+/// Telling them apart from a log line is the whole point — the last two failures in this feature
+/// each cost hours precisely because a null did not say which null it was.
+pub struct MlsPreviewOutcome {
+    /// The message text, when it could be read.
+    pub plaintext: Option<Vec<u8>>,
+    /// How many of the offered groups this device actually holds.
+    pub groups_held: u32,
+    /// How many were offered.
+    pub groups_offered: u32,
+}
+
 pub fn mls_decrypt_preview(
     state: Vec<u8>,
     group_ids: Vec<Vec<u8>>,
     ciphertext: Vec<u8>,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<MlsPreviewOutcome> {
     let client = pheme_mls::PreviewClient::import_state(&state).map_err(|e| anyhow!(e))?;
+    let mut held = 0u32;
     // A conversation can have more than one group: a retired group's messages still decrypt under
     // its old id. Try each the caller knows about, skipping any this device does not hold.
     for group_id in &group_ids {
         if !client.has_group(group_id) {
             continue;
         }
+        held += 1;
         if let Ok(Some(plaintext)) = client.decrypt(group_id, &ciphertext) {
-            return Ok(Some(plaintext));
+            return Ok(MlsPreviewOutcome {
+                plaintext: Some(plaintext),
+                groups_held: held,
+                groups_offered: group_ids.len() as u32,
+            });
         }
     }
-    Ok(None)
+    Ok(MlsPreviewOutcome {
+        plaintext: None,
+        groups_held: held,
+        groups_offered: group_ids.len() as u32,
+    })
 }
 
 /// Derives a secret from the group for a purpose outside MLS's own messaging — Pheme keys voice-call

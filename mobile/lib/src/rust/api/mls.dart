@@ -166,31 +166,7 @@ Future<Opened> mlsDecrypt({
   ciphertext: ciphertext,
 );
 
-/// Decrypts one message for a NOTIFICATION PREVIEW, and touches nothing else.
-///
-/// This is the one MLS call that does not go through `CLIENT`, and that is the entire point.
-///
-/// A preview runs where the app is not: an Android background isolate, an iOS
-/// NotificationServiceExtension. Both are contexts the single-client rule was written to keep away
-/// from the key store — a background isolate that called `mls_load` would swap the client out from
-/// under the foreground one, and a second process would race it to disk. Either way the older state
-/// can land last: a ratchet saved as though it had not moved, which is every message after that
-/// point permanently unreadable.
-///
-/// So this borrows nothing. It takes the state blob by value, builds a throwaway
-/// `PreviewClient` from it, reads one message, and drops the lot. `PreviewClient` has no
-/// `export_state`, so there is nowhere for the advanced ratchet to go and no way for a later edit
-/// to persist it by accident. The real client — in whichever isolate or process owns it — is
-/// untouched and still holds an unconsumed key for that message, and decrypts it again for real
-/// when the app opens.
-///
-/// Note what is NOT returned: a state blob. Every other mutating call here hands one back to
-/// persist. This one deliberately cannot, and the asymmetry in the signature is the API telling
-/// the caller what it is.
-///
-/// `None` means there was nothing to preview — control traffic, or a message this device cannot
-/// read. Both are ordinary outcomes on this path, not errors.
-Future<Uint8List?> mlsDecryptPreview({
+Future<MlsPreviewOutcome> mlsDecryptPreview({
   required List<int> state,
   required List<Uint8List> groupIds,
   required List<int> ciphertext,
@@ -307,6 +283,70 @@ class Bytes {
           runtimeType == other.runtimeType &&
           bytes == other.bytes &&
           state == other.state;
+}
+
+/// Decrypts one message for a NOTIFICATION PREVIEW, and touches nothing else.
+///
+/// This is the one MLS call that does not go through `CLIENT`, and that is the entire point.
+///
+/// A preview runs where the app is not: an Android background isolate, an iOS
+/// NotificationServiceExtension. Both are contexts the single-client rule was written to keep away
+/// from the key store — a background isolate that called `mls_load` would swap the client out from
+/// under the foreground one, and a second process would race it to disk. Either way the older state
+/// can land last: a ratchet saved as though it had not moved, which is every message after that
+/// point permanently unreadable.
+///
+/// So this borrows nothing. It takes the state blob by value, builds a throwaway
+/// `PreviewClient` from it, reads one message, and drops the lot. `PreviewClient` has no
+/// `export_state`, so there is nowhere for the advanced ratchet to go and no way for a later edit
+/// to persist it by accident. The real client — in whichever isolate or process owns it — is
+/// untouched and still holds an unconsumed key for that message, and decrypts it again for real
+/// when the app opens.
+///
+/// Note what is NOT returned: a state blob. Every other mutating call here hands one back to
+/// persist. This one deliberately cannot, and the asymmetry in the signature is the API telling
+/// the caller what it is.
+///
+/// `None` means there was nothing to preview — control traffic, or a message this device cannot
+/// read. Both are ordinary outcomes on this path, not errors.
+/// What came of a preview attempt.
+///
+/// A bare `Option` said only "no preview", which is true of three different situations that want
+/// three different responses: a device that does not hold the group at all (the conversation was
+/// re-established and this device never joined the new one), a device that holds it but cannot read
+/// the message (the on-disk state lags the epoch the message was sent in, or the app already
+/// consumed the key), and control traffic that was never meant to be shown.
+///
+/// Telling them apart from a log line is the whole point — the last two failures in this feature
+/// each cost hours precisely because a null did not say which null it was.
+class MlsPreviewOutcome {
+  /// The message text, when it could be read.
+  final Uint8List? plaintext;
+
+  /// How many of the offered groups this device actually holds.
+  final int groupsHeld;
+
+  /// How many were offered.
+  final int groupsOffered;
+
+  const MlsPreviewOutcome({
+    this.plaintext,
+    required this.groupsHeld,
+    required this.groupsOffered,
+  });
+
+  @override
+  int get hashCode =>
+      plaintext.hashCode ^ groupsHeld.hashCode ^ groupsOffered.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MlsPreviewOutcome &&
+          runtimeType == other.runtimeType &&
+          plaintext == other.plaintext &&
+          groupsHeld == other.groupsHeld &&
+          groupsOffered == other.groupsOffered;
 }
 
 /// A decrypted message. `plaintext` is `None` for a control message — which is a success, not a

@@ -52,6 +52,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  MlsPreviewOutcome dco_decode_mls_preview_outcome(dynamic raw);
+
+  @protected
   Opened dco_decode_opened(dynamic raw);
 
   @protected
@@ -59,6 +62,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Staged dco_decode_staged(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
 
   @protected
   BigInt dco_decode_u_64(dynamic raw);
@@ -105,6 +111,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  MlsPreviewOutcome sse_decode_mls_preview_outcome(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Opened sse_decode_opened(SseDeserializer deserializer);
 
   @protected
@@ -112,6 +123,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Staged sse_decode_staged(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
 
   @protected
   BigInt sse_decode_u_64(SseDeserializer deserializer);
@@ -168,6 +182,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_mls_preview_outcome(
+    MlsPreviewOutcome self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opened(Opened self, SseSerializer serializer);
 
   @protected
@@ -178,6 +198,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_staged(Staged self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_64(BigInt self, SseSerializer serializer);

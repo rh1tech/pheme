@@ -1332,6 +1332,20 @@ impl SseDecode for Vec<u8> {
     }
 }
 
+impl SseDecode for crate::api::mls::MlsPreviewOutcome {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_plaintext = <Option<Vec<u8>>>::sse_decode(deserializer);
+        let mut var_groupsHeld = <u32>::sse_decode(deserializer);
+        let mut var_groupsOffered = <u32>::sse_decode(deserializer);
+        return crate::api::mls::MlsPreviewOutcome {
+            plaintext: var_plaintext,
+            groups_held: var_groupsHeld,
+            groups_offered: var_groupsOffered,
+        };
+    }
+}
+
 impl SseDecode for crate::api::mls::Opened {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1366,6 +1380,13 @@ impl SseDecode for crate::api::mls::Staged {
             commit: var_commit,
             state: var_state,
         };
+    }
+}
+
+impl SseDecode for u32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u32::<NativeEndian>().unwrap()
     }
 }
 
@@ -1522,6 +1543,28 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::mls::Bytes> for crate::api::m
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::mls::MlsPreviewOutcome {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.plaintext.into_into_dart().into_dart(),
+            self.groups_held.into_into_dart().into_dart(),
+            self.groups_offered.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::mls::MlsPreviewOutcome
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::mls::MlsPreviewOutcome>
+    for crate::api::mls::MlsPreviewOutcome
+{
+    fn into_into_dart(self) -> crate::api::mls::MlsPreviewOutcome {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::mls::Opened {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -1630,6 +1673,15 @@ impl SseEncode for Vec<u8> {
     }
 }
 
+impl SseEncode for crate::api::mls::MlsPreviewOutcome {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Option<Vec<u8>>>::sse_encode(self.plaintext, serializer);
+        <u32>::sse_encode(self.groups_held, serializer);
+        <u32>::sse_encode(self.groups_offered, serializer);
+    }
+}
+
 impl SseEncode for crate::api::mls::Opened {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1654,6 +1706,13 @@ impl SseEncode for crate::api::mls::Staged {
         <Vec<u8>>::sse_encode(self.welcome, serializer);
         <Vec<u8>>::sse_encode(self.commit, serializer);
         <Vec<u8>>::sse_encode(self.state, serializer);
+    }
+}
+
+impl SseEncode for u32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u32::<NativeEndian>(self).unwrap();
     }
 }
 
