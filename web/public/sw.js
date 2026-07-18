@@ -28,7 +28,11 @@
 // they are not worth the whole worker.
 let previewLoaded = false
 try {
-  importScripts('/mls/preview.js')
+  // The ?v= is not decoration. nginx now sends no-store for this path, but a header cannot reach
+  // back and invalidate a response a browser has already stored — and every device that loaded the
+  // app during the four-hour window has the old copy. Changing the URL is the only thing that
+  // bypasses it. Bump this whenever preview.js changes in a way the worker depends on.
+  importScripts('/mls/preview.js?v=2')
   previewLoaded = true
 } catch (e) {
   // An old deploy, a 404, a cache miss. Notifications carry on without previews.

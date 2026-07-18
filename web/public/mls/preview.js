@@ -23,8 +23,10 @@
 
 /* global wasm_bindgen */
 
-const WASM_GLUE = '/mls/pheme_mls_nomodules.js'
-const WASM_BINARY = '/mls/pheme_mls_bg.wasm'
+// Version-queried for the same reason sw.js versions this file: a cached copy of either would
+// otherwise outlive the worker that needs the new one. Bump when the crypto is rebuilt.
+const WASM_GLUE = '/mls/pheme_mls_nomodules.js?v=2'
+const WASM_BINARY = '/mls/pheme_mls_bg.wasm?v=2'
 
 const DB_NAME = 'pheme'
 const DB_STORE = 'mls'
