@@ -18,6 +18,19 @@ const PASSWORD = 'Sup3rSecret!'
 // about rendering.
 test.skip(({ browserName }) => browserName !== 'chromium', 'crypto round-trip: chromium only')
 
+// The same budget every other multi-device MLS file in this suite sets, and for the same reason:
+// each of these walks several devices through sign-in, key publication, admission and a message
+// exchange, which does not fit the suite's default 30 seconds.
+//
+// This file was the only one of them missing it, while being the heaviest — ten tests, four browser
+// contexts apiece. "removing a member cuts off every device they have" spends 24 of its 30 seconds
+// on two deliberate waits alone (a 20s assertion for a removal to propagate, and 4s to establish
+// that something does NOT appear), leaving six for three admin-created accounts and four logins.
+// On an unloaded laptop that just fits; on a shared CI runner it does not, and it failed there as
+// "Test timeout of 30000ms exceeded" — the harness cutting the test off mid-way and reporting it as
+// a product failure.
+test.describe.configure({ timeout: 120_000 })
+
 /**
  * The bug, exactly as it was reported.
  *

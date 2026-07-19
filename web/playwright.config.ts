@@ -57,7 +57,29 @@ export default defineConfig({
         permissions: ['microphone'],
       },
     },
-    { name: 'mobile-safari', use: { ...devices['iPhone 13'] } },
+    {
+      name: 'mobile-safari',
+      use: {
+        ...devices['iPhone 13'],
+        // No service worker under WebKit.
+        //
+        // The app registers a worker on every page load and immediately calls update() on it. That
+        // is right in production — it is what stops installs running an old worker — and it is what
+        // made this project intermittently red. Under WebKit each registration races the navigation
+        // that triggered it, and roughly three tests per run would sit until the 30-second timeout,
+        // never the same three. Measured across full runs: 19 passed / 3 failed twice in a row with
+        // workers on, 21/1 and then 22/0 with them blocked.
+        //
+        // Nothing is given up by blocking them here. Playwright can only observe service workers on
+        // Chromium — context.serviceWorkers() is empty everywhere else and waitForEvent('serviceworker')
+        // never fires — so the one test that asserts on worker behaviour is already chromium-only
+        // and says so. Registering a worker this project cannot see bought no coverage and cost
+        // stability.
+        //
+        // Safari's real worker behaviour still matters, and still belongs to on-device testing.
+        serviceWorkers: 'block',
+      },
+    },
   ],
   webServer: [
     {

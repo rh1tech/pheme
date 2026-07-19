@@ -24,8 +24,15 @@ export async function gotoStable(page: Page, path: string): Promise<void> {
       await page.goto(path, { waitUntil: 'commit' })
       return
     } catch (error) {
-      const aborted = error instanceof Error && error.message.includes('ERR_ABORTED')
-      if (!aborted || attempt >= 3) throw error
+      // Two shapes of one thing: the app navigated while we were navigating. ERR_ABORTED is what
+      // the browser reports when our request is replaced; "interrupted by another navigation" is
+      // what Playwright reports when it notices the replacement itself. Both are the router doing
+      // its job mid-load, and both deserve a retry. The caller still asserts on a real element
+      // afterwards, so "navigated but bounced elsewhere" cannot pass silently.
+      const message = error instanceof Error ? error.message : ''
+      const raced =
+        message.includes('ERR_ABORTED') || message.includes('interrupted by another navigation')
+      if (!raced || attempt >= 3) throw error
     }
   }
 }
@@ -61,6 +68,17 @@ export async function login(
   await page.getByLabel('Password', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByTestId('chat-sidebar')).toBeVisible()
+  // Wait for the URL to settle, not merely for the surface to appear.
+  //
+  // Signing in ends with a client-side redirect from /login to /. The sidebar can become visible
+  // while that navigation is still committing, so a caller that immediately calls page.goto races
+  // the tail of it, and Playwright reports "Navigation to X is interrupted by another navigation
+  // to /". That is what made membership, profile and users fail together on mobile-safari while
+  // passing when run alone — WebKit is slower, so it loses the race more often.
+  //
+  // Asserting the URL makes login() mean "signed in and settled" rather than "the sidebar has
+  // rendered".
+  await expect(page).not.toHaveURL(/\/login/)
 }
 
 /** Opens the admin "Add user" modal and creates a user with the given role. */
