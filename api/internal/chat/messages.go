@@ -150,15 +150,16 @@ var pushSlots = make(chan struct{}, maxConcurrentPushes)
 // Only on GONE, never on a plain failure: a device must not lose its registration because the
 // network was down or a push service had a bad minute.
 func (h *Handler) pruneDeadDevices(ctx context.Context, results []push.Result) {
-	for _, r := range results {
-		if !r.Gone || r.DeviceID == "" {
+	// The rule for what counts as permanently dead lives in push.GoneDeviceIDs, shared with the
+	// channel broadcast dispatcher. It was written here first and not there, so broadcasts retried
+	// dead addresses forever while chat did not — the kind of divergence that only shows up as a
+	// slow, invisible tax.
+	for _, id := range push.GoneDeviceIDs(results) {
+		if err := h.Store.DeleteDevice(ctx, id); err != nil {
+			h.logger().Error("chat push: prune dead device", "device", id, "error", err)
 			continue
 		}
-		if err := h.Store.DeleteDevice(ctx, r.DeviceID); err != nil {
-			h.logger().Error("chat push: prune dead device", "device", r.DeviceID, "error", err)
-			continue
-		}
-		h.logger().Info("chat push: pruned a dead push address", "device", r.DeviceID, "reason", r.Error)
+		h.logger().Info("chat push: pruned a dead push address", "device", id)
 	}
 }
 

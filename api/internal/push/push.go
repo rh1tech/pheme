@@ -215,6 +215,27 @@ func (n ChatNotification) ttl() int {
 	}
 }
 
+// GoneDeviceIDs returns the devices whose push address the provider has declared permanently dead.
+//
+// The rule lives here rather than in each caller because it is a rule about what a Result MEANS,
+// and because getting it wrong in either direction is expensive. Pruning on a plain failure
+// silently unsubscribes people over a bad minute on the network; not pruning at all leaves dead
+// addresses being pushed to on every message forever, which is how one account accumulated four
+// Android rows for one phone with only the newest able to receive anything.
+//
+// It was implemented once, in the chat path, and the channel broadcast path — the one with
+// thousands of subscribers rather than a handful of conversation members — recorded the flag and
+// did nothing with it.
+func GoneDeviceIDs(results []Result) []string {
+	var ids []string
+	for _, r := range results {
+		if r.Gone && r.DeviceID != "" {
+			ids = append(ids, r.DeviceID)
+		}
+	}
+	return ids
+}
+
 // Sender delivers notifications to a set of devices and reports per-device
 // results. Channel messages are server-readable and carry their content; chat
 // messages are encrypted and carry only who sent them.

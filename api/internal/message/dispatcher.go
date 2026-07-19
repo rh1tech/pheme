@@ -70,12 +70,33 @@ func (d *Dispatcher) Handle(ctx context.Context, task domain.NotifyTask) error {
 				d.Logger.Error("record delivery", "message", msg.ID, "device", r.DeviceID, "error", derr)
 			}
 		}
+		d.pruneDeadAddresses(ctx, results)
 	}
 
 	if d.Live != nil {
 		d.Live.Publish(live.Event{ChannelID: msg.ChannelID, Message: msg})
 	}
 	return nil
+}
+
+// pruneDeadAddresses removes push addresses the provider has declared permanently dead.
+//
+// The Gone flag was recorded into the delivery row and otherwise ignored on this path, so every
+// broadcast to a channel retried devices that could never receive anything again — the app
+// uninstalled, the token rotated, the browser subscription dropped. On a channel with thousands of
+// subscribers that is a growing tax on every single post, paid one outbound HTTPS request at a
+// time. The chat path already did this; this one did not.
+//
+// Only on a definitive GONE, never on a plain failure: a device must not lose its registration
+// because the network had a bad minute.
+func (d *Dispatcher) pruneDeadAddresses(ctx context.Context, results []push.Result) {
+	for _, id := range push.GoneDeviceIDs(results) {
+		if err := d.Store.DeleteDevice(ctx, id); err != nil {
+			d.Logger.Error("prune dead device", "device", id, "error", err)
+			continue
+		}
+		d.Logger.Info("pruned a dead push address", "device", id)
+	}
 }
 
 // Verify Handle satisfies the broker.Handler signature.
