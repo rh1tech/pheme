@@ -33,20 +33,24 @@ type dropCounter struct {
 // if it is not yet time to write one. The count it returns includes the drop just recorded, and
 // resets — so summing every reported count yields the true total, with none of them missed and
 // none double-counted.
-func (d *dropCounter) record(now time.Time) (int, bool) {
+func (d *dropCounter) record(now time.Time) (int, bool) { return d.recordN(1, now) }
+
+// recordN is record for a batch — one fan-out can fail for many devices at once, and counting
+// those one at a time would report a rate that is wrong by the size of the conversation.
+func (d *dropCounter) recordN(n int, now time.Time) (int, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.pending++
+	d.pending += n
 	// A zero lastLog makes the first drop report immediately, which is what makes the onset of
 	// dropping visible rather than up to reportWindow late.
 	if now.Sub(d.lastLog) < reportWindow {
 		return 0, false
 	}
-	n := d.pending
+	total := d.pending
 	d.pending = 0
 	d.lastLog = now
-	return n, true
+	return total, true
 }
 
 // The two places that drop notifications: an ordinary message, and a call ringing. They count
@@ -55,4 +59,19 @@ func (d *dropCounter) record(now time.Time) (int, bool) {
 var (
 	messagePushDrops dropCounter
 	callPushDrops    dropCounter
+
+	// Notifications that reached a worker too late to be worth sending. A different failure from a
+	// full queue — capacity is not short, the backlog is simply draining slower than it fills — so
+	// it is counted and reported on its own.
+	messageStaleDrops dropCounter
+
+	// Notifications the server tried to send and the push service refused.
+	//
+	// These were invisible. SendChat returns a Result per device carrying that device's error, and
+	// the caller logged only the single error covering the whole call — which is nil when every
+	// individual send failed. A push service rejecting every notification for an entire
+	// conversation therefore produced silence: no log line, no counter, and a delivery rate that
+	// looked perfect from inside the server. It was found by measuring deliveries at the far end
+	// and finding fewer than the server believed it had sent.
+	pushSendFailures dropCounter
 )

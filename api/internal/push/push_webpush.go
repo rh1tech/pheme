@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
@@ -17,6 +18,36 @@ import (
 // notification. Enough that a large group does not serialise into a long queue of round-trips;
 // small enough not to look like an attack to any one push service.
 const webPushConcurrency = 16
+
+// pushHTTPClient is the client every Web Push request goes through, and it exists because the
+// default is badly wrong for this workload.
+//
+// webpush-go builds `&http.Client{}` when no client is supplied. That has a nil Transport, so it
+// uses http.DefaultTransport — whose MaxIdleConnsPerHost is 2. Notifications go to a handful of
+// push hosts and often to just one, so past two concurrent sends to the same host every further
+// notification opened a fresh TCP connection, completed a full TLS handshake, and then closed it
+// because there was no room to keep it idle.
+//
+// The cost lands in three places at once: a handshake's worth of latency on almost every
+// notification, the CPU to perform it, and a socket left in TIME_WAIT afterwards. Under load the
+// third one is what breaks first — a push run against a local service exhausted the machine's
+// ephemeral ports and started failing with "can't assign requested address", which is the same
+// wall a server would hit talking to FCM, only sooner because the round trip is shorter.
+//
+// The pool is sized above the real concurrency ceiling (pushWorkers x webPushConcurrency) so that
+// connections are reused rather than rebuilt. Idle connections are cheap; handshakes are not.
+var pushHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConns:        1024,
+		MaxIdleConnsPerHost: 256,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:   true,
+	},
+	// No Timeout here on purpose: every send already carries a context with the caller's deadline,
+	// and a second, blunter bound would only cut some of those short.
+}
 
 // WebPushSender delivers notifications to browsers via the Web Push protocol
 // using VAPID authentication. A device's WebPushSub field holds the JSON
@@ -129,6 +160,7 @@ func (s *WebPushSender) sendOne(ctx context.Context, payload []byte, n notificat
 		VAPIDPrivateKey: s.vapidPrivate,
 		TTL:             n.TTL,
 		Urgency:         webpush.UrgencyHigh,
+		HTTPClient:      pushHTTPClient,
 	})
 	if err != nil {
 		return Result{DeviceID: d.ID, Status: domain.DeliveryFailed, Error: err.Error()}

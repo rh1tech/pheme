@@ -360,3 +360,52 @@ func TestWebPushChannelSendReportsGoneSeparatelyFromFailed(t *testing.T) {
 			"registration over a bad minute", got)
 	}
 }
+
+// Connections must be REUSED across notifications.
+//
+// webpush-go supplies its own &http.Client{} when none is given, which falls back to
+// http.DefaultTransport and its MaxIdleConnsPerHost of 2. Every notification past the second
+// concurrent one to the same host then paid for a fresh TCP connection and a full TLS handshake,
+// and left a socket in TIME_WAIT behind it. Against FCM — one host for every Android device on the
+// server — that is a handshake per notification. It showed up first as a load test exhausting the
+// machine's ephemeral ports.
+//
+// Counting distinct connections is the only way to see this: every notification succeeds either
+// way, so nothing else distinguishes a pooled client from one that reconnects every time.
+func TestWebPush_ReusesConnectionsAcrossNotifications(t *testing.T) {
+	var mu sync.Mutex
+	conns := map[string]bool{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		conns[r.RemoteAddr] = true
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	priv, pub := vapid(t)
+	s := NewWebPushSender(pub, priv, "mailto:ops@pheme.test", "")
+	devices := webDevices(t, srv.URL, 40)
+
+	// Sequential rounds, so concurrency cannot be what keeps connections distinct: with a working
+	// pool these should almost all land on connections opened by the first round.
+	for round := 0; round < 3; round++ {
+		if _, err := s.SendChat(context.Background(), ChatNotification{SenderName: "A"}, devices); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+	}
+
+	mu.Lock()
+	used := len(conns)
+	mu.Unlock()
+
+	// 120 notifications went out. Bounded concurrency is webPushConcurrency, so a pooled client
+	// needs about that many connections; an unpooled one opens one per notification.
+	if used > webPushConcurrency*2 {
+		t.Errorf("120 notifications used %d distinct connections, want no more than %d. Each extra "+
+			"one is a TCP connection and a TLS handshake that the pool should have made unnecessary, "+
+			"and a socket left in TIME_WAIT — which is what exhausts ephemeral ports under load.",
+			used, webPushConcurrency*2)
+	}
+}

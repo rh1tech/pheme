@@ -121,18 +121,6 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 // request, so it needs its own bound.
 const pushTimeout = 15 * time.Second
 
-// How many chat pushes may be in flight at once, process-wide.
-//
-// Each one holds a connection to the push provider for up to pushTimeout. Without a
-// ceiling, sending a message — which used to be O(1) work — would fan out into an
-// unbounded number of goroutines, so anyone able to post quickly could exhaust file
-// descriptors here and hammer the provider. Past the ceiling a push is dropped rather
-// than queued: a notification is a courtesy, and a stale one is worth less than a
-// responsive server. The message itself is already stored and on the live stream.
-const maxConcurrentPushes = 64
-
-var pushSlots = make(chan struct{}, maxConcurrentPushes)
-
 // notifyMembers pushes a generic notification to the other members' devices.
 //
 // The notification says who sent a message, never what it said — the server holds
@@ -169,109 +157,144 @@ func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage,
 	if h.Push == nil || isControlContent(msg.ContentType) {
 		return
 	}
-	// Take a slot, or drop the notification. Never block the caller: this runs on the
-	// request path, and a saturated push provider must not slow down sending messages.
-	select {
-	case pushSlots <- struct{}{}:
-	default:
+	// Queue the fan-out. This never blocks the caller — a saturated push provider must not slow
+	// down sending messages — but past the queue's bounds it still returns false, and then the
+	// notification really is lost.
+	if !messagePush.offer(pushJob{
+		h: h, convID: convID, senderID: senderID, msg: msg, members: members,
+		queuedAt: time.Now(),
+	}) {
 		if n, report := messagePushDrops.record(time.Now()); report {
-			h.logger().Warn("chat push: at capacity, notifications dropped",
+			h.logger().Warn("chat push: queue full, notifications dropped",
 				"dropped", n, "over", reportWindow, "conversation", convID)
 		}
+	}
+}
+
+// deliverPush is the fan-out itself, run by a queue worker rather than on the request path.
+func (h *Handler) deliverPush(
+	convID, senderID string, msg domain.ChatMessage, members []domain.ConversationMember,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
+	defer cancel()
+	log := h.logger()
+
+	// The caller already read the roster to address the live event; re-reading it here was one
+	// wholly redundant query per message. Empty means that read failed, so fall back rather
+	// than silently notifying nobody.
+	if len(members) == 0 {
+		var err error
+		if members, err = h.Store.ConversationMembers(ctx, convID); err != nil {
+			log.Error("chat push: load members", "conversation", convID, "error", err)
+			return
+		}
+	}
+	recipients := make([]string, 0, len(members))
+	for _, m := range members {
+		if m.UserID != senderID { // never notify the sender of their own message
+			recipients = append(recipients, m.UserID)
+		}
+	}
+	if len(recipients) == 0 {
 		return
 	}
-	go func() {
-		defer func() { <-pushSlots }()
-		ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
-		defer cancel()
-		log := h.logger()
 
-		// The caller already read the roster to address the live event; re-reading it here was one
-		// wholly redundant query per message. Empty means that read failed, so fall back rather
-		// than silently notifying nobody.
-		if len(members) == 0 {
-			var err error
-			if members, err = h.Store.ConversationMembers(ctx, convID); err != nil {
-				log.Error("chat push: load members", "conversation", convID, "error", err)
-				return
-			}
-		}
-		recipients := make([]string, 0, len(members))
-		for _, m := range members {
-			if m.UserID != senderID { // never notify the sender of their own message
-				recipients = append(recipients, m.UserID)
-			}
-		}
-		if len(recipients) == 0 {
-			return
-		}
+	devices, err := h.Store.DevicesForUsers(ctx, recipients)
+	if err != nil {
+		log.Error("chat push: load devices", "conversation", convID, "error", err)
+		return
+	}
+	if len(devices) == 0 {
+		return
+	}
 
-		devices, err := h.Store.DevicesForUsers(ctx, recipients)
-		if err != nil {
-			log.Error("chat push: load devices", "conversation", convID, "error", err)
-			return
-		}
-		if len(devices) == 0 {
-			return
-		}
-
-		name, avatarID := h.senderIdentity(ctx, senderID)
-		// One send per privacy setting, not one per conversation. What a push may say is the
-		// RECIPIENT's decision, and two members of the same chat can decide differently, so the
-		// devices are split by their owner's setting and each group gets the payload it asked
-		// for. Almost always this is a single group — the loop costs nothing when everyone
-		// agrees, and is the only correct thing to do when they do not.
-		// The conversation's groups, loaded ONCE and only if some recipient actually wants a
-		// preview. Everybody else's notification does not depend on it, and a chat where nobody
-		// opted in should not pay for a lookup it will not use.
-		var groupIDs []string
-		groupsLoaded := false
-		loadGroupIDs := func() []string {
-			if groupsLoaded {
-				return groupIDs
-			}
-			groupsLoaded = true
-			state, err := h.Store.MLSGroupState(ctx, convID)
-			if err != nil {
-				// Not fatal. Without the ids the device falls back to the mapping it learned by
-				// opening the chat, and failing that to the generic notification.
-				log.Warn("chat push: load group state for preview", "conversation", convID, "error", err)
-				return nil
-			}
-			if state.GroupID != "" {
-				groupIDs = append(groupIDs, state.GroupID)
-			}
-			// Newest first: a retired group still decrypts its own old messages, but the message
-			// that just arrived is overwhelmingly likely to belong to the current one.
-			groupIDs = append(groupIDs, state.PriorGroupIDs...)
+	name, avatarID := h.senderIdentity(ctx, senderID)
+	// One send per privacy setting, not one per conversation. What a push may say is the
+	// RECIPIENT's decision, and two members of the same chat can decide differently, so the
+	// devices are split by their owner's setting and each group gets the payload it asked
+	// for. Almost always this is a single group — the loop costs nothing when everyone
+	// agrees, and is the only correct thing to do when they do not.
+	// The conversation's groups, loaded ONCE and only if some recipient actually wants a
+	// preview. Everybody else's notification does not depend on it, and a chat where nobody
+	// opted in should not pay for a lookup it will not use.
+	var groupIDs []string
+	groupsLoaded := false
+	loadGroupIDs := func() []string {
+		if groupsLoaded {
 			return groupIDs
 		}
-
-		for key, group := range h.devicesByPrivacy(ctx, recipients, devices) {
-			var preview []string
-			if key.privacy.ShowsPreview() && key.rendersPreview {
-				preview = loadGroupIDs()
-			}
-			results, err := h.Push.SendChat(ctx, push.ChatNotification{
-				ConversationID:       convID,
-				MessageID:            msg.ID,
-				SenderName:           name,
-				SenderAvatarID:       avatarID,
-				Privacy:              key.privacy,
-				DeviceRendersPreview: key.rendersPreview,
-				// Passed to every group; the payload builder attaches it only for the group that
-				// asked for previews. Deciding here instead would mean each caller re-deriving
-				// the same rule, and one of them eventually getting it wrong.
-				Ciphertext:  msg.Ciphertext,
-				ContentType: msg.ContentType,
-				GroupIDs:    preview,
-			}, group)
-			if err != nil {
-				log.Error("chat push: send", "conversation", convID, "privacy", string(key.privacy), "error", err)
-			}
-			h.pruneDeadDevices(ctx, results)
+		groupsLoaded = true
+		state, err := h.Store.MLSGroupState(ctx, convID)
+		if err != nil {
+			// Not fatal. Without the ids the device falls back to the mapping it learned by
+			// opening the chat, and failing that to the generic notification.
+			log.Warn("chat push: load group state for preview", "conversation", convID, "error", err)
+			return nil
 		}
-	}()
+		if state.GroupID != "" {
+			groupIDs = append(groupIDs, state.GroupID)
+		}
+		// Newest first: a retired group still decrypts its own old messages, but the message
+		// that just arrived is overwhelmingly likely to belong to the current one.
+		groupIDs = append(groupIDs, state.PriorGroupIDs...)
+		return groupIDs
+	}
+
+	for key, group := range h.devicesByPrivacy(ctx, recipients, devices) {
+		var preview []string
+		if key.privacy.ShowsPreview() && key.rendersPreview {
+			preview = loadGroupIDs()
+		}
+		results, err := h.Push.SendChat(ctx, push.ChatNotification{
+			ConversationID:       convID,
+			MessageID:            msg.ID,
+			SenderName:           name,
+			SenderAvatarID:       avatarID,
+			Privacy:              key.privacy,
+			DeviceRendersPreview: key.rendersPreview,
+			// Passed to every group; the payload builder attaches it only for the group that
+			// asked for previews. Deciding here instead would mean each caller re-deriving
+			// the same rule, and one of them eventually getting it wrong.
+			Ciphertext:  msg.Ciphertext,
+			ContentType: msg.ContentType,
+			GroupIDs:    preview,
+		}, group)
+		if err != nil {
+			log.Error("chat push: send", "conversation", convID, "privacy", string(key.privacy), "error", err)
+		}
+		h.pruneDeadDevices(ctx, results)
+		h.reportSendFailures(results)
+	}
+}
+
+// reportSendFailures surfaces per-device push failures, which nothing used to look at.
+//
+// SendChat returns a Result per device and a single error covering the call as a whole. The caller
+// logged the second and read the first only to prune permanently dead addresses, so a device whose
+// notification simply failed was recorded and then discarded. With every individual send failing
+// the call-level error is still nil, which means a push service refusing everything looked
+// identical to one accepting everything.
+func (h *Handler) reportSendFailures(results []push.Result) {
+	failed, sample := 0, ""
+	for _, r := range results {
+		// Gone is not a failure to report here: the address is permanently dead and pruneDeadDevices
+		// has already removed it, so counting it again would report a delivery problem every time a
+		// stale registration is cleaned up.
+		if r.Gone || r.Status != domain.DeliveryFailed {
+			continue
+		}
+		failed++
+		if sample == "" {
+			sample = r.Error
+		}
+	}
+	if failed == 0 {
+		return
+	}
+	if n, report := pushSendFailures.recordN(failed, time.Now()); report {
+		h.logger().Warn("chat push: the push service refused notifications",
+			"failed", n, "over", reportWindow, "example", sample)
+	}
 }
 
 // devicesByPrivacy groups recipients' devices by their owner's notification privacy setting.

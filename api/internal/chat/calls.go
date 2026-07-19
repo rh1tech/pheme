@@ -272,7 +272,7 @@ func (h *Handler) ringMembers(convID, callerID, callID string, kind push.Kind) {
 		return
 	}
 	select {
-	case pushSlots <- struct{}{}:
+	case ringSlots <- struct{}{}:
 	default:
 		if n, report := callPushDrops.record(time.Now()); report {
 			h.logger().Warn("call ring: at capacity, rings dropped",
@@ -281,7 +281,7 @@ func (h *Handler) ringMembers(convID, callerID, callID string, kind push.Kind) {
 		return
 	}
 	go func() {
-		defer func() { <-pushSlots }()
+		defer func() { <-ringSlots }()
 		ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
 		defer cancel()
 		log := h.logger()
