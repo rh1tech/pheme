@@ -27,9 +27,6 @@ jobs:
     env:
       MONGO_CONTAINER: pheme-ci-mongo-${{ github.run_id }}-${{ github.run_attempt }}
       REDIS_CONTAINER: pheme-ci-redis-${{ github.run_id }}-${{ github.run_attempt }}
-      # High, run-scoped ports so two runs on this shared host cannot collide on them.
-      MONGO_PORT: 27117
-      REDIS_PORT: 6479
     defaults:
       run:
         working-directory: api
@@ -56,11 +53,23 @@ jobs:
           # The cache is capped because this host also runs prod and dev: mongod sizes its
           # WiredTiger cache from TOTAL system memory, not from what it is allowed to use, and an
           # unbounded one competes with the services that matter.
-          docker run -d --rm --name "$MONGO_CONTAINER" -p 127.0.0.1:${MONGO_PORT}:27017 \
+          # An EPHEMERAL host port, discovered after the fact.
+          #
+          # A fixed port was the bug. The container NAME was scoped per run but the port was not, so
+          # two overlapping runs raced for it: the second container could not bind, exited, and --rm
+          # swept it away — while the second run's tests connected happily to the FIRST run's
+          # database, passed for a while, and then died mid-suite when that run cleaned up. It read
+          # as mongod crashing ("socket was unexpectedly closed"), which is why it took three
+          # attempts to find; the diagnostics added last round are what showed the container was
+          # simply gone, with no OOM and 22 GB free.
+          docker run -d --rm --name "$MONGO_CONTAINER" -p 127.0.0.1::27017 \
             mongo:7 --wiredTigerCacheSizeGB 0.25
           for i in $(seq 1 30); do
             if docker exec "$MONGO_CONTAINER" mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1; then
-              echo "mongo ready"; exit 0
+              port=$(docker port "$MONGO_CONTAINER" 27017/tcp | head -1 | sed 's/.*://')
+              echo "mongo ready on $port"
+              echo "PHEME_TEST_MONGO_URI=mongodb://127.0.0.1:$port" >> "$GITHUB_ENV"
+              exit 0
             fi
             sleep 2
           done
@@ -70,20 +79,22 @@ jobs:
       - name: Start Redis for the OTP conformance suite
         run: |
           docker rm -f "$REDIS_CONTAINER" 2>/dev/null || true
-          docker run -d --rm --name "$REDIS_CONTAINER" -p 127.0.0.1:${REDIS_PORT}:6379 redis:7-alpine
+          docker run -d --rm --name "$REDIS_CONTAINER" -p 127.0.0.1::6379 redis:7-alpine
           for i in $(seq 1 30); do
             if docker exec "$REDIS_CONTAINER" redis-cli ping >/dev/null 2>&1; then
-              echo "redis ready"; exit 0
+              port=$(docker port "$REDIS_CONTAINER" 6379/tcp | head -1 | sed 's/.*://')
+              echo "redis ready on $port"
+              echo "PHEME_TEST_REDIS_ADDR=127.0.0.1:$port" >> "$GITHUB_ENV"
+              exit 0
             fi
             sleep 2
           done
           echo "redis never became ready"; docker logs "$REDIS_CONTAINER" | tail -20; exit 1
       - run: go vet ./...
       - run: go build ./...
+      # PHEME_TEST_MONGO_URI and PHEME_TEST_REDIS_ADDR come from the startup steps above, which
+      # discover the ephemeral ports Docker chose.
       - run: go test -race -cover ./...
-        env:
-          PHEME_TEST_MONGO_URI: mongodb://127.0.0.1:${{ env.MONGO_PORT }}
-          PHEME_TEST_REDIS_ADDR: 127.0.0.1:${{ env.REDIS_PORT }}
       # If the tests failed, say what the databases were doing. mongod dying mid-run reads as a
       # test failure — thirty-second selection timeouts on everything after it — and without its
       # own log the cause is guesswork. This is failure()-only so a green run stays quiet.
