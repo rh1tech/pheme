@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,8 +190,16 @@ func TestRedisBusCancelDuringPublishDoesNotPanic(t *testing.T) {
 // the subscribers are. A second version asserted that and passed against a deliberately blocking
 // send, which is worse than the first: a test that cannot fail.
 //
-// What actually separates a working bus from a stalled one is whether events published AFTER a
-// reader wedges still reach everybody else. So: the LAST event must arrive.
+// And a third mistake, which CI caught and which is the first one wearing a different hat: the
+// healthy subscriber must actually READ. A version that published all 192 events and only then
+// started reading left both subscribers stalled — its buffer filled at 64 and the rest were
+// dropped, exactly as designed — and then failed for not seeing the last event. Demanding a
+// specific event of a reader that was not reading is the same error as demanding all of them.
+//
+// What separates a working bus from a stalled one is whether a continuously-draining subscriber
+// keeps receiving past the point where its wedged neighbour filled up. A delivery loop that waited
+// on the wedged reader would stop dead at one buffer's worth; a working one goes well beyond it.
+// That is the assertion, and it does not depend on any single event surviving.
 func TestRedisBusCountsWhatItDropsForASlowSubscriber(t *testing.T) {
 	bus, _ := redisOrSkip(t)
 
@@ -199,10 +208,19 @@ func TestRedisBusCountsWhatItDropsForASlowSubscriber(t *testing.T) {
 	healthy, cancelHealthy := bus.Subscribe("healthy")
 	defer cancelHealthy()
 
+	// The healthy subscriber drains from the start, which is what makes it healthy.
+	var received atomic.Int64
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for range healthy {
+			received.Add(1)
+		}
+	}()
+
 	// Comfortably more than one buffer's worth, so the stalled subscriber is over-full long before
 	// the end.
 	const sent = subscriberBuffer * 3
-	last := fmt.Sprintf("c%d", sent-1)
 	for i := 0; i < sent; i++ {
 		bus.Publish(Event{
 			ConversationID: fmt.Sprintf("c%d", i),
@@ -210,25 +228,12 @@ func TestRedisBusCountsWhatItDropsForASlowSubscriber(t *testing.T) {
 		})
 	}
 
-	// The final event, published long after the stalled reader's buffer filled, must still reach
-	// the healthy one. A delivery loop that waited on the wedged reader would stop here, and every
-	// other subscriber on this instance would go silent with it.
-	deadline := time.After(20 * time.Second)
-	received, sawLast := 0, false
-	for !sawLast {
-		select {
-		case e, ok := <-healthy:
-			if !ok {
-				t.Fatal("the healthy subscriber's channel closed early")
-			}
-			received++
-			if e.ConversationID == last {
-				sawLast = true
-			}
-		case <-deadline:
-			t.Fatalf("the healthy subscriber received %d events and never saw the last one; one "+
-				"reader that stopped reading has stopped delivery to everyone else", received)
-		}
+	// Past one buffer's worth is the whole claim: delivery continued after the wedged subscriber
+	// stopped accepting. A blocking send caps this at exactly subscriberBuffer and no more.
+	if !waitUntil(t, 20*time.Second, func() bool { return received.Load() > int64(subscriberBuffer) }) {
+		t.Fatalf("the healthy subscriber received %d events and got no further than one buffer's "+
+			"worth (%d); one reader that stopped reading has stopped delivery to everyone else",
+			received.Load(), subscriberBuffer)
 	}
 
 	// And the losses are visible. A drop is a message a user never sees, with nothing in any HTTP
