@@ -27,6 +27,7 @@ jobs:
     env:
       MONGO_CONTAINER: pheme-ci-mongo-${{ github.run_id }}-${{ github.run_attempt }}
       REDIS_CONTAINER: pheme-ci-redis-${{ github.run_id }}-${{ github.run_attempt }}
+      RABBIT_CONTAINER: pheme-ci-rabbit-${{ github.run_id }}-${{ github.run_attempt }}
     defaults:
       run:
         working-directory: api
@@ -103,6 +104,23 @@ jobs:
             sleep 2
           done
           echo "redis never became ready"; docker logs "$REDIS_CONTAINER" | tail -20; exit 1
+      # The broker that ships. The in-memory driver is a Go channel and cannot express what matters
+      # here: a publish CONFIRMED by the broker, and a failed handler dead-lettering rather than
+      # spinning on the same message forever.
+      - name: Start RabbitMQ for the broker tests
+        run: |
+          docker rm -f "$RABBIT_CONTAINER" 2>/dev/null || true
+          docker run -d --name "$RABBIT_CONTAINER" -p 127.0.0.1::5672 rabbitmq:3-alpine
+          for i in $(seq 1 45); do
+            if docker exec "$RABBIT_CONTAINER" rabbitmq-diagnostics -q ping >/dev/null 2>&1; then
+              port=$(docker port "$RABBIT_CONTAINER" 5672/tcp | head -1 | sed 's/.*://')
+              echo "rabbit ready on $port"
+              echo "PHEME_TEST_RABBIT_URI=amqp://guest:guest@127.0.0.1:$port/" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 4
+          done
+          echo "rabbit never became ready"; docker logs "$RABBIT_CONTAINER" | tail -30; exit 1
       - run: go vet ./...
       - run: go build ./...
       # PHEME_TEST_MONGO_URI and PHEME_TEST_REDIS_ADDR come from the startup steps above, which
@@ -124,14 +142,16 @@ jobs:
           echo "=== mongo: last 120 lines ==="; docker logs "$MONGO_CONTAINER" 2>&1 | tail -120 || true
           echo "=== mongo state ==="; docker inspect "$MONGO_CONTAINER" --format '{{.State.Status}} oomkilled={{.State.OOMKilled}} exit={{.State.ExitCode}}' || true
           echo "=== redis ==="; docker logs "$REDIS_CONTAINER" 2>&1 | tail -20 || true
+          echo "=== rabbit ==="; docker logs "$RABBIT_CONTAINER" 2>&1 | tail -30 || true
           echo "=== host memory ==="; free -m || true
       # always(), so a failing test still takes its containers with it rather than leaving them
       # running on a shared host until somebody notices.
-      - name: Stop MongoDB and Redis
+      - name: Stop the test databases and broker
         if: always()
         run: |
           docker rm -f "$MONGO_CONTAINER" 2>/dev/null || true
           docker rm -f "$REDIS_CONTAINER" 2>/dev/null || true
+          docker rm -f "$RABBIT_CONTAINER" 2>/dev/null || true
 
   web:
     name: Web (Vite)
