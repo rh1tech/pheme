@@ -111,9 +111,17 @@ jobs:
         run: |
           docker rm -f "$RABBIT_CONTAINER" 2>/dev/null || true
           docker run -d --name "$RABBIT_CONTAINER" -p 127.0.0.1::5672 rabbitmq:3-alpine
+          port=$(docker port "$RABBIT_CONTAINER" 5672/tcp | head -1 | sed 's/.*://')
+          # Wait on the PORT from the host, never by exec'ing rabbitmq-diagnostics into the
+          # container. docker exec runs as root, and every Erlang CLI tool reads — and CREATES,
+          # mode 400, owned by whoever ran it — $HOME/.erlang.cookie, which in this image is
+          # /var/lib/rabbitmq/.erlang.cookie. Poll before the server has written its own and root
+          # wins the race, leaving the broker (running as rabbitmq) unable to read its own cookie:
+          # "Error when reading /var/lib/rabbitmq/.erlang.cookie: eacces", and it never boots. The
+          # readiness check was killing the thing it was checking. It only showed up once the image
+          # had to be pulled first, which moved the timing.
           for i in $(seq 1 45); do
-            if docker exec "$RABBIT_CONTAINER" rabbitmq-diagnostics -q ping >/dev/null 2>&1; then
-              port=$(docker port "$RABBIT_CONTAINER" 5672/tcp | head -1 | sed 's/.*://')
+            if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
               echo "rabbit ready on $port"
               echo "PHEME_TEST_RABBIT_URI=amqp://guest:guest@127.0.0.1:$port/" >> "$GITHUB_ENV"
               exit 0
