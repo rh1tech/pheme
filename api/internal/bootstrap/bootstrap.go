@@ -31,6 +31,7 @@ type Builder struct {
 	logger *slog.Logger
 	redis  *redis.Client
 	blob   blob.Store
+	tokens *auth.TokenManager
 }
 
 // New returns a Builder for the given configuration.
@@ -249,7 +250,16 @@ func (b *Builder) Mailer() (mailer.Sender, error) {
 
 // Tokens builds the JWT token manager.
 func (b *Builder) Tokens() *auth.TokenManager {
-	return auth.NewTokenManager(b.cfg.JWTSecret, b.cfg.AccessTokenTTL, b.cfg.RefreshTokenTTL)
+	// CACHED, like the blob store, and for a sharper reason than saving an allocation.
+	//
+	// The session revoker is attached to a manager instance (UseRevoker), and it is what makes
+	// "terminate this device" actually bite. A second manager would be a second verifier with NO
+	// revoker on it — accepting tokens that had been revoked, and undoing a security control
+	// silently. There is one caller today; this makes a second one safe rather than subtly wrong.
+	if b.tokens == nil {
+		b.tokens = auth.NewTokenManager(b.cfg.JWTSecret, b.cfg.AccessTokenTTL, b.cfg.RefreshTokenTTL)
+	}
+	return b.tokens
 }
 
 // Close releases shared resources (the cached Redis client and blob store).
