@@ -27,7 +27,7 @@ type RedisBus struct {
 	channel string
 	logger  *slog.Logger
 
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	subs    map[chan Event]struct{}
 	started bool
 	stop    context.CancelFunc
@@ -132,45 +132,44 @@ func (b *RedisBus) startLocked() {
 }
 
 // fanout delivers one event to every current subscriber without blocking on a slow one.
+//
+// The sends happen while holding the read lock, and cancel closes a subscriber's channel only
+// under the write lock. That mutual exclusion is what makes this safe: closing a channel another
+// goroutine is sending on is a data race whether or not the resulting panic is recovered, and an
+// earlier version of this did exactly that. It sent outside the lock and recovered the panic,
+// which looked fine and passed -race locally — CI reported it as a race on the first run.
+//
+// Holding the lock across the sends costs nothing, because every send here is non-blocking: a
+// subscriber that is not reading is skipped, never waited for.
 func (b *RedisBus) fanout(e Event) {
-	b.mu.Lock()
-	targets := make([]chan Event, 0, len(b.subs))
+	var dropped int64
+
+	b.mu.RLock()
 	for ch := range b.subs {
-		targets = append(targets, ch)
-	}
-	b.mu.Unlock()
-
-	// Sent outside the lock: a subscriber's cancel takes the same lock, and holding it across a
-	// send would let one departing stream stall delivery for every other.
-	//
-	// The send is still guarded, because cancel closes the channel and a send to a closed channel
-	// panics. Losing the race means the subscriber was leaving anyway.
-	for _, ch := range targets {
-		b.trySend(ch, e)
-	}
-}
-
-func (b *RedisBus) trySend(ch chan Event, e Event) {
-	defer func() {
-		// The subscriber unsubscribed and closed its channel between the snapshot and this send.
-		_ = recover()
-	}()
-	select {
-	case ch <- e:
-	default:
-		n := b.dropped.Add(1)
-		// Logged sparsely: at the point drops are happening there are a great many of them, and a
-		// line per dropped event would bury the reason under its own symptom.
-		if n == 1 || n%1000 == 0 {
-			b.logger.Warn("live event dropped: a subscriber is not keeping up",
-				"dropped_total", n, "subscribers", b.subscriberCount())
+		select {
+		case ch <- e:
+		default:
+			dropped++
 		}
+	}
+	subscribers := len(b.subs)
+	b.mu.RUnlock()
+
+	if dropped == 0 {
+		return
+	}
+	total := b.dropped.Add(dropped)
+	// Logged sparsely and outside the lock: when drops happen there are a great many of them, and
+	// a line per dropped event would bury the reason under its own symptom.
+	if before := total - dropped; before == 0 || before/1000 != total/1000 {
+		b.logger.Warn("live event dropped: a subscriber is not keeping up",
+			"dropped_total", total, "subscribers", subscribers)
 	}
 }
 
 func (b *RedisBus) subscriberCount() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	return len(b.subs)
 }
 
