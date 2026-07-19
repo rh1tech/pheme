@@ -263,3 +263,112 @@ func typeName(v any) string {
 	}
 	return strings.TrimPrefix(fmt.Sprintf("%T", v), "*")
 }
+
+// The remaining driver switches: the live bus, the call mailbox, the rate limiter and the
+// idempotency store. Each is a choice between "shared across instances" and "this process only",
+// and each is silently wrong rather than loudly broken when it lands on the wrong one.
+//
+// That is what makes them worth testing despite looking trivial. A memory live bus behind two
+// instances means a message reaches whichever half of your users happen to be connected to the same
+// instance as the sender. A memory call mailbox means two devices can each believe they won the
+// race to answer. A memory rate limiter means the limit is multiplied by the instance count. None
+// of those fails a health check; they just quietly do the wrong thing under a load balancer.
+
+func TestLiveBusDriverSelection(t *testing.T) {
+	t.Run("defaults to in-process", func(t *testing.T) {
+		bus, err := quietBuilder(config.Config{}).Live()
+		if err != nil || bus == nil {
+			t.Fatalf("Live() = %v, %v", bus, err)
+		}
+		if !strings.Contains(strings.ToLower(typeName(bus)), "memory") {
+			t.Errorf("the default live bus is %s, want the in-process one", typeName(bus))
+		}
+	})
+
+	t.Run("redis is selected explicitly", func(t *testing.T) {
+		bus, err := quietBuilder(config.Config{LiveDriver: "redis"}).Live()
+		if err != nil || bus == nil {
+			t.Fatalf("Live(redis) = %v, %v", bus, err)
+		}
+		// No connection is made here — the client is lazy — so this asserts the WIRING, which is
+		// the part that goes wrong.
+		if !strings.Contains(strings.ToLower(typeName(bus)), "redis") {
+			t.Errorf("Live(redis) built %s; with two instances a message would reach only the half "+
+				"of your users connected to the same one as the sender", typeName(bus))
+		}
+	})
+
+	t.Run("an unknown driver is refused", func(t *testing.T) {
+		_, err := quietBuilder(config.Config{LiveDriver: "rediss"}).Live()
+		if err == nil {
+			t.Fatal("an unknown live driver was accepted")
+		}
+		if !strings.Contains(err.Error(), "rediss") {
+			t.Errorf("error %q does not name the offending value", err)
+		}
+	})
+}
+
+// The call mailbox follows the live driver rather than having its own setting, and that coupling is
+// deliberate: a deployment with a shared bus and a per-process answer lock would ring both of a
+// person's devices and let both believe they answered.
+func TestCallMailboxFollowsTheLiveDriver(t *testing.T) {
+	if m := quietBuilder(config.Config{}).CallMailbox(); !strings.Contains(strings.ToLower(typeName(m)), "memory") {
+		t.Errorf("the default call mailbox is %s, want in-process", typeName(m))
+	}
+	if m := quietBuilder(config.Config{LiveDriver: "redis"}).CallMailbox(); !strings.Contains(strings.ToLower(typeName(m)), "redis") {
+		t.Errorf("with a redis live bus the call mailbox is %s; two devices could each believe they "+
+			"won the race to answer", typeName(m))
+	}
+	// An unknown live driver is refused by Live(), so the mailbox falling back to memory here is
+	// unreachable in a running server — the process would not have started.
+	if m := quietBuilder(config.Config{LiveDriver: "nonsense"}).CallMailbox(); m == nil {
+		t.Error("CallMailbox returned nil")
+	}
+}
+
+func TestLimiterDriverSelection(t *testing.T) {
+	if l := quietBuilder(config.Config{}).Limiter(); !strings.Contains(strings.ToLower(typeName(l)), "tokenbucket") {
+		t.Errorf("the default limiter is %s, want the in-process token bucket", typeName(l))
+	}
+	if l := quietBuilder(config.Config{RateLimitDriver: "redis"}).Limiter(); !strings.Contains(strings.ToLower(typeName(l)), "redis") {
+		t.Errorf("Limiter(redis) built %s; the limit would be multiplied by the number of instances",
+			typeName(l))
+	}
+}
+
+// The idempotency store follows the rate limiter's setting for the same reason: both answer "has
+// this caller already done this?", and both are only correct when every instance shares one view.
+// Deduplicating only the retries that happen to land on the same instance is worse than not
+// deduplicating at all, because it looks like it works.
+func TestDedupFollowsTheRateLimitDriver(t *testing.T) {
+	if d := quietBuilder(config.Config{}).Dedup(); !strings.Contains(strings.ToLower(typeName(d)), "memory") {
+		t.Errorf("the default dedup store is %s, want in-process", typeName(d))
+	}
+	if d := quietBuilder(config.Config{RateLimitDriver: "redis"}).Dedup(); !strings.Contains(strings.ToLower(typeName(d)), "redis") {
+		t.Errorf("with a redis limiter the dedup store is %s; a retry landing on another instance "+
+			"would notify everyone twice", typeName(d))
+	}
+}
+
+// The Redis client is built once and shared. Several of these builders ask for it, and a client
+// per caller would mean several connection pools to the same server for no reason.
+func TestTheRedisClientIsSharedAcrossBuilders(t *testing.T) {
+	b := quietBuilder(config.Config{LiveDriver: "redis", RateLimitDriver: "redis"})
+
+	first := b.redisClient()
+	second := b.redisClient()
+	if first != second {
+		t.Error("redisClient() built a second client; each one carries its own connection pool")
+	}
+	// And the builders that need it all get that same one.
+	if _, err := b.Live(); err != nil {
+		t.Fatalf("Live: %v", err)
+	}
+	_ = b.CallMailbox()
+	_ = b.Limiter()
+	_ = b.Dedup()
+	if b.redisClient() != first {
+		t.Error("a builder replaced the shared Redis client")
+	}
+}
