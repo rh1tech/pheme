@@ -34,161 +34,14 @@
 
 import 'dart:typed_data';
 
-import 'package:dio/dio.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
-import 'package:pheme_mobile/src/core/api_client.dart';
-import 'package:pheme_mobile/src/core/token_store.dart';
-import 'package:pheme_mobile/src/crypto/chat_cache.dart';
 import 'package:pheme_mobile/src/crypto/mls_errors.dart';
-import 'package:pheme_mobile/src/crypto/mls_service.dart';
-import 'package:pheme_mobile/src/data/pheme_repository.dart';
 import 'package:pheme_mobile/src/models/chat_models.dart';
 import 'package:pheme_mobile/src/rust/frb_generated.dart';
 
-/// Where the API is. An Android emulator cannot see the host as localhost, so:
-/// `--dart-define=PHEME_API=http://10.0.2.2:8099`.
-const _apiBase = String.fromEnvironment(
-  'PHEME_API',
-  defaultValue: 'http://localhost:8099',
-);
-
-// Matches the PHEME_SEED_ADMIN_* env above, and web/e2e/constants.ts.
-const _adminEmail = 'admin@pheme.test';
-const _adminPassword = 'Admin12345';
-const _password = 'Correct12345';
-
-/// Creates a user the way the web suite does: as the admin, over the admin API.
-///
-/// Deliberately a raw Dio rather than a PhemeRepository method — the app's repository is the
-/// non-admin surface, and a test is no reason to widen it.
-Future<void> _createUser(String email) async {
-  final dio = Dio(BaseOptions(baseUrl: _apiBase));
-
-  final session = await dio.post<Map<String, dynamic>>(
-    '/v1/auth/login',
-    data: {'email': _adminEmail, 'password': _adminPassword},
-  );
-  final token = session.data!['accessToken'] as String;
-
-  await dio.post<void>(
-    '/v1/admin/users',
-    data: {'email': email, 'password': _password, 'role': 'user'},
-    options: Options(headers: {'Authorization': 'Bearer $token'}),
-  );
-}
-
-/// One device: its own account session, its own storage namespace, its own MLS identity.
-class Device {
-  Device._({
-    required this.userId,
-    required this.repo,
-    required this.mls,
-    required this.cache,
-  });
-
-  final String userId;
-  final PhemeRepository repo;
-  final MlsService mls;
-  final ChatCache cache;
-
-  /// Signs [email] in on a device whose storage is entirely its own.
-  ///
-  /// The namespace is what makes two devices two devices. Without it they would share a key store and
-  /// an MLS device id, and therefore a leaf — the one thing MLS must never let happen.
-  static Future<Device> signIn(String label, String email) async {
-    const storage = FlutterSecureStorage();
-    final tokens = TokenStore(storage);
-
-    final dio = buildDio(
-      baseUrl: _apiBase,
-      tokenStore: tokens,
-      onAuthFailure: () {},
-    );
-    final repo = PhemeRepository(dio);
-
-    final session = await repo.login(email, _password);
-    await tokens.save(
-      Tokens(
-        accessToken: session.accessToken,
-        refreshToken: session.refreshToken,
-      ),
-    );
-
-    final namespace = '.$label';
-    final cache = ChatCache(storage, namespace: namespace);
-
-    return Device._(
-      userId: session.userId,
-      repo: repo,
-      cache: cache,
-      mls: MlsService(
-        repository: repo,
-        storage: storage,
-        cache: cache,
-        namespace: namespace,
-      ),
-    );
-  }
-
-  /// Creates the account, then signs its first device in.
-  static Future<Device> signUp(String label, String email) async {
-    await _createUser(email);
-    return signIn(label, email);
-  }
-
-  /// Mints this device's MLS identity and publishes its key packages, so it is reachable.
-  ///
-  /// The app does this in the background on launch. The test does it explicitly and waits, because a
-  /// device that has published nothing cannot be added to a group — so without the wait the test
-  /// would be asserting against a race rather than against the code.
-  Future<void> publishKeys() async {
-    final session = await mls.session(userId);
-    final minted = await session.mintKeyPackages(count: 5, lastResort: true);
-    await repo.publishKeyPackages(
-      session.deviceId,
-      minted.packages,
-      lastResortKeyPackage: minted.lastResort,
-    );
-  }
-
-  /// Opens a conversation the way the app opens it, and returns everything this device can read,
-  /// keyed by message id. A null value means "arrived, but could not be decrypted".
-  Future<Map<String, String?>> read(String conversationId) async {
-    await cache.load(conversationId);
-
-    // The three steps the app takes on open, in the app's order.
-    //
-    // Prime makes what we already know readable with no round trip. Confirm asks the server which
-    // group is current — that is what repairs the cache when a group has been reset underneath us.
-    // NEITHER of them joins anything: a device cannot add itself to an MLS group, so a device that is
-    // not yet a member reads nothing, and both of these say so honestly by leaving it that way.
-    //
-    // Settling is what joins. It applies the Commits this device missed — which may be the very
-    // Welcome that lets it in — and announces the device if it is still outside. The app runs it in
-    // the background, off the critical path, precisely because it can be slow; the test awaits it,
-    // because a test that raced it would be asserting against the timing rather than the code.
-    await mls.primeGroup(conversationId);
-    await mls.confirmGroup(conversationId, userId);
-    await mls.ensureGroup(await repo.getConversation(conversationId), userId);
-
-    final page = await repo.listChatMessages(conversationId);
-    final out = <String, String?>{};
-
-    for (final message in page.messages.reversed) {
-      if (message.isControl) continue;
-      final content = await mls.decryptMessage(conversationId, userId, message);
-      out[message.id] = content?.body;
-    }
-    return out;
-  }
-}
-
-/// A fresh address per run, so the suite survives a re-run against a live server.
-String _email(String who) =>
-    '$who-${DateTime.now().microsecondsSinceEpoch}@pheme.test';
+import 'harness.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -201,8 +54,8 @@ void main() {
 
   group('a message', () {
     testWidgets('is written by one device and read by the other', (_) async {
-      final alice = await Device.signUp('alice', _email('alice'));
-      final bob = await Device.signUp('bob', _email('bob'));
+      final alice = await Device.signUp('alice', email('alice'));
+      final bob = await Device.signUp('bob', email('bob'));
 
       // Bob must be reachable before Alice can build a group with him.
       await alice.publishKeys();
@@ -233,8 +86,8 @@ void main() {
     testWidgets('cannot be decrypted a second time, even by its sender', (
       _,
     ) async {
-      final alice = await Device.signUp('alice', _email('alice'));
-      final bob = await Device.signUp('bob', _email('bob'));
+      final alice = await Device.signUp('alice', email('alice'));
+      final bob = await Device.signUp('bob', email('bob'));
       await alice.publishKeys();
       await bob.publishKeys();
 
@@ -269,8 +122,8 @@ void main() {
     testWidgets('is reported as such, not as a message that failed to send', (
       _,
     ) async {
-      final alice = await Device.signUp('alice', _email('alice'));
-      final ghost = await Device.signUp('ghost', _email('ghost'));
+      final alice = await Device.signUp('alice', email('alice'));
+      final ghost = await Device.signUp('ghost', email('ghost'));
       await alice.publishKeys();
       // The ghost publishes nothing. There is no leaf to build a group around.
 
@@ -290,8 +143,8 @@ void main() {
     testWidgets('is admitted, reads what follows, and cannot read the past', (
       _,
     ) async {
-      final bobEmail = _email('bob');
-      final alice = await Device.signUp('alice', _email('alice'));
+      final bobEmail = email('bob');
+      final alice = await Device.signUp('alice', email('alice'));
       final bobPhone = await Device.signUp('bobphone', bobEmail);
       await alice.publishKeys();
       await bobPhone.publishKeys();
@@ -338,8 +191,8 @@ void main() {
     testWidgets('external-joins with no one online, and strands nobody', (
       _,
     ) async {
-      final bobEmail = _email('bob');
-      final alice = await Device.signUp('alice', _email('alice'));
+      final bobEmail = email('bob');
+      final alice = await Device.signUp('alice', email('alice'));
       final bobPhone = await Device.signUp('bobphone', bobEmail);
       await alice.publishKeys();
       await bobPhone.publishKeys();
@@ -403,8 +256,8 @@ void main() {
     // Here, sendMessage goes through ensureGroup unconditionally, which asks the server. This test is
     // what says that is still true.
     testWidgets('does not swallow the next message sent to it', (_) async {
-      final alice = await Device.signUp('alice', _email('alice'));
-      final bob = await Device.signUp('bob', _email('bob'));
+      final alice = await Device.signUp('alice', email('alice'));
+      final bob = await Device.signUp('bob', email('bob'));
       await alice.publishKeys();
       await bob.publishKeys();
 
@@ -449,8 +302,8 @@ void main() {
     testWidgets('is sealed, uploaded, fetched and opened by the other end', (
       _,
     ) async {
-      final alice = await Device.signUp('alice', _email('alice'));
-      final bob = await Device.signUp('bob', _email('bob'));
+      final alice = await Device.signUp('alice', email('alice'));
+      final bob = await Device.signUp('bob', email('bob'));
       await alice.publishKeys();
       await bob.publishKeys();
 
@@ -507,8 +360,8 @@ void main() {
     testWidgets('carries the id of the message it answers, not a quote of it', (
       _,
     ) async {
-      final alice = await Device.signUp('alice', _email('alice'));
-      final bob = await Device.signUp('bob', _email('bob'));
+      final alice = await Device.signUp('alice', email('alice'));
+      final bob = await Device.signUp('bob', email('bob'));
       await alice.publishKeys();
       await bob.publishKeys();
 
@@ -556,9 +409,9 @@ void main() {
     testWidgets('restores history to a FRESH device that works alongside the original', (
       _,
     ) async {
-      final aliceEmail = _email('alice');
+      final aliceEmail = email('alice');
       final alice1 = await Device.signUp('alice1', aliceEmail);
-      final bob = await Device.signUp('bob', _email('bob'));
+      final bob = await Device.signUp('bob', email('bob'));
       await alice1.publishKeys();
       await bob.publishKeys();
 
@@ -649,8 +502,8 @@ void main() {
     testWidgets('hands a fresh device its pre-join history from a co-member', (
       _,
     ) async {
-      final bobEmail = _email('bob');
-      final alice = await Device.signUp('alice', _email('alice'));
+      final bobEmail = email('bob');
+      final alice = await Device.signUp('alice', email('alice'));
       final bobPhone = await Device.signUp('bobphone', bobEmail);
       await alice.publishKeys();
       await bobPhone.publishKeys();

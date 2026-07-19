@@ -281,3 +281,15 @@ func TestDeadPushAddressesArePruned(t *testing.T) {
 		t.Error("a device was pruned for a transient failure")
 	}
 }
+
+// reset forgets what has been recorded, so a test can assert on a SECOND message without the first
+// one's deliveries still in the way.
+func (f *fakePush) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = nil
+	f.toDevs = nil
+	for len(f.fired) > 0 {
+		<-f.fired
+	}
+}
