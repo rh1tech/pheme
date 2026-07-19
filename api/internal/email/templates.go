@@ -1,6 +1,9 @@
 package email
 
-import "fmt"
+import (
+	"fmt"
+	"html"
+)
 
 // VerificationEmail returns the subject, plain-text, and HTML bodies for an
 // account-verification message carrying a 6-digit code.
@@ -31,7 +34,14 @@ func PasswordResetEmail(code string) (subject, text, html string) {
 }
 
 // codeHTML renders a minimal, inline-styled email body with a prominent code.
+//
+// The interpolated values are escaped. Today they cannot carry markup — the headings are constants
+// in this file and the code is six digits from the OTP generator — so this changes nothing about
+// what is sent. It is here because "safe as long as nobody ever passes something else" is a
+// property of the callers rather than of this function, and an unescaped %s in an HTML template is
+// the kind of thing that stays correct right up until someone reuses it.
 func codeHTML(heading, lead, code string) string {
+	heading, lead, code = html.EscapeString(heading), html.EscapeString(lead), html.EscapeString(code)
 	return fmt.Sprintf(`<!doctype html>
 <html>
   <body style="margin:0;padding:0;background:#f4f1fb;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
