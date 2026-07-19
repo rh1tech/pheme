@@ -174,7 +174,10 @@ func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage,
 	select {
 	case pushSlots <- struct{}{}:
 	default:
-		h.logger().Warn("chat push: at capacity, notification dropped", "conversation", convID)
+		if n, report := messagePushDrops.record(time.Now()); report {
+			h.logger().Warn("chat push: at capacity, notifications dropped",
+				"dropped", n, "over", reportWindow, "conversation", convID)
+		}
 		return
 	}
 	go func() {

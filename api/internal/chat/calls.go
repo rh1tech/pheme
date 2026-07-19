@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/live"
@@ -273,7 +274,10 @@ func (h *Handler) ringMembers(convID, callerID, callID string, kind push.Kind) {
 	select {
 	case pushSlots <- struct{}{}:
 	default:
-		h.logger().Warn("call ring: at capacity, notification dropped", "conversation", convID)
+		if n, report := callPushDrops.record(time.Now()); report {
+			h.logger().Warn("call ring: at capacity, rings dropped",
+				"dropped", n, "over", reportWindow, "conversation", convID)
+		}
 		return
 	}
 	go func() {
