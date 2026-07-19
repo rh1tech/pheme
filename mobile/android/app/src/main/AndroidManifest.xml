@@ -73,6 +73,25 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- The channel the system tray draws a message notification on.
+
+             Without this, FCM has no channel to use for a notification it renders itself, so it
+             invents one: fcm_fallback_notification_channel, named "Misc", at DEFAULT importance
+             with vibration off. Everything still arrives, which is why this went unnoticed — but
+             it arrives on the wrong channel, and that has consequences the app cannot override.
+
+             The app creates pheme_messages at HIGH importance with vibration on. HIGH is what
+             makes a message appear as a heads-up banner; DEFAULT drops it silently into the
+             shade. And a user adjusting "Pheme messages" in system settings was configuring a
+             channel that nothing was being delivered on, so their choices did nothing.
+
+             Only affects tray-rendered notifications. A preview arrives data-only and is drawn by
+             the app on the right channel already, which is why this is invisible to anyone testing
+             with previews on. Verified on a Pixel 9: before this, the posted record read
+             channel=fcm_fallback_notification_channel. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="pheme_messages" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
