@@ -275,3 +275,88 @@ func TestWebPushStopsWhenTheContextIsCancelled(t *testing.T) {
 		t.Errorf("got %d results, want one per device even when cancelled", len(results))
 	}
 }
+
+// The channel broadcast path. SendChat was covered and this was not, which is the wrong way round
+// by volume: a conversation has a handful of members, a channel has as many subscribers as it can
+// get, and this is the call that fans out to all of them.
+func TestWebPushSendsAChannelMessageToEveryDevice(t *testing.T) {
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	priv, pub := vapid(t)
+	sender := NewWebPushSender(pub, priv, "mailto:ops@pheme.test", "https://pheme.example")
+
+	devices := webDevices(t, srv.URL, 5)
+	results, err := sender.Send(context.Background(), domain.Message{
+		ID: "msg-1", ChannelID: "chan-1", Title: "Deploy finished", Body: "v1.2.3 is live",
+		Images: []domain.MessageImage{{ID: "img-1", Width: 8, Height: 8}},
+	}, devices)
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if len(results) != len(devices) {
+		t.Fatalf("got %d results for %d devices", len(results), len(devices))
+	}
+	for i, r := range results {
+		if r.Status != domain.DeliverySent {
+			t.Errorf("device %d: status %q, error %q", i, r.Status, r.Error)
+		}
+		if r.DeviceID != devices[i].ID {
+			t.Errorf("result %d belongs to %q but sits in %q's position", i, r.DeviceID, devices[i].ID)
+		}
+	}
+	if n := requests.Load(); n != int64(len(devices)) {
+		t.Errorf("%d requests for %d devices; a subscriber was skipped", n, len(devices))
+	}
+}
+
+// A channel send also prunes: a subscriber whose browser dropped the subscription reports 410, and
+// that must be distinguishable from one whose delivery merely failed.
+func TestWebPushChannelSendReportsGoneSeparatelyFromFailed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("outcome") {
+		case "gone":
+			w.WriteHeader(http.StatusGone)
+		case "error":
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusCreated)
+		}
+	}))
+	defer srv.Close()
+
+	priv, pub := vapid(t)
+	sender := NewWebPushSender(pub, priv, "mailto:ops@pheme.test", "")
+
+	devices := []domain.Device{
+		{ID: "ok", Platform: domain.PlatformWeb, WebPushSub: subscriptionFor(t, srv.URL)},
+		{ID: "dropped", Platform: domain.PlatformWeb, WebPushSub: subscriptionFor(t, srv.URL+"?outcome=gone")},
+		{ID: "flaky", Platform: domain.PlatformWeb, WebPushSub: subscriptionFor(t, srv.URL+"?outcome=error")},
+	}
+	results, err := sender.Send(context.Background(),
+		domain.Message{ID: "m", ChannelID: "c", Title: "t"}, devices)
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	byID := map[string]Result{}
+	for _, r := range results {
+		byID[r.DeviceID] = r
+	}
+	if got := byID["ok"]; got.Status != domain.DeliverySent || got.Gone {
+		t.Errorf("the working subscriber: %+v", got)
+	}
+	if got := byID["dropped"]; !got.Gone {
+		t.Errorf("a dropped subscription was not reported as Gone (%+v); it stays in the collection "+
+			"and every future broadcast retries it forever", got)
+	}
+	if got := byID["flaky"]; got.Gone {
+		t.Errorf("a transient 500 was reported as Gone (%+v); the subscriber loses their "+
+			"registration over a bad minute", got)
+	}
+}

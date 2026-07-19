@@ -215,3 +215,47 @@ func TestConformance_TerminatingADeviceRemovesItsPushAddresses(t *testing.T) {
 		}
 	})
 }
+
+// Removing a single push address by id. This is what the dispatcher calls when a push provider
+// reports an address permanently dead, so the caller is covered and this was not.
+func TestConformance_DeletingOnePushDevice(t *testing.T) {
+	eachStore(t, func(t *testing.T, s storeUnderTest) {
+		ctx := context.Background()
+
+		doomed, err := s.store.CreateDevice(ctx, domain.Device{
+			UserID: "alice", Platform: domain.PlatformAndroid, FCMToken: "dead-token",
+			CreatedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		keeper, err := s.store.CreateDevice(ctx, domain.Device{
+			UserID: "alice", Platform: domain.PlatformAndroid, FCMToken: "live-token",
+			CreatedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		if err := s.store.DeleteDevice(ctx, doomed.ID); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+
+		remaining, err := s.store.DevicesForUsers(ctx, []string{"alice"})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(remaining) != 1 || remaining[0].ID != keeper.ID {
+			t.Errorf("after deleting one address the user has %+v, want only the live one", remaining)
+		}
+
+		// Deleting one that is already gone is not an error. The dispatcher prunes from a result
+		// set that may name the same address twice, and a second delete must not fail the batch.
+		if err := s.store.DeleteDevice(ctx, doomed.ID); err != nil {
+			t.Errorf("deleting an already-deleted device = %v, want nil", err)
+		}
+		if err := s.store.DeleteDevice(ctx, "000000000000000000000000"); err != nil {
+			t.Errorf("deleting an unknown device = %v, want nil", err)
+		}
+	})
+}
