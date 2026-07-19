@@ -73,11 +73,13 @@ class DeviceController extends Notifier<String?> {
     final settings = ref.read(settingsStoreProvider);
     final registered = await settings.loadRegisteredPushToken();
     final mlsDeviceId = await loadMlsDeviceId(const FlutterSecureStorage());
+    final registeredMls = await settings.loadRegisteredMlsIdentity();
+    final hasMls = mlsDeviceId != null && mlsDeviceId.isNotEmpty;
     if (!needsReregistration(
       current: token,
       registered: registered,
-      hasMlsIdentity: mlsDeviceId != null && mlsDeviceId.isNotEmpty,
-      registeredMlsIdentity: await settings.loadRegisteredMlsIdentity(),
+      hasMlsIdentity: hasMls,
+      registeredMlsIdentity: registeredMls,
     )) {
       return;
     }

@@ -625,6 +625,23 @@ func (m *Mongo) CreateDevice(ctx context.Context, d domain.Device) (domain.Devic
 				"lastSeenAt":       d.LastSeenAt,
 				"canRenderPreview": d.CanRenderPreview,
 			}
+			// The MLS device this address belongs to, when the registration carries one.
+			//
+			// This was missing, and it made the omission permanent. A client registers when the app
+			// starts, which can be before it has minted its MLS identity, so the first registration
+			// legitimately has none. Every later one does — but every later one also matches this
+			// dedupe, and the update dropped the field, so the row kept its empty value forever.
+			//
+			// That is not cosmetic: an address with no MLS device cannot be removed when that device
+			// is revoked, and is therefore refused message previews. The device would show "New
+			// message" for the rest of its life with no way to recover, having done nothing wrong
+			// and having sent the right value on every launch.
+			//
+			// Only when non-empty, so a registration that genuinely has no identity — a Mac, a
+			// client that has not minted one yet — cannot erase a link that already exists.
+			if d.MLSDeviceID != "" {
+				set["mlsDeviceId"] = d.MLSDeviceID
+			}
 			if d.WebPushSub != "" {
 				set["webPushSub"] = d.WebPushSub
 			}
@@ -640,6 +657,9 @@ func (m *Mongo) CreateDevice(ctx context.Context, d domain.Device) (domain.Devic
 			}
 			existing.LastSeenAt = d.LastSeenAt
 			existing.CanRenderPreview = d.CanRenderPreview
+			if d.MLSDeviceID != "" {
+				existing.MLSDeviceID = d.MLSDeviceID
+			}
 			if d.WebPushSub != "" {
 				existing.WebPushSub = d.WebPushSub
 			}

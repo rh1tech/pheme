@@ -641,6 +641,11 @@ func (m *Memory) CreateDevice(_ context.Context, d domain.Device) (domain.Device
 		}
 		existing.LastSeenAt = d.LastSeenAt
 		existing.CanRenderPreview = d.CanRenderPreview
+		// See Mongo: a first registration can precede the MLS identity, and without this the row
+		// never learns it — which permanently costs that device its message previews.
+		if d.MLSDeviceID != "" {
+			existing.MLSDeviceID = d.MLSDeviceID
+		}
 		if d.WebPushSub != "" {
 			existing.WebPushSub = d.WebPushSub
 		}
