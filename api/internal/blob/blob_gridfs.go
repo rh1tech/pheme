@@ -16,7 +16,7 @@ import (
 // driver stays self-contained and decoupled from the document Store.
 type GridFS struct {
 	client *mongo.Client
-	bucket *gridfs.Bucket
+	db     *mongo.Database
 }
 
 // NewGridFS connects to MongoDB and prepares a GridFS bucket on the database.
@@ -29,27 +29,48 @@ func NewGridFS(ctx context.Context, uri, dbName string) (*GridFS, error) {
 		_ = client.Disconnect(ctx)
 		return nil, err
 	}
-	bucket, err := gridfs.NewBucket(client.Database(dbName))
-	if err != nil {
+	db := client.Database(dbName)
+	// Prove the bucket can be built now rather than failing on the first upload.
+	if _, err := gridfs.NewBucket(db); err != nil {
 		_ = client.Disconnect(ctx)
 		return nil, err
 	}
-	return &GridFS{client: client, bucket: bucket}, nil
+	return &GridFS{client: client, db: db}, nil
 }
 
 // Put uploads data under a new id, recording the content type in file metadata.
-func (g *GridFS) Put(_ context.Context, data []byte, contentType string) (string, error) {
+func (g *GridFS) Put(ctx context.Context, data []byte, contentType string) (string, error) {
+	b, err := g.bucket()
+	if err != nil {
+		return "", err
+	}
 	id := newID()
 	opts := options.GridFSUpload().SetMetadata(bson.M{"contentType": contentType})
-	if err := g.bucket.UploadFromStreamWithID(id, id, bytes.NewReader(data), opts); err != nil {
+	if err := b.UploadFromStreamWithID(id, id, bytes.NewReader(data), opts); err != nil {
 		return "", err
 	}
 	return id, nil
 }
 
+// bucket returns a Bucket for ONE operation.
+//
+// The driver's Bucket is not safe for concurrent use. It mutates itself on the first write to
+// record that it has created its indexes, and it reuses an internal buffer across uploads — the
+// race detector catches both, and this app uploads concurrently as a matter of course: several
+// images in one message, several people at once. Sharing one Bucket meant two uploads could
+// interleave into the same buffer, which is not a crash but a corrupted image.
+//
+// A Bucket is a thin handle over two collections, so making one per call is cheap, and it is the
+// only way to use this driver concurrently without serialising every upload behind a mutex.
+func (g *GridFS) bucket() (*gridfs.Bucket, error) { return gridfs.NewBucket(g.db) }
+
 // Get downloads the bytes and content type for an id.
 func (g *GridFS) Get(_ context.Context, id string) ([]byte, string, error) {
-	ds, err := g.bucket.OpenDownloadStream(id)
+	b, err := g.bucket()
+	if err != nil {
+		return nil, "", err
+	}
+	ds, err := b.OpenDownloadStream(id)
 	if err != nil {
 		if errors.Is(err, gridfs.ErrFileNotFound) {
 			return nil, "", ErrNotFound
@@ -77,7 +98,11 @@ func (g *GridFS) Get(_ context.Context, id string) ([]byte, string, error) {
 
 // Delete removes a blob; a missing id is treated as success.
 func (g *GridFS) Delete(_ context.Context, id string) error {
-	if err := g.bucket.Delete(id); err != nil && !errors.Is(err, gridfs.ErrFileNotFound) {
+	b, err := g.bucket()
+	if err != nil {
+		return err
+	}
+	if err := b.Delete(id); err != nil && !errors.Is(err, gridfs.ErrFileNotFound) {
 		return err
 	}
 	return nil
