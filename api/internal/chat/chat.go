@@ -10,6 +10,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -204,6 +205,18 @@ func (h *Handler) requireMember(w http.ResponseWriter, r *http.Request) (uid, co
 	convID = r.PathValue("id")
 	member, err := h.Store.ConversationMembership(r.Context(), convID, uid)
 	if err != nil {
+		// Only a genuine absence is a 404. Everything else — a timeout, an exhausted connection
+		// pool, a database that is simply down — is the server's problem and must say so.
+		//
+		// This mattered: under load the store started timing out, and because every error became
+		// "conversation not found", a load test saw users being told their conversations did not
+		// exist. A client cannot tell that apart from a real deletion, and neither could anyone
+		// reading the logs afterwards.
+		if !errors.Is(err, store.ErrNotFound) {
+			h.logger().Error("membership lookup failed", "conversation", convID, "user", uid, "error", err)
+			httpx.Error(w, http.StatusServiceUnavailable, "could not reach the conversation store")
+			return uid, convID, member, false
+		}
 		httpx.Error(w, http.StatusNotFound, "conversation not found")
 		return uid, convID, member, false
 	}

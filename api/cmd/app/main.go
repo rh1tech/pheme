@@ -26,6 +26,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg := config.Load()
 	b := bootstrap.New(cfg, logger)
+	startDebugServer(logger)
 
 	ctx := context.Background()
 	db, err := b.Store(ctx)

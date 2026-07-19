@@ -66,6 +66,11 @@ type CallSignal struct {
 	FromUserID string `json:"fromUserId"`
 }
 
+// subscriberBuffer is how many events a subscriber may fall behind by before its events start
+// being dropped. A drop is silent to the user — the message simply never appears — so the number
+// is a tradeoff between memory per connection and how long a stalled reader is tolerated.
+const subscriberBuffer = 64
+
 // Bus distributes live events to subscribers.
 type Bus interface {
 	Publish(e Event)
@@ -98,7 +103,7 @@ func (b *MemoryBus) Publish(e Event) {
 // Subscribe registers a new subscriber and returns its channel plus a cancel
 // function that unsubscribes and closes the channel.
 func (b *MemoryBus) Subscribe() (<-chan Event, func()) {
-	ch := make(chan Event, 16)
+	ch := make(chan Event, subscriberBuffer)
 	b.mu.Lock()
 	b.subs[ch] = struct{}{}
 	b.mu.Unlock()
