@@ -48,4 +48,70 @@ void main() {
       },
     );
   });
+
+  _mlsIdentityGroup();
+}
+
+/// The other way a registration goes stale: the device has an MLS identity the server was never
+/// told about.
+///
+/// Registration happens when the app starts, which can be before the identity is minted, and
+/// registerDevice attaches whatever exists at that moment. The server will not send message
+/// previews to a push address it cannot trace to an MLS device — because such an address survives
+/// revocation — so a device that registered a moment too early shows "New message" forever.
+void _mlsIdentityGroup() {
+  group('needsReregistration, MLS identity', () {
+    test('an identity the server was never told about forces a re-register', () {
+      expect(
+        needsReregistration(
+          current: 'token-a',
+          registered:
+              'token-a', // token unchanged, so only the identity can trigger this
+          hasMlsIdentity: true,
+          registeredMlsIdentity: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('an identity already registered changes nothing', () {
+      expect(
+        needsReregistration(
+          current: 'token-a',
+          registered: 'token-a',
+          hasMlsIdentity: true,
+          registeredMlsIdentity: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('no identity yet is not a reason to re-register', () {
+      // Before the identity is minted there is nothing to send, and re-registering on every launch
+      // until it appears would be churn for its own sake.
+      expect(
+        needsReregistration(
+          current: 'token-a',
+          registered: 'token-a',
+          hasMlsIdentity: false,
+          registeredMlsIdentity: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('a missing identity link wins even when the token cannot be read', () {
+      // An unreadable token normally means leave things alone, but an unlinked identity is a
+      // definite, locally-known defect: previews are off until it is sent.
+      expect(
+        needsReregistration(
+          current: null,
+          registered: null,
+          hasMlsIdentity: true,
+          registeredMlsIdentity: false,
+        ),
+        isTrue,
+      );
+    });
+  });
 }

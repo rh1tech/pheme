@@ -337,7 +337,21 @@ func (h *Handler) devicesByPrivacy(
 			// sending the same payload twice.
 			p = u.NotificationPrivacy.Effective()
 		}
-		key := pushGroup{privacy: p, rendersPreview: d.CanRenderPreview}
+		// A push address that cannot be traced back to an MLS device does not get ciphertext, even
+		// if it says it can render a preview.
+		//
+		// Revocation is why. Terminating a device removes its push rows by matching mlsDeviceId, so
+		// a row that carries none is unmatched by that delete and survives it — and a surviving row
+		// with CanRenderPreview set goes on being handed the ciphertext of messages the device has
+		// just been forbidden to read. domain.Device.MLSDeviceID has always said this was enforced;
+		// it was not, anywhere. Legacy rows and rows registered before the client had minted its MLS
+		// identity both land here, and both are exactly the rows that cannot be revoked.
+		//
+		// The cost of being wrong this way is one generic notification until the device registers
+		// again with its identity attached. The cost of being wrong the other way is ciphertext
+		// delivered to a device that was revoked.
+		accountable := d.MLSDeviceID != ""
+		key := pushGroup{privacy: p, rendersPreview: d.CanRenderPreview && accountable}
 		groups[key] = append(groups[key], d)
 	}
 	return groups

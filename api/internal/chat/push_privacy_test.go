@@ -350,3 +350,51 @@ func TestDevicesWithoutPushAreNotCollapsed(t *testing.T) {
 		t.Error("two push-less devices were merged into one; each needs its own id to answer a call")
 	}
 }
+
+// Ciphertext must not go to a push address that cannot be traced back to an MLS device.
+//
+// Revocation is the reason. Terminating a device removes its push rows by matching mlsDeviceId, so
+// a row carrying none is not matched by that delete and outlives it. If such a row is still treated
+// as preview-capable, it keeps being handed the ciphertext of messages the device has just been
+// forbidden to read — which is the exact failure the two device registries were joined to prevent.
+//
+// domain.Device.MLSDeviceID documented this as enforced. It was not enforced anywhere: the only
+// device-level condition was CanRenderPreview. A phone in production was in precisely this state,
+// registered before its client had minted an MLS identity.
+func TestChatPushWithholdsCiphertextFromUnrevocableDevices(t *testing.T) {
+	f := newFixture(t)
+	pusher := newFakePush()
+	f.setPush(pusher)
+
+	_, aliceToken := f.user(t, "alice-unrevocable@pheme.test")
+	bobID, _ := f.user(t, "bob-unrevocable@pheme.test") // defaults to preview
+
+	// Claims it can render previews, but nothing ties it to an MLS device — so revoking that device
+	// would leave this row behind.
+	if _, err := f.store.CreateDevice(context.Background(), domain.Device{
+		UserID:           bobID,
+		Platform:         "android",
+		FCMToken:         "token-orphan",
+		CanRenderPreview: true,
+	}); err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+
+	conv := f.createDirect(t, aliceToken, bobID)
+	f.sendMessage(t, conv, aliceToken)
+
+	if !pusher.waitForPush(t) {
+		t.Fatal("expected a chat push")
+	}
+	n := pusher.notifications()[0]
+	if n.DeviceRendersPreview {
+		t.Error("a push address with no MLS device was treated as preview-capable; revoking the " +
+			"device cannot remove this row, so it would go on receiving the ciphertext of messages " +
+			"it is no longer allowed to read")
+	}
+	// The notification itself must still be sent — the device is unaccountable, not untrusted. It
+	// gets the generic form until it registers again with its identity attached.
+	if len(pusher.notifications()) == 0 {
+		t.Error("no notification at all was sent; the device should still be told a message arrived")
+	}
+}

@@ -19,6 +19,13 @@ class SettingsStore {
   /// has stopped working.
   static const _registeredTokenKey = 'pheme.registeredPushToken';
 
+  /// Whether the registration the server holds carried this device's MLS identity.
+  ///
+  /// Registration can happen before that identity exists, and the server will not send message
+  /// previews to a push address it cannot trace to an MLS device — so a device that registered too
+  /// early shows "New message" forever unless it registers again.
+  static const _registeredMlsKey = 'pheme.registeredMlsIdentity';
+
   final FlutterSecureStorage _storage;
 
   Future<String?> read(String key) => _storage.read(key: key);
@@ -69,4 +76,10 @@ class SettingsStore {
 
   Future<void> saveRegisteredPushToken(String token) =>
       _storage.write(key: _registeredTokenKey, value: token);
+
+  Future<bool> loadRegisteredMlsIdentity() async =>
+      await _storage.read(key: _registeredMlsKey) == 'true';
+
+  Future<void> saveRegisteredMlsIdentity(bool linked) =>
+      _storage.write(key: _registeredMlsKey, value: linked ? 'true' : 'false');
 }

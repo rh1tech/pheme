@@ -220,6 +220,11 @@ func (f *fixture) capableDevice(t *testing.T, userID string) string {
 		Platform:         "android",
 		FCMToken:         "token-capable-" + userID,
 		CanRenderPreview: true,
+		// A real preview-capable registration carries the MLS device it belongs to — that is what
+		// makes the push address revocable, and ciphertext is only sent to addresses that are. This
+		// fixture used to omit it, which described a device that cannot exist in a healthy client
+		// and quietly asserted that previews flow to unrevocable addresses.
+		MLSDeviceID: "mls-" + userID,
 	})
 	if err != nil {
 		t.Fatalf("create capable device: %v", err)

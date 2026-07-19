@@ -475,7 +475,14 @@ class PushService {
       mlsDeviceId: mlsDeviceId,
       canRenderPreview: _canRenderPreview,
     );
-    return Registration(id: device.id, pushToken: fcmToken);
+    return Registration(
+      id: device.id,
+      pushToken: fcmToken,
+      // Whether the MLS identity actually made it into this registration. Best-effort above, so it
+      // is genuinely absent when the identity has not been minted yet — and the server withholds
+      // previews from an address it cannot trace to one.
+      linkedMlsIdentity: mlsDeviceId != null && mlsDeviceId.isNotEmpty,
+    );
   }
 
   /// Whether THIS build can decrypt a message and draw the notification itself.
@@ -530,8 +537,16 @@ class PushService {
 /// A null token is normal rather than a failure: a Mac has no Firebase, and someone who declined
 /// notifications still gets an id, because the id is also what lets them answer a call.
 final class Registration {
-  const Registration({required this.id, this.pushToken});
+  const Registration({
+    required this.id,
+    this.pushToken,
+    this.linkedMlsIdentity = false,
+  });
 
   final String id;
   final String? pushToken;
+
+  /// Whether this registration told the server which MLS device the address belongs to. False means
+  /// the server cannot revoke this address, and so will not send it message previews.
+  final bool linkedMlsIdentity;
 }

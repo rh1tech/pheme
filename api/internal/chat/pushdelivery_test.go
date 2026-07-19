@@ -28,6 +28,12 @@ func (f *fixture) pushDevice(t *testing.T, userID, token string, canPreview bool
 		Platform:         domain.PlatformAndroid,
 		FCMToken:         token,
 		CanRenderPreview: canPreview,
+		// Every device of a working client belongs to an MLS device, whatever its app version — that
+		// link is what makes the push address revocable, and ciphertext only goes to addresses that
+		// are. Leaving it out here would make these fixtures unrevocable rows rather than the old
+		// and new builds they are meant to represent, and the capability being tested would no
+		// longer be the thing deciding the outcome.
+		MLSDeviceID: "mls-" + token,
 	}); err != nil {
 		t.Fatalf("create device: %v", err)
 	}

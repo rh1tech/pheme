@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+import '../crypto/mls_device.dart';
 
 import '../core/providers.dart';
 
@@ -50,6 +53,7 @@ class DeviceController extends Notifier<String?> {
     if (token != null) {
       await settings.saveRegisteredPushToken(token);
     }
+    await settings.saveRegisteredMlsIdentity(registration.linkedMlsIdentity);
     state = registration.id;
     return registration.id;
   }
@@ -68,7 +72,15 @@ class DeviceController extends Notifier<String?> {
     final token = await ref.read(pushServiceProvider).currentPushToken();
     final settings = ref.read(settingsStoreProvider);
     final registered = await settings.loadRegisteredPushToken();
-    if (!needsReregistration(current: token, registered: registered)) return;
+    final mlsDeviceId = await loadMlsDeviceId(const FlutterSecureStorage());
+    if (!needsReregistration(
+      current: token,
+      registered: registered,
+      hasMlsIdentity: mlsDeviceId != null && mlsDeviceId.isNotEmpty,
+      registeredMlsIdentity: await settings.loadRegisteredMlsIdentity(),
+    )) {
+      return;
+    }
 
     // Force register() past its early return: the id may still be valid, but the address behind it
     // is not, and only a fresh registration carries the new token.
@@ -114,7 +126,21 @@ class DeviceController extends Notifier<String?> {
 bool needsReregistration({
   required String? current,
   required String? registered,
+  bool hasMlsIdentity = false,
+  bool registeredMlsIdentity = false,
 }) {
+  // An MLS identity this device has but the server was never told about is the other way a
+  // registration goes stale, and it is easy to reach: the device registers when the app starts,
+  // which can be before the MLS identity has been minted, and registerDevice attaches whatever
+  // exists at that moment. The comment there says the link is sent "on its next registration" —
+  // but with register() returning early forever, there was no next one.
+  //
+  // The consequence is not a missing link, it is missing PREVIEWS. The server will not hand
+  // ciphertext to a push address it cannot trace to an MLS device, because such an address cannot
+  // be revoked. So the device shows "New message" and nothing else, permanently, with nothing
+  // anywhere reporting a fault.
+  if (hasMlsIdentity && !registeredMlsIdentity) return true;
+
   if (current == null) return false;
   return current != registered;
 }
