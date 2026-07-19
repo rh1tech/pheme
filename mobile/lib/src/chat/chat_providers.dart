@@ -105,15 +105,34 @@ final lastSeenProvider =
 /// A message from us is never unread, and control traffic is not a message at all — the user has
 /// nothing to read, so it must not light up a dot.
 final unreadProvider = Provider.family<bool, Conversation>((ref, conversation) {
-  final last = conversation.lastMessage;
-  if (last == null) return false;
-  if (ContentType.control.contains(last.contentType)) return false;
-  if (last.senderId == ref.watch(myUserIdProvider)) return false;
-
-  final seen = ref.watch(lastSeenProvider).value?[conversation.id];
-  if (seen == null) return true;
-  return last.createdAt.compareTo(seen) > 0;
+  return isConversationUnread(
+    last: conversation.lastMessage,
+    myUserId: ref.watch(myUserIdProvider),
+    seenAt: ref.watch(lastSeenProvider).value?[conversation.id],
+  );
 });
+
+/// The unread rule, as a plain function so it can be tested without a provider container.
+///
+/// [seenAt] is the timestamp of the newest message this device has DISPLAYED. Comparison is lexical
+/// on the server's ISO-8601 UTC timestamps, which sort correctly as strings precisely because the
+/// server writes them in one fixed shape.
+bool isConversationUnread({
+  required LastChatMessage? last,
+  required String myUserId,
+  required String? seenAt,
+}) {
+  if (last == null) return false;
+  // Protocol traffic is not a message; nobody wrote it and there is nothing to read.
+  if (ContentType.control.contains(last.contentType)) return false;
+  // Neither is a line the conversation says about itself — somebody joining or leaving is worth
+  // seeing when you next look, and is not a message waiting for you.
+  if (ContentType.system.contains(last.contentType)) return false;
+  if (last.senderId == myUserId) return false;
+
+  if (seenAt == null) return true;
+  return last.createdAt.compareTo(seenAt) > 0;
+}
 
 /// The conversation list, patched live from the event stream.
 final conversationListProvider =

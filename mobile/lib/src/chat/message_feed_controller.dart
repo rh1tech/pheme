@@ -226,6 +226,8 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       );
       await _decrypt(messages);
       unawaited(_persistEnvelope());
+      // Opening a conversation IS reading it.
+      unawaited(_markNewestRead());
     } on Object {
       state = state.copyWith(loading: false);
     }
@@ -362,6 +364,7 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       // twice, because the key is gone.
       await _decryptUnread();
       unawaited(_persistEnvelope());
+      unawaited(_markNewestRead());
     } on Object {
       // Leave it. Another reconnect or the next open will pick it up.
     }
@@ -499,6 +502,18 @@ class MessageFeedController extends Notifier<MessageFeedState> {
         contents: {...state.contents, message.id: content},
       );
     }
+  }
+
+  /// Marks the newest message on screen as read.
+  ///
+  /// Called when the feed loads, not only when a live message lands. _markRead used to run from the
+  /// live path ALONE, so a message that arrived while the app was closed — the ordinary case, the
+  /// one a push notification announces — was never marked read no matter how long you looked at it.
+  /// The dot stayed lit forever, on a conversation with nothing in it to read.
+  Future<void> _markNewestRead() async {
+    if (state.messages.isEmpty) return;
+    // Oldest-first, so the newest is last.
+    await _markRead(state.messages.last);
   }
 
   Future<void> _markRead(ChatMessage message) => ref
