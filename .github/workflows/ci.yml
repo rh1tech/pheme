@@ -24,35 +24,51 @@ jobs:
   api:
     name: API (Go)
     runs-on: [self-hosted, linux, ci]
+    env:
+      MONGO_CONTAINER: pheme-ci-mongo-${{ github.run_id }}-${{ github.run_attempt }}
+      # A high, run-scoped port so two runs on this shared host cannot collide on it.
+      MONGO_PORT: 27117
     defaults:
       run:
         working-directory: api
-    # The store has two hand-written implementations of one interface, and production runs the
-    # Mongo one while almost every test exercised the in-memory one. They have already disagreed:
-    # the profile update that blanked people's display names was Mongo-only behaviour. The
-    # conformance suite runs one set of assertions against BOTH, and it can only do that with a
-    # real database — without this service it skips the half that ships.
-    services:
-      mongo:
-        image: mongo:7
-        ports:
-          - 27117:27017
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: api/go.mod
           cache-dependency-path: api/go.sum
+      # The store has two hand-written implementations of one interface, and production runs the
+      # Mongo one while almost every test exercised the in-memory one. They have already disagreed:
+      # the profile update that blanked people's display names was Mongo-only behaviour. The
+      # conformance suite runs one set of assertions against BOTH, and it can only do that with a
+      # real database — without this it skips the half that ships.
+      #
+      # Started by hand rather than with `services:`, which needs a container network this
+      # self-hosted runner does not have ("Value cannot be null. (Parameter 'network')").
+      #
+      # The container name carries the run and job id: two jobs share this host, and a fixed name
+      # would have one job's cleanup kill the other's database mid-test.
+      - name: Start MongoDB for the store conformance suite
+        run: |
+          docker rm -f "$MONGO_CONTAINER" 2>/dev/null || true
+          docker run -d --rm --name "$MONGO_CONTAINER" -p 127.0.0.1:${MONGO_PORT}:27017 mongo:7
+          for i in $(seq 1 30); do
+            if docker exec "$MONGO_CONTAINER" mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1; then
+              echo "mongo ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "mongo never became ready"; docker logs "$MONGO_CONTAINER" | tail -20; exit 1
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race -cover ./...
         env:
-          PHEME_TEST_MONGO_URI: mongodb://localhost:27117
+          PHEME_TEST_MONGO_URI: mongodb://127.0.0.1:${{ env.MONGO_PORT }}
+      # always(), so a failing test still takes its database with it rather than leaving a
+      # container running on a shared host until somebody notices.
+      - name: Stop MongoDB
+        if: always()
+        run: docker rm -f "$MONGO_CONTAINER" 2>/dev/null || true
 
   web:
     name: Web (Vite)

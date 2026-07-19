@@ -1668,7 +1668,9 @@ class MlsService {
     }
     final bodies = (await _cache.exportAllContents())[conversationId];
     if (bodies == null || bodies.isEmpty) {
-      debugPrint('Pheme: no history offer — this device has no transcript to share');
+      debugPrint(
+        'Pheme: no history offer — this device has no transcript to share',
+      );
       return;
     }
 
@@ -1696,7 +1698,9 @@ class MlsService {
     try {
       historyId = await _repo.uploadHistory(conversationId, sealed.ciphertext);
     } on Object catch (e) {
-      debugPrint('Pheme: no history offer — the sealed blob would not upload: $e');
+      debugPrint(
+        'Pheme: no history offer — the sealed blob would not upload: $e',
+      );
       return;
     }
     final offer = _encodeControl({
@@ -1728,7 +1732,10 @@ class MlsService {
   ///
   /// Returns whether any history was imported. Offers addressed to other devices are skipped by
   /// receiveHistoryOffer, which is what makes it safe for every member to see them.
-  Future<bool> collectPendingHistory(String conversationId, String userId) async {
+  Future<bool> collectPendingHistory(
+    String conversationId,
+    String userId,
+  ) async {
     final List<ChatMessage> offers;
     try {
       offers = await _repo.listHistoryOffers(conversationId);
@@ -1739,7 +1746,11 @@ class MlsService {
     }
     for (final offer in offers) {
       try {
-        if (await receiveHistoryOffer(conversationId, userId, offer.ciphertext)) {
+        if (await receiveHistoryOffer(
+          conversationId,
+          userId,
+          offer.ciphertext,
+        )) {
           return true;
         }
       } on Object catch (e) {

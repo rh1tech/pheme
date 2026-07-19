@@ -591,13 +591,12 @@ class PhemeRepository {
   /// over the live stream or not at all — and a device that was not connected at that instant
   /// showed a blank history until it happened to ask again. This is how it finds the answer it
   /// already asked for.
-  Future<List<ChatMessage>> listHistoryOffers(String conversationId) => _get(
-    '/v1/conversations/$conversationId/mls/history-offers',
-  ).then(
-    (d) => ((d['messages'] as List?) ?? const [])
-        .map((m) => ChatMessage.fromJson(m as Map<String, dynamic>))
-        .toList(),
-  );
+  Future<List<ChatMessage>> listHistoryOffers(String conversationId) =>
+      _get('/v1/conversations/$conversationId/mls/history-offers').then(
+        (d) => ((d['messages'] as List?) ?? const [])
+            .map((m) => ChatMessage.fromJson(m as Map<String, dynamic>))
+            .toList(),
+      );
 
   Future<void> removeConversationMember(String id, String userId) =>
       _delete('/v1/conversations/$id/members/$userId');
