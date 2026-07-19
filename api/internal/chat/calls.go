@@ -30,6 +30,26 @@ import (
 // next to what someone would like to make the server buffer.
 const maxSignalBytes = 16 * 1024
 
+// callKey scopes a call's mailbox to the conversation it was placed in.
+//
+// The call id is minted by the client and arrives in the URL path, so on its own it is a claim
+// rather than a fact. Every one of these handlers proves the caller belongs to the conversation in
+// the path and then used the call id verbatim, which authorises the caller against A conversation
+// but never against THIS call. Anyone who learned a call id could present it alongside a
+// conversation of their own and reach a call they had nothing to do with.
+//
+// Reading the signals would tell them little — the signals are sealed under a key derived from the
+// other conversation's MLS group. Claiming the answer lock is the damaging one: it is
+// first-to-answer and atomic, so a stranger claiming it first means the real callee's device is
+// told it lost, stops ringing and puts the microphone away. The call cannot be answered, and
+// nothing anywhere reports a fault.
+//
+// Scoping the key fixes it without a client change and without storing anything new: a call placed
+// in one conversation simply is not addressable from another. A request quoting somebody else's
+// call id lands on an empty mailbox of its own, which behaves exactly like a call that does not
+// exist, because as far as that conversation is concerned it does not.
+func callKey(convID, callID string) string { return convID + ":" + callID }
+
 type callSignalRequest struct {
 	// Ciphertext is the sealed signal. Opaque: the server relays it and never looks inside.
 	Ciphertext []byte `json:"ciphertext"`
@@ -81,7 +101,7 @@ func (h *Handler) postCallSignal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signal, err := h.Mailbox.Append(r.Context(), callID, req.Ciphertext)
+	signal, err := h.Mailbox.Append(r.Context(), callKey(convID, callID), req.Ciphertext)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not relay the signal")
 		return
@@ -167,7 +187,7 @@ func (h *Handler) postCallRing(w http.ResponseWriter, r *http.Request) {
 // getCallSignals returns everything the caller has not seen. This is the transport of
 // record; SSE is only the nudge that says to come and look.
 func (h *Handler) getCallSignals(w http.ResponseWriter, r *http.Request) {
-	_, _, _, ok := h.requireMember(w, r)
+	_, convID, _, ok := h.requireMember(w, r)
 	if !ok {
 		return
 	}
@@ -185,7 +205,7 @@ func (h *Handler) getCallSignals(w http.ResponseWriter, r *http.Request) {
 		}
 		since = n
 	}
-	signals, err := h.Mailbox.Since(r.Context(), callID, since)
+	signals, err := h.Mailbox.Since(r.Context(), callKey(convID, callID), since)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not load signals")
 		return
@@ -207,7 +227,7 @@ type callAcceptRequest struct {
 // a timeout fires. So the answer is decided here, atomically, and both devices are told for
 // certain.
 func (h *Handler) postCallAccept(w http.ResponseWriter, r *http.Request) {
-	_, _, _, ok := h.requireMember(w, r)
+	_, convID, _, ok := h.requireMember(w, r)
 	if !ok {
 		return
 	}
@@ -226,7 +246,7 @@ func (h *Handler) postCallAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	winner, won, err := h.Mailbox.Claim(r.Context(), callID, req.DeviceID)
+	winner, won, err := h.Mailbox.Claim(r.Context(), callKey(convID, callID), req.DeviceID)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not accept the call")
 		return
