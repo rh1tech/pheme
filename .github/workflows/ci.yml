@@ -26,8 +26,10 @@ jobs:
     runs-on: [self-hosted, linux, ci]
     env:
       MONGO_CONTAINER: pheme-ci-mongo-${{ github.run_id }}-${{ github.run_attempt }}
-      # A high, run-scoped port so two runs on this shared host cannot collide on it.
+      REDIS_CONTAINER: pheme-ci-redis-${{ github.run_id }}-${{ github.run_attempt }}
+      # High, run-scoped ports so two runs on this shared host cannot collide on them.
       MONGO_PORT: 27117
+      REDIS_PORT: 6479
     defaults:
       run:
         working-directory: api
@@ -59,16 +61,32 @@ jobs:
             sleep 2
           done
           echo "mongo never became ready"; docker logs "$MONGO_CONTAINER" | tail -20; exit 1
+      # Same reasoning for the OTP store, which guards signup and password reset: production runs
+      # the Redis one and the tests exercised the in-memory one.
+      - name: Start Redis for the OTP conformance suite
+        run: |
+          docker rm -f "$REDIS_CONTAINER" 2>/dev/null || true
+          docker run -d --rm --name "$REDIS_CONTAINER" -p 127.0.0.1:${REDIS_PORT}:6379 redis:7-alpine
+          for i in $(seq 1 30); do
+            if docker exec "$REDIS_CONTAINER" redis-cli ping >/dev/null 2>&1; then
+              echo "redis ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "redis never became ready"; docker logs "$REDIS_CONTAINER" | tail -20; exit 1
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race -cover ./...
         env:
           PHEME_TEST_MONGO_URI: mongodb://127.0.0.1:${{ env.MONGO_PORT }}
-      # always(), so a failing test still takes its database with it rather than leaving a
-      # container running on a shared host until somebody notices.
-      - name: Stop MongoDB
+          PHEME_TEST_REDIS_ADDR: 127.0.0.1:${{ env.REDIS_PORT }}
+      # always(), so a failing test still takes its containers with it rather than leaving them
+      # running on a shared host until somebody notices.
+      - name: Stop MongoDB and Redis
         if: always()
-        run: docker rm -f "$MONGO_CONTAINER" 2>/dev/null || true
+        run: |
+          docker rm -f "$MONGO_CONTAINER" 2>/dev/null || true
+          docker rm -f "$REDIS_CONTAINER" 2>/dev/null || true
 
   web:
     name: Web (Vite)
