@@ -45,7 +45,15 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     // WITHOUT a push token if permission is refused — which matters, because the id is also what
     // the call answer-lock is keyed on. Nothing here shows a toast; this is not an action the user
     // asked for and should not report back to them.
-    unawaited(ref.read(deviceControllerProvider.notifier).ensureRegistered());
+    final devices = ref.read(deviceControllerProvider.notifier);
+    unawaited(
+      devices.ensureRegistered().then(
+        // Having an id is not the same as the server having a working address for it. A token that
+        // rotated while the app was closed — a reinstall, cleared data — raises no event the app can
+        // hear, so a device that is registered can still be unreachable, and nothing says so.
+        (_) => devices.refreshRegistrationIfTokenChanged(),
+      ),
+    );
   }
 
   @override

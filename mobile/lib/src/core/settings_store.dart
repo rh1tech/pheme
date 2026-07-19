@@ -11,6 +11,14 @@ class SettingsStore {
   static const _baseUrlKey = 'pheme.baseUrl';
   static const _deviceIdKey = 'pheme.deviceId';
 
+  /// The push token this device last told the server about.
+  ///
+  /// Kept so a launch can tell whether the token has changed since. FCM rotates tokens, and a
+  /// rotation that happens while the app is not running raises no event it can hear — so without
+  /// something to compare against, the app has no way to know the address the server holds for it
+  /// has stopped working.
+  static const _registeredTokenKey = 'pheme.registeredPushToken';
+
   final FlutterSecureStorage _storage;
 
   Future<String?> read(String key) => _storage.read(key: key);
@@ -55,4 +63,10 @@ class SettingsStore {
       _storage.write(key: _deviceIdKey, value: id);
 
   Future<void> clearDeviceId() => _storage.delete(key: _deviceIdKey);
+
+  Future<String?> loadRegisteredPushToken() =>
+      _storage.read(key: _registeredTokenKey);
+
+  Future<void> saveRegisteredPushToken(String token) =>
+      _storage.write(key: _registeredTokenKey, value: token);
 }

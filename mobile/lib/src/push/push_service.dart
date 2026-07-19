@@ -422,7 +422,24 @@ class PushService {
   /// with no Firebase, still needs one, or their phone rings and the Answer button does nothing.
   ///
   /// It used to throw in all three of those cases.
-  Future<String> registerDevice(PhemeRepository repo) async {
+  /// The push token this device currently holds, or null if it has none.
+  ///
+  /// Deliberately does NOT ask for permission — this is called on launch to check whether the
+  /// address the server has for us is still the right one, and prompting for that would put a
+  /// permission dialog in front of someone who has already answered the question once.
+  Future<String?> currentPushToken() async {
+    if (!_available) return null;
+    try {
+      return await FirebaseMessaging.instance.getToken();
+    } on Object {
+      // A token we cannot read is indistinguishable from one that has not changed. Reporting null
+      // leaves the existing registration alone, which is the safe direction: the alternative is
+      // re-registering on every launch whenever Firebase is briefly unavailable.
+      return null;
+    }
+  }
+
+  Future<Registration> registerDevice(PhemeRepository repo) async {
     String? fcmToken;
     String? voipToken;
 
@@ -458,7 +475,7 @@ class PushService {
       mlsDeviceId: mlsDeviceId,
       canRenderPreview: _canRenderPreview,
     );
-    return device.id;
+    return Registration(id: device.id, pushToken: fcmToken);
   }
 
   /// Whether THIS build can decrypt a message and draw the notification itself.
@@ -501,4 +518,20 @@ class PushService {
     if (Platform.isMacOS) return 'macos';
     return 'android';
   }
+}
+
+/// What a registration produced: the server's id for this device, and the push token it was told
+/// about.
+///
+/// The token comes back so the caller can remember what the server was told. That is the only way a
+/// later launch can notice the token has since changed — FCM rotates them, and a rotation that
+/// happens while the app is closed raises no event the app can hear.
+///
+/// A null token is normal rather than a failure: a Mac has no Firebase, and someone who declined
+/// notifications still gets an id, because the id is also what lets them answer a call.
+final class Registration {
+  const Registration({required this.id, this.pushToken});
+
+  final String id;
+  final String? pushToken;
 }

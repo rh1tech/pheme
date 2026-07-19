@@ -39,13 +39,41 @@ class DeviceController extends Notifier<String?> {
     final existing = state;
     if (existing != null) return existing;
 
-    final id = await ref
+    final registration = await ref
         .read(pushServiceProvider)
         .registerDevice(ref.read(repositoryProvider));
 
-    await ref.read(settingsStoreProvider).saveDeviceId(id);
-    state = id;
-    return id;
+    final settings = ref.read(settingsStoreProvider);
+    await settings.saveDeviceId(registration.id);
+    // Remember what the server was told, so a later launch can tell whether it is still true.
+    final token = registration.pushToken;
+    if (token != null) {
+      await settings.saveRegisteredPushToken(token);
+    }
+    state = registration.id;
+    return registration.id;
+  }
+
+  /// Re-registers if this device's push token has changed since the server was last told.
+  ///
+  /// onTokenRefresh only fires while the app is RUNNING. FCM also rotates a token when the app is
+  /// reinstalled or its data cleared, and those happen while nothing is listening — so the app comes
+  /// back holding a device id it trusts, never registers again, and the server keeps pushing to an
+  /// address that has stopped existing. Nothing on either side reports it: the server's send fails
+  /// per-device, and the phone simply stays quiet.
+  ///
+  /// Comparing on launch is what closes that gap. It costs one token read and, in the ordinary case
+  /// where nothing has changed, no request at all.
+  Future<void> refreshRegistrationIfTokenChanged() async {
+    final token = await ref.read(pushServiceProvider).currentPushToken();
+    final settings = ref.read(settingsStoreProvider);
+    final registered = await settings.loadRegisteredPushToken();
+    if (!needsReregistration(current: token, registered: registered)) return;
+
+    // Force register() past its early return: the id may still be valid, but the address behind it
+    // is not, and only a fresh registration carries the new token.
+    state = null;
+    await ensureRegistered();
   }
 
   /// Makes sure this device has an id, without asking for notification permission.
@@ -68,4 +96,25 @@ class DeviceController extends Notifier<String?> {
   /// hears about a call over the live stream — which is the honest arrangement for a machine that is
   /// either open or off.
   bool get pushSupported => !Platform.isMacOS;
+}
+
+/// Whether the server's push address for this device needs replacing.
+///
+/// Pulled out as a plain function because the rule is easy to get subtly wrong in the direction
+/// that costs somebody their notifications, and the surrounding controller cannot be tested without
+/// Firebase.
+///
+/// A null [current] means the token could not be read — no Firebase, notifications declined, or a
+/// transient failure. That is NOT evidence the registration is stale, and treating it as such would
+/// clear a perfectly good one every time Firebase had a bad moment. Worse, the device id is also
+/// what the call answer-lock is keyed on, so churning it costs more than a notification.
+///
+/// A null [registered] with a real [current] does mean re-registering: it is a device that has a
+/// token the server was never told about, which is exactly the state an app upgrade lands in.
+bool needsReregistration({
+  required String? current,
+  required String? registered,
+}) {
+  if (current == null) return false;
+  return current != registered;
 }
