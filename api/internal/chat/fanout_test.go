@@ -1,12 +1,18 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/live"
+	"github.com/rh1tech/pheme/api/internal/push"
+	"github.com/rh1tech/pheme/api/internal/store"
 )
 
 // Who a live event names.
@@ -149,4 +155,66 @@ func (f *fixture) group(t *testing.T, ownerToken, name string, memberIDs ...stri
 		t.Fatalf("members: %v", err)
 	}
 	return out.ID
+}
+
+// nopPusher is a push Sender that does nothing. It exists so notifyMembers actually RUNS: with a
+// nil Push the whole background path returns immediately, and a test of what that path reads would
+// pass no matter what it did. The first version of the test below did exactly that.
+type nopPusher struct{}
+
+func (nopPusher) Send(context.Context, domain.Message, []domain.Device) ([]push.Result, error) {
+	return nil, nil
+}
+
+func (nopPusher) SendChat(context.Context, push.ChatNotification, []domain.Device) ([]push.Result, error) {
+	return nil, nil
+}
+
+// countingStore counts roster reads.
+type countingStore struct {
+	store.Store
+	mu     sync.Mutex
+	reads  int
+	convID string
+}
+
+func (c *countingStore) ConversationMembers(ctx context.Context, convID string) ([]domain.ConversationMember, error) {
+	if convID == c.convID {
+		c.mu.Lock()
+		c.reads++
+		c.mu.Unlock()
+	}
+	return c.Store.ConversationMembers(ctx, convID)
+}
+
+func (c *countingStore) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads
+}
+
+// Sending a message reads the roster ONCE. It is needed twice — to address the live event and to
+// address the push notifications — and was read twice, which is one redundant query per message
+// forever. At a few hundred messages a second that is a few hundred pointless queries a second.
+func TestSendingAMessageReadsTheRosterOnce(t *testing.T) {
+	f := newFixture(t)
+	_, ownerToken := f.user(t, "counter@pheme.test")
+	other, _ := f.user(t, "counted@pheme.test")
+	conv := f.group(t, ownerToken, "counted", other)
+
+	counting := &countingStore{Store: f.store, convID: conv}
+	f.handler.Store = counting
+	f.handler.Push = nopPusher{} // without this the push path never runs and this test proves nothing
+
+	if rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/messages", ownerToken,
+		map[string]any{"ciphertext": []byte("hello")}); rec.Code != http.StatusCreated {
+		t.Fatalf("post = %d: %s", rec.Code, rec.Body)
+	}
+
+	// The push path runs in a goroutine, so give it a moment to make the read it should not make.
+	time.Sleep(250 * time.Millisecond)
+
+	if n := counting.count(); n != 1 {
+		t.Errorf("sending one message read the roster %d times, want 1", n)
+	}
 }

@@ -111,9 +111,9 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 	//
 	// With the list it is a slice scan against a list this handler already has to fetch to send
 	// push notifications.
-	recipients := h.recipientsFor(r.Context(), convID)
-	h.Live.Publish(live.Event{ConversationID: convID, ChatMessage: &msg, Recipients: recipients})
-	h.notifyMembers(convID, uid, msg)
+	members := h.membersFor(r.Context(), convID)
+	h.Live.Publish(live.Event{ConversationID: convID, ChatMessage: &msg, Recipients: userIDsOf(members)})
+	h.notifyMembers(convID, uid, msg, members)
 	httpx.JSON(w, http.StatusCreated, msg)
 }
 
@@ -162,7 +162,7 @@ func (h *Handler) pruneDeadDevices(ctx context.Context, results []push.Result) {
 	}
 }
 
-func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage) {
+func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage, members []domain.ConversationMember) {
 	// Control messages (the MLS Welcome that lets a member join) are protocol
 	// traffic, not something a human sent. Never notify for them.
 	if h.Push == nil || isControlContent(msg.ContentType) {
@@ -182,10 +182,15 @@ func (h *Handler) notifyMembers(convID, senderID string, msg domain.ChatMessage)
 		defer cancel()
 		log := h.logger()
 
-		members, err := h.Store.ConversationMembers(ctx, convID)
-		if err != nil {
-			log.Error("chat push: load members", "conversation", convID, "error", err)
-			return
+		// The caller already read the roster to address the live event; re-reading it here was one
+		// wholly redundant query per message. Empty means that read failed, so fall back rather
+		// than silently notifying nobody.
+		if len(members) == 0 {
+			var err error
+			if members, err = h.Store.ConversationMembers(ctx, convID); err != nil {
+				log.Error("chat push: load members", "conversation", convID, "error", err)
+				return
+			}
 		}
 		recipients := make([]string, 0, len(members))
 		for _, m := range members {
@@ -614,18 +619,24 @@ func (h *Handler) deleteConversation(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// recipientsFor returns the user ids entitled to see a conversation's events.
+// membersFor reads the conversation's roster once, for both the people who should receive the live
+// event and the people who should be notified. Those were separate reads of the same rows.
 //
-// A nil result is deliberately safe: the SSE loop falls back to a per-connection membership lookup
-// when the list is empty, which is slower but never wrong. So a failure here costs performance,
-// never delivery — the opposite tradeoff would drop messages when the database hiccuped.
-func (h *Handler) recipientsFor(ctx context.Context, convID string) []string {
+// A nil result is deliberately safe. The SSE loop falls back to a per-connection membership lookup
+// when the recipient list is empty, and the push path re-reads the roster itself, so a failure here
+// costs performance and never delivery — the opposite tradeoff would drop messages whenever the
+// database hiccuped.
+func (h *Handler) membersFor(ctx context.Context, convID string) []domain.ConversationMember {
 	members, err := h.Store.ConversationMembers(ctx, convID)
 	if err != nil {
 		h.logger().Warn("could not list members for live fanout; falling back to per-connection checks",
 			"conversation", convID, "error", err)
 		return nil
 	}
+	return members
+}
+
+func userIDsOf(members []domain.ConversationMember) []string {
 	ids := make([]string, 0, len(members))
 	for _, m := range members {
 		ids = append(ids, m.UserID)
