@@ -463,7 +463,8 @@ func (h *AppHandler) subscribe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AppHandler) unsubscribe(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireUser(w, r); !ok {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
 		return
 	}
 	channelID := r.PathValue("id")
@@ -472,11 +473,46 @@ func (h *AppHandler) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "deviceId is required")
 		return
 	}
+	// The device must be the caller's own. This endpoint was authenticated but not authorised: it
+	// unsubscribed whatever device id it was handed, so anyone signed in who learned somebody
+	// else's device id could quietly stop their phone receiving a channel — and the victim would
+	// see no error anywhere, only notifications that stopped arriving.
+	//
+	// No endpoint currently hands out another user's push device id, so this was latent rather than
+	// exploitable. It is checked here because "you would have to learn an id we do not publish" is
+	// a property of today's routes, not of this handler, and the next route to return a device is
+	// not obliged to notice.
+	owned, err := h.ownsDevice(r, uid, deviceID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not unsubscribe")
+		return
+	}
+	if !owned {
+		// Answered as though it succeeded, exactly like unsubscribing something already gone. A
+		// distinct status here would confirm which device ids exist and who they belong to, which
+		// is the enumeration this check exists to prevent.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if err := h.Store.Unsubscribe(r.Context(), channelID, deviceID); err != nil && err != store.ErrNotFound {
 		httpx.Error(w, http.StatusInternalServerError, "could not unsubscribe")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ownsDevice reports whether deviceID belongs to uid.
+func (h *AppHandler) ownsDevice(r *http.Request, uid, deviceID string) (bool, error) {
+	devices, err := h.Store.DevicesForUsers(r.Context(), []string{uid})
+	if err != nil {
+		return false, err
+	}
+	for _, d := range devices {
+		if d.ID == deviceID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // subscriptionStatus reports whether a given device is subscribed to the
