@@ -11,7 +11,7 @@ import {
   Text,
   TextInput,
 } from '@mantine/core'
-import { useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { Trans, useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
 import { ApiError } from '../lib/api'
@@ -26,7 +26,7 @@ import { PasswordStrength } from '../components/PasswordStrength'
 const RESEND_SECONDS = 120
 
 export function LoginPage() {
-  const { login, register, verifyEmail } = useAuth()
+  const { login, register, verifyEmail, isAuthenticated } = useAuth()
   const navigate = useNavigate()
   const { t } = useTranslation()
   const [mode, setMode] = useState<'login' | 'register'>('login')
@@ -36,6 +36,18 @@ export function LoginPage() {
   const [code, setCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [cooldown, startCooldown] = useCountdown()
+
+  // Leaving is decided by STATE, not by a call that has to land.
+  //
+  // Signing in used to depend solely on the imperative navigate() below, and an imperative
+  // navigation can be lost: something else navigating at the same moment cancels it
+  // ("Navigation to / is interrupted by another navigation to /"). When that happened the person
+  // was fully signed in — the server had returned 200 and the tokens were stored — and still
+  // looking at the login form, with no error to explain it and nothing to do but try again.
+  //
+  // Being authenticated is now sufficient on its own. The navigate() calls stay because they are
+  // the fast path and read clearly; this is what makes the outcome certain.
+  if (isAuthenticated) return <Navigate to="/" replace />
 
   function fail(err: unknown) {
     notifyError(err instanceof ApiError ? err.message : t('auth.requestFailed'))
