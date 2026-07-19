@@ -84,10 +84,20 @@ func TestConformance_KeysAreIndependent(t *testing.T) {
 
 // The bucket refills. A limiter that drained permanently would turn a brief burst into a channel
 // that never works again.
+//
+// Two per second, and the numbers are chosen so neither half of the test races the other. Draining
+// takes three round trips, which at this rate accumulates about a fifth of a token — nowhere near
+// the one needed to wrongly allow the request that proves the bucket emptied. Then 800ms refills
+// comfortably more than one.
+//
+// An earlier version ran at 20/sec, where a token appears every 50ms. That is fine on an idle
+// machine and fails on a busy one, because the drain itself outlasts the refill interval and the
+// bucket is no longer empty by the time the test checks. It failed exactly once, in a full-suite
+// run while the rest of the packages were competing for the same Redis — which is the only
+// condition under which it could.
 func TestConformance_TheBucketRefills(t *testing.T) {
 	const capacity = 2
-	// 20/sec: a tenth of a second is comfortably enough for two tokens.
-	eachLimiter(t, 20, capacity, func(t *testing.T, l Limiter) {
+	eachLimiter(t, 2, capacity, func(t *testing.T, l Limiter) {
 		for i := 0; i < capacity; i++ {
 			if !l.Allow("refilling") {
 				t.Fatalf("request %d refused before the burst was used up", i+1)
@@ -97,7 +107,7 @@ func TestConformance_TheBucketRefills(t *testing.T) {
 			t.Fatal("the bucket did not empty")
 		}
 
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(800 * time.Millisecond)
 
 		if !l.Allow("refilling") {
 			t.Error("the bucket never refilled; one burst would disable the channel permanently")
