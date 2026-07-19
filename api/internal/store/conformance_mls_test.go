@@ -483,3 +483,58 @@ func TestConformance_ReceiptsRoundTrip(t *testing.T) {
 		}
 	})
 }
+
+// Deleting a device's KeyPackages must be scoped to its OWNER as well as its id.
+//
+// Device ids are minted by clients, not issued by the server, so nothing stops two unrelated
+// accounts holding the same one — and on a delete keyed by device id alone, one person tidying up
+// after a retired device would strip another person's live device of everything it had published.
+// The victim would not notice until somebody tried to add them to a group and found nothing to
+// add, which reads as "this person cannot be messaged" long after the cause.
+//
+// Worth running against both stores rather than one: the two implementations filter separately,
+// and a missing userId in a Mongo query looks nothing like a missing condition in a Go loop.
+func TestConformance_DeletingKeyPackagesIsScopedToTheOwner(t *testing.T) {
+	eachStore(t, func(t *testing.T, s storeUnderTest) {
+		ctx := context.Background()
+
+		const shared = "same-client-minted-id"
+		if err := s.store.AddKeyPackages(ctx, []domain.MLSKeyPackage{
+			{UserID: "mine", DeviceID: shared, KeyPackage: []byte("mine-1")},
+			{UserID: "mine", DeviceID: shared, KeyPackage: []byte("mine-2"), LastResort: true},
+			{UserID: "theirs", DeviceID: shared, KeyPackage: []byte("theirs-1")},
+			{UserID: "theirs", DeviceID: shared, KeyPackage: []byte("theirs-2"), LastResort: true},
+			{UserID: "mine", DeviceID: "another-device", KeyPackage: []byte("other-1")},
+		}); err != nil {
+			t.Fatalf("add: %v", err)
+		}
+
+		if err := s.store.DeleteKeyPackages(ctx, "mine", shared); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+
+		// Mine are gone, last-resort included — a package left behind adds a device to groups it
+		// can no longer decrypt.
+		if n, err := s.store.CountKeyPackages(ctx, "mine", shared); err != nil || n != 0 {
+			t.Errorf("my device kept %d packages (err %v), want none", n, err)
+		}
+		if has, err := s.store.HasLastResortKeyPackage(ctx, "mine", shared); err != nil || has {
+			t.Errorf("my device kept its last-resort package (has=%v, err %v)", has, err)
+		}
+
+		// Theirs are untouched.
+		if n, err := s.store.CountKeyPackages(ctx, "theirs", shared); err != nil || n != 1 {
+			t.Errorf("another account's device with the same id has %d single-use packages (err %v), "+
+				"want 1 — deleting mine reached across accounts", n, err)
+		}
+		if has, err := s.store.HasLastResortKeyPackage(ctx, "theirs", shared); err != nil || !has {
+			t.Errorf("another account's device lost its last-resort package (has=%v, err %v); it "+
+				"silently stops being addable to groups", has, err)
+		}
+
+		// And my other device is untouched.
+		if n, err := s.store.CountKeyPackages(ctx, "mine", "another-device"); err != nil || n != 1 {
+			t.Errorf("my other device has %d packages (err %v), want 1", n, err)
+		}
+	})
+}

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func eachStore(t *testing.T, fn func(t *testing.T, s storeUnderTest)) {
 		// subtest. Disconnecting between them was not enough on a host that also runs prod and dev:
 		// mongod fell over mid-run and every test after it timed out for thirty seconds apiece.
 		// Four connections is ample for a sequential test and cannot swamp anything.
-		m, err := NewMongo(ctx, uri+"/?maxPoolSize=4&minPoolSize=0&serverSelectionTimeoutMS=5000", db, blobs)
+		m, err := NewMongo(ctx, withPoolLimits(t, uri), db, blobs)
 		if err != nil {
 			t.Fatalf("connect to mongo: %v", err)
 		}
@@ -469,4 +470,34 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// withPoolLimits adds this suite's connection settings to a Mongo URI without assuming the URI has
+// none of its own.
+//
+// This used to be plain concatenation of "/?maxPoolSize=4&…", which is fine for the bare
+// host:port CI provides and broken for anything else. A URI that already carries a query string —
+// which any authenticated Mongo does, "…/?authSource=admin" — came out as
+// "…/?authSource=admin/?maxPoolSize=4", and the driver reported it as an authentication failure
+// against a database called "admin/?maxPoolSize=4". The suite was effectively unrunnable against a
+// realistic local Mongo, and said something misleading when you tried.
+func withPoolLimits(t *testing.T, uri string) string {
+	t.Helper()
+	u, err := url.Parse(uri)
+	if err != nil {
+		t.Fatalf("PHEME_TEST_MONGO_URI is not a URI: %v", err)
+	}
+	q := u.Query()
+	// A SMALL pool, and a short selection timeout. The driver's default is 100 sockets per client
+	// and this suite opens a client per subtest; on a host that also runs prod and dev, that was
+	// enough to take mongod down mid-run. Set rather than added, so a caller's own value does not
+	// end up duplicated in the query string.
+	q.Set("maxPoolSize", "4")
+	q.Set("minPoolSize", "0")
+	q.Set("serverSelectionTimeoutMS", "5000")
+	u.RawQuery = q.Encode()
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	return u.String()
 }
