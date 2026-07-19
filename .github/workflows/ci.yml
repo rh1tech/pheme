@@ -84,6 +84,16 @@ jobs:
         env:
           PHEME_TEST_MONGO_URI: mongodb://127.0.0.1:${{ env.MONGO_PORT }}
           PHEME_TEST_REDIS_ADDR: 127.0.0.1:${{ env.REDIS_PORT }}
+      # If the tests failed, say what the databases were doing. mongod dying mid-run reads as a
+      # test failure — thirty-second selection timeouts on everything after it — and without its
+      # own log the cause is guesswork. This is failure()-only so a green run stays quiet.
+      - name: Database logs on failure
+        if: failure()
+        run: |
+          echo "=== mongo ==="; docker logs "$MONGO_CONTAINER" 2>&1 | tail -40 || true
+          echo "=== mongo state ==="; docker inspect "$MONGO_CONTAINER" --format '{{.State.Status}} oomkilled={{.State.OOMKilled}} exit={{.State.ExitCode}}' || true
+          echo "=== redis ==="; docker logs "$REDIS_CONTAINER" 2>&1 | tail -20 || true
+          echo "=== host memory ==="; free -m || true
       # always(), so a failing test still takes its containers with it rather than leaving them
       # running on a shared host until somebody notices.
       - name: Stop MongoDB and Redis

@@ -59,7 +59,13 @@ func eachStore(t *testing.T, fn func(t *testing.T, s storeUnderTest)) {
 				db = db[:i] + "_" + db[i+1:]
 			}
 		}
-		m, err := NewMongo(ctx, uri, db, blobs)
+		// A SMALL pool, and a short selection timeout.
+		//
+		// The driver's default pool is 100 sockets per client, and this suite opens a client per
+		// subtest. Disconnecting between them was not enough on a host that also runs prod and dev:
+		// mongod fell over mid-run and every test after it timed out for thirty seconds apiece.
+		// Four connections is ample for a sequential test and cannot swamp anything.
+		m, err := NewMongo(ctx, uri+"/?maxPoolSize=4&minPoolSize=0&serverSelectionTimeoutMS=5000", db, blobs)
 		if err != nil {
 			t.Fatalf("connect to mongo: %v", err)
 		}
