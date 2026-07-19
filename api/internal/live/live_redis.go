@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -21,21 +20,16 @@ import (
 // enough to take the machine down at two messages a second.
 //
 // Sharing it also means each event is unmarshalled once for the whole process rather than once per
-// connected user.
+// connected user, and the registry then routes it to the subscribers it is actually for.
 type RedisBus struct {
 	client  *redis.Client
 	channel string
 	logger  *slog.Logger
+	reg     *registry
 
-	mu      sync.RWMutex
-	subs    map[chan Event]struct{}
+	mu      sync.Mutex
 	started bool
 	stop    context.CancelFunc
-
-	// dropped counts events discarded because a subscriber was not reading fast enough. A drop is
-	// a message a user never sees, with nothing in any HTTP response to say so, so it is at least
-	// counted and logged rather than being invisible.
-	dropped atomic.Int64
 }
 
 // NewRedisBus creates a Redis-backed bus publishing on the given channel.
@@ -47,7 +41,7 @@ func NewRedisBus(client *redis.Client, channel string, logger *slog.Logger) *Red
 		client:  client,
 		channel: channel,
 		logger:  logger,
-		subs:    map[chan Event]struct{}{},
+		reg:     newRegistry(logger),
 	}
 }
 
@@ -63,42 +57,21 @@ func (b *RedisBus) Publish(e Event) {
 	}
 }
 
-// Subscribe registers a subscriber on the shared Redis subscription and returns its channel plus a
-// cancel function. The first subscriber starts the subscription; the last one to leave stops it, so
-// an idle process holds no Redis connection.
-func (b *RedisBus) Subscribe() (<-chan Event, func()) {
-	ch := make(chan Event, subscriberBuffer)
-
-	b.mu.Lock()
-	b.subs[ch] = struct{}{}
-	if !b.started {
-		b.startLocked()
-	}
-	b.mu.Unlock()
-
-	var once sync.Once
-	cancel := func() {
-		once.Do(func() {
-			b.mu.Lock()
-			if _, ok := b.subs[ch]; ok {
-				delete(b.subs, ch)
-				close(ch)
-			}
-			if len(b.subs) == 0 && b.started {
-				b.started = false
-				stop := b.stop
-				b.mu.Unlock()
-				stop()
-				return
-			}
-			b.mu.Unlock()
-		})
-	}
-	return ch, cancel
+// Subscribe registers a subscriber for userID on the shared Redis subscription and returns its
+// channel plus a cancel function. The first subscriber starts the subscription; the last one to
+// leave stops it, so an idle process holds no Redis connection.
+func (b *RedisBus) Subscribe(userID string) (<-chan Event, func()) {
+	return b.reg.add(userID, b.start, b.shutdown)
 }
 
-// startLocked opens the shared subscription. The caller must hold b.mu.
-func (b *RedisBus) startLocked() {
+// start opens the shared subscription. The registry calls it while holding its own lock when the
+// first subscriber arrives, so this takes only b.mu and must never call back into the registry.
+func (b *RedisBus) start() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.started {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	sub := b.client.Subscribe(ctx, b.channel)
 	b.stop = func() {
@@ -125,57 +98,27 @@ func (b *RedisBus) startLocked() {
 					b.logger.Error("live unmarshal", "error", err)
 					continue
 				}
-				b.fanout(e)
+				b.reg.deliver(e)
 			}
 		}
 	}()
 }
 
-// fanout delivers one event to every current subscriber without blocking on a slow one.
-//
-// The sends happen while holding the read lock, and cancel closes a subscriber's channel only
-// under the write lock. That mutual exclusion is what makes this safe: closing a channel another
-// goroutine is sending on is a data race whether or not the resulting panic is recovered, and an
-// earlier version of this did exactly that. It sent outside the lock and recovered the panic,
-// which looked fine and passed -race locally — CI reported it as a race on the first run.
-//
-// Holding the lock across the sends costs nothing, because every send here is non-blocking: a
-// subscriber that is not reading is skipped, never waited for.
-func (b *RedisBus) fanout(e Event) {
-	var dropped int64
+// shutdown closes the shared subscription once the last subscriber has gone.
+func (b *RedisBus) shutdown() {
+	b.mu.Lock()
+	stop := b.stop
+	b.started = false
+	b.stop = nil
+	b.mu.Unlock()
 
-	b.mu.RLock()
-	for ch := range b.subs {
-		select {
-		case ch <- e:
-		default:
-			dropped++
-		}
-	}
-	subscribers := len(b.subs)
-	b.mu.RUnlock()
-
-	if dropped == 0 {
-		return
-	}
-	total := b.dropped.Add(dropped)
-	// Logged sparsely and outside the lock: when drops happen there are a great many of them, and
-	// a line per dropped event would bury the reason under its own symptom.
-	if before := total - dropped; before == 0 || before/1000 != total/1000 {
-		b.logger.Warn("live event dropped: a subscriber is not keeping up",
-			"dropped_total", total, "subscribers", subscribers)
+	if stop != nil {
+		stop()
 	}
 }
 
-func (b *RedisBus) subscriberCount() int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return len(b.subs)
-}
-
-// Dropped reports how many events have been discarded because a subscriber was too slow. Exposed
-// so a health endpoint or a test can see the number that is otherwise invisible.
-func (b *RedisBus) Dropped() int64 { return b.dropped.Load() }
+// Dropped reports how many deliveries were discarded because a subscriber was too slow.
+func (b *RedisBus) Dropped() int64 { return b.reg.Dropped() }
 
 // Verify RedisBus satisfies the Bus interface.
 var _ Bus = (*RedisBus)(nil)

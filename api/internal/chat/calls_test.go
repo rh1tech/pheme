@@ -113,7 +113,9 @@ func TestCallSignalPublishesANudgeNotTheSignal(t *testing.T) {
 	bobID, _ := f.user(t, "bob-nudge@pheme.test")
 	conv := f.createDirect(t, aliceToken, bobID)
 
-	events, cancel := f.handler.Live.Subscribe()
+	// Subscribed as BOB, the person the nudge is addressed to. The bus routes by recipient now, so
+	// this asserts the nudge reaches the callee rather than merely that it was published.
+	events, cancel := f.handler.Live.Subscribe(bobID)
 	defer cancel()
 
 	if code, _ := postSignal(t, f, aliceToken, conv, "call-n", []byte("super-secret-sdp"), false); code != http.StatusOK {
@@ -157,7 +159,7 @@ func TestReRingingRepublishesTheNudgeWithoutTouchingTheMailbox(t *testing.T) {
 		t.Fatalf("invite: got %d", code)
 	}
 
-	events, cancel := f.handler.Live.Subscribe()
+	events, cancel := f.handler.Live.Subscribe(bobID)
 	defer cancel()
 
 	rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/calls/call-r/ring", aliceToken, nil)

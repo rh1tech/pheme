@@ -66,7 +66,7 @@ func TestRedisBusSharesOneSubscriptionAcrossManySubscribers(t *testing.T) {
 	cancels := make([]func(), 0, subscribers)
 	chans := make([]<-chan Event, 0, subscribers)
 	for i := 0; i < subscribers; i++ {
-		ch, cancel := bus.Subscribe()
+		ch, cancel := bus.Subscribe(fmt.Sprintf("user-%d", i))
 		chans = append(chans, ch)
 		cancels = append(cancels, cancel)
 	}
@@ -107,11 +107,11 @@ func TestRedisBusOpensAndClosesTheSubscriptionWithItsSubscribers(t *testing.T) {
 		t.Fatalf("an unused bus already holds %d subscriptions", n)
 	}
 
-	first, cancelFirst := bus.Subscribe()
+	first, cancelFirst := bus.Subscribe("first")
 	_ = first
 	waitUntil(t, 5*time.Second, func() bool { return pubsubConnections(t, client, bus.channel) == 1 })
 
-	second, cancelSecond := bus.Subscribe()
+	second, cancelSecond := bus.Subscribe("second")
 	_ = second
 	if n := pubsubConnections(t, client, bus.channel); n != 1 {
 		t.Errorf("a second subscriber opened another subscription (%d)", n)
@@ -129,10 +129,10 @@ func TestRedisBusOpensAndClosesTheSubscriptionWithItsSubscribers(t *testing.T) {
 	}
 
 	// And it comes back for a new subscriber, rather than being a one-shot.
-	third, cancelThird := bus.Subscribe()
+	third, cancelThird := bus.Subscribe("third")
 	defer cancelThird()
 	waitUntil(t, 5*time.Second, func() bool { return pubsubConnections(t, client, bus.channel) == 1 })
-	bus.Publish(Event{ConversationID: "after-restart"})
+	bus.Publish(Event{ConversationID: "after-restart", Recipients: []string{"third"}})
 	select {
 	case e := <-third:
 		if e.ConversationID != "after-restart" {
@@ -144,14 +144,15 @@ func TestRedisBusOpensAndClosesTheSubscriptionWithItsSubscribers(t *testing.T) {
 	}
 }
 
-// Cancelling while events are in flight must not panic. fanout sends outside the lock, so a
-// subscriber can close its channel between the snapshot and the send — the race this guards.
+// Cancelling while events are in flight must not race. Delivery sends under a read lock and cancel
+// closes under the write lock; an earlier version sent outside the lock and recovered the panic,
+// which CI correctly reported as a data race.
 func TestRedisBusCancelDuringPublishDoesNotPanic(t *testing.T) {
 	bus, _ := redisOrSkip(t)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 25; i++ {
-		ch, cancel := bus.Subscribe()
+		ch, cancel := bus.Subscribe(fmt.Sprintf("churn-%d", i))
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -177,9 +178,9 @@ func TestRedisBusCancelDuringPublishDoesNotPanic(t *testing.T) {
 func TestRedisBusCountsWhatItDropsForASlowSubscriber(t *testing.T) {
 	bus, _ := redisOrSkip(t)
 
-	stalled, cancelStalled := bus.Subscribe() // never read from
+	stalled, cancelStalled := bus.Subscribe("stalled") // never read from
 	defer cancelStalled()
-	healthy, cancelHealthy := bus.Subscribe()
+	healthy, cancelHealthy := bus.Subscribe("healthy")
 	defer cancelHealthy()
 
 	// Comfortably more than one buffer's worth.

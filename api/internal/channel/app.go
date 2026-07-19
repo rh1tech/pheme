@@ -644,7 +644,11 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 	// its buffer filled — turning a live stream into a batched one.
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	events, cancel := h.Live.Subscribe()
+	// Subscribed by user id, so the bus delivers only what this person is entitled to instead of
+	// offering every event to every connection and having each one work out it was not the
+	// recipient. The per-event checks below still run: routing is an optimisation, not the
+	// authorisation.
+	events, cancel := h.Live.Subscribe(uid)
 	defer cancel()
 
 	var expiry <-chan time.Time

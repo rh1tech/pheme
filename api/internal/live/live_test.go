@@ -50,7 +50,7 @@ func TestRecipientsSurviveTheRedisRoundTrip(t *testing.T) {
 // loss (call signalling) needs its own at-least-once channel rather than riding this bus.
 func TestPublishDoesNotBlockOnASlowSubscriber(t *testing.T) {
 	bus := NewMemoryBus()
-	events, cancel := bus.Subscribe()
+	events, cancel := bus.Subscribe("u1")
 	defer cancel()
 
 	// Far more than the 16-slot buffer, with nobody draining it.
@@ -67,12 +67,118 @@ func TestPublishDoesNotBlockOnASlowSubscriber(t *testing.T) {
 // A subscriber that has cancelled must stop receiving, and must not wedge the bus.
 func TestCancelUnsubscribes(t *testing.T) {
 	bus := NewMemoryBus()
-	events, cancel := bus.Subscribe()
+	events, cancel := bus.Subscribe("u1")
 	cancel()
 
 	bus.Publish(Event{ChannelID: "c"})
 
 	if _, open := <-events; open {
 		t.Fatal("a cancelled subscriber must not receive events")
+	}
+}
+
+// Routing. An event that names its recipients must reach exactly them.
+//
+// This is what keeps delivery proportional to the conversation rather than to the number of people
+// signed in. Before it, one message was offered to every open connection on the instance and each
+// one worked out for itself that the message was not for it — at a thousand streams, a ten-person
+// conversation woke a thousand goroutines to deliver ten events.
+//
+// It is also an authorisation boundary in practice, even though the stream re-checks: a bug here
+// would hand one conversation's traffic to someone outside it.
+func TestAnAddressedEventReachesOnlyTheNamedUsers(t *testing.T) {
+	bus := NewMemoryBus()
+
+	alice, cancelA := bus.Subscribe("alice")
+	defer cancelA()
+	bob, cancelB := bus.Subscribe("bob")
+	defer cancelB()
+	stranger, cancelS := bus.Subscribe("stranger")
+	defer cancelS()
+
+	bus.Publish(Event{ConversationID: "conv1", Recipients: []string{"alice", "bob"}})
+
+	if len(alice) != 1 {
+		t.Errorf("alice was named but received %d events", len(alice))
+	}
+	if len(bob) != 1 {
+		t.Errorf("bob was named but received %d events", len(bob))
+	}
+	if len(stranger) != 0 {
+		t.Errorf("a user who was not named received %d events from a conversation they are not in",
+			len(stranger))
+	}
+}
+
+// Every one of a user's streams gets it — that is what keeps a second device in sync.
+func TestAnAddressedEventReachesAllOfAUsersStreams(t *testing.T) {
+	bus := NewMemoryBus()
+
+	phone, cancelPhone := bus.Subscribe("alice")
+	defer cancelPhone()
+	laptop, cancelLaptop := bus.Subscribe("alice")
+	defer cancelLaptop()
+
+	bus.Publish(Event{ConversationID: "conv1", Recipients: []string{"alice"}})
+
+	if len(phone) != 1 || len(laptop) != 1 {
+		t.Errorf("a user's two devices received %d and %d events, want 1 each; one of their devices "+
+			"would be silently out of date", len(phone), len(laptop))
+	}
+}
+
+// Closing one device's stream must not disturb the other's.
+func TestClosingOneStreamLeavesTheUsersOthersAlone(t *testing.T) {
+	bus := NewMemoryBus()
+
+	phone, cancelPhone := bus.Subscribe("alice")
+	laptop, cancelLaptop := bus.Subscribe("alice")
+	defer cancelLaptop()
+
+	cancelPhone()
+	bus.Publish(Event{ConversationID: "conv1", Recipients: []string{"alice"}})
+
+	if len(laptop) != 1 {
+		t.Errorf("closing one device's stream cost the other its events (%d)", len(laptop))
+	}
+	if _, open := <-phone; open {
+		t.Error("the cancelled stream is still open")
+	}
+}
+
+// An event with NO recipients is broadcast, and the receiving stream authorises it for itself.
+// Channel broadcasts take this path, as does a chat event whose roster could not be read — so
+// losing it would mean losing channel messages entirely.
+func TestAnUnaddressedEventStillReachesEveryone(t *testing.T) {
+	bus := NewMemoryBus()
+
+	alice, cancelA := bus.Subscribe("alice")
+	defer cancelA()
+	bob, cancelB := bus.Subscribe("bob")
+	defer cancelB()
+
+	bus.Publish(Event{ChannelID: "channel1"})
+
+	if len(alice) != 1 || len(bob) != 1 {
+		t.Errorf("a channel broadcast reached %d and %d subscribers, want both; channel messages "+
+			"would stop arriving", len(alice), len(bob))
+	}
+}
+
+// Naming somebody who is not connected is not an error — most recipients are usually offline.
+func TestNamingAnAbsentUserIsHarmless(t *testing.T) {
+	bus := NewMemoryBus()
+
+	alice, cancel := bus.Subscribe("alice")
+	defer cancel()
+
+	bus.Publish(Event{ConversationID: "conv1", Recipients: []string{"alice", "nobody-here"}})
+
+	if len(alice) != 1 {
+		t.Errorf("alice received %d events", len(alice))
+	}
+	if n := bus.Dropped(); n != 0 {
+		t.Errorf("an offline recipient counted as %d dropped deliveries; the drop counter is meant "+
+			"to mean a connected subscriber fell behind", n)
 	}
 }

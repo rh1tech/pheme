@@ -4,8 +4,6 @@
 package live
 
 import (
-	"sync"
-
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
 
@@ -72,49 +70,33 @@ type CallSignal struct {
 const subscriberBuffer = 64
 
 // Bus distributes live events to subscribers.
+//
+// Subscribe takes the id of the user the stream belongs to, so the bus can route an event to the
+// people it is for instead of offering it to everyone and having each connection decide. See
+// registry for why that matters.
 type Bus interface {
 	Publish(e Event)
-	Subscribe() (<-chan Event, func())
+	Subscribe(userID string) (<-chan Event, func())
 }
 
 // MemoryBus is an in-process Bus. It is safe for concurrent use.
 type MemoryBus struct {
-	mu   sync.RWMutex
-	subs map[chan Event]struct{}
+	reg *registry
 }
 
 // NewMemoryBus returns an initialised in-process bus.
 func NewMemoryBus() *MemoryBus {
-	return &MemoryBus{subs: map[chan Event]struct{}{}}
+	return &MemoryBus{reg: newRegistry(nil)}
 }
 
-// Publish delivers e to all current subscribers without blocking on slow ones.
-func (b *MemoryBus) Publish(e Event) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	for ch := range b.subs {
-		select {
-		case ch <- e:
-		default: // drop for slow consumers
-		}
-	}
-}
+// Publish delivers e to the subscribers it is addressed to, without blocking on slow ones.
+func (b *MemoryBus) Publish(e Event) { b.reg.deliver(e) }
 
-// Subscribe registers a new subscriber and returns its channel plus a cancel
+// Subscribe registers a new subscriber for userID and returns its channel plus a cancel
 // function that unsubscribes and closes the channel.
-func (b *MemoryBus) Subscribe() (<-chan Event, func()) {
-	ch := make(chan Event, subscriberBuffer)
-	b.mu.Lock()
-	b.subs[ch] = struct{}{}
-	b.mu.Unlock()
-
-	cancel := func() {
-		b.mu.Lock()
-		if _, ok := b.subs[ch]; ok {
-			delete(b.subs, ch)
-			close(ch)
-		}
-		b.mu.Unlock()
-	}
-	return ch, cancel
+func (b *MemoryBus) Subscribe(userID string) (<-chan Event, func()) {
+	return b.reg.add(userID, nil, nil)
 }
+
+// Dropped reports how many deliveries were discarded because a subscriber was too slow.
+func (b *MemoryBus) Dropped() int64 { return b.reg.Dropped() }
