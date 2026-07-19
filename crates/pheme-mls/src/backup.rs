@@ -122,3 +122,186 @@ mod tests {
         assert!(!b.ciphertext.windows(5).any(|w| w == b"eagle"));
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod integrity_tests {
+    use super::*;
+
+    /// What a backup is FOR: the transcript and key state of somebody's whole account, sitting on a
+    /// server that must not be able to read it and must not be able to alter it undetectably.
+    /// AES-GCM gives both, but only if every input is authenticated — so each of these flips one
+    /// byte of one input and insists the open fails.
+
+    #[test]
+    fn a_tampered_ciphertext_is_refused() {
+        let backup = encrypt(b"passphrase", b"the state").expect("seal");
+        let mut corrupt = backup.ciphertext.clone();
+        corrupt[0] ^= 0x01;
+
+        let opened = decrypt(b"passphrase", &backup.salt, &backup.nonce, &corrupt);
+        assert!(
+            opened.is_err(),
+            "a single flipped bit in the ciphertext was accepted; the server could alter a backup \
+             without anyone noticing"
+        );
+    }
+
+    #[test]
+    fn a_tampered_tag_is_refused() {
+        let backup = encrypt(b"passphrase", b"the state").expect("seal");
+        let mut corrupt = backup.ciphertext.clone();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0x01; // the GCM tag lives at the end
+
+        assert!(
+            decrypt(b"passphrase", &backup.salt, &backup.nonce, &corrupt).is_err(),
+            "a flipped bit in the authentication tag was accepted"
+        );
+    }
+
+    #[test]
+    fn a_swapped_nonce_is_refused() {
+        let backup = encrypt(b"passphrase", b"the state").expect("seal");
+        let other = encrypt(b"passphrase", b"the state").expect("seal");
+
+        assert!(
+            decrypt(b"passphrase", &backup.salt, &other.nonce, &backup.ciphertext).is_err(),
+            "a backup opened under another backup's nonce"
+        );
+    }
+
+    #[test]
+    fn a_swapped_salt_is_refused() {
+        let backup = encrypt(b"passphrase", b"the state").expect("seal");
+        let other = encrypt(b"passphrase", b"the state").expect("seal");
+
+        // A different salt derives a different key from the same passphrase, so this must fail even
+        // though the passphrase is correct.
+        assert!(
+            decrypt(b"passphrase", &other.salt, &backup.nonce, &backup.ciphertext).is_err(),
+            "a backup opened under another backup's salt"
+        );
+    }
+
+    #[test]
+    fn a_truncated_blob_is_refused() {
+        let backup = encrypt(b"passphrase", b"the state").expect("seal");
+        let truncated = &backup.ciphertext[..backup.ciphertext.len() - 1];
+
+        assert!(
+            decrypt(b"passphrase", &backup.salt, &backup.nonce, truncated).is_err(),
+            "a truncated backup was accepted"
+        );
+    }
+
+    #[test]
+    fn an_empty_blob_is_refused() {
+        let backup = encrypt(b"passphrase", b"the state").expect("seal");
+        assert!(decrypt(b"passphrase", &backup.salt, &backup.nonce, &[]).is_err());
+    }
+
+    /// Sealing the same thing twice must not produce the same bytes. If it did, the server could
+    /// tell that two backups have identical contents — that a user's state had not changed between
+    /// them, or that two users hold the same transcript.
+    #[test]
+    fn sealing_twice_never_repeats_itself() {
+        let first = encrypt(b"passphrase", b"the state").expect("seal");
+        let second = encrypt(b"passphrase", b"the state").expect("seal");
+
+        assert_ne!(first.salt, second.salt, "the salt repeated across two seals");
+        assert_ne!(first.nonce, second.nonce, "the nonce repeated across two seals");
+        assert_ne!(
+            first.ciphertext, second.ciphertext,
+            "sealing identical plaintext twice produced identical ciphertext"
+        );
+    }
+
+    /// Both open correctly, which is what makes the randomness above safe rather than merely noisy.
+    #[test]
+    fn two_seals_of_the_same_state_both_open() {
+        let first = encrypt(b"passphrase", b"the state").expect("seal");
+        let second = encrypt(b"passphrase", b"the state").expect("seal");
+
+        assert_eq!(
+            decrypt(b"passphrase", &first.salt, &first.nonce, &first.ciphertext).unwrap(),
+            b"the state"
+        );
+        assert_eq!(
+            decrypt(b"passphrase", &second.salt, &second.nonce, &second.ciphertext).unwrap(),
+            b"the state"
+        );
+    }
+
+    /// An empty passphrase is a real input — a client with a bug could pass one — and it must
+    /// behave like any other: it seals, and it opens under itself and nothing else.
+    #[test]
+    fn an_empty_passphrase_still_seals_and_opens_only_under_itself() {
+        let backup = encrypt(b"", b"the state").expect("seal");
+
+        assert_eq!(
+            decrypt(b"", &backup.salt, &backup.nonce, &backup.ciphertext).unwrap(),
+            b"the state"
+        );
+        assert!(
+            decrypt(b"x", &backup.salt, &backup.nonce, &backup.ciphertext).is_err(),
+            "a backup sealed under an empty passphrase opened under a different one"
+        );
+    }
+
+    /// An account with no history yet still gets a backup, and it must round-trip rather than
+    /// erroring — a new device restoring from it should find an empty transcript, not a failure.
+    #[test]
+    fn an_empty_state_round_trips() {
+        let backup = encrypt(b"passphrase", b"").expect("seal");
+        assert_eq!(
+            decrypt(b"passphrase", &backup.salt, &backup.nonce, &backup.ciphertext).unwrap(),
+            b""
+        );
+    }
+
+    /// A real backup is a whole transcript, not a token. This is closer to the size that ships.
+    #[test]
+    fn a_large_state_round_trips() {
+        let state: Vec<u8> = (0..256 * 1024).map(|i| (i % 251) as u8).collect();
+        let backup = encrypt(b"passphrase", &state).expect("seal");
+
+        assert_eq!(
+            decrypt(b"passphrase", &backup.salt, &backup.nonce, &backup.ciphertext).unwrap(),
+            state
+        );
+    }
+
+    /// A passphrase is bytes, not ASCII: the recovery code normaliser upper-cases and strips, but
+    /// nothing stops a caller passing UTF-8, and a byte-for-byte match must still be required.
+    #[test]
+    fn a_passphrase_is_compared_byte_for_byte() {
+        let backup = encrypt("пароль".as_bytes(), b"the state").expect("seal");
+
+        assert_eq!(
+            decrypt("пароль".as_bytes(), &backup.salt, &backup.nonce, &backup.ciphertext).unwrap(),
+            b"the state"
+        );
+        // One byte different in the middle of a multi-byte character.
+        assert!(
+            decrypt("паролъ".as_bytes(), &backup.salt, &backup.nonce, &backup.ciphertext).is_err()
+        );
+    }
+
+    /// The salt is what makes two users with the SAME passphrase produce different keys. Without
+    /// it, one cracked passphrase would open every backup that shared it.
+    #[test]
+    fn the_same_passphrase_yields_different_keys_under_different_salts() {
+        let a = derive_key(b"passphrase", &[1u8; SALT_LEN]).expect("derive");
+        let b = derive_key(b"passphrase", &[2u8; SALT_LEN]).expect("derive");
+        assert_ne!(a.as_slice(), b.as_slice());
+    }
+
+    /// ...and the same passphrase with the same salt must derive the same key, or nothing could
+    /// ever be reopened.
+    #[test]
+    fn key_derivation_is_deterministic() {
+        let a = derive_key(b"passphrase", &[7u8; SALT_LEN]).expect("derive");
+        let b = derive_key(b"passphrase", &[7u8; SALT_LEN]).expect("derive");
+        assert_eq!(a.as_slice(), b.as_slice());
+    }
+}

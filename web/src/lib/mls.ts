@@ -2469,10 +2469,20 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
   const backup = await api.getKeyBackup(true)
   if (!backup) return false
 
+  // NORMALISED, exactly as the backup was sealed. ensureRecoveryBackup seals under
+  // normalizeRecoveryCode(pretty), and `pretty` is grouped with dashes for legibility —
+  // "ABCDE-FGHIJ-…" — which normalisation strips. Passing the raw string could therefore never
+  // open a backup this app had made.
+  //
+  // restoreWithSecret hides that by retrying with the normalised form when the first attempt
+  // throws, so it was never visible in the app; doing it right here means the retry is a courtesy
+  // for a loosely typed code rather than the only thing that works.
+  const pass = new TextEncoder().encode(normalizeRecoveryCode(passphrase))
+
   // Prove the passphrase by opening the state blob (throws on a wrong one) — then discard
   // it. Its only job here is to validate, and to confirm the bytes really are a client state.
   const state = decryptBackup(
-    new TextEncoder().encode(passphrase),
+    pass,
     base64ToBytes(backup.salt),
     base64ToBytes(backup.nonce),
     base64ToBytes(backup.ciphertext),
@@ -2485,7 +2495,7 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
   if (backup.transcriptCiphertext && backup.transcriptSalt && backup.transcriptNonce) {
     try {
       const opened = decryptBackup(
-        new TextEncoder().encode(passphrase),
+        pass,
         base64ToBytes(backup.transcriptSalt),
         base64ToBytes(backup.transcriptNonce),
         base64ToBytes(backup.transcriptCiphertext),
