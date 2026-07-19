@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -257,14 +258,24 @@ type memberView struct {
 // users lookup (mirrors the admin handlers' id→email map).
 func (h *AppHandler) withEmails(ctx context.Context, members []domain.ChannelMember) []memberView {
 	out := make([]memberView, 0, len(members))
-	emails := map[string]string{}
-	if users, err := h.Store.ListUsers(ctx); err == nil {
-		for _, u := range users {
-			emails[u.ID] = u.Email
-		}
+
+	// Only the members being listed are fetched. This used to call ListUsers, which reads EVERY
+	// user on the server, to decorate a page of at most two hundred — so the cost of viewing one
+	// channel's members grew with the size of the whole user base, on a page an administrator
+	// refreshes. The output was always correctly scoped to members; it was the query that was not.
+	ids := make([]string, 0, len(members))
+	for _, m := range members {
+		ids = append(ids, m.UserID)
+	}
+	users, err := h.Store.UsersByIDs(ctx, ids)
+	if err != nil {
+		// The email is a decoration on a list that is useful without it. Losing it must not cost
+		// the administrator the member list itself.
+		slog.Default().Warn("could not load member emails", "channelMembers", len(members), "error", err)
+		users = nil
 	}
 	for _, m := range members {
-		out = append(out, memberView{ChannelMember: m, Email: emails[m.UserID]})
+		out = append(out, memberView{ChannelMember: m, Email: users[m.UserID].Email})
 	}
 	return out
 }
