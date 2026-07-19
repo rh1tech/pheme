@@ -39,13 +39,18 @@ export function LoginPage() {
   // Set the moment a sign-in succeeds; see the redirect below.
   const [signedIn, setSignedIn] = useState(false)
 
-  // Leaving after a successful sign-in is decided by STATE, not by a call that has to land.
+  // Leaving after a successful sign-in is decided by STATE, and by nothing else.
   //
-  // It used to depend solely on the imperative navigate() below, and an imperative navigation can
-  // be lost: something else navigating at the same moment cancels it ("Navigation to / is
-  // interrupted by another navigation to /"). When that happened the person was fully signed in —
-  // the server had returned 200 and the tokens were stored — and still looking at the login form,
-  // with no error to explain it and nothing to do but try again.
+  // It used to be an imperative navigate(), and an imperative navigation can be lost: something
+  // else navigating at the same moment cancels it ("Navigation to / is interrupted by another
+  // navigation to /"). When that happened the person was fully signed in — the server had returned
+  // 200 and the tokens were stored — and still looking at the login form, with no error to explain
+  // it and nothing to do but try again.
+  //
+  // This redirect must be the ONLY one. Keeping the navigate() alongside it, which is what the
+  // first version of this fix did, means a sign-in fires two navigations to the same place, and the
+  // straggler cancels whatever the person did next — the click they made the instant the app
+  // appeared, silently undone.
   //
   // Deliberately gated on having just signed in HERE, rather than on being authenticated at all.
   // Redirecting every authenticated visitor away from /login would make it impossible to reach
@@ -64,7 +69,6 @@ export function LoginPage() {
       if (mode === 'login') {
         await login(email, password)
         setSignedIn(true)
-        navigate('/', { replace: true })
       } else {
         await register(email, password)
         setCode('')
@@ -83,7 +87,6 @@ export function LoginPage() {
     try {
       await verifyEmail(email, value)
       setSignedIn(true)
-      navigate('/', { replace: true })
     } catch (err) {
       fail(err)
     } finally {
