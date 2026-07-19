@@ -85,20 +85,32 @@ func TestPushPump_RefusesBeyondItsDepth(t *testing.T) {
 	p := newPushPump(4, pushQueueBytes, time.Minute, func(pushJob) { <-block })
 	defer close(block)
 
+	const offers = 4 + pushWorkers + 50
 	accepted := 0
-	for i := 0; i < 4+pushWorkers+50; i++ {
+	for i := 0; i < offers; i++ {
 		if p.offer(job(16, time.Now())) {
 			accepted++
 		}
 	}
 
-	// Every worker takes one job and blocks; the queue holds its depth; the rest are refused.
-	if want := 4 + pushWorkers; accepted != want {
-		t.Errorf("accepted %d jobs, want %d (%d queued + %d workers each holding one)",
-			accepted, want, 4, pushWorkers)
+	// The bound is what matters, not an exact count. How many workers have picked up a job by now
+	// is a scheduling detail — an earlier version of this test asserted the maximum and failed on a
+	// loaded CI machine where the workers had not been scheduled yet. That was the test being wrong
+	// about the requirement: the requirement is that acceptance stops somewhere between the queue's
+	// depth and depth-plus-workers, and that everything past it is refused rather than swallowed.
+	if accepted < 4 {
+		t.Errorf("accepted only %d jobs; the queue's own depth of 4 should always be usable", accepted)
 	}
-	if p.full.Load() != 50 {
-		t.Errorf("%d refusals were counted, want 50", p.full.Load())
+	if max := 4 + pushWorkers; accepted > max {
+		t.Errorf("accepted %d jobs, which is more than the %d the queue and workers can hold — the "+
+			"bound is not being enforced and the backlog can grow without limit", accepted, max)
+	}
+	if refused := p.full.Load(); int64(accepted)+refused != offers {
+		t.Errorf("%d accepted + %d refused = %d, want %d; an offer went missing without being "+
+			"either queued or reported as dropped", accepted, refused, int64(accepted)+refused, offers)
+	}
+	if p.full.Load() == 0 {
+		t.Error("nothing was refused, so this never reached the bound it means to test")
 	}
 }
 
