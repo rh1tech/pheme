@@ -173,8 +173,24 @@ func TestRedisBusCancelDuringPublishDoesNotPanic(t *testing.T) {
 	wg.Wait()
 }
 
-// A subscriber that stops reading must not stall anyone else, and its losses must be COUNTED. A
-// silent drop is a message the user never sees with nothing anywhere to say so.
+// A subscriber that stops reading must not starve its neighbours, and its losses must be COUNTED.
+//
+// Two things this test learned the hard way about what it can and cannot assert.
+//
+// It must not demand that the healthy subscriber receives EVERY event. This bus is deliberately
+// lossy — subscriberBuffer is "how many events a subscriber may fall behind by before its events
+// start being dropped" — so under a burst any reader can lose some, including a healthy one that is
+// merely a moment behind the publisher. The first version demanded all 192 and duly failed in CI at
+// 174, which was the test asserting a guarantee the bus does not make rather than the bus
+// misbehaving.
+//
+// Nor can it watch Publish for signs of blocking. On the Redis bus Publish only writes to Redis;
+// delivery happens later on the subscription goroutine, so Publish returns promptly however wedged
+// the subscribers are. A second version asserted that and passed against a deliberately blocking
+// send, which is worse than the first: a test that cannot fail.
+//
+// What actually separates a working bus from a stalled one is whether events published AFTER a
+// reader wedges still reach everybody else. So: the LAST event must arrive.
 func TestRedisBusCountsWhatItDropsForASlowSubscriber(t *testing.T) {
 	bus, _ := redisOrSkip(t)
 
@@ -183,27 +199,40 @@ func TestRedisBusCountsWhatItDropsForASlowSubscriber(t *testing.T) {
 	healthy, cancelHealthy := bus.Subscribe("healthy")
 	defer cancelHealthy()
 
-	// Comfortably more than one buffer's worth.
+	// Comfortably more than one buffer's worth, so the stalled subscriber is over-full long before
+	// the end.
 	const sent = subscriberBuffer * 3
-	go func() {
-		for i := 0; i < sent; i++ {
-			bus.Publish(Event{ConversationID: fmt.Sprintf("c%d", i)})
-		}
-	}()
+	last := fmt.Sprintf("c%d", sent-1)
+	for i := 0; i < sent; i++ {
+		bus.Publish(Event{
+			ConversationID: fmt.Sprintf("c%d", i),
+			Recipients:     []string{"stalled", "healthy"},
+		})
+	}
 
-	// The healthy subscriber keeps up throughout, despite its neighbour being wedged.
-	received := 0
-	deadline := time.After(15 * time.Second)
-	for received < sent {
+	// The final event, published long after the stalled reader's buffer filled, must still reach
+	// the healthy one. A delivery loop that waited on the wedged reader would stop here, and every
+	// other subscriber on this instance would go silent with it.
+	deadline := time.After(20 * time.Second)
+	received, sawLast := 0, false
+	for !sawLast {
 		select {
-		case <-healthy:
+		case e, ok := <-healthy:
+			if !ok {
+				t.Fatal("the healthy subscriber's channel closed early")
+			}
 			received++
+			if e.ConversationID == last {
+				sawLast = true
+			}
 		case <-deadline:
-			t.Fatalf("the healthy subscriber received only %d of %d events; one stalled reader "+
-				"stalled the bus", received, sent)
+			t.Fatalf("the healthy subscriber received %d events and never saw the last one; one "+
+				"reader that stopped reading has stopped delivery to everyone else", received)
 		}
 	}
 
+	// And the losses are visible. A drop is a message a user never sees, with nothing in any HTTP
+	// response to say so, so it is at least countable.
 	if !waitUntil(t, 5*time.Second, func() bool { return bus.Dropped() > 0 }) {
 		t.Error("a subscriber that never read lost events but Dropped() stayed at 0; the loss is " +
 			"invisible to operators")

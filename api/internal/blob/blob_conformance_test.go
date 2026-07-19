@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -39,13 +40,39 @@ func eachBlobStore(t *testing.T, fn func(t *testing.T, s Store)) {
 		db := sanitiseDBName("phemeblob_" + t.Name())
 		// A small pool: this opens a client per subtest, and the default of 100 sockets each is
 		// what put a shared host's mongod under strain.
-		s, err := NewGridFS(ctx, uri+"/?maxPoolSize=4&serverSelectionTimeoutMS=5000", db)
+		s, err := NewGridFS(ctx, poolLimited(t, uri), db)
 		if err != nil {
 			t.Fatalf("connect to gridfs: %v", err)
 		}
 		t.Cleanup(func() { _ = s.Close(context.Background()) })
 		fn(t, s)
 	})
+}
+
+// poolLimited adds this suite's connection settings without assuming the URI carries none of its
+// own. This was plain concatenation, which works for the bare host:port CI provides and breaks for
+// everything else: an authenticated URI already ends in "/?authSource=admin", and appending to that
+// produced "…/?authSource=admin/?maxPoolSize=4", which the driver reports as an authentication
+// failure against a database named "admin/?maxPoolSize=4". So the GridFS half — the implementation
+// production actually runs — could not be exercised locally at all, and misdirected anyone who
+// tried. The store package's conformance harness had the identical fault.
+func poolLimited(t *testing.T, uri string) string {
+	t.Helper()
+	u, err := url.Parse(uri)
+	if err != nil {
+		t.Fatalf("PHEME_TEST_MONGO_URI is not a URI: %v", err)
+	}
+	q := u.Query()
+	// A small pool: this opens a client per subtest, and the default of 100 sockets each is what
+	// put a shared host's mongod under strain. Set rather than appended, so a caller's own value is
+	// replaced instead of duplicated.
+	q.Set("maxPoolSize", "4")
+	q.Set("serverSelectionTimeoutMS", "5000")
+	u.RawQuery = q.Encode()
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	return u.String()
 }
 
 func TestBlobConformance_RoundTrip(t *testing.T) {
