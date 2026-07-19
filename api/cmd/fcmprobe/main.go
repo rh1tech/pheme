@@ -40,6 +40,9 @@ func main() {
 		concurrency = flag.Int("concurrency", 4, "notifications in flight at once")
 		realToken   = flag.String("real-token", "", "optionally ONE real device token, to confirm a "+
 			"notification actually arrives; sent once, not in the load")
+		senderName = flag.String("sender-name", "Probe", "sender name the notification shows")
+		avatarID   = flag.String("avatar-id", "", "sender's avatar id, so the notification carries a picture")
+		baseURL    = flag.String("base-url", "", "public API base URL, used to build the avatar URL")
 	)
 	flag.Parse()
 
@@ -47,20 +50,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-credentials is required")
 		os.Exit(2)
 	}
-	if err := run(*creds, *batch, *rounds, *concurrency, *realToken); err != nil {
+	if err := run(*creds, *batch, *rounds, *concurrency, *realToken,
+		*senderName, *avatarID, *baseURL); err != nil {
 		fmt.Fprintf(os.Stderr, "\nfcmprobe failed: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(creds string, batch, rounds, concurrency int, realToken string) error {
+func run(creds string, batch, rounds, concurrency int, realToken, senderName, avatarID, baseURL string) error {
 	ctx := context.Background()
+
+	probeSenderName, probeAvatarID = senderName, avatarID
 
 	// Building the sender is where the service account is read and the OAuth exchange is set up.
 	// Timed separately: it happens once per process, and counting it in the per-send numbers would
 	// make the first notification of a deploy look like the typical one.
 	start := time.Now()
-	sender, err := push.NewFCMSender(ctx, creds, "")
+	sender, err := push.NewFCMSender(ctx, creds, baseURL)
 	if err != nil {
 		return fmt.Errorf("build sender: %w", err)
 	}
@@ -227,10 +233,23 @@ func syntheticToken() string {
 		base64.RawURLEncoding.EncodeToString(blob)
 }
 
+// chatNote is the notification under test. The avatar and privacy matter for what the phone
+// actually draws: the server only attaches a picture when the recipient's privacy allows the sender
+// to be named, so a probe that leaves privacy at its zero value tests a notification nobody
+// receives in practice.
 func chatNote() push.ChatNotification {
 	return push.ChatNotification{
 		ConversationID: "probe-conversation",
 		MessageID:      "probe-message",
-		SenderName:     "Probe",
+		SenderName:     probeSenderName,
+		SenderAvatarID: probeAvatarID,
+		Privacy:        domain.NotificationPrivacyPreview,
 	}
 }
+
+// Set once from the flags; chatNote is called from several places and threading these through all
+// of them would say nothing a package-level pair does not.
+var (
+	probeSenderName = "Probe"
+	probeAvatarID   string
+)
