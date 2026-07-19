@@ -67,7 +67,15 @@ jobs:
           # as mongod crashing ("socket was unexpectedly closed"), which is why it took three
           # attempts to find; the diagnostics added last round are what showed the container was
           # simply gone, with no OOM and 22 GB free.
+          #
+          # --ulimit nofile is not optional. The conformance suites open a database per subtest and
+          # each one builds its indexes, so a run holds thousands of WiredTiger files. Against the
+          # host's default descriptor limit mongod hit EMFILE mid-suite ("WiredTiger error 24"),
+          # tripped fassert 50853 and aborted with SIGABRT — which reads from the client side as
+          # "socket was unexpectedly closed" and then thirty-second timeouts on everything after.
+          # 64000 is MongoDB's own documented requirement.
           docker run -d --name "$MONGO_CONTAINER" -p 127.0.0.1::27017 \
+            --ulimit nofile=64000:64000 \
             mongo:7 --wiredTigerCacheSizeGB 0.25
           for i in $(seq 1 30); do
             if docker exec "$MONGO_CONTAINER" mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1; then

@@ -36,18 +36,22 @@ export function LoginPage() {
   const [code, setCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [cooldown, startCooldown] = useCountdown()
+  // Set the moment a sign-in succeeds; see the redirect below.
+  const [signedIn, setSignedIn] = useState(false)
 
-  // Leaving is decided by STATE, not by a call that has to land.
+  // Leaving after a successful sign-in is decided by STATE, not by a call that has to land.
   //
-  // Signing in used to depend solely on the imperative navigate() below, and an imperative
-  // navigation can be lost: something else navigating at the same moment cancels it
-  // ("Navigation to / is interrupted by another navigation to /"). When that happened the person
-  // was fully signed in — the server had returned 200 and the tokens were stored — and still
-  // looking at the login form, with no error to explain it and nothing to do but try again.
+  // It used to depend solely on the imperative navigate() below, and an imperative navigation can
+  // be lost: something else navigating at the same moment cancels it ("Navigation to / is
+  // interrupted by another navigation to /"). When that happened the person was fully signed in —
+  // the server had returned 200 and the tokens were stored — and still looking at the login form,
+  // with no error to explain it and nothing to do but try again.
   //
-  // Being authenticated is now sufficient on its own. The navigate() calls stay because they are
-  // the fast path and read clearly; this is what makes the outcome certain.
-  if (isAuthenticated) return <Navigate to="/" replace />
+  // Deliberately gated on having just signed in HERE, rather than on being authenticated at all.
+  // Redirecting every authenticated visitor away from /login would make it impossible to reach
+  // this form to sign in as somebody else — which is exactly what an admin does to check that a
+  // blocked account cannot get back in, and what anyone does to switch accounts.
+  if (signedIn && isAuthenticated) return <Navigate to="/" replace />
 
   function fail(err: unknown) {
     notifyError(err instanceof ApiError ? err.message : t('auth.requestFailed'))
@@ -59,6 +63,7 @@ export function LoginPage() {
     try {
       if (mode === 'login') {
         await login(email, password)
+        setSignedIn(true)
         navigate('/', { replace: true })
       } else {
         await register(email, password)
@@ -77,6 +82,7 @@ export function LoginPage() {
     setLoading(true)
     try {
       await verifyEmail(email, value)
+      setSignedIn(true)
       navigate('/', { replace: true })
     } catch (err) {
       fail(err)
