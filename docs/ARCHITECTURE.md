@@ -70,6 +70,10 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
   only), or `multipart/form-data` with `title`/`body`/`data` fields plus up to 10
   `images` file parts (≤ 10 MB each). Optional `Idempotency-Key` header → `202
   Accepted`. At least one of title, body, or an image is required.
+  A repeated `Idempotency-Key` within 24 hours is answered `202` and enqueues
+  nothing, so retrying a request that timed out does not notify twice. Keys are
+  scoped per channel. If the dedup store is unreachable the request is accepted
+  undeduplicated — a duplicate notification is a lesser fault than a missing one.
 
 ### App (user JWT)
 - `POST /v1/auth/register` (emails a 6-digit code) · `POST /v1/auth/verify` (confirms the code → creates the account, logs in) · `POST /v1/auth/login` · `POST /v1/auth/refresh`

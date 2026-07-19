@@ -17,6 +17,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/calls"
 	"github.com/rh1tech/pheme/api/internal/config"
 	mailer "github.com/rh1tech/pheme/api/internal/email"
+	"github.com/rh1tech/pheme/api/internal/idempotency"
 	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/otp"
 	"github.com/rh1tech/pheme/api/internal/push"
@@ -160,6 +161,24 @@ func (b *Builder) Limiter() ratelimit.Limiter {
 	default:
 		b.logger.Info("ratelimit: in-memory")
 		return ratelimit.NewTokenBucket(rate, burst)
+	}
+}
+
+// Dedup builds the store that makes a retried ingest request safe to send twice.
+//
+// It follows the rate limiter's driver setting rather than having its own: both answer the same
+// question — "has this caller already done this?" — and both are only correct when every instance
+// shares one view. A deployment that runs Redis for one and memory for the other would deduplicate
+// only the retries that happened to land on the same instance, which is worse than not
+// deduplicating at all, because it looks like it works.
+func (b *Builder) Dedup() idempotency.Store {
+	switch b.cfg.RateLimitDriver {
+	case "redis":
+		b.logger.Info("idempotency: redis")
+		return idempotency.NewRedis(b.redisClient(), "pheme:idem:")
+	default:
+		b.logger.Info("idempotency: in-memory (retries are only deduplicated on this instance)")
+		return idempotency.NewMemory()
 	}
 }
 

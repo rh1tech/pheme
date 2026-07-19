@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/png"
 	"mime/multipart"
@@ -16,6 +17,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/auth"
 	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"github.com/rh1tech/pheme/api/internal/idempotency"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
@@ -462,5 +464,139 @@ func TestIngestHealthz(t *testing.T) {
 	f.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
 		t.Errorf("healthz = %d, want 200", rec.Code)
+	}
+}
+
+// Idempotency: making a retried request safe to send twice.
+//
+// The endpoint has always accepted an Idempotency-Key header, and the architecture document has
+// always promised what that header universally means. Nothing implemented it: the key was read,
+// attached to the task, carried through the broker and used by no one. A caller retrying a request
+// that timed out — which is the entire reason the header exists — woke every subscriber's phone a
+// second time.
+
+// notifyWithKey posts a notification carrying an Idempotency-Key.
+func (f *ingestFixture) notifyWithKey(publicID, apiKey, idemKey string, body any) *httptest.ResponseRecorder {
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest/"+publicID+"/notify", bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", apiKey)
+	if idemKey != "" {
+		req.Header.Set("Idempotency-Key", idemKey)
+	}
+	rec := httptest.NewRecorder()
+	f.mux.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestIngestDeduplicatesARetriedRequest(t *testing.T) {
+	f := newIngest(t)
+	f.h.Dedup = idempotency.NewMemory()
+
+	first := f.notifyWithKey("chan-public", f.key, "order-42", map[string]any{"title": "Shipped"})
+	second := f.notifyWithKey("chan-public", f.key, "order-42", map[string]any{"title": "Shipped"})
+
+	// Both are accepted. The caller cannot tell, and does not need to: "we already have this" and
+	// "we have taken this" are the same answer for a notification.
+	if first.Code != http.StatusAccepted || second.Code != http.StatusAccepted {
+		t.Fatalf("statuses = %d and %d, want 202 for both", first.Code, second.Code)
+	}
+	if len(f.pub.tasks) != 1 {
+		t.Errorf("a retried request enqueued %d notifications; every subscriber's phone goes off "+
+			"twice for one event", len(f.pub.tasks))
+	}
+}
+
+// Two different keys are two different requests. Collapsing them would silently swallow real
+// notifications, which is worse than the duplicate the header exists to prevent.
+func TestIngestDistinctKeysAreDistinctNotifications(t *testing.T) {
+	f := newIngest(t)
+	f.h.Dedup = idempotency.NewMemory()
+
+	f.notifyWithKey("chan-public", f.key, "order-1", map[string]any{"title": "One"})
+	f.notifyWithKey("chan-public", f.key, "order-2", map[string]any{"title": "Two"})
+
+	if len(f.pub.tasks) != 2 {
+		t.Errorf("two distinct keys produced %d notifications, want 2", len(f.pub.tasks))
+	}
+}
+
+// Keys are scoped per channel. Two customers both numbering their orders from one must not
+// silence each other.
+func TestIngestIdempotencyIsScopedToTheChannel(t *testing.T) {
+	f := newIngest(t)
+	f.h.Dedup = idempotency.NewMemory()
+
+	other, err := f.h.Store.CreateChannel(context.Background(), domain.Channel{
+		PublicID: "other-public", OwnerID: "someone-else", Name: "Theirs",
+		Status: domain.ChannelActive, CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create other channel: %v", err)
+	}
+	plaintext, hash, prefix := auth.GenerateAPIKey()
+	if _, err := f.h.Store.CreateAPIKey(context.Background(), domain.APIKey{
+		ChannelID: other.ID, HashedKey: hash, Prefix: prefix, Label: "theirs",
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create their key: %v", err)
+	}
+
+	f.notifyWithKey("chan-public", f.key, "order-1", map[string]any{"title": "Mine"})
+	f.notifyWithKey(other.PublicID, plaintext, "order-1", map[string]any{"title": "Theirs"})
+
+	if len(f.pub.tasks) != 2 {
+		t.Errorf("the same key in two channels produced %d notifications, want 2 — one customer's "+
+			"key silenced another's", len(f.pub.tasks))
+	}
+}
+
+// No key means no promise. A caller that sends the same thing twice without one gets it twice,
+// which is the only thing the server can honestly do.
+func TestIngestWithoutAKeyDoesNotDeduplicate(t *testing.T) {
+	f := newIngest(t)
+	f.h.Dedup = idempotency.NewMemory()
+
+	f.notify("chan-public", f.key, map[string]any{"title": "Same"})
+	f.notify("chan-public", f.key, map[string]any{"title": "Same"})
+
+	if len(f.pub.tasks) != 2 {
+		t.Errorf("two requests with no idempotency key produced %d notifications, want 2", len(f.pub.tasks))
+	}
+}
+
+// The check fails OPEN. The dedup store being unreachable is the server's problem, and refusing
+// over it would turn a Redis hiccup into undelivered notifications — a duplicate is the lesser
+// fault than a silence.
+func TestIngestAcceptsTheRequestWhenTheDedupStoreIsDown(t *testing.T) {
+	f := newIngest(t)
+	f.h.Dedup = brokenDedup{}
+
+	rec := f.notifyWithKey("chan-public", f.key, "order-7", map[string]any{"title": "Shipped"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("notify with a broken dedup store = %d, want 202", rec.Code)
+	}
+	if len(f.pub.tasks) != 1 {
+		t.Errorf("the notification was dropped because the dedup store was unreachable (%d enqueued)",
+			len(f.pub.tasks))
+	}
+}
+
+type brokenDedup struct{}
+
+func (brokenDedup) Seen(context.Context, string, time.Duration) (bool, error) {
+	return false, fmt.Errorf("dedup store unavailable")
+}
+
+// With no dedup store configured the endpoint still works — it simply cannot honour the header.
+func TestIngestWorksWithNoDedupStoreConfigured(t *testing.T) {
+	f := newIngest(t)
+	f.h.Dedup = nil
+
+	if rec := f.notifyWithKey("chan-public", f.key, "order-9", map[string]any{"title": "x"}); rec.Code != http.StatusAccepted {
+		t.Fatalf("notify = %d, want 202", rec.Code)
+	}
+	if len(f.pub.tasks) != 1 {
+		t.Errorf("enqueued %d, want 1", len(f.pub.tasks))
 	}
 }

@@ -40,7 +40,7 @@ func main() {
 	}
 	limiter := b.Limiter()
 
-	h := &channel.IngestHandler{Store: db, Publisher: pub, Limiter: limiter, Blob: blobs}
+	h := &channel.IngestHandler{Store: db, Publisher: pub, Limiter: limiter, Blob: blobs, Dedup: b.Dedup()}
 	mux := http.NewServeMux()
 	h.Routes(mux)
 

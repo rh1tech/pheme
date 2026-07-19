@@ -2,6 +2,7 @@ package channel
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/broker"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
+	"github.com/rh1tech/pheme/api/internal/idempotency"
 	"github.com/rh1tech/pheme/api/internal/ratelimit"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
@@ -21,6 +23,9 @@ type IngestHandler struct {
 	Publisher broker.Publisher
 	Limiter   ratelimit.Limiter
 	Blob      blob.Store
+	// Dedup makes a retried request safe. May be nil, which disables the check — the endpoint
+	// still accepts an Idempotency-Key, it simply cannot honour it.
+	Dedup idempotency.Store
 }
 
 // Routes registers the ingest endpoints on a mux.
@@ -60,6 +65,33 @@ func (h *IngestHandler) notify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Idempotency, where the architecture document puts it: after the key is validated and the
+	// rate limit checked, before anything is enqueued.
+	//
+	// The endpoint has always accepted this header and never acted on it, so a caller retrying a
+	// request that timed out — which is the entire reason the header exists — woke every
+	// subscriber's phone a second time.
+	//
+	// Scoped per channel: two customers picking "order-1" are not the same request, and one of
+	// them must not silence the other.
+	idemKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idemKey != "" && h.Dedup != nil {
+		seen, err := h.Dedup.Seen(r.Context(), ch.ID+":"+idemKey, idempotency.Window)
+		if err != nil {
+			// Fail OPEN. The store being unreachable is our problem, and refusing the request over
+			// it would turn a Redis hiccup into undelivered notifications. A duplicate is the
+			// lesser fault than a silence.
+			slog.Default().Warn("idempotency check failed; accepting the request undeduplicated",
+				"channel", ch.ID, "error", err)
+		} else if seen {
+			// Answered exactly as the original was. The caller cannot tell, and does not need to:
+			// for a notification, "we already have this" and "we have taken this" mean the same
+			// thing to them.
+			httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+			return
+		}
+	}
+
 	in, ok := decodeNotify(w, r, h.Blob)
 	if !ok {
 		return
@@ -76,7 +108,7 @@ func (h *IngestHandler) notify(w http.ResponseWriter, r *http.Request) {
 		Images:          in.Images,
 		Data:            in.Data,
 		CommentsAllowed: in.CommentsAllowed,
-		IdempotencyKey:  strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+		IdempotencyKey:  idemKey,
 		EnqueuedAt:      time.Now().UTC(),
 	}
 	if err := h.Publisher.Publish(r.Context(), task); err != nil {
