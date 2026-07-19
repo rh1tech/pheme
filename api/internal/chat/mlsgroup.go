@@ -143,6 +143,35 @@ func (h *Handler) listMLSCommits(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"messages": msgs})
 }
 
+// listHistoryOffers hands back the recent history offers in a conversation, so a device that asked
+// for its history can find the answer even if it was not connected when the answer was posted.
+//
+// Offers are protocol traffic and are therefore absent from the transcript. That left exactly one
+// delivery route — the live stream, at the instant of posting — and a restored device that missed
+// it showed a blank history until it happened to ask again.
+//
+// Every member sees every offer, and that is safe: the transcript inside is sealed under a key
+// derived from the group AND bound to the requesting device, so an offer opens for the one device
+// it was addressed to and for nobody else, this server included.
+func (h *Handler) listHistoryOffers(w http.ResponseWriter, r *http.Request) {
+	_, convID, _, ok := h.requireMember(w, r)
+	if !ok {
+		return
+	}
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 50 {
+			limit = n
+		}
+	}
+	offers, err := h.Store.MLSHistoryOffers(r.Context(), convID, limit)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not load history offers")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"messages": offers})
+}
+
 // mayRemove applies the roster's own rule — "only a group admin can remove members" — to
 // the Commits that change the encrypted group, so the two cannot disagree about who is
 // allowed to throw somebody out.

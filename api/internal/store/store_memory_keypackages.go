@@ -399,6 +399,25 @@ func (m *Memory) ActiveUserRevocations(_ context.Context, now time.Time) (map[st
 	return out, nil
 }
 
+func (m *Memory) MLSHistoryOffers(_ context.Context, conversationID string, limit int) ([]domain.ChatMessage, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []domain.ChatMessage
+	for _, msg := range m.chatMessages {
+		if msg.ConversationID == conversationID && msg.ContentType == domain.ContentTypeMLSHistoryOffer {
+			out = append(out, msg)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (m *Memory) DeleteDevice(_ context.Context, deviceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

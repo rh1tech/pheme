@@ -38,7 +38,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
 import 'package:pheme_mobile/src/crypto/mls_errors.dart';
-import 'package:pheme_mobile/src/models/chat_models.dart';
 import 'package:pheme_mobile/src/rust/frb_generated.dart';
 
 import 'harness.dart';
@@ -539,15 +538,15 @@ void main() {
         laptopIdentity,
       );
 
-      // The laptop receives the offer (a control message) and opens it.
-      final page = await bobLaptop.repo.listChatMessages(conversation.id);
-      final offer = page.messages.firstWhere(
-        (m) => m.contentType == ContentType.mlsHistoryOffer,
-      );
-      final imported = await bobLaptop.mls.receiveHistoryOffer(
+      // The laptop collects the answer it asked for.
+      //
+      // Deliberately NOT read from the transcript: an offer is protocol traffic and is excluded
+      // from it. It used to be delivered over the live stream alone, at the instant it was posted,
+      // so a device that was not connected right then never saw it — which is the ordinary case for
+      // a device that has just been restored and is still settling.
+      final imported = await bobLaptop.mls.collectPendingHistory(
         conversation.id,
         bobLaptop.userId,
-        offer.ciphertext,
       );
       expect(
         imported,

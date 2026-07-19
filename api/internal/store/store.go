@@ -305,6 +305,19 @@ type Store interface {
 	// this would be unable to catch up at all.
 	MLSControlMessagesSince(ctx context.Context, conversationID, groupID string, sinceEpoch int64) ([]domain.ChatMessage, error)
 
+	// MLSHistoryOffers returns the most recent history offers in a conversation, newest first.
+	//
+	// They are excluded from the transcript on purpose — they are protocol traffic, not something
+	// anyone wrote — and until now the ONLY way to receive one was to be connected to the live
+	// stream at the instant it was posted. A restored device that asked for its history while the
+	// co-member answering was asleep, or that simply reconnected a second too late, never saw the
+	// answer and showed a blank history for the rest of the session.
+	//
+	// Returning them costs nothing in confidentiality: the transcript inside is sealed under a key
+	// derived from the group and bound to the requesting device, so the server cannot open one and
+	// neither can any member it was not addressed to.
+	MLSHistoryOffers(ctx context.Context, conversationID string, limit int) ([]domain.ChatMessage, error)
+
 	// SetMLSGroupInfo records the latest GroupInfo (RFC 9420 §11.2.1) a joiner can external-join
 	// against. Kept only for the CURRENT group and only if at least as new as what is stored, so a
 	// late or retired export never overwrites fresher material. See domain.MLSGroupInfo.

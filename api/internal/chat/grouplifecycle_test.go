@@ -436,3 +436,75 @@ func TestMembershipNotesRaiseNoPushNotification(t *testing.T) {
 	t.Errorf("%s raises a push notification; a roster change is not something a person sent",
 		domain.ContentTypeMembership)
 }
+
+// A history offer must be findable AFTER the moment it was posted.
+//
+// Offers are protocol traffic and are deliberately absent from the transcript, which left exactly
+// one delivery route: the live stream, at the instant of posting. A device that asked for its
+// history while the co-member answering was asleep — or that simply reconnected a second too late —
+// never saw the answer, and since the request is made once per conversation per session it showed a
+// blank history for the whole session. That is the ordinary case for a device that has just been
+// restored from a recovery code and is still settling.
+func TestAHistoryOfferCanBeCollectedAfterTheFact(t *testing.T) {
+	f := newFixture(t)
+	_, holderTok := f.user(t, "hist-holder@pheme.test")
+	joinerID, joinerTok := f.user(t, "hist-joiner@pheme.test")
+	conv := f.createGroup(t, holderTok, []string{joinerID})
+
+	// The co-member answers a request by posting an offer.
+	rec := f.do(http.MethodPost, "/v1/conversations/"+conv+"/messages", holderTok, map[string]any{
+		"ciphertext":  []byte(`{"to":"someone","historyId":"blob-1"}`),
+		"contentType": domain.ContentTypeMLSHistoryOffer,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post offer: %d %s", rec.Code, rec.Body)
+	}
+
+	// It is NOT in the transcript — an offer is not something anyone wrote.
+	rec = f.do(http.MethodGet, "/v1/conversations/"+conv+"/messages", joinerTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("messages: %d", rec.Code)
+	}
+	var page struct {
+		Messages []domain.ChatMessage `json:"messages"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &page)
+	for _, m := range page.Messages {
+		if m.ContentType == domain.ContentTypeMLSHistoryOffer {
+			t.Error("a history offer appeared in the transcript; it is protocol traffic, not a message")
+		}
+	}
+
+	// ...but it can still be collected, which is the whole point.
+	rec = f.do(http.MethodGet, "/v1/conversations/"+conv+"/mls/history-offers", joinerTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("history-offers: %d %s", rec.Code, rec.Body)
+	}
+	var offers struct {
+		Messages []domain.ChatMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &offers); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(offers.Messages) != 1 {
+		t.Fatalf("got %d offers, want 1 — a device that missed the live delivery cannot find its history",
+			len(offers.Messages))
+	}
+	if offers.Messages[0].ContentType != domain.ContentTypeMLSHistoryOffer {
+		t.Errorf("got content type %q", offers.Messages[0].ContentType)
+	}
+}
+
+// Only members. An offer is sealed to one device, but who is talking to whom is not public.
+func TestHistoryOffersAreMembersOnly(t *testing.T) {
+	f := newFixture(t)
+	_, ownerTok := f.user(t, "ho-owner@pheme.test")
+	memberID, _ := f.user(t, "ho-member@pheme.test")
+	_, outsiderTok := f.user(t, "ho-outsider@pheme.test")
+	conv := f.createGroup(t, ownerTok, []string{memberID})
+
+	rec := f.do(http.MethodGet, "/v1/conversations/"+conv+"/mls/history-offers", outsiderTok, nil)
+	if rec.Code == http.StatusOK {
+		t.Errorf("a non-member could list a conversation's history offers: %d", rec.Code)
+	}
+}

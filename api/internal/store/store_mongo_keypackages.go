@@ -494,6 +494,27 @@ func (m *Mongo) ActiveUserRevocations(ctx context.Context, now time.Time) (map[s
 	return out, cur.Err()
 }
 
+// MLSHistoryOffers returns the most recent history offers in a conversation, newest first.
+func (m *Mongo) MLSHistoryOffers(ctx context.Context, conversationID string, limit int) ([]domain.ChatMessage, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	cur, err := m.db.Collection("chatMessages").Find(
+		ctx,
+		bson.M{"conversationId": conversationID, "contentType": domain.ContentTypeMLSHistoryOffer},
+		options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}}).SetLimit(int64(limit)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var out []domain.ChatMessage
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DeleteDevice removes one push device by id.
 func (m *Mongo) DeleteDevice(ctx context.Context, deviceID string) error {
 	_, err := m.db.Collection("devices").DeleteOne(ctx, bson.M{"_id": deviceID})

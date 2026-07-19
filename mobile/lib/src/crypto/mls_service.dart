@@ -21,8 +21,9 @@
 
 import 'dart:async';
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'dart:io' show Platform;
-import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -429,7 +430,11 @@ class MlsService {
       if (joined != null) {
         _waitingSince.remove(conversation.id);
         // We just joined and hold none of the past — ask a co-member for it. A no-op if we have it.
-        unawaited(requestHistory(conversation.id, myUserId).catchError((_) {}));
+        unawaited(
+          requestHistory(conversation.id, myUserId)
+              .then((_) => collectPendingHistory(conversation.id, myUserId))
+              .catchError((Object _) => false),
+        );
         return joined;
       }
 
@@ -489,7 +494,11 @@ class MlsService {
       ).catchError((_) {}),
     );
     // If we hold the group but none of its history (a device admitted by Welcome), ask for it.
-    unawaited(requestHistory(conversation.id, myUserId).catchError((_) {}));
+    unawaited(
+      requestHistory(conversation.id, myUserId)
+          .then((_) => collectPendingHistory(conversation.id, myUserId))
+          .catchError((Object _) => false),
+    );
     return state.groupId;
   }
 
@@ -1395,7 +1404,12 @@ class MlsService {
     final state = await session.exportState();
     if (state == null) throw Exception('no local key state to back up');
 
-    final passphraseBytes = Uint8List.fromList(passphrase.codeUnits);
+    // NORMALISED, and restoreKeys normalises to match. Sealing and opening must agree on the exact
+    // bytes, and the code shown to the user is not those bytes: it is grouped with dashes for
+    // legibility, which normalisation strips.
+    final passphraseBytes = Uint8List.fromList(
+      normalizeRecoveryCode(passphrase).codeUnits,
+    );
     final stateBlob = await rust.mlsBackupEncrypt(
       passphrase: passphraseBytes,
       plaintext: state,
@@ -1458,7 +1472,14 @@ class MlsService {
       throw const IdentityAlreadySetUpException();
     }
 
-    final passphraseBytes = Uint8List.fromList(passphrase.codeUnits);
+    // NORMALISED, exactly as backupKeys sealed it. The code handed to the user is grouped with
+    // dashes — "ABCDE-FGHIJ-…" — and normalisation strips them, so the raw string could never open
+    // a backup this app had made. restoreWithSecret hides that by retrying with the normalised form
+    // on failure, which is why it never showed up in the app; doing it right here means the retry
+    // is a courtesy for a loosely-typed code rather than the only thing that works.
+    final passphraseBytes = Uint8List.fromList(
+      normalizeRecoveryCode(passphrase).codeUnits,
+    );
 
     // Prove the passphrase by opening the state blob (throws on a wrong one), then discard it — this
     // device does not adopt those keys.
@@ -1634,12 +1655,22 @@ class MlsService {
   ) async {
     final session = await this.session(userId);
     if (requesterIdentity.isEmpty || requesterIdentity == session.identity) {
+      debugPrint('Pheme: no history offer — the request is our own device');
       return;
     }
     final state = await _repo.mlsGroupState(conversationId);
-    if (!state.isEstablished || !await session.hasGroup(state.groupId)) return;
+    if (!state.isEstablished || !await session.hasGroup(state.groupId)) {
+      debugPrint(
+        'Pheme: no history offer — this device does not hold the group '
+        '(established=${state.isEstablished})',
+      );
+      return;
+    }
     final bodies = (await _cache.exportAllContents())[conversationId];
-    if (bodies == null || bodies.isEmpty) return;
+    if (bodies == null || bodies.isEmpty) {
+      debugPrint('Pheme: no history offer — this device has no transcript to share');
+      return;
+    }
 
     final derived = await session.exportSecret(
       state.groupId,
@@ -1647,7 +1678,12 @@ class MlsService {
       Uint8List.fromList(utf8.encode(requesterIdentity)),
       32,
     );
-    if (derived == null) return;
+    if (derived == null) {
+      debugPrint(
+        'Pheme: no history offer — could not derive the sync key at this epoch',
+      );
+      return;
+    }
 
     final plaintext = Uint8List.fromList(
       utf8.encode(jsonEncode({'v': 1, 'bodies': bodies})),
@@ -1659,7 +1695,8 @@ class MlsService {
     final String historyId;
     try {
       historyId = await _repo.uploadHistory(conversationId, sealed.ciphertext);
-    } on Object {
+    } on Object catch (e) {
+      debugPrint('Pheme: no history offer — the sealed blob would not upload: $e');
       return;
     }
     final offer = _encodeControl({
@@ -1675,9 +1712,41 @@ class MlsService {
         offer,
         ContentType.mlsHistoryOffer,
       );
-    } on Object {
+      debugPrint('Pheme: history offer delivered to $requesterIdentity');
+    } on Object catch (e) {
       // The requester will re-ask on its next settle if this never lands.
+      debugPrint('Pheme: the history offer was sealed but not delivered: $e');
     }
+  }
+
+  /// Looks for an offer already waiting for this device, and opens it.
+  ///
+  /// requestHistory asks; this collects the answer. Without it the answer had one delivery route —
+  /// the live stream, at the instant it was posted — so a device that asked while the co-member
+  /// answering was asleep, or that reconnected a moment too late, never saw it. Since the request
+  /// is made once per conversation per session, that meant a blank history for the whole session.
+  ///
+  /// Returns whether any history was imported. Offers addressed to other devices are skipped by
+  /// receiveHistoryOffer, which is what makes it safe for every member to see them.
+  Future<bool> collectPendingHistory(String conversationId, String userId) async {
+    final List<ChatMessage> offers;
+    try {
+      offers = await _repo.listHistoryOffers(conversationId);
+    } on Object catch (e) {
+      // An older server has no such endpoint; the live path still works.
+      debugPrint('Pheme: could not list history offers: $e');
+      return false;
+    }
+    for (final offer in offers) {
+      try {
+        if (await receiveHistoryOffer(conversationId, userId, offer.ciphertext)) {
+          return true;
+        }
+      } on Object catch (e) {
+        debugPrint('Pheme: a pending history offer would not open: $e');
+      }
+    }
+    return false;
   }
 
   /// Opens a history offer addressed to this device: derive the same group-bound key, fetch the

@@ -140,6 +140,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// Device-to-device history handoff: a member seals its transcript for a joining device under a
 	// group-derived key and uploads it here; the joining device fetches it once. Sealed off the
 	// server, so it only ever holds ciphertext.
+	// The offers waiting for this device. An offer is delivered over the live stream, and a device
+	// that was not connected at that moment never saw it — see listHistoryOffers.
+	mux.HandleFunc("GET /v1/conversations/{id}/mls/history-offers", h.listHistoryOffers)
 	mux.HandleFunc("POST /v1/conversations/{id}/mls/history", h.uploadHistory)
 	mux.HandleFunc("GET /v1/conversations/{id}/mls/history/{historyId}", h.getHistory)
 	// 1:1 voice calls. The server relays a few kilobytes of sealed signalling and hands out
