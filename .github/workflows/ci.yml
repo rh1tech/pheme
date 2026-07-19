@@ -53,6 +53,11 @@ jobs:
           # The cache is capped because this host also runs prod and dev: mongod sizes its
           # WiredTiger cache from TOTAL system memory, not from what it is allowed to use, and an
           # unbounded one competes with the services that matter.
+          # NO --rm. A container that removes itself on exit takes its log with it, and the last
+          # two rounds of this failed with "no such object" where the log should have been —
+          # instrumentation that disappears exactly when it is needed. The cleanup step below
+          # removes it explicitly instead.
+          #
           # An EPHEMERAL host port, discovered after the fact.
           #
           # A fixed port was the bug. The container NAME was scoped per run but the port was not, so
@@ -62,7 +67,7 @@ jobs:
           # as mongod crashing ("socket was unexpectedly closed"), which is why it took three
           # attempts to find; the diagnostics added last round are what showed the container was
           # simply gone, with no OOM and 22 GB free.
-          docker run -d --rm --name "$MONGO_CONTAINER" -p 127.0.0.1::27017 \
+          docker run -d --name "$MONGO_CONTAINER" -p 127.0.0.1::27017 \
             mongo:7 --wiredTigerCacheSizeGB 0.25
           for i in $(seq 1 30); do
             if docker exec "$MONGO_CONTAINER" mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1; then
@@ -79,7 +84,7 @@ jobs:
       - name: Start Redis for the OTP conformance suite
         run: |
           docker rm -f "$REDIS_CONTAINER" 2>/dev/null || true
-          docker run -d --rm --name "$REDIS_CONTAINER" -p 127.0.0.1::6379 redis:7-alpine
+          docker run -d --name "$REDIS_CONTAINER" -p 127.0.0.1::6379 redis:7-alpine
           for i in $(seq 1 30); do
             if docker exec "$REDIS_CONTAINER" redis-cli ping >/dev/null 2>&1; then
               port=$(docker port "$REDIS_CONTAINER" 6379/tcp | head -1 | sed 's/.*://')
