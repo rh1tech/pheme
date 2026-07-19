@@ -28,6 +28,14 @@ import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/phe
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { ApiError, api } from './api'
 import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
+// The roster rules — who belongs in a group and who does not — live in their own module so they can
+// be tested without WASM, a server or a real group. See roster.ts.
+import {
+  deviceIdentity,
+  deviceOf,
+  missingDevices as rosterMissingDevices,
+  staleLeaves as rosterStaleLeaves,
+} from './roster'
 import { cacheContent, clearPreviews, exportAllContents, importContents } from './chatCache'
 import { clearSafetyPins } from './safety'
 import { loadMlsDeviceId, saveMlsDeviceId } from './device'
@@ -282,15 +290,8 @@ function groupBytes(groupId: string): Uint8Array {
 }
 
 /** One device's MLS identity, as it appears in a group's leaf: `userId:deviceId`. */
-function deviceIdentity(userId: string, deviceId: string): string {
-  return `${userId}:${deviceId}`
-}
 
 /** The device half of a credential identity. */
-function deviceOf(identity: string): string {
-  const sep = identity.indexOf(':')
-  return sep === -1 ? '' : identity.slice(sep + 1)
-}
 
 /**
  * One device's MLS session.
@@ -1058,7 +1059,7 @@ async function establishGroup(
   myUserId: string,
 ): Promise<string | null> {
   const { published } = await api.mlsDevices(conversation.id)
-  const targets = missingDevices(session, published, [])
+  const targets = rosterMissingDevices(session.identity, published, [], zombieDevices)
 
   // Nobody else is reachable. For a direct chat that is the whole conversation, and the
   // user needs to be told plainly rather than watching a message fail to send. (In a
@@ -1151,7 +1152,10 @@ async function reconcileDevices(
     // is refused, and that is fine — pruning a departed member or a ghost device is
     // hygiene, and it waits for an admin. What must NOT happen is the refusal stopping us
     // from ADDING the devices that are missing, which is the part somebody is waiting on.
-    const stale = pruned.length > 0 ? [] : staleLeaves(session, leaves, memberIds, published, revoked)
+    const stale =
+      pruned.length > 0
+        ? []
+        : rosterStaleLeaves(session.identity, leaves, memberIds, published, revoked)
     if (stale.length > 0) {
       let result: 'accepted' | 'conflict'
       try {
@@ -1165,7 +1169,7 @@ async function reconcileDevices(
       continue // look again either way: the group has changed shape
     }
 
-    const missing = missingDevices(session, published, leaves)
+    const missing = rosterMissingDevices(session.identity, published, leaves, zombieDevices)
     if (missing.length === 0) return
 
     const claimed = await claimFor(conversationId, missing)
@@ -1216,48 +1220,6 @@ async function reconcileDevices(
  * never opened Pheme looks like, and also what one looks like for the instant between
  * purging a dead identity's KeyPackages and publishing the new one's.
  */
-function staleLeaves(
-  session: Session,
-  leaves: string[],
-  memberIds: string[],
-  published: Record<string, string[]>,
-  revoked: Record<string, string[]>,
-): string[] {
-  const members = new Set(memberIds)
-  const out: string[] = []
-  for (const leaf of leaves) {
-    if (leaf === session.identity) continue // never prune ourselves
-    const sep = leaf.indexOf(':')
-    if (sep === -1) {
-      // A LEGACY leaf — an identity from before leaves carried a device id, so it names a
-      // person and no device. No current client can hold its keys (legacy state is
-      // discarded on load), so it can never read anything, and it never leaves on its own.
-      // Prune it deliberately. It used to be pruned by accident — slice(0, -1) mangled the
-      // user id, which read as a departed member — which happened to do the right thing
-      // here while doing the wrong thing everywhere else.
-      out.push(leaf)
-      continue
-    }
-    const userId = leaf.slice(0, sep)
-    if (!members.has(userId)) {
-      out.push(leaf) // departed member
-      continue
-    }
-    // A REVOKED device, said so by the server. This has to be checked before the bail below:
-    // terminating a device deletes its KeyPackages, so a revoked device has none published and
-    // would otherwise be waved through as "cannot tell" — which is how a device that had just had
-    // its access removed kept its leaf, and with it the ability to read everything sent afterwards.
-    // Deleting every device on an account made that certain rather than merely likely.
-    if ((revoked[userId] ?? []).includes(deviceOf(leaf))) {
-      out.push(leaf)
-      continue
-    }
-    const devices = published[userId] ?? []
-    if (devices.length === 0) continue // cannot tell; leave them be
-    if (!devices.includes(deviceOf(leaf))) out.push(leaf) // ghost device
-  }
-  return out
-}
 
 /**
  * Devices whose published KeyPackage turned out to be a TRAP: it was claimed and committed, and the
@@ -1273,25 +1235,6 @@ function staleLeaves(
 const zombieDevices = new Set<string>()
 
 /** The published devices that are not already leaves of the group, excluding our own. */
-function missingDevices(
-  session: Session,
-  published: Record<string, string[]>,
-  leaves: string[],
-): { userId: string; deviceId: string }[] {
-  const have = new Set(leaves)
-  const out: { userId: string; deviceId: string }[] = []
-  for (const [userId, deviceIds] of Object.entries(published)) {
-    for (const deviceId of deviceIds) {
-      // Our own device is never claimed for: it holds the group (or is creating it), and
-      // claiming our own KeyPackage would burn one for nothing.
-      if (deviceIdentity(userId, deviceId) === session.identity) continue
-      if (have.has(deviceIdentity(userId, deviceId))) continue
-      if (zombieDevices.has(deviceIdentity(userId, deviceId))) continue
-      out.push({ userId, deviceId })
-    }
-  }
-  return out
-}
 
 /**
  * Claims one KeyPackage per device, keeping WHICH device each one was claimed for. A device that

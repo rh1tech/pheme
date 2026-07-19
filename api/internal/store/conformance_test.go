@@ -63,7 +63,16 @@ func eachStore(t *testing.T, fn func(t *testing.T, s storeUnderTest)) {
 		if err != nil {
 			t.Fatalf("connect to mongo: %v", err)
 		}
-		t.Cleanup(func() { _ = m.db.Drop(context.Background()) })
+		// DISCONNECT, not just drop. Each subtest opens its own client, and a client holds a
+		// connection pool — leaving them open accumulated one pool per test until mongod fell over
+		// mid-run ("socket was unexpectedly closed: EOF", then thirty-second selection timeouts on
+		// everything after it). It survived locally and died on a host that also runs prod and dev.
+		t.Cleanup(func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = m.db.Drop(cleanup)
+			_ = m.client.Disconnect(cleanup)
+		})
 		fn(t, storeUnderTest{name: "mongo", store: m, blobs: blobs})
 	})
 }
