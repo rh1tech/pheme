@@ -27,6 +27,21 @@ jobs:
     defaults:
       run:
         working-directory: api
+    # The store has two hand-written implementations of one interface, and production runs the
+    # Mongo one while almost every test exercised the in-memory one. They have already disagreed:
+    # the profile update that blanked people's display names was Mongo-only behaviour. The
+    # conformance suite runs one set of assertions against BOTH, and it can only do that with a
+    # real database — without this service it skips the half that ships.
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27117:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -36,6 +51,8 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race -cover ./...
+        env:
+          PHEME_TEST_MONGO_URI: mongodb://localhost:27117
 
   web:
     name: Web (Vite)
