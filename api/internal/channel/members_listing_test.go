@@ -217,3 +217,76 @@ type failingUsersStore struct {
 func (f *failingUsersStore) UsersByIDs(context.Context, []string) (map[string]domain.User, error) {
 	return nil, fmt.Errorf("user store unavailable")
 }
+
+// The admin channel list has the same shape of problem: it attaches each channel's owner email.
+// That read every user on the server too, and — unlike the member list — failed the whole request
+// if the read failed, so a hiccup looking up users cost an administrator the channel list itself.
+func TestAdminChannelListReadsOnlyTheOwnersOnThePage(t *testing.T) {
+	db := store.NewMemory(nil)
+	admin := seedUser(t, db, "chan-list-admin@pheme.test", domain.RoleAdmin)
+
+	owner := seedUser(t, db, "chan-owner@pheme.test", domain.RoleUser)
+	if _, err := db.CreateChannel(context.Background(), domain.Channel{
+		PublicID: "pub-listed", OwnerID: owner.ID, Name: "listed",
+		Status: domain.ChannelActive, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	for i := 0; i < 40; i++ {
+		seedUser(t, db, fmt.Sprintf("chan-bystander-%d@pheme.test", i), domain.RoleUser)
+	}
+
+	counting := &countingUserStore{Store: db}
+	mux := http.NewServeMux()
+	(&AdminHandler{Store: counting}).Register(mux)
+
+	rec := adminReq(mux, http.MethodGet, "/v1/admin/channels", admin.ID, "admin", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list channels = %d: %s", rec.Code, rec.Body)
+	}
+
+	all, sizes := counting.report()
+	if all > 0 {
+		t.Errorf("the admin channel list called ListUsers %d times; that reads every user on the "+
+			"server to attach one owner address per channel", all)
+	}
+	for _, n := range sizes {
+		if n > 1 {
+			t.Errorf("a lookup asked for %d users for a page holding 1 channel", n)
+		}
+	}
+
+	// The owner's address is still attached.
+	if !strings.Contains(rec.Body.String(), "chan-owner@pheme.test") {
+		t.Errorf("the owner's email is missing from the listing: %s", rec.Body)
+	}
+	// And nobody else's.
+	if strings.Contains(rec.Body.String(), "chan-bystander-0@pheme.test") {
+		t.Errorf("an unrelated user's email appeared in the channel listing: %s", rec.Body)
+	}
+}
+
+// A failed owner lookup costs the decoration, not the page.
+func TestAdminChannelListSurvivesAnOwnerLookupFailure(t *testing.T) {
+	db := store.NewMemory(nil)
+	admin := seedUser(t, db, "chan-degraded-admin@pheme.test", domain.RoleAdmin)
+	owner := seedUser(t, db, "chan-degraded-owner@pheme.test", domain.RoleUser)
+	if _, err := db.CreateChannel(context.Background(), domain.Channel{
+		PublicID: "pub-degraded", OwnerID: owner.ID, Name: "degraded",
+		Status: domain.ChannelActive, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	(&AdminHandler{Store: &failingUsersStore{Store: db}}).Register(mux)
+
+	rec := adminReq(mux, http.MethodGet, "/v1/admin/channels", admin.ID, "admin", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list channels with a failing user lookup = %d, want the list anyway: %s",
+			rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "degraded") {
+		t.Errorf("the channel is missing from the listing: %s", rec.Body)
+	}
+}

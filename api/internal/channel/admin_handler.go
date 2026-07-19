@@ -2,6 +2,7 @@ package channel
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -271,21 +272,26 @@ func (h *AdminHandler) listChannels(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not list channels")
 		return
 	}
-	users, err := h.Store.ListUsers(r.Context())
-	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "could not list channels")
-		return
+	// Only the owners of the channels on THIS page. This read every user on the server to attach an
+	// owner's address to a page of fifty, so an administrator opening the channel list paid for the
+	// entire user base — the same fault the channel member listing had.
+	ownerIDs := make([]string, 0, len(channels))
+	for _, c := range channels {
+		ownerIDs = append(ownerIDs, c.OwnerID)
 	}
-	emails := map[string]string{}
-	for _, u := range users {
-		emails[u.ID] = u.Email
+	owners, err := h.Store.UsersByIDs(r.Context(), ownerIDs)
+	if err != nil {
+		// The owner's address is a decoration on a list that is useful without it. It used to fail
+		// the whole request, so a hiccup reading users cost an administrator the channel list.
+		slog.Default().Warn("could not load channel owner emails", "channels", len(channels), "error", err)
+		owners = nil
 	}
 	out := make([]channelSummary, 0, len(channels))
 	for _, c := range channels {
 		if c.Status == "" {
 			c.Status = domain.ChannelActive
 		}
-		out = append(out, channelSummary{Channel: c, OwnerEmail: emails[c.OwnerID]})
+		out = append(out, channelSummary{Channel: c, OwnerEmail: owners[c.OwnerID].Email})
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"channels": out, "total": total, "page": page, "limit": limit})
 }
