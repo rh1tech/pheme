@@ -106,7 +106,14 @@ jobs:
       - name: Database logs on failure
         if: failure()
         run: |
-          echo "=== mongo ==="; docker logs "$MONGO_CONTAINER" 2>&1 | tail -40 || true
+          # The FATAL line first. A mongod crash dumps forty-odd stack frames after it, so a plain
+          # tail shows only the frames and never the reason — which is how two rounds of this got
+          # spent guessing.
+          echo "=== mongo: why it stopped ==="
+          docker logs "$MONGO_CONTAINER" 2>&1 \
+            | grep -iE 'fassert|invariant|abort|terminate|Fatal|out of memory|ENOSPC|WiredTiger error|shutting down|got signal|BadValue|exception' \
+            | tail -25 || true
+          echo "=== mongo: last 120 lines ==="; docker logs "$MONGO_CONTAINER" 2>&1 | tail -120 || true
           echo "=== mongo state ==="; docker inspect "$MONGO_CONTAINER" --format '{{.State.Status}} oomkilled={{.State.OOMKilled}} exit={{.State.ExitCode}}' || true
           echo "=== redis ==="; docker logs "$REDIS_CONTAINER" 2>&1 | tail -20 || true
           echo "=== host memory ==="; free -m || true
