@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
+
+// webPushConcurrency is how many push services this will talk to at once for a single
+// notification. Enough that a large group does not serialise into a long queue of round-trips;
+// small enough not to look like an attack to any one push service.
+const webPushConcurrency = 16
 
 // WebPushSender delivers notifications to browsers via the Web Push protocol
 // using VAPID authentication. A device's WebPushSub field holds the JSON
@@ -59,45 +65,88 @@ func (s *WebPushSender) send(ctx context.Context, n notification, devices []doma
 		return nil, err
 	}
 
-	results := make([]Result, 0, len(devices))
-	for _, d := range devices {
+	// Sent CONCURRENTLY, a bounded number at a time.
+	//
+	// This was a plain sequential loop: one HTTPS round-trip to a push service per device, each
+	// waiting for the last. A notification for a conversation of ten people with two devices each
+	// meant twenty round-trips end to end, inside a fifteen-second budget, while holding one of the
+	// process's sixty-four push slots the whole time. The slots are what the server drops
+	// notifications from when they run out, so the sequential loop was not just slow for one
+	// notification — it was the reason others got dropped.
+	//
+	// The bound matters as much as the concurrency: unbounded, a large group would open a
+	// connection per device to whichever push services its members use, which is how a sender
+	// arranges to be rate-limited by them.
+	results := make([]Result, len(devices))
+	sem := make(chan struct{}, webPushConcurrency)
+	var wg sync.WaitGroup
+
+	for i, d := range devices {
 		if d.WebPushSub == "" {
-			results = append(results, Result{DeviceID: d.ID, Status: domain.DeliverySkipped})
+			results[i] = Result{DeviceID: d.ID, Status: domain.DeliverySkipped}
 			continue
 		}
-		var sub webpush.Subscription
-		if err := json.Unmarshal([]byte(d.WebPushSub), &sub); err != nil {
-			results = append(results, Result{DeviceID: d.ID, Status: domain.DeliveryFailed, Error: "invalid subscription"})
-			continue
-		}
-		resp, err := webpush.SendNotificationWithContext(ctx, payload, &sub, &webpush.Options{
-			Subscriber:      s.subscriber,
-			VAPIDPublicKey:  s.vapidPublic,
-			VAPIDPrivateKey: s.vapidPrivate,
-			TTL:             n.TTL,
-			Urgency:         webpush.UrgencyHigh,
-		})
-		if err != nil {
-			results = append(results, Result{DeviceID: d.ID, Status: domain.DeliveryFailed, Error: err.Error()})
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		_ = resp.Body.Close()
-		if resp.StatusCode >= http.StatusBadRequest {
-			results = append(results, Result{
-				DeviceID: d.ID,
-				Status:   domain.DeliveryFailed,
-				Error:    fmt.Sprintf("push service returned %d: %s", resp.StatusCode, string(body)),
-				// 404 and 410 are the Web Push spec's way of saying the subscription is gone for
-				// good — the user cleared site data, or the browser dropped it. Every other status
-				// may be transient and must not cost the device its registration.
-				Gone: resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone,
-			})
-			continue
-		}
-		results = append(results, Result{DeviceID: d.ID, Status: domain.DeliverySent})
+		wg.Add(1)
+		go func(i int, d domain.Device) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results[i] = Result{DeviceID: d.ID, Status: domain.DeliveryFailed, Error: ctx.Err().Error()}
+				return
+			}
+			// Written by exactly one goroutine per index, read only after wg.Wait, so no lock is
+			// needed and none is taken on the hot path.
+			results[i] = s.sendOne(ctx, payload, n, d)
+		}(i, d)
 	}
+	wg.Wait()
+
 	return results, nil
+}
+
+// sendOne delivers to a single device and reports what happened to it.
+func (s *WebPushSender) sendOne(ctx context.Context, payload []byte, n notification, d domain.Device) Result {
+	// Each send gets its OWN copy of the payload, because the library takes ownership of the slice
+	// it is handed: internally it does bytes.NewBuffer(message) and then appends the encryption
+	// padding, which writes into the slice's spare capacity. Sharing one payload across concurrent
+	// sends is a data race on the caller's own buffer — the race detector catches it immediately —
+	// and worse, one send can be padding the bytes another is encrypting. Sequentially this was
+	// invisible, which is exactly why it survived into a concurrent version.
+	//
+	// A notification is a few hundred bytes, so the copy is not worth avoiding.
+	mine := make([]byte, len(payload))
+	copy(mine, payload)
+
+	var sub webpush.Subscription
+	if err := json.Unmarshal([]byte(d.WebPushSub), &sub); err != nil {
+		return Result{DeviceID: d.ID, Status: domain.DeliveryFailed, Error: "invalid subscription"}
+	}
+	resp, err := webpush.SendNotificationWithContext(ctx, mine, &sub, &webpush.Options{
+		Subscriber:      s.subscriber,
+		VAPIDPublicKey:  s.vapidPublic,
+		VAPIDPrivateKey: s.vapidPrivate,
+		TTL:             n.TTL,
+		Urgency:         webpush.UrgencyHigh,
+	})
+	if err != nil {
+		return Result{DeviceID: d.ID, Status: domain.DeliveryFailed, Error: err.Error()}
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	_ = resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		return Result{
+			DeviceID: d.ID,
+			Status:   domain.DeliveryFailed,
+			Error:    fmt.Sprintf("push service returned %d: %s", resp.StatusCode, string(body)),
+			// 404 and 410 are the Web Push spec's way of saying the subscription is gone for
+			// good — the user cleared site data, or the browser dropped it. Every other status
+			// may be transient and must not cost the device its registration.
+			Gone: resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone,
+		}
+	}
+	return Result{DeviceID: d.ID, Status: domain.DeliverySent}
 }
 
 var _ Sender = (*WebPushSender)(nil)
