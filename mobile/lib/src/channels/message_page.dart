@@ -110,7 +110,6 @@ class _MessagePageState extends ConsumerState<MessagePage> {
         // is why this is not simply always intrinsic.
         if (_expanded)
           Expanded(
-            flex: 3,
             child: _PostBody(
               message: message,
               expanded: true,
@@ -124,14 +123,24 @@ class _MessagePageState extends ConsumerState<MessagePage> {
             onToggle: () => setState(() => _expanded = true),
           ),
         const SizedBox(height: 8),
-        Expanded(
-          flex: _expanded ? 1 : 2,
-          child: _CommentsSection(
+        // Open, the comments give up their space entirely — the post takes everything down to the
+        // field you would reply in, which is what "full screen" meant. The field itself stays,
+        // because losing the ability to reply while reading is not part of that.
+        if (_expanded)
+          _CommentsSection(
             channelId: widget.channelId,
             messageId: widget.messageId,
             commentsAllowed: message.commentsAllowed,
+            showList: false,
+          )
+        else
+          Expanded(
+            child: _CommentsSection(
+              channelId: widget.channelId,
+              messageId: widget.messageId,
+              commentsAllowed: message.commentsAllowed,
+            ),
           ),
-        ),
       ],
     );
   }
@@ -277,11 +286,16 @@ class _CommentsSection extends ConsumerStatefulWidget {
     required this.channelId,
     required this.messageId,
     required this.commentsAllowed,
+    this.showList = true,
   });
 
   final String channelId;
   final String messageId;
   final bool commentsAllowed;
+
+  /// Whether the thread is shown. False while the post is open full-screen, where the composer is
+  /// all that remains of this section.
+  final bool showList;
 
   @override
   ConsumerState<_CommentsSection> createState() => _CommentsSectionState();
@@ -405,51 +419,64 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: widget.showList ? MainAxisSize.max : MainAxisSize.min,
       children: [
         // The comments scroll on their own, so the composer below stays put — the same
         // arrangement a chat has. They used to be part of one long page scroll with the post, so
         // the field you type into drifted off the bottom as the thread grew.
-        Expanded(
-          child: _loading
-              ? const Center(child: AdaptiveProgress())
-              : _comments.isEmpty
-              // "No comments yet. Be the first to comment." under a post that does not accept
-              // comments invites the reader to do something the screen will refuse.
-              ? (widget.commentsAllowed
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(
-                            l10n.t('comment.empty'),
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: scheme.onSurfaceVariant,
+        if (widget.showList)
+          Expanded(
+            child: _loading
+                ? const Center(child: AdaptiveProgress())
+                : _comments.isEmpty
+                // "No comments yet. Be the first to comment." under a post that does not accept
+                // comments invites the reader to do something the screen will refuse.
+                ? (widget.commentsAllowed
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Text(
+                              l10n.t('comment.empty'),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: scheme.onSurfaceVariant,
+                              ),
                             ),
                           ),
-                        ),
-                      )
-                    : const SizedBox.shrink())
-              : ListView(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                  children: [
-                    ..._comments.map(
-                      (c) => _CommentTile(
+                        )
+                      : const SizedBox.shrink())
+                : ListView.builder(
+                    // Reversed, like the chat and channel feeds. The server returns comments
+                    // newest-first, so a plain list put the newest at the TOP and opening a thread
+                    // showed its end. Reversed, index 0 draws at the bottom and the view starts
+                    // there — on the latest comment, with no scrolling to get to it.
+                    reverse: true,
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                    itemCount:
+                        _comments.length + (_nextCursor.isNotEmpty ? 1 : 0),
+                    itemBuilder: (context, i) {
+                      // The last index draws at the TOP of a reversed list, which is where older
+                      // comments belong.
+                      if (i >= _comments.length) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Center(
+                            child: AdaptiveButton.text(
+                              onPressed: _loadMore,
+                              child: Text(l10n.t('comment.loadMore')),
+                            ),
+                          ),
+                        );
+                      }
+                      final c = _comments[i];
+                      return _CommentTile(
                         comment: c,
                         canDelete: canModerate || c.userId == myId,
                         onDelete: () => _delete(c),
-                      ),
-                    ),
-                    if (_nextCursor.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: AdaptiveButton.text(
-                          onPressed: _loadMore,
-                          child: Text(l10n.t('comment.loadMore')),
-                        ),
-                      ),
-                  ],
-                ),
-        ),
+                      );
+                    },
+                  ),
+          ),
         // The same bar the channel composes a post with — rounded field, filled send button, and
         // the same rule along its top. A labelled "Comment" button beside a plain box was a form;
         // this is a place to say something.
@@ -592,63 +619,75 @@ class _CommentTile extends ConsumerWidget {
           ),
           const SizedBox(width: 8),
           Flexible(
-            child: GestureDetector(
-              onLongPress: canDelete ? onDelete : null,
-              child: Container(
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.sizeOf(context).width * 0.72,
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(context).width * 0.72,
+              ),
+              decoration: BoxDecoration(
+                color: bubble,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(4),
+                  topRight: Radius.circular(16),
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(16),
                 ),
-                decoration: BoxDecoration(
-                  color: bubble,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(4),
-                    topRight: Radius.circular(16),
-                    bottomLeft: Radius.circular(16),
-                    bottomRight: Radius.circular(16),
-                  ),
-                ),
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      label,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        color: scheme.primary,
-                      ),
+              ),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: scheme.primary,
                     ),
-                    const SizedBox(height: 2),
-                    Text(comment.body, style: const TextStyle(fontSize: 14)),
-                    const SizedBox(height: 2),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Spacer(),
-                        Text(
-                          bubbleTime(l10n, comment.createdAt),
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(comment.body, style: const TextStyle(fontSize: 14)),
+                  const SizedBox(height: 2),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Spacer(),
+                      Text(
+                        bubbleTime(l10n, comment.createdAt),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      // A menu, not a mystery. This was a bare "..." with a long press behind
+                      // it: the glyph named no action and the gesture was invisible, so the only
+                      // way to discover deleting was to try holding the thing you wanted gone.
+                      if (canDelete) ...[
+                        const SizedBox(width: 2),
+                        SizedBox(
+                          height: 18,
+                          width: 22,
+                          child: PopupMenuButton<String>(
+                            padding: EdgeInsets.zero,
+                            iconSize: 15,
+                            tooltip: l10n.t('comment.menu'),
+                            icon: Icon(
+                              Icons.more_horiz,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            onSelected: (_) => onDelete(),
+                            itemBuilder: (context) => [
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Text(l10n.t('common.delete')),
+                              ),
+                            ],
                           ),
                         ),
-                        // Deleting is a long press on the bubble, as it is on a chat message —
-                        // a delete icon sitting permanently beside every comment is a button
-                        // pointed at the reader's own words.
-                        if (canDelete) ...[
-                          const SizedBox(width: 6),
-                          Icon(
-                            Icons.more_horiz,
-                            size: 14,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ],
                       ],
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),

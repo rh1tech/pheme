@@ -161,6 +161,7 @@ const Map<String, String> enStrings = {
 
   // comments
   'comment.title': 'Comments',
+  'comment.menu': 'Comment options',
   'comment.placeholder': 'Write a comment…',
   'comment.post': 'Comment',
   'comment.posted': 'Comment posted',

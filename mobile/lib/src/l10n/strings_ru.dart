@@ -159,6 +159,7 @@ const Map<String, String> ruStrings = {
 
   // comments
   'comment.title': 'Комментарии',
+  'comment.menu': 'Действия с комментарием',
   'comment.placeholder': 'Написать комментарий…',
   'comment.post': 'Комментировать',
   'comment.posted': 'Комментарий добавлен',
