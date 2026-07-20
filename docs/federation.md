@@ -225,8 +225,36 @@ Each stage ships and is useful before the next one starts.
   commit authenticity is inherently the hub's job, which is F5. MIMI's
   SemiPrivateMessage (leaks less than PublicMessage) is the eventual target but
   depends on a younger draft OpenMLS 0.8 may not implement.
-- **F5 — MLS hub model.** Hub assignment, follower proxying, the signed ordering
-  chain from Decision 2, cross-host key-package claim, credential migration.
+- **F5 — MLS hub model.** *Not started — this is the centerpiece, and unlike
+  F0–F4 it does not decompose into a standalone increment: its parts are
+  interdependent, and all of them are live cryptography. It wants a dedicated
+  run with a full context budget, not the tail of another stage.* Execution
+  order for that run:
+  1. **Qualified credentials (F5a).** `Client::new` takes the host domain; the
+     MLS credential becomes `mimi://domain/d/<user>/<device>` (a form whose user
+     half is itself a `mimi://domain/u/<user>`), and `user_of` parses it back to
+     the qualified user. With no real users this is a CLEAN BREAK — no
+     mixed-format groups, none of the zombie-KeyPackage danger that made it
+     unsafe before (see Decision 1). Rebuild the WASM and the mobile FFI; the
+     E2E suite is the proof that qualified credentials still encrypt/decrypt.
+     Foundational: every cross-host member is named by one of these.
+  2. **Signed ordering chain (F5b, Decision 2).** Each commit the hub accepts
+     gets `(seq, prevHash, hash=H(prevHash‖seq‖commit), hubSig)`, stored with the
+     epoch advance in the same atomic CAS (`CommitMLSGroup`). The hub key is F0's
+     host key. A follower verifies the chain links and the signature. Build this
+     WITH its consumer (step 4), not before — a chain nothing verifies is
+     speculative.
+  3. **Cross-host key-package claim + remote membership (F5c).** S2S endpoints so
+     a hub can fetch a remote user's key packages (extending F2's signed
+     transport) and resolve a remote member — the `chat.go` `UserByID` gate that
+     rejects remote users today becomes a nodelist-aware lookup.
+  4. **Hub commit-proxying (F5d).** A follower's member builds a commit locally
+     and posts it to its own host, which forwards it to the conversation's hub
+     over S2S; the hub runs the F4 epoch check, the F5b chain, and the CAS, then
+     fans the accepted commit back to every participant host. This is where F5b's
+     chain gets its verifier and the whole thing becomes real.
+
+  Before starting, write the hub-migration ADR Decision 5 calls for.
 - **F6 — Ordering rework.** Hub-assigned sequence numbers replacing wall-clock
   ordering. Receipts stop being timestamp watermarks — `domain.go:506-521` is the
   deepest single-clock assumption in the codebase, and two hosts' clocks skewing
