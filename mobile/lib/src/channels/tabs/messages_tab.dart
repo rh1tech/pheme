@@ -12,6 +12,7 @@ import '../../widgets/adaptive/adaptive.dart';
 import '../../widgets/adaptive/adaptive_search_field.dart';
 import '../../widgets/error_view.dart';
 import '../../chat/chat_time.dart';
+import '../../chat/widgets/chat_wallpaper.dart';
 import '../../chat/widgets/call_event_bubble.dart';
 import '../../widgets/message_carousel.dart';
 
@@ -41,6 +42,15 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
   /// needs no scrolling at all — the controller is here for the load-more button's sake and for
   /// anything later that wants to jump.
   final _scroll = ScrollController();
+
+  /// Guards the automatic load, for the same reason the comments do: a fast flick to the top would
+  /// otherwise fire several requests for the same cursor and the feed would gain each page twice.
+  void _onScroll() {
+    if (!_scroll.hasClients || _loadingMore || _cursor.isEmpty) return;
+    final pos = _scroll.position;
+    if (pos.pixels >= pos.maxScrollExtent - 300) _loadMore();
+  }
+
   List<Message> _messages = const [];
   String _cursor = '';
   String _activeQuery = '';
@@ -51,6 +61,7 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onScroll);
     _load();
   }
 
@@ -215,51 +226,48 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
         ),
       );
     }
-    return ListView.builder(
-      // Reversed, like the chat feed: the newest post sits at the BOTTOM and the channel opens on
-      // it. It used to render newest-first top-down, so opening a channel showed the latest post at
-      // the top of the screen and reading forward meant scrolling up — the opposite of every other
-      // message list in the app.
-      reverse: true,
-      controller: _scroll,
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-      itemCount: _messages.length + (_cursor.isNotEmpty ? 1 : 0),
-      itemBuilder: (context, i) {
-        // In a reversed list the last index draws at the TOP, which is where "load older" belongs.
-        if (i >= _messages.length) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Center(
-              child: _loadingMore
-                  ? const AdaptiveProgress(size: 24)
-                  : AdaptiveButton.outlined(
-                      onPressed: _loadMore,
-                      child: Text(l10n.t('channel.loadMore')),
-                    ),
-            ),
+    return ChatWallpaper(
+      child: ListView.builder(
+        // Reversed, like the chat feed: the newest post sits at the BOTTOM and the channel opens on
+        // it. It used to render newest-first top-down, so opening a channel showed the latest post at
+        // the top of the screen and reading forward meant scrolling up — the opposite of every other
+        // message list in the app.
+        reverse: true,
+        controller: _scroll,
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        itemCount: _messages.length + (_cursor.isNotEmpty ? 1 : 0),
+        itemBuilder: (context, i) {
+          // In a reversed list the last index draws at the TOP, which is where "load older" belongs.
+          if (i >= _messages.length) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              // Older posts arrive on their own now; this says they are coming rather than asking.
+              child: const Center(child: AdaptiveProgress(size: 22)),
+            );
+          }
+
+          final message = _messages[i];
+          // The array runs newest-first and the list is reversed, so index+1 is the post ABOVE this
+          // one on screen — the older one. A separator belongs above the first post of a day, which
+          // means comparing against that older neighbour. Comparing against the newer one put
+          // "Today" underneath the only message of today.
+          final older = i + 1 < _messages.length ? _messages[i + 1] : null;
+          final day = messageDay(message.createdAt);
+          final olderDay = older == null ? null : messageDay(older.createdAt);
+          final startsDay =
+              day != null && (olderDay == null || day != olderDay);
+
+          return Column(
+            children: [
+              if (startsDay) DateSeparator(day: day),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _MessageCard(message: message),
+              ),
+            ],
           );
-        }
-
-        final message = _messages[i];
-        // The array runs newest-first and the list is reversed, so index+1 is the post ABOVE this
-        // one on screen — the older one. A separator belongs above the first post of a day, which
-        // means comparing against that older neighbour. Comparing against the newer one put
-        // "Today" underneath the only message of today.
-        final older = i + 1 < _messages.length ? _messages[i + 1] : null;
-        final day = messageDay(message.createdAt);
-        final olderDay = older == null ? null : messageDay(older.createdAt);
-        final startsDay = day != null && (olderDay == null || day != olderDay);
-
-        return Column(
-          children: [
-            if (startsDay) DateSeparator(day: day),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: _MessageCard(message: message),
-            ),
-          ],
-        );
-      },
+        },
+      ),
     );
   }
 }
@@ -281,8 +289,9 @@ class _MessageCard extends StatelessWidget {
     // The same colour an INCOMING chat bubble uses, taken from MessageBubble rather than guessed:
     // surface is the page itself in some themes, which drew a bubble that could not be seen
     // against it. A channel post is incoming by definition — nobody reading it wrote it.
-    final dark = theme.brightness == Brightness.dark;
-    final bubble = dark ? const Color(0xFF1F2126) : Colors.white;
+    // The web's bubble colour and shadow. A flat rectangle on a patterned background reads as a
+    // hole punched in the wallpaper; the shadow is what puts it on top.
+    final bubble = BubbleStyle.background(context);
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -294,6 +303,7 @@ class _MessageCard extends StatelessWidget {
         ),
         child: Material(
           color: bubble,
+          elevation: 0,
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(4),
             topRight: Radius.circular(16),

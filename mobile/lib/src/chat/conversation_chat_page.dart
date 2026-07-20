@@ -33,6 +33,7 @@ import 'receipts.dart';
 import 'safety_number_sheet.dart';
 import 'widgets/call_event_bubble.dart';
 import 'widgets/conversation_avatar.dart';
+import 'widgets/chat_wallpaper.dart';
 import 'widgets/message_bubble.dart';
 import 'widgets/photo_grid.dart';
 import 'widgets/reply_quote.dart';
@@ -433,25 +434,29 @@ class _ChatViewState extends ConsumerState<_ChatView> {
       body: Column(
         children: [
           Expanded(
-            child: Stack(
-              children: [
-                _Feed(
-                  feed: feed,
-                  conversation: conversation,
-                  myUserId: myUserId,
-                  scroll: _scroll,
-                  onReply: _startReply,
-                ),
-                Positioned(
-                  right: 12,
-                  bottom: 12,
-                  child: _JumpToBottom(
-                    visible: !_atBottom,
-                    unseen: _unseen,
-                    onPressed: _scrollToBottom,
+            // The wallpaper the web draws, behind the feed rather than around it, so the jump-to-
+            // bottom button and the unseen counter still float above the messages.
+            child: ChatWallpaper(
+              child: Stack(
+                children: [
+                  _Feed(
+                    feed: feed,
+                    conversation: conversation,
+                    myUserId: myUserId,
+                    scroll: _scroll,
+                    onReply: _startReply,
                   ),
-                ),
-              ],
+                  Positioned(
+                    right: 12,
+                    bottom: 12,
+                    child: _JumpToBottom(
+                      visible: !_atBottom,
+                      unseen: _unseen,
+                      onPressed: _scrollToBottom,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           _Composer(

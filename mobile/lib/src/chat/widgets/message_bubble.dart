@@ -8,6 +8,8 @@
 import 'package:flutter/cupertino.dart' show cupertinoTextSelectionControls;
 import 'package:flutter/material.dart';
 
+import 'chat_wallpaper.dart';
+
 import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
 import '../../widgets/adaptive/platform.dart';
@@ -75,9 +77,11 @@ class MessageBubble extends StatelessWidget {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
 
+    // Incoming takes the shared value; own keeps its violet tint. Both now sit on a patterned
+    // background, which is what the shadow below is for.
     final background = isOwn
         ? (dark ? const Color(0x38A888F5) : const Color(0x1F7740EE))
-        : (dark ? const Color(0xFF1F2126) : Colors.white);
+        : BubbleStyle.background(context);
 
     // The tail corner belongs to the last bubble of the run. Mid-run bubbles keep it rounded, so the
     // run reads as one block.
@@ -108,21 +112,13 @@ class MessageBubble extends StatelessWidget {
           // column to its widest real child (the text), and the timestamp right-aligns within that.
           decoration: BoxDecoration(
             color: background,
+            boxShadow: BubbleStyle.shadow(context),
             borderRadius: BorderRadius.only(
               topLeft: _round,
               topRight: _round,
               bottomLeft: isOwn ? _round : tailCorner,
               bottomRight: isOwn ? tailCorner : _round,
             ),
-            boxShadow: dark
-                ? null
-                : const [
-                    BoxShadow(
-                      color: Color(0x0F141028),
-                      blurRadius: 2,
-                      offset: Offset(0, 1),
-                    ),
-                  ],
           ),
           child: IntrinsicWidth(
             child: Column(

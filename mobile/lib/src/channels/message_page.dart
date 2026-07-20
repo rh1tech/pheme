@@ -6,6 +6,8 @@ import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../data/app_providers.dart';
 import '../chat/chat_time.dart';
+import '../chat/widgets/chat_wallpaper.dart';
+import '../chat/widgets/call_event_bubble.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../widgets/adaptive/adaptive.dart';
@@ -117,10 +119,20 @@ class _MessagePageState extends ConsumerState<MessagePage> {
             ),
           )
         else
-          _PostBody(
-            message: message,
-            expanded: false,
-            onToggle: () => setState(() => _expanded = true),
+          // Bounds the collapsed post ENTIRELY — pictures, date, text and control together. Capping
+          // only the text left a post with a photograph taking half the screen, which is the space
+          // the comments were supposed to have.
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.35,
+            ),
+            child: SingleChildScrollView(
+              child: _PostBody(
+                message: message,
+                expanded: false,
+                onToggle: () => setState(() => _expanded = true),
+              ),
+            ),
           ),
         const SizedBox(height: 8),
         // Open, the comments give up their space entirely — the post takes everything down to the
@@ -213,7 +225,7 @@ class _PostBody extends StatelessWidget {
     ColorScheme scheme,
   ) {
     final l10n = context.l10n;
-    final cap = MediaQuery.sizeOf(context).height * 0.3;
+    final cap = MediaQuery.sizeOf(context).height * 0.22;
     return LayoutBuilder(
       builder: (context, constraints) {
         final painter = TextPainter(
@@ -305,17 +317,25 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
   final _input = TextEditingController();
   List<Comment> _comments = const [];
   String _nextCursor = '';
+
+  /// Guards the automatic load. Without it a fast flick to the top fires several loads for the
+  /// same cursor before the first returns, and the thread gains each page two or three times.
+  bool _loadingMore = false;
+
+  final _scroll = ScrollController();
   bool _loading = true;
   bool _posting = false;
 
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onScroll);
     _load();
   }
 
   @override
   void dispose() {
+    _scroll.dispose();
     _input.dispose();
     super.dispose();
   }
@@ -338,7 +358,19 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
     }
   }
 
+  /// Older comments load on reaching the top, which in a reversed list is the far end.
+  ///
+  /// 300px of warning rather than the exact edge, so the next page is usually there before the
+  /// reader arrives and the thread does not visibly stall.
+  void _onScroll() {
+    if (!_scroll.hasClients || _loadingMore || _nextCursor.isEmpty) return;
+    final pos = _scroll.position;
+    if (pos.pixels >= pos.maxScrollExtent - 300) _loadMore();
+  }
+
   Future<void> _loadMore() async {
+    if (_loadingMore || _nextCursor.isEmpty) return;
+    setState(() => _loadingMore = true);
     try {
       final page = await ref
           .read(repositoryProvider)
@@ -351,6 +383,7 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
       setState(() {
         _comments = [..._comments, ...page.comments];
         _nextCursor = page.nextCursor;
+        _loadingMore = false;
       });
     } catch (e) {
       if (mounted) {
@@ -426,56 +459,75 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
         // the field you type into drifted off the bottom as the thread grew.
         if (widget.showList)
           Expanded(
-            child: _loading
-                ? const Center(child: AdaptiveProgress())
-                : _comments.isEmpty
-                // "No comments yet. Be the first to comment." under a post that does not accept
-                // comments invites the reader to do something the screen will refuse.
-                ? (widget.commentsAllowed
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Text(
-                              l10n.t('comment.empty'),
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: scheme.onSurfaceVariant,
+            child: ChatWallpaper(
+              child: _loading
+                  ? const Center(child: AdaptiveProgress())
+                  : _comments.isEmpty
+                  // "No comments yet. Be the first to comment." under a post that does not accept
+                  // comments invites the reader to do something the screen will refuse.
+                  ? (widget.commentsAllowed
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Text(
+                                l10n.t('comment.empty'),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: scheme.onSurfaceVariant,
+                                ),
                               ),
                             ),
-                          ),
-                        )
-                      : const SizedBox.shrink())
-                : ListView.builder(
-                    // Reversed, like the chat and channel feeds. The server returns comments
-                    // newest-first, so a plain list put the newest at the TOP and opening a thread
-                    // showed its end. Reversed, index 0 draws at the bottom and the view starts
-                    // there — on the latest comment, with no scrolling to get to it.
-                    reverse: true,
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                    itemCount:
-                        _comments.length + (_nextCursor.isNotEmpty ? 1 : 0),
-                    itemBuilder: (context, i) {
-                      // The last index draws at the TOP of a reversed list, which is where older
-                      // comments belong.
-                      if (i >= _comments.length) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: Center(
-                            child: AdaptiveButton.text(
-                              onPressed: _loadMore,
-                              child: Text(l10n.t('comment.loadMore')),
+                          )
+                        : const SizedBox.shrink())
+                  : ListView.builder(
+                      // Reversed, like the chat and channel feeds. The server returns comments
+                      // newest-first, so a plain list put the newest at the TOP and opening a thread
+                      // showed its end. Reversed, index 0 draws at the bottom and the view starts
+                      // there — on the latest comment, with no scrolling to get to it.
+                      reverse: true,
+                      controller: _scroll,
+                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                      itemCount:
+                          _comments.length + (_nextCursor.isNotEmpty ? 1 : 0),
+                      itemBuilder: (context, i) {
+                        // The last index draws at the TOP of a reversed list, which is where older
+                        // comments belong.
+                        if (i >= _comments.length) {
+                          // A spinner rather than a button: older comments now arrive on their own
+                          // when the reader reaches the top, so this reports that they are coming
+                          // rather than asking permission to fetch them.
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Center(child: AdaptiveProgress(size: 20)),
+                          );
+                        }
+                        final c = _comments[i];
+                        // The same day badge the chat feed draws. Reversed list, so the comment
+                        // ABOVE this one on screen is the older one at index+1, and the badge
+                        // belongs above the first comment of each day.
+                        final older = i + 1 < _comments.length
+                            ? _comments[i + 1]
+                            : null;
+                        final day = messageDay(c.createdAt);
+                        final olderDay = older == null
+                            ? null
+                            : messageDay(older.createdAt);
+                        final startsDay =
+                            day != null &&
+                            (olderDay == null || day != olderDay);
+                        return Column(
+                          children: [
+                            if (startsDay) DateSeparator(day: day),
+                            _CommentTile(
+                              comment: c,
+                              canDelete: canModerate || c.userId == myId,
+                              onDelete: () => _delete(c),
                             ),
-                          ),
+                          ],
                         );
-                      }
-                      final c = _comments[i];
-                      return _CommentTile(
-                        comment: c,
-                        canDelete: canModerate || c.userId == myId,
-                        onDelete: () => _delete(c),
-                      );
-                    },
-                  ),
+                      },
+                    ),
+            ),
           ),
         // The same bar the channel composes a post with — rounded field, filled send button, and
         // the same rule along its top. A labelled "Comment" button beside a plain box was a form;
@@ -593,9 +645,7 @@ class _CommentTile extends ConsumerWidget {
     final l10n = context.l10n;
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final dark = theme.brightness == Brightness.dark;
-    // The incoming-bubble colour, the same value MessageBubble uses.
-    final bubble = dark ? const Color(0xFF1F2126) : Colors.white;
+    final bubble = BubbleStyle.background(context);
 
     final label = comment.author.label(l10n.t('comment.anonymous'));
     final avatarId = comment.author.avatarId;
