@@ -14,16 +14,15 @@ import 'package:flutter_test/flutter_test.dart';
 /// exist so a Dio upgrade that changed the merge strategy fails here instead.
 void main() {
   Uri urlFor(String baseUrl, String path, {Map<String, dynamic>? query}) =>
-      RequestOptions(
-        baseUrl: baseUrl,
-        path: path,
-        queryParameters: query,
-      ).uri;
+      RequestOptions(baseUrl: baseUrl, path: path, queryParameters: query).uri;
 
   group('a base URL carrying a path prefix', () {
     test('keeps the prefix in front of the API path', () {
       expect(
-        urlFor('https://host.example/a7f3c91e4b2d', '/v1/auth/login').toString(),
+        urlFor(
+          'https://host.example/a7f3c91e4b2d',
+          '/v1/auth/login',
+        ).toString(),
         'https://host.example/a7f3c91e4b2d/v1/auth/login',
       );
     });

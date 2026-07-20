@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meridian Brass Quintet</title>
+<style>
+  :root { --ink:#f2efe9; --bg:#17161a; --panel:#201f24; --muted:#a49c92; --brass:#c9a227; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:16px/1.7 "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  .wrap { max-width:48rem; margin:0 auto; padding:3rem 1.25rem 4rem; }
+  h1 { font-size:2rem; margin:0; letter-spacing:.08em; text-transform:uppercase; }
+  .rule { width:3rem; height:2px; background:var(--brass); margin:1rem 0 1.5rem; }
+  .lede { color:var(--muted); font-size:1.05rem; max-width:38rem; }
+  h2 { font-size:.8rem; letter-spacing:.14em; text-transform:uppercase;
+       color:var(--brass); margin:2.5rem 0 .75rem; }
+  .date { display:flex; gap:1rem; padding:.8rem 0; border-bottom:1px solid #2e2c33;
+          align-items:baseline; flex-wrap:wrap; }
+  .date time { color:var(--brass); font-variant-numeric:tabular-nums; min-width:7rem;
+               font-size:.9rem; }
+  .date .where { color:var(--muted); font-size:.9rem; }
+  .players { display:grid; grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));
+             gap:.6rem 1.5rem; padding:0; list-style:none; margin:0; }
+  .players li { padding:.5rem 0; border-bottom:1px solid #2e2c33; font-size:.95rem; }
+  .players span { display:block; color:var(--muted); font-size:.8rem; }
+  blockquote { margin:1.5rem 0; padding-left:1.1rem; border-left:2px solid var(--brass);
+               color:var(--muted); font-style:italic; }
+  footer { margin-top:3rem; color:var(--muted); font-size:.85rem; }
+  a { color:var(--brass); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Meridian Brass</h1>
+  <div class="rule"></div>
+  <p class="lede">A quintet playing repertoire from Gabrieli to the present day,
+  with a particular fondness for the awkward middle ground where neither the
+  church nor the concert hall quite knows what to do with us.</p>
+
+  <h2>Coming up</h2>
+  <div class="date"><time>14 March</time><span>Renaissance and Now</span>
+    <span class="where">St Cuthbert's, evening</span></div>
+  <div class="date"><time>2 April</time><span>Lunchtime recital</span>
+    <span class="where">Guildhall, free entry</span></div>
+  <div class="date"><time>19 April</time><span>Ewald &amp; Ligeti</span>
+    <span class="where">Assembly Rooms</span></div>
+  <div class="date"><time>7 June</time><span>Open-air programme</span>
+    <span class="where">Botanic Gardens</span></div>
+
+  <h2>Players</h2>
+  <ul class="players">
+    <li>Ines Rahal <span>Trumpet I</span></li>
+    <li>Tomas Weir <span>Trumpet II</span></li>
+    <li>Marged Ellis <span>Horn</span></li>
+    <li>Aurelio Banks <span>Trombone</span></li>
+    <li>Nkechi Oduya <span>Tuba</span></li>
+  </ul>
+
+  <h2>Bookings</h2>
+  <p>We play weddings, civic occasions and the occasional funeral. A quintet
+  needs about four square metres and, indoors, no amplification. We are happy
+  to work to a programme you choose.</p>
+  <blockquote>"They played for forty minutes in the rain and nobody left."</blockquote>
+
+  <footer>
+    <a href="mailto:bookings@example.com">bookings@example.com</a> &middot;
+    Recordings available on request
+  </footer>
+</div>
+</body>
+</html>

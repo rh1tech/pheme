@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../channels/qr_scanner_page.dart';
 import '../core/app_config.dart';
 import '../core/providers.dart';
 import '../core/snackbar.dart';
@@ -86,6 +87,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   void dispose() {
     _baseUrl.dispose();
     super.dispose();
+  }
+
+  /// Scans a server URL off a QR code and saves it.
+  ///
+  /// A self-hosted Pheme server is reached at an unlisted path prefix —
+  /// `https://host.example/a7f3c91e4b2d` — which is long, case-sensitive and
+  /// meaningless, so typing it off a screen is exactly the sort of thing people
+  /// get wrong once and give up on. The self-host kit prints this QR for the
+  /// operator to hand out (see deploy/self-host).
+  ///
+  /// Scanned raw: unlike a channel code there is no `ref` to extract, and a
+  /// query parameter in a server URL is part of the address.
+  Future<void> _scanBaseUrl() async {
+    final l10n = context.l10n;
+    final scanned = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => QrScannerPage(
+          raw: true,
+          instruction: l10n.t('settings.serverScanHint'),
+        ),
+      ),
+    );
+    if (scanned == null || scanned.isEmpty || !mounted) return;
+    _baseUrl.text = scanned;
+    // Validation lives in _saveBaseUrl, so a QR carrying something that is not a
+    // server URL is refused the same way a typo is.
+    await _saveBaseUrl();
   }
 
   Future<void> _saveBaseUrl() async {
@@ -277,9 +306,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     onSubmitted: (_) => _saveBaseUrl(),
                   ),
                   const SizedBox(height: 12),
-                  AdaptiveButton.filled(
-                    onPressed: _saveBaseUrl,
-                    child: Text(l10n.t('common.save')),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: AdaptiveButton.filled(
+                          onPressed: _saveBaseUrl,
+                          child: Text(l10n.t('common.save')),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      AdaptiveButton(
+                        onPressed: _scanBaseUrl,
+                        child: Text(l10n.t('settings.serverScan')),
+                      ),
+                    ],
                   ),
                 ],
               ),

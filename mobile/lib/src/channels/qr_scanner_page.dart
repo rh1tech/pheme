@@ -16,10 +16,20 @@ String extractRef(String raw) {
   return trimmed;
 }
 
-/// Full-screen camera scanner. Pops with the extracted join reference (a
-/// [String]) on the first decoded barcode, or null when dismissed.
+/// Full-screen camera scanner. Pops with the decoded [String] on the first
+/// barcode, or null when dismissed.
+///
+/// By default the value is run through [extractRef], which is what joining a
+/// channel wants. Set [raw] to take the scanned text exactly as it was encoded
+/// — a self-hosted server URL is scanned that way, since a `ref` parameter in
+/// one would be an ordinary part of the address rather than a join reference.
 class QrScannerPage extends StatefulWidget {
-  const QrScannerPage({super.key});
+  const QrScannerPage({super.key, this.raw = false, this.instruction});
+
+  final bool raw;
+
+  /// Overrides the on-screen prompt, which otherwise talks about channels.
+  final String? instruction;
 
   @override
   State<QrScannerPage> createState() => _QrScannerPageState();
@@ -34,7 +44,9 @@ class _QrScannerPageState extends State<QrScannerPage> {
       final value = barcode.rawValue;
       if (value != null && value.isNotEmpty) {
         _handled = true;
-        Navigator.of(context).pop(extractRef(value));
+        Navigator.of(
+          context,
+        ).pop(widget.raw ? value.trim() : extractRef(value));
         return;
       }
     }
@@ -78,7 +90,7 @@ class _QrScannerPageState extends State<QrScannerPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
                   child: Text(
-                    l10n.t('scan.instruction'),
+                    widget.instruction ?? l10n.t('scan.instruction'),
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Colors.white,

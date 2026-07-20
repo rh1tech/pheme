@@ -247,6 +247,9 @@ const Map<String, String> enStrings = {
   'settings.serverUrlHint': 'http://10.0.2.2:8080',
   'settings.serverSaved': 'Server URL saved',
   'settings.serverInvalid': 'Enter a valid http(s) URL',
+  'settings.serverScan': 'Scan',
+  'settings.serverScanHint':
+      'Point your camera at the QR code your server operator gave you.',
   'settings.device': 'This device',
   'settings.deviceRegistered': 'Registered for push notifications',
   'settings.deviceNotRegistered': 'Not registered for push notifications',

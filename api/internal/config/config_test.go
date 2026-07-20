@@ -216,3 +216,39 @@ func TestLoadDefaultJWTSecretIsObviouslyInsecure(t *testing.T) {
 			"for a configured one", cfg.JWTSecret)
 	}
 }
+
+// An unset PHEME_CORS_ORIGINS falls back to the Vite dev server so `make dev`
+// works untouched.
+func TestCORSOriginsDefaultToTheDevServerWhenUnset(t *testing.T) {
+	cfg := Load()
+	if len(cfg.CORSOrigins) != 1 || cfg.CORSOrigins[0] != "http://localhost:5173" {
+		t.Errorf("CORSOrigins = %v, want the dev server", cfg.CORSOrigins)
+	}
+}
+
+// Set-but-empty must mean "no browser origin may call this API", NOT "use the
+// default". This is not a hypothetical distinction: compose substitutes an
+// unset variable as the empty string, so `PHEME_CORS_ORIGINS: ${PHEME_WEB_ORIGIN}`
+// on a mobile-only instance arrives as "". Falling back there allowed the
+// development origin on a production instance, and suppressed the startup
+// warning that exists to catch a stack.env missing the variable.
+func TestCORSOriginsSetButEmptyMeansNoneNotDefault(t *testing.T) {
+	t.Setenv("PHEME_CORS_ORIGINS", "")
+	if got := Load().CORSOrigins; len(got) != 0 {
+		t.Errorf("CORSOrigins = %v, want empty when the variable is set to the empty string", got)
+	}
+}
+
+func TestCORSOriginsParseAListAndLowercase(t *testing.T) {
+	t.Setenv("PHEME_CORS_ORIGINS", "https://A.example , https://b.example")
+	got := Load().CORSOrigins
+	want := []string{"https://a.example", "https://b.example"}
+	if len(got) != len(want) {
+		t.Fatalf("CORSOrigins = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("CORSOrigins[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

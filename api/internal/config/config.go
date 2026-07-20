@@ -217,11 +217,19 @@ func envList(key string) []string {
 	return envListDefault(key, "")
 }
 
-// envListDefault is envList with a fallback used when the variable is unset or
-// empty. The fallback runs through the same parsing, so it may itself be a list.
+// envListDefault is envList with a fallback used when the variable is UNSET.
+// The fallback runs through the same parsing, so it may itself be a list.
+//
+// Set-but-empty is honoured as an empty list rather than falling back. The two
+// are different intentions, and conflating them is not theoretical: compose
+// substitutes an unset variable as the empty string, so
+// `PHEME_CORS_ORIGINS: ${PHEME_WEB_ORIGIN}` on an instance that serves no web
+// app arrives here as "". Treating that as "unset" silently allowed the
+// development origin on a production instance and suppressed the startup
+// warning written for exactly that case.
 func envListDefault(key, def string) []string {
 	raw, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(raw) == "" {
+	if !ok {
 		raw = def
 	}
 	var out []string

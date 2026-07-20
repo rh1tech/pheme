@@ -246,6 +246,9 @@ const Map<String, String> ruStrings = {
   'settings.serverUrlHint': 'http://10.0.2.2:8080',
   'settings.serverSaved': 'URL сервера сохранён',
   'settings.serverInvalid': 'Введите корректный http(s) URL',
+  'settings.serverScan': 'Сканировать',
+  'settings.serverScanHint':
+      'Наведите камеру на QR-код, который вам дал администратор сервера.',
   'settings.device': 'Это устройство',
   'settings.deviceRegistered': 'Зарегистрировано для push-уведомлений',
   'settings.deviceNotRegistered': 'Не зарегистрировано для push-уведомлений',
