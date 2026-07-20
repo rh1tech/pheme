@@ -109,9 +109,10 @@ func main() {
 		Blob:      blobs,
 		Admin:     &channel.AdminHandler{Store: db},
 		Chat: &chat.Handler{
-			Store: db,
-			Live:  bus,
-			Push:  pusher,
+			Store:      db,
+			Live:       bus,
+			HostDomain: cfg.HostDomain,
+			Push:       pusher,
 			// The same blob store the channel images use. What it holds here is ciphertext
 			// the server cannot open — the key is inside the encrypted message.
 			Blobs: blobs,

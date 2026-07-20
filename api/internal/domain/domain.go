@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/rh1tech/pheme/api/internal/ident"
 )
 
 // SubscriptionMode controls who may subscribe a device to a channel.
@@ -175,18 +177,22 @@ func (p NotificationPrivacy) ShowsPreview() bool {
 // processed image in the blob store (served via the public GET /v1/images/{id}).
 // NotificationPrivacy is what this user's own devices may show on a lock screen.
 type User struct {
-	ID            string     `bson:"_id,omitempty" json:"id"`
-	Email         string     `bson:"email" json:"email"`
-	PasswordHash  string     `bson:"passwordHash" json:"-"`
-	Role          Role       `bson:"role" json:"role"`
-	Status        UserStatus `bson:"status" json:"status"`
-	Username      string     `bson:"username,omitempty" json:"username,omitempty"`
-	UsernameLower string     `bson:"usernameLower,omitempty" json:"-"`
-	DisplayName   string     `bson:"displayName,omitempty" json:"displayName,omitempty"`
-	Bio           string     `bson:"bio,omitempty" json:"bio,omitempty"`
-	Phone         string     `bson:"phone,omitempty" json:"phone,omitempty"`
-	Website       string     `bson:"website,omitempty" json:"website,omitempty"`
-	AvatarID      string     `bson:"avatarId,omitempty" json:"avatarId,omitempty"`
+	ID           string     `bson:"_id,omitempty" json:"id"`
+	Email        string     `bson:"email" json:"email"`
+	PasswordHash string     `bson:"passwordHash" json:"-"`
+	Role         Role       `bson:"role" json:"role"`
+	Status       UserStatus `bson:"status" json:"status"`
+	// Domain is the host this account belongs to. EMPTY MEANS LOCAL — this
+	// server — so every account that predates federation is already correct and
+	// needs no backfill. A remote account carries the peer's domain.
+	Domain        string `bson:"domain,omitempty" json:"domain,omitempty"`
+	Username      string `bson:"username,omitempty" json:"username,omitempty"`
+	UsernameLower string `bson:"usernameLower,omitempty" json:"-"`
+	DisplayName   string `bson:"displayName,omitempty" json:"displayName,omitempty"`
+	Bio           string `bson:"bio,omitempty" json:"bio,omitempty"`
+	Phone         string `bson:"phone,omitempty" json:"phone,omitempty"`
+	Website       string `bson:"website,omitempty" json:"website,omitempty"`
+	AvatarID      string `bson:"avatarId,omitempty" json:"avatarId,omitempty"`
 	// Empty means the account predates the setting and behaves as sender; see Effective.
 	// New accounts get an explicit value at creation, so absence never means "new".
 	NotificationPrivacy NotificationPrivacy `bson:"notificationPrivacy,omitempty" json:"notificationPrivacy,omitempty"`
@@ -805,8 +811,30 @@ type MLSKeyBackup struct {
 	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
 }
 
-// DirectKey builds the unique deduplication key for a direct chat between two
-// users: their ids sorted and joined, so {a,b} and {b,a} collide to one row.
+// Ident returns this user's qualified identifier. Accounts with no Domain are
+// local, so they take the domain of the host asking.
+func (u User) Ident(localDomain string) ident.ID {
+	d := u.Domain
+	if d == "" {
+		d = localDomain
+	}
+	return ident.User(d, u.ID)
+}
+
+// DirectKey builds the LEGACY deduplication key for a direct chat: the two ids
+// sorted and joined with a colon.
+//
+// Superseded by ident.PairKey, and kept only so a conversation created before
+// qualified identifiers can still be found. Two reasons it cannot be the
+// federated key:
+//
+// The ids are unqualified, so alice on this host and alice on another would
+// collide into one conversation.
+//
+// And the join is ambiguous. ("x", "y:z") and ("x:y", "z") both produce
+// "x:y:z", so two different pairs share a key — harmless while ids are fixed-
+// width hex, fatal once an id can contain the separator. ident.PairKey hashes
+// length-prefixed parts instead, which cannot collide whatever an id contains.
 func DirectKey(userA, userB string) string {
 	if userA > userB {
 		userA, userB = userB, userA

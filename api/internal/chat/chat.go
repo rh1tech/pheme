@@ -21,6 +21,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/calls"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
+	"github.com/rh1tech/pheme/api/internal/ident"
 	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/push"
 	"github.com/rh1tech/pheme/api/internal/ratelimit"
@@ -31,6 +32,10 @@ import (
 type Handler struct {
 	Store store.Store
 	Live  live.Bus
+	// HostDomain is this instance's own domain. Empty keeps the pre-federation
+	// behaviour: identifiers stay unqualified and direct chats keep their old
+	// deduplication key.
+	HostDomain string
 	// Push may be nil (tests, or a deployment with no push configured). Chat
 	// notifications carry only the sender's name — never message content, which the
 	// server cannot read.
@@ -258,6 +263,23 @@ func (h *Handler) createConversation(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// directKeys returns the deduplication key a new direct conversation should be
+// filed under, and the legacy key an older one may already be filed under
+// (empty once this host has a domain and no legacy rows can remain).
+//
+// The qualified key is what makes alice-on-this-host and alice-on-another-host
+// two different conversations rather than one. Without a configured domain
+// there is nothing to qualify WITH, so the host keeps using the old key and
+// behaves exactly as it did -- federation is opt-in, and a deployment that has
+// not opted in should not have its data shape change underneath it.
+func (h *Handler) directKeys(a, b domain.User) (primary, legacy string) {
+	legacy = domain.DirectKey(a.ID, b.ID)
+	if h.HostDomain == "" {
+		return legacy, ""
+	}
+	return ident.PairKey(a.Ident(h.HostDomain), b.Ident(h.HostDomain)), legacy
+}
+
 func (h *Handler) createDirect(w http.ResponseWriter, r *http.Request, uid string, req createConversationRequest) {
 	if len(req.MemberIDs) != 1 {
 		httpx.Error(w, http.StatusBadRequest, "a direct chat needs exactly one other member")
@@ -268,16 +290,36 @@ func (h *Handler) createDirect(w http.ResponseWriter, r *http.Request, uid strin
 		httpx.Error(w, http.StatusBadRequest, "cannot start a direct chat with yourself")
 		return
 	}
-	if _, err := h.Store.UserByID(r.Context(), other); err != nil {
+	otherUser, err := h.Store.UserByID(r.Context(), other)
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "user not found")
+		return
+	}
+	meUser, err := h.Store.UserByID(r.Context(), uid)
+	if err != nil {
 		httpx.Error(w, http.StatusNotFound, "user not found")
 		return
 	}
 
 	// Dedupe: at most one direct chat per unordered pair.
-	key := domain.DirectKey(uid, other)
+	key, legacy := h.directKeys(meUser, otherUser)
 	if existing, err := h.Store.ConversationByDirectKey(r.Context(), key); err == nil {
 		httpx.JSON(w, http.StatusOK, existing)
 		return
+	}
+	// A conversation created before identifiers were qualified is filed under the
+	// old key. Looking under both is what stops this from silently creating a
+	// SECOND direct chat with someone you already have one with -- the unique
+	// index would not catch it, because the two keys differ.
+	//
+	// Deliberately no rewrite: the key is used for nothing but this check, so
+	// upgrading it would be churn for no behaviour. The second lookup goes away
+	// when the last legacy conversation does.
+	if legacy != "" {
+		if existing, err := h.Store.ConversationByDirectKey(r.Context(), legacy); err == nil {
+			httpx.JSON(w, http.StatusOK, existing)
+			return
+		}
 	}
 
 	now := time.Now().UTC()
