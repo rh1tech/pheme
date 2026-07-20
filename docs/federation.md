@@ -79,10 +79,29 @@ qualified identifiers, sorted. A separator-based key cannot survive identifiers
 that contain the separator, and picking a different separator just moves the
 problem to whichever character the next identifier scheme uses.
 
-**MLS credential identity becomes the qualified device URI.** This invalidates
-every existing group's ratchet tree and needs a migration. There is precedent:
-identities already migrated once when they gained the device half, and
-`user_of()` in `lib.rs` still carries the compatibility path from it.
+**MLS credential identity becomes the qualified device URI — but not in F0.**
+This is the one identity change that invalidates every existing group's ratchet
+tree, and it is deliberately deferred to F5. The reasoning, recorded because it
+will look like an omission otherwise:
+
+- It buys nothing until there are cross-host groups to put remote members into,
+  which is F5. Done now, it is pure risk against no benefit.
+- It fights the lesson the zombie-KeyPackage incident taught. `user_of()`'s
+  legacy fallback and the whole `zombieDevices` machinery exist because *mixing
+  credential formats within one group* is the documented footgun — a keypackage
+  under a legacy credential once burned ~500 epochs in a reconcile war.
+  Introducing a second format into live single-host groups, with no federation
+  to justify it, re-loads that gun.
+- MIMI has not decided the credential format — the protocol draft's credential
+  section is a literal `TODO`. Committing to a wire format inside the credential
+  before F5 tells us what cross-host membership needs is the premature
+  generality this whole document is trying to avoid.
+
+So the credential stays `userId:deviceId` through F0–F4. F5 defines the
+qualified form, migrates the trees, and handles the mixed-format transition as
+one deliberate piece of work — by which time MIMI may have resolved its own
+`TODO`. There is precedent for the migration itself: identities already gained a
+device half once, and `user_of()` still carries that compatibility path.
 
 ---
 
@@ -177,11 +196,14 @@ limitation and belongs in the user-facing docs, not just here.
 
 Each stage ships and is useful before the next one starts.
 
-- **F0 — Qualified identity.** `mimi://` forms, `Domain` on users, `DirectKey`
-  becomes a hash, asymmetric JWTs with `iss`/`aud`/`kid`. Breaking; ship behind a
-  migration that accepts both forms. **No federation yet** — this is entirely
-  local groundwork, and it is worth doing on its own merits: the HS256 shared
-  secret with no issuer claim is weak today, single-instance or not.
+- **F0 — Qualified identity.** `mimi://` forms (the `ident` package), `Domain`
+  on users, `DirectKey` superseded by `ident.PairKey`, asymmetric JWTs with
+  `iss`/`aud`/`kid`. All backwards-compatible: no data migration, and every
+  change is a no-op until `PHEME_HOST_DOMAIN`/`PHEME_HOST_KEY` are set. **No
+  federation yet** — local groundwork, worth doing on its own merits since the
+  HS256 shared secret with no issuer claim is weak today, single-instance or
+  not. **Excludes the MLS credential**, which is deferred to F5 for the reasons
+  under Decision 1. *Shipped.*
 - **F1 — Host identity + nodelist.** Keypair per host, signed list format,
   compiler tooling, mirroring, the application process. Self-contained.
 - **F2 — S2S transport.** mTLS + signed requests, `.well-known` directory,
