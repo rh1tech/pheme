@@ -101,6 +101,16 @@ type Config struct {
 	// entry is filed under. Empty keeps the pre-federation behaviour.
 	HostDomain string
 
+	// NodelistCoordKey is the coordinator public key this host trusts to sign the
+	// network's nodelist, base64url-encoded. Empty means this host is not part of
+	// a federated network — it verifies no peers and federates with no one, which
+	// is the correct default for a standalone instance.
+	NodelistCoordKey string
+
+	// NodelistPath is where the signed nodelist is read from at startup and by
+	// refresh. Empty disables federation even if a coordinator key is set.
+	NodelistPath string
+
 	// HostKey is this instance's Ed25519 signing key, base64url-encoded 32-byte
 	// seed. Generate one with `pheme-hostkey`.
 	//
@@ -193,6 +203,9 @@ func Load() Config {
 
 		HostDomain: env("PHEME_HOST_DOMAIN", ""),
 		HostKey:    env("PHEME_HOST_KEY", ""),
+
+		NodelistCoordKey: env("PHEME_NODELIST_COORD_KEY", ""),
+		NodelistPath:     env("PHEME_NODELIST_PATH", ""),
 
 		AdminEmails: envList("PHEME_ADMIN_EMAILS"),
 

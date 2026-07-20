@@ -24,7 +24,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/pheme-ingest ./cmd/ingest \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/pheme-dispatcher ./cmd/dispatcher \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/pheme-vapidgen ./cmd/vapidgen \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/pheme-hostkey ./cmd/hostkey
+ && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/pheme-hostkey ./cmd/hostkey \
+ && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/pheme-nodelist ./cmd/nodelist
 
 FROM gcr.io/distroless/static-debian12:nonroot
 # vapidgen is a one-shot key generator rather than a service. It ships here so
@@ -32,7 +33,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 # not have to install a Go toolchain to generate the Web Push keypair their
 # instance cannot send notifications without. It is a couple of megabytes and
 # is never the entrypoint.
-COPY --from=build /out/pheme-app /out/pheme-ingest /out/pheme-dispatcher /out/pheme-vapidgen /out/pheme-hostkey /usr/local/bin/
+COPY --from=build /out/pheme-app /out/pheme-ingest /out/pheme-dispatcher /out/pheme-vapidgen /out/pheme-hostkey /out/pheme-nodelist /usr/local/bin/
 USER nonroot:nonroot
 # Default to the App API; ingest and dispatcher override entrypoint in compose.
 ENTRYPOINT ["/usr/local/bin/pheme-app"]

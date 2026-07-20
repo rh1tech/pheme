@@ -85,6 +85,10 @@ services:
       # network the name its nodelist entry is filed under.
       PHEME_HOST_DOMAIN: ${PHEME_HOST_DOMAIN:-}
       PHEME_HOST_KEY: ${PHEME_HOST_KEY:-}
+      # The signed roster of the federated network, and the coordinator key
+      # that vouches for it. Both empty keeps this host standalone.
+      PHEME_NODELIST_COORD_KEY: ${PHEME_NODELIST_COORD_KEY:-}
+      PHEME_NODELIST_PATH: ${PHEME_NODELIST_PATH:-}
       # Browser origins allowed to call this API. The web SPA is served from a
       # different host than the API, so it genuinely needs CORS — but only for
       # that one origin. Anything unlisted gets no CORS headers at all.

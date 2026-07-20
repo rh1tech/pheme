@@ -6,8 +6,11 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/redis/go-redis/v9"
 
@@ -19,6 +22,7 @@ import (
 	mailer "github.com/rh1tech/pheme/api/internal/email"
 	"github.com/rh1tech/pheme/api/internal/idempotency"
 	"github.com/rh1tech/pheme/api/internal/live"
+	"github.com/rh1tech/pheme/api/internal/nodelist"
 	"github.com/rh1tech/pheme/api/internal/otp"
 	"github.com/rh1tech/pheme/api/internal/push"
 	"github.com/rh1tech/pheme/api/internal/ratelimit"
@@ -293,6 +297,35 @@ func (b *Builder) Tokens() *auth.TokenManager {
 	return b.tokens
 }
 
+// Nodelist builds the store of trusted peers from the configured coordinator
+// key and signed list, or returns (nil, nil) when federation is not configured.
+//
+// Federation is off unless BOTH a coordinator key and a list path are set. A
+// key with no list, or a list with no key, is a half-configured host, and the
+// safe reading of that is "not federated" rather than "trust something".
+//
+// A missing or malformed list is fatal, not ignored: an operator who configured
+// federation and whose host silently came up trusting no peers would have a
+// mystery, not an error. A host that means to stand alone simply sets neither.
+func (b *Builder) Nodelist() (*nodelist.Store, error) {
+	if b.cfg.NodelistCoordKey == "" || b.cfg.NodelistPath == "" {
+		if b.cfg.NodelistCoordKey != "" || b.cfg.NodelistPath != "" {
+			b.logger.Warn("federation half-configured — need both PHEME_NODELIST_COORD_KEY and PHEME_NODELIST_PATH; staying standalone")
+		}
+		return nil, nil
+	}
+	coord, err := parseCoordKey(b.cfg.NodelistCoordKey)
+	if err != nil {
+		return nil, fmt.Errorf("nodelist coordinator key: %w", err)
+	}
+	s := nodelist.NewStore(coord)
+	if err := s.LoadFile(b.cfg.NodelistPath); err != nil {
+		return nil, fmt.Errorf("loading nodelist from %s: %w", b.cfg.NodelistPath, err)
+	}
+	b.logger.Info("nodelist loaded", "serial", s.Serial())
+	return s, nil
+}
+
 // Close releases shared resources (the cached Redis client and blob store).
 func (b *Builder) Close() error {
 	if b.blob != nil {
@@ -302,4 +335,16 @@ func (b *Builder) Close() error {
 		return b.redis.Close()
 	}
 	return nil
+}
+
+// parseCoordKey decodes a base64url-encoded Ed25519 public key.
+func parseCoordKey(encoded string) (ed25519.PublicKey, error) {
+	b, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(strings.TrimSpace(encoded), "="))
+	if err != nil {
+		return nil, fmt.Errorf("not base64url: %w", err)
+	}
+	if len(b) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("is %d bytes, want %d", len(b), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(b), nil
 }
