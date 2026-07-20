@@ -230,7 +230,7 @@ Each stage ships and is useful before the next one starts.
   interdependent, and all of them are live cryptography. It wants a dedicated
   run with a full context budget, not the tail of another stage.* Execution
   order for that run:
-  1. **Qualified credentials (F5a).** `Client::new` takes the host domain; the
+  1. **Qualified credentials (F5a).** *Shipped.* `Client::new` takes the host domain; the
      MLS credential becomes `mimi://domain/d/<user>/<device>` (a form whose user
      half is itself a `mimi://domain/u/<user>`), and `user_of` parses it back to
      the qualified user. With no real users this is a CLEAN BREAK — no
@@ -244,7 +244,10 @@ Each stage ships and is useful before the next one starts.
      host key. A follower verifies the chain links and the signature. Build this
      WITH its consumer (step 4), not before — a chain nothing verifies is
      speculative.
-  3. **Cross-host key-package claim + remote membership (F5c).** S2S endpoints so
+  3. **Cross-host key-package claim (F5c).** *Shipped* — the key-package half:
+     a signed S2S endpoint lets a hub claim a remote user's key packages. Remote
+     membership resolution (a conversation holding a remote member) is part of
+     F5d below. S2S endpoints so
      a hub can fetch a remote user's key packages (extending F2's signed
      transport) and resolve a remote member — the `chat.go` `UserByID` gate that
      rejects remote users today becomes a nodelist-aware lookup.
@@ -254,7 +257,15 @@ Each stage ships and is useful before the next one starts.
      fans the accepted commit back to every participant host. This is where F5b's
      chain gets its verifier and the whole thing becomes real.
 
-  Before starting, write the hub-migration ADR Decision 5 calls for.
+  Before starting F5b/F5d, write the hub-migration ADR Decision 5 calls for.
+
+  **On F5d's verification blocker:** the delivery service is a Go server with no
+  MLS, so the actual cross-host encrypted round-trip can only be proven by two
+  real clients on two servers — a two-server, two-browser E2E harness that does
+  not exist. F5a and F5c are verifiable in isolation (crate/E2E, two-server Go
+  test) and shipped; F5d's message-relay plumbing is not, because shipping it
+  without an end-to-end decryption test would be shipping unverified live crypto.
+  Building that harness is a prerequisite for F5d, not an afterthought.
 - **F6 — Ordering rework.** Hub-assigned sequence numbers replacing wall-clock
   ordering. Receipts stop being timestamp watermarks — `domain.go:506-521` is the
   deepest single-clock assumption in the codebase, and two hosts' clocks skewing
