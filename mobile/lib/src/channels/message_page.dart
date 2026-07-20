@@ -110,7 +110,7 @@ class _MessagePageState extends ConsumerState<MessagePage> {
           expanded: _expanded,
           onToggle: () => setState(() => _expanded = !_expanded),
         ),
-        const Divider(height: 1),
+        const SizedBox(height: 8),
         Expanded(
           flex: 2,
           child: _CommentsSection(
@@ -418,47 +418,59 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
                   ],
                 ),
         ),
-        // The same bar the channel composes a post with — rounded field, filled send button. A
-        // labelled "Comment" button beside a plain box was a form; this is a place to say something.
+        // The same bar the channel composes a post with — rounded field, filled send button, and
+        // the same rule along its top. A labelled "Comment" button beside a plain box was a form;
+        // this is a place to say something.
         if (widget.commentsAllowed && canComment)
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _input,
-                  minLines: 1,
-                  maxLines: 4,
-                  textCapitalization: TextCapitalization.sentences,
-                  onChanged: (_) => setState(() {}),
-                  decoration: InputDecoration(
-                    hintText: l10n.t('comment.placeholder'),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
-                    isDense: true,
-                  ),
+          Container(
+            decoration: BoxDecoration(
+              color: scheme.surface,
+              border: Border(
+                top: BorderSide(
+                  color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
                 ),
               ),
-              const SizedBox(width: 6),
-              IconButton.filled(
-                icon: _posting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.send),
-                tooltip: l10n.t('comment.post'),
-                onPressed: (_posting || _input.text.trim().isEmpty)
-                    ? null
-                    : _post,
-              ),
-            ],
+            ),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _input,
+                    minLines: 1,
+                    maxLines: 4,
+                    textCapitalization: TextCapitalization.sentences,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      hintText: l10n.t('comment.placeholder'),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                IconButton.filled(
+                  icon: _posting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send),
+                  tooltip: l10n.t('comment.post'),
+                  onPressed: (_posting || _input.text.trim().isEmpty)
+                      ? null
+                      : _post,
+                ),
+              ],
+            ),
           ),
         if (!widget.commentsAllowed)
           Text(
