@@ -19,6 +19,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/chat"
 	"github.com/rh1tech/pheme/api/internal/config"
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
@@ -135,6 +136,17 @@ func main() {
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
 	}).Routes(mux)
 
+	// Host-to-host federation, mounted only when this instance is part of a
+	// network. Peers are authenticated against the nodelist, not the JWT
+	// middleware, so these routes sit on the bare mux rather than under /v1.
+	if nodes, err := b.Nodelist(); err != nil {
+		logger.Error("nodelist", "error", err)
+		os.Exit(1)
+	} else if nodes != nil {
+		federation.NewHandler(cfg.HostDomain, nodes, userResolver{db}).Register(mux)
+		logger.Info("federation enabled", "origin", cfg.HostDomain, "nodelist_serial", nodes.Serial())
+	}
+
 	// An empty allowlist is legal — a deployment whose SPA is same-origin with the
 	// API needs no CORS at all — but it is far more often a stack.env that predates
 	// PHEME_CORS_ORIGINS. Left unsaid, the symptom is every browser request failing
@@ -231,4 +243,14 @@ func withCORS(origins []string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// userResolver adapts the store to federation.UserResolver. It answers only
+// "does this local user exist" — the one thing the first federated endpoints
+// need, and nothing that would leak a user's details to a peer.
+type userResolver struct{ db store.Store }
+
+func (u userResolver) UserExists(ctx context.Context, localID string) bool {
+	_, err := u.db.UserByID(ctx, localID)
+	return err == nil
 }

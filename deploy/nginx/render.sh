@@ -40,6 +40,22 @@ for leak in "$PHEME_API_HOST" pheme Pheme PHEME; do
   fi
 done
 
+# federation_block keeps the __FEDERATION_BEGIN__..__FEDERATION_END__ region
+# only when PHEME_FEDERATION=1, and strips the markers either way.
+#
+# A standalone host must NOT carry the federation locations: those paths would
+# proxy to an app that answers Go's 404, which differs from the decoy's nginx
+# 404 and so fingerprints the host — the one thing the decoy exists to prevent.
+# A federating host has already chosen to be publicly listed, so exposing them
+# there is not a leak.
+federation_block() {
+  if [[ "${PHEME_FEDERATION:-0}" == "1" ]]; then
+    grep -v '__FEDERATION_BEGIN__\|__FEDERATION_END__'
+  else
+    sed '/__FEDERATION_BEGIN__/,/__FEDERATION_END__/d'
+  fi
+}
+
 rendered=$(
   sed \
     -e "s|__PHEME_API_HOST__|${PHEME_API_HOST}|g" \
@@ -48,7 +64,7 @@ rendered=$(
     -e "s|__PHEME_SSL_SNIPPET__|${PHEME_SSL_SNIPPET}|g" \
     -e "s|__PHEME_APP_PORT__|${APP_HOST_PORT}|g" \
     -e "s|__PHEME_INGEST_PORT__|${INGEST_HOST_PORT}|g" \
-    "$template"
+    "$template" | federation_block
 )
 
 # The whole point of the prefix is defeated by a config that still carries a

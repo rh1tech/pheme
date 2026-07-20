@@ -73,6 +73,38 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
+    # __FEDERATION_BEGIN__
+    # --- Host-to-host federation (only for a host that has joined a network) --
+    #
+    # This whole block is emitted by render.sh ONLY when PHEME_FEDERATION=1.
+    # It must not be present on a standalone host: these paths would proxy to the
+    # app, which — not having federation configured — answers Go's "404 page not
+    # found", visibly different from the decoy's nginx 404. That difference is a
+    # fingerprint, the exact thing the decoy exists to remove. A non-federating
+    # host has no federation block, so every such path falls through to the decoy
+    # like anything else.
+    #
+    # These are UNPREFIXED, and have to be: a peer discovers this host via
+    # /.well-known/ and cannot know a secret prefix. Exposing them reveals that
+    # this host runs Pheme federation — not a leak, because a federating host is
+    # already listed by domain in a signed nodelist its peers all hold.
+    #
+    # /.well-known is public; /federation/v1/* verifies a nodelist signature and
+    # answers 401 to anyone else.
+    location = /.well-known/pheme-federation {
+        proxy_pass http://127.0.0.1:__PHEME_APP_PORT__/.well-known/pheme-federation;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+    location /federation/ {
+        proxy_pass http://127.0.0.1:__PHEME_APP_PORT__/federation/;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+    # __FEDERATION_END__
+
     # --- Everything else is the decoy site ----------------------------------
     #
     # Including a request for the prefix without its trailing slash, and every

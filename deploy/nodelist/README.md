@@ -67,6 +67,25 @@ A host that is federated but whose nodelist is missing or malformed **refuses to
 start**, rather than coming up silently trusting no peers: an operator who
 configured federation deserves an error, not a mystery.
 
+## Exposing the S2S endpoints
+
+Peers reach a federating host at unprefixed paths — `/.well-known/pheme-federation`
+and `/federation/v1/*` — because a peer discovering this host cannot know its
+secret path prefix. Re-render the nginx vhost with `PHEME_FEDERATION=1` so those
+locations are proxied to the app:
+
+```sh
+PHEME_FEDERATION=1 PHEME_API_HOST=... ./deploy/nginx/render.sh > ...
+```
+
+Without that flag the block is omitted entirely, and for a good reason: those
+paths would otherwise proxy to an app with no federation configured, which
+answers Go's `404 page not found` — visibly different from the decoy's nginx 404,
+and so a fingerprint. A standalone host has no federation block and every such
+path falls through to the decoy like anything else. Exposing the endpoints is
+only appropriate once a host has joined a network, at which point it is already
+publicly listed by domain in the nodelist.
+
 ## What this is and is not
 
 It is the trust and revocation layer: who is a peer, and which key speaks for
