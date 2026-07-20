@@ -81,4 +81,7 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // ShortcutManagerCompat and friends, for the conversation shortcuts that let Android promote a
+    // message notification to a conversation — avatar in the icon slot, app icon badged onto it.
+    implementation("androidx.core:core-ktx:1.13.1")
 }

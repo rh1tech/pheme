@@ -17,7 +17,14 @@ import 'chat_providers.dart';
 import 'chat_time.dart';
 import 'conversation_title.dart';
 import 'new_chat_sheet.dart';
+import 'dart:async';
+
 import 'widgets/conversation_avatar.dart';
+import '../push/conversation_shortcuts.dart';
+
+/// How many conversations get a notification shortcut. Android bounds the number of dynamic
+/// shortcuts an app may publish, so this spends that budget on the most recent chats.
+const _maxConversationShortcuts = 15;
 
 class ConversationsPage extends ConsumerStatefulWidget {
   const ConversationsPage({super.key});
@@ -29,6 +36,34 @@ class ConversationsPage extends ConsumerStatefulWidget {
 class _ConversationsPageState extends ConsumerState<ConversationsPage> {
   final _search = TextEditingController();
   String _query = '';
+
+  /// Conversations whose notification shortcut has already been published this run.
+  ///
+  /// Publishing is what lets Android draw a message notification as a conversation — the sender's
+  /// avatar as the icon, the app badged into its corner — and it has to happen HERE rather than
+  /// when the notification arrives. Most notifications are drawn by the background isolate, which
+  /// cannot reach the platform channel that publishes them, so by then it is too late. Seeing a
+  /// conversation in the list is the earliest reliable moment.
+  ///
+  /// The picture comes from the notification itself, not from the shortcut, so a name is enough
+  /// here — which is just as well, since this list draws initials rather than fetching avatars.
+  final _shortcutsPublished = <String>{};
+
+  void _publishShortcuts(
+    List<Conversation> conversations,
+    String myUserId,
+    AppLocalizations l10n,
+  ) {
+    for (final c in conversations.take(_maxConversationShortcuts)) {
+      if (!_shortcutsPublished.add(c.id)) continue;
+      unawaited(
+        ConversationShortcuts.publish(
+          conversationId: c.id,
+          name: conversationTitle(c, myUserId, l10n),
+        ),
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -65,6 +100,12 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
     final l10n = AppLocalizations.of(context);
     final conversations = ref.watch(conversationListProvider);
     final myUserId = ref.watch(myUserIdProvider);
+    // Android caps how many dynamic shortcuts an app may hold, and a long list would spend that cap
+    // on chats nobody is waiting on. The most recent ones are the ones a notification is likely to
+    // be about.
+    conversations.whenData(
+      (list) => _publishShortcuts(list, myUserId, AppLocalizations.of(context)),
+    );
 
     return AdaptiveScaffold(
       title: Text(l10n.t('chat.title')),

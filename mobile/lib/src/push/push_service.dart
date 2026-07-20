@@ -13,6 +13,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../crypto/mls_device.dart';
 import '../data/pheme_repository.dart';
+import 'conversation_shortcuts.dart';
 import 'notification_preview.dart';
 
 /// Background isolate handler. Must be a top-level, vm:entry-point function.
@@ -226,6 +227,17 @@ Future<void> _showChatNotification(
       ? null
       : conversationId;
 
+  // Publish (or refresh) the shortcut first, so the notification about to be drawn has something
+  // to anchor to. Only reaches the platform from the main isolate; from the background one this is
+  // a no-op and the notification falls back to ordinary rendering.
+  if (groupKey != null) {
+    await ConversationShortcuts.publish(
+      conversationId: groupKey,
+      name: title ?? 'Chat',
+      avatar: await _avatarBytes(avatarUrl),
+    );
+  }
+
   try {
     final sender = Person(
       name: title,
@@ -246,6 +258,11 @@ Future<void> _showChatNotification(
           importance: Importance.high,
           priority: Priority.high,
           groupKey: groupKey,
+          // Anchors this to the conversation shortcut, which is what earns the conversation
+          // treatment: avatar in the icon slot, app icon badged onto its corner. Quoting an id with
+          // no published shortcut behind it is harmless — the notification just renders the
+          // ordinary way, which is what it did before any of this.
+          shortcutId: groupKey,
           styleInformation: MessagingStyleInformation(
             // The person this is addressed TO. Never rendered, because everything drawn here was
             // written by somebody else; it exists so Android can tell incoming from outgoing. It
