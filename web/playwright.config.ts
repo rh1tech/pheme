@@ -90,6 +90,11 @@ export default defineConfig({
       timeout: 120_000,
       env: {
         PHEME_APP_ADDR: `:${API_PORT}`,
+        // The API only answers CORS for origins it is told about, and the suite's
+        // web server is on its own port (per shard, see e2e/constants.ts) — not the
+        // :5173 the API defaults to for `make dev`. Without this every browser
+        // request in the suite fails as a CORS error.
+        PHEME_CORS_ORIGINS: WEB_URL,
         PHEME_JWT_SECRET: 'e2e-test-secret',
         PHEME_MAIL_DRIVER: 'log',
         PHEME_SEED_ADMIN_EMAIL: ADMIN_EMAIL,

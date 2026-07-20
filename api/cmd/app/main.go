@@ -134,9 +134,17 @@ func main() {
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
 	}).Routes(mux)
 
+	// An empty allowlist is legal — a deployment whose SPA is same-origin with the
+	// API needs no CORS at all — but it is far more often a stack.env that predates
+	// PHEME_CORS_ORIGINS. Left unsaid, the symptom is every browser request failing
+	// with an opaque CORS error and nothing in the server log to explain it.
+	if len(cfg.CORSOrigins) == 0 {
+		logger.Warn("no PHEME_CORS_ORIGINS configured: browsers on any other origin will be refused")
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.AppAddr,
-		Handler:           withCORS(mux),
+		Handler:           withCORS(cfg.CORSOrigins, mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -194,12 +202,28 @@ func maybeSeedAdmin(ctx context.Context, db store.Store, email, password string,
 	logger.Info("seeded initial admin", "email", email)
 }
 
-// withCORS allows the local web dev server to call the API during development.
-func withCORS(next http.Handler) http.Handler {
+// withCORS allows the configured web origins to call the API from a browser.
+//
+// It echoes the request's Origin only when it is on the allowlist; anything else
+// gets no CORS headers at all. The previous blanket "*" let any page on the
+// internet call the API, and told an unauthenticated prober that this host serves
+// a browser API for some other origin — which plain static hosting never does.
+func withCORS(origins []string, next http.Handler) http.Handler {
+	allowed := make(map[string]struct{}, len(origins))
+	for _, o := range origins {
+		allowed[o] = struct{}{}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		origin := strings.ToLower(strings.TrimSpace(r.Header.Get("Origin")))
+		if _, ok := allowed[origin]; ok && origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			// The response body is the same either way, but the headers are not, so
+			// a shared cache must key on Origin or it will serve one origin's
+			// allowance to another.
+			w.Header().Add("Vary", "Origin")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

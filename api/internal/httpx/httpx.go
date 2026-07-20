@@ -74,8 +74,14 @@ func Binary(w http.ResponseWriter, contentType string, data []byte) {
 }
 
 // Health returns a handler reporting service liveness.
-func Health(service string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		JSON(w, http.StatusOK, map[string]string{"status": "ok", "service": service})
+//
+// The response is a bare 200 with no body on purpose. It used to answer
+// {"status":"ok","service":"app"}, which meant one unauthenticated request
+// identified the host as a Pheme deployment — everything a censor needs to
+// build a blocklist. Liveness is carried by the status code, which is all any
+// health check ever read.
+func Health() http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	}
 }

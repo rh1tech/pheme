@@ -246,21 +246,28 @@ func TestBinarySetsLengthAndImmutableCaching(t *testing.T) {
 	}
 }
 
-func TestHealthReportsItsService(t *testing.T) {
+// Health answers with a status code and nothing else.
+//
+// It used to return {"status":"ok","service":"app"}, so that an operator hitting
+// one proxy could tell WHICH process answered. That cost is real but small: app
+// and ingest sit on different upstream ports behind different nginx locations,
+// so the URL you asked for already told you which one replied. What the body
+// bought in return was a single unauthenticated request that identified the host
+// as a Pheme deployment — the cheapest possible signal for anyone assembling a
+// blocklist. The status code carries the liveness; the body only carried the
+// giveaway.
+func TestHealthAnswersWithoutIdentifyingTheService(t *testing.T) {
 	rec := httptest.NewRecorder()
-	Health("ingest")(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	Health()(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d", rec.Code)
+		t.Errorf("status = %d, want 200", rec.Code)
 	}
-	var got map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v", err)
+	if body := rec.Body.Bytes(); len(body) != 0 {
+		t.Errorf("health body = %q, want empty — a body here fingerprints the host", body)
 	}
-	// The service name is what tells you WHICH process answered, when app and ingest are both
-	// behind the same proxy and one of them is the one that is down.
-	if got["status"] != "ok" || got["service"] != "ingest" {
-		t.Errorf("health = %v, want ok/ingest", got)
+	if ct := rec.Header().Get("Content-Type"); ct != "" {
+		t.Errorf("Content-Type = %q, want unset", ct)
 	}
 }
 

@@ -84,6 +84,17 @@ type Config struct {
 	CodeTTL      time.Duration
 	CodeCooldown time.Duration // minimum interval between code sends per email
 
+	// CORSOrigins is the exact set of browser origins allowed to call this API,
+	// e.g. "https://app.example.com". The web SPA is served from a different host
+	// than the API, so it genuinely needs CORS.
+	//
+	// This used to be a blanket "Access-Control-Allow-Origin: *" on every response.
+	// That header on an API is both needless exposure and a fingerprint — a censor
+	// probing an unknown host learns it is running an API meant for a browser on
+	// some other origin, which static hosting never says. An unlisted origin now
+	// gets no CORS headers at all rather than a wildcard.
+	CORSOrigins []string
+
 	// Authorization
 	AdminEmails []string // emails granted the admin role on register/login
 
@@ -155,6 +166,10 @@ func Load() Config {
 		CodeTTL:      envDuration("PHEME_CODE_TTL", 30*time.Minute),
 		CodeCooldown: envDuration("PHEME_CODE_COOLDOWN", 2*time.Minute),
 
+		// Defaults to the Vite dev server so `make dev` works untouched. Every
+		// real deployment must set this to its web origin.
+		CORSOrigins: envListDefault("PHEME_CORS_ORIGINS", "http://localhost:5173"),
+
 		AdminEmails: envList("PHEME_ADMIN_EMAILS"),
 
 		SeedAdminEmail:    env("PHEME_SEED_ADMIN_EMAIL", ""),
@@ -199,9 +214,15 @@ func envBool(key string, def bool) bool {
 
 // envList parses a comma-separated env var into a trimmed, lowercased slice.
 func envList(key string) []string {
+	return envListDefault(key, "")
+}
+
+// envListDefault is envList with a fallback used when the variable is unset or
+// empty. The fallback runs through the same parsing, so it may itself be a list.
+func envListDefault(key, def string) []string {
 	raw, ok := os.LookupEnv(key)
 	if !ok || strings.TrimSpace(raw) == "" {
-		return nil
+		raw = def
 	}
 	var out []string
 	for _, part := range strings.Split(raw, ",") {

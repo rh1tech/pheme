@@ -81,6 +81,10 @@ services:
       PHEME_RABBIT_URI: "amqp://${RABBIT_USER}:${RABBIT_PASS}@rabbitmq:5672/"
       PHEME_REDIS_ADDR: "redis:6379"
       PHEME_JWT_SECRET: ${PHEME_JWT_SECRET}
+      # Browser origins allowed to call this API. The web SPA is served from a
+      # different host than the API, so it genuinely needs CORS — but only for
+      # that one origin. Anything unlisted gets no CORS headers at all.
+      PHEME_CORS_ORIGINS: ${PHEME_WEB_ORIGIN}
       PHEME_ADMIN_EMAILS: ${PHEME_ADMIN_EMAILS}
       PHEME_VAPID_PUBLIC: ${PHEME_VAPID_PUBLIC}
       PHEME_VAPID_PRIVATE: ${PHEME_VAPID_PRIVATE}

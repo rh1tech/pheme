@@ -249,8 +249,8 @@ export const api = {
       public: true,
     }),
 
-  // Meta (public)
-  meta: () => request<Meta>('/v1/meta', { public: true }),
+  // Meta (authenticated — see the handler comment; unauthenticated it fingerprinted the host)
+  meta: () => request<Meta>('/v1/meta'),
 
   // Profile (self)
   getMe: () => request<User>('/v1/me'),

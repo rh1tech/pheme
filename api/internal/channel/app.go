@@ -37,8 +37,7 @@ type AppHandler struct {
 // wrapped with JWT middleware; health is public and the SSE stream authenticates
 // via a token query parameter (EventSource cannot set headers).
 func (h *AppHandler) Routes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /healthz", httpx.Health("app"))
-	mux.HandleFunc("GET /v1/meta", h.meta)
+	mux.HandleFunc("GET /healthz", httpx.Health())
 	mux.HandleFunc("GET /v1/stream", h.stream)
 	// Public so devices and <img>/notification fetches need no bearer token; the
 	// blob id is unguessable. This mirrors message history, already readable by
@@ -46,6 +45,7 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/images/{id}", h.serveImage)
 
 	protected := http.NewServeMux()
+	protected.HandleFunc("GET /v1/meta", h.meta)
 	// Profile (self).
 	protected.HandleFunc("GET /v1/me", h.me)
 	protected.HandleFunc("PATCH /v1/me", h.updateProfile)
@@ -96,8 +96,12 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	mux.Handle("/v1/", h.Tokens.Middleware(protected))
 }
 
-// meta exposes public client configuration, such as the Web Push VAPID public
-// key, so the web client always matches the server's keys.
+// meta exposes client configuration, such as the Web Push VAPID public key, so
+// the web client always matches the server's keys.
+//
+// Authenticated, though the VAPID public key is not a secret: unauthenticated it
+// was a one-request fingerprint identifying the host as a Pheme deployment. The
+// only caller subscribes to push, which already requires a session.
 func (h *AppHandler) meta(w http.ResponseWriter, _ *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"vapidPublicKey": h.VAPIDPublicKey,
@@ -676,9 +680,12 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	// Defeats nginx's proxy buffering, which would otherwise hold events back until
-	// its buffer filled — turning a live stream into a batched one.
-	w.Header().Set("X-Accel-Buffering", "no")
+	// Buffering is disabled in the reverse proxy instead (`proxy_buffering off` on
+	// the /v1/stream location). This used to send X-Accel-Buffering: no, which did
+	// the same job but put a header on the wire that almost nothing else sends —
+	// a free fingerprint for anything watching responses. Any deployment fronting
+	// this service must disable proxy buffering on the stream path; the shipped
+	// nginx templates do.
 
 	// Subscribed by user id, so the bus delivers only what this person is entitled to instead of
 	// offering every event to every connection and having each one work out it was not the

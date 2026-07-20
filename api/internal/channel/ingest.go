@@ -30,7 +30,7 @@ type IngestHandler struct {
 
 // Routes registers the ingest endpoints on a mux.
 func (h *IngestHandler) Routes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /healthz", httpx.Health("ingest"))
+	mux.HandleFunc("GET /healthz", httpx.Health())
 	mux.HandleFunc("POST /v1/ingest/{channelId}/notify", h.notify)
 }
 
