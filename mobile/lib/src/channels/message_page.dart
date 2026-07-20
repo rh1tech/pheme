@@ -5,6 +5,7 @@ import '../core/format.dart';
 import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../data/app_providers.dart';
+import '../chat/chat_time.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../widgets/adaptive/adaptive.dart';
@@ -263,27 +264,45 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
         ),
         const SizedBox(height: 12),
+        // The same bar the channel composes a post with — rounded field, filled send button. A
+        // labelled "Comment" button beside a plain box was a form; this is a place to say something.
         if (widget.commentsAllowed && canComment)
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Expanded(
-                child: AdaptiveTextField(
+                child: TextField(
                   controller: _input,
-                  placeholder: l10n.t('comment.placeholder'),
                   minLines: 1,
                   maxLines: 4,
+                  textCapitalization: TextCapitalization.sentences,
                   onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: l10n.t('comment.placeholder'),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    isDense: true,
+                  ),
                 ),
               ),
-              const SizedBox(width: 8),
-              AdaptiveButton.filled(
+              const SizedBox(width: 6),
+              IconButton.filled(
+                icon: _posting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send),
+                tooltip: l10n.t('comment.post'),
                 onPressed: (_posting || _input.text.trim().isEmpty)
                     ? null
                     : _post,
-                child: _posting
-                    ? const AdaptiveProgress(size: 18)
-                    : Text(l10n.t('comment.post')),
               ),
             ],
           ),
@@ -330,6 +349,16 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
 }
 
 /// A single comment row: author avatar/name, timestamp, body, optional delete.
+/// One comment, as a bubble.
+///
+/// Comments were a flat list of avatar-plus-name-plus-text rows — a comment section under an
+/// article, which is what the channel screen used to be. Now that a channel reads as a
+/// conversation, its comments should too: they are the one place in a channel where more than one
+/// person speaks, and a bubble is what tells them apart at a glance.
+///
+/// Everyone's comment is left-aligned. Distinguishing your own from another's would need the
+/// reader's user id, which this widget has no reason to know, and the author's name above the text
+/// already says who wrote it.
 class _CommentTile extends ConsumerWidget {
   const _CommentTile({
     required this.comment,
@@ -344,67 +373,92 @@ class _CommentTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = context.l10n;
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final dark = theme.brightness == Brightness.dark;
+    // The incoming-bubble colour, the same value MessageBubble uses.
+    final bubble = dark ? const Color(0xFF1F2126) : Colors.white;
+
     final label = comment.author.label(l10n.t('comment.anonymous'));
     final avatarId = comment.author.avatarId;
     final avatarUrl = (avatarId != null && avatarId.isNotEmpty)
         ? ref.read(repositoryProvider).imageUrl(avatarId)
         : null;
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 10),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           CircleAvatar(
-            radius: 16,
+            radius: 14,
             backgroundColor: scheme.primaryContainer,
             foregroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
             child: Text(
               label.characters.take(2).toString().toUpperCase(),
-              style: const TextStyle(fontSize: 12),
+              style: const TextStyle(fontSize: 11),
             ),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+          const SizedBox(width: 8),
+          Flexible(
+            child: GestureDetector(
+              onLongPress: canDelete ? onDelete : null,
+              child: Container(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width * 0.72,
+                ),
+                decoration: BoxDecoration(
+                  color: bubble,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(4),
+                    topRight: Radius.circular(16),
+                    bottomLeft: Radius.circular(16),
+                    bottomRight: Radius.circular(16),
+                  ),
+                ),
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: Text(
-                        label,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
                     Text(
-                      formatDateTime(comment.createdAt),
+                      label,
                       style: TextStyle(
-                        fontSize: 11,
-                        color: scheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: scheme.primary,
                       ),
                     ),
-                    if (canDelete)
-                      GestureDetector(
-                        onTap: onDelete,
-                        behavior: HitTestBehavior.opaque,
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 8),
-                          child: Icon(
-                            Icons.delete_outline,
-                            size: 18,
-                            color: scheme.error,
+                    const SizedBox(height: 2),
+                    Text(comment.body, style: const TextStyle(fontSize: 14)),
+                    const SizedBox(height: 2),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Spacer(),
+                        Text(
+                          bubbleTime(l10n, comment.createdAt),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: scheme.onSurfaceVariant,
                           ),
                         ),
-                      ),
+                        // Deleting is a long press on the bubble, as it is on a chat message —
+                        // a delete icon sitting permanently beside every comment is a button
+                        // pointed at the reader's own words.
+                        if (canDelete) ...[
+                          const SizedBox(width: 6),
+                          Icon(
+                            Icons.more_horiz,
+                            size: 14,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
-                const SizedBox(height: 2),
-                Text(comment.body, style: const TextStyle(fontSize: 14)),
-              ],
+              ),
             ),
           ),
         ],

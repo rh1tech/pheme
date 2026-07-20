@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../chat/chat_time.dart';
 import '../../chat/widgets/conversation_avatar.dart';
+import '../../core/providers.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 
@@ -17,7 +19,7 @@ import '../../models/models.dart';
 /// The one deliberate difference is the badge. A channel is a broadcast, not a conversation, and
 /// the row should say so at a glance rather than by the reader noticing that nobody else ever
 /// speaks in it.
-class ChannelRow extends StatelessWidget {
+class ChannelRow extends ConsumerWidget {
   const ChannelRow({super.key, required this.channel, this.role});
 
   final Channel channel;
@@ -44,7 +46,7 @@ class ChannelRow extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final l10n = context.l10n;
     final last = channel.lastMessage;
@@ -61,7 +63,15 @@ class ChannelRow extends StatelessWidget {
             Stack(
               clipBehavior: Clip.none,
               children: [
-                ConversationAvatar(id: channel.id, label: channel.name),
+                ConversationAvatar(
+                  id: channel.id,
+                  label: channel.name,
+                  imageUrl: channel.avatarId == null
+                      ? null
+                      : ref
+                            .read(repositoryProvider)
+                            .imageUrl(channel.avatarId!),
+                ),
                 Positioned(
                   right: -2,
                   bottom: -2,

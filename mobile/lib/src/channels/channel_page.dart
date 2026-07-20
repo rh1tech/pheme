@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/app_providers.dart';
+import '../chat/widgets/conversation_avatar.dart';
+import '../core/providers.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../widgets/adaptive/adaptive.dart';
@@ -60,7 +62,20 @@ class _ChannelView extends ConsumerWidget {
     final channel = relation.channel;
 
     return AdaptiveScaffold(
-      title: Text(channel.name),
+      title: Row(
+        children: [
+          ConversationAvatar(
+            id: channel.id,
+            label: channel.name,
+            size: 32,
+            imageUrl: channel.avatarId == null
+                ? null
+                : ref.read(repositoryProvider).imageUrl(channel.avatarId!),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(channel.name, overflow: TextOverflow.ellipsis)),
+        ],
+      ),
       trailing: [
         // Everything that is not "read the channel". Only the entries this reader may act on are
         // built, so a plain subscriber sees a short menu rather than a long one full of refusals.

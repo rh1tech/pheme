@@ -284,6 +284,12 @@ class _MessageCard extends StatelessWidget {
         ? l10n.t('channel.noTitle')
         : message.title;
 
+    // The same colour an INCOMING chat bubble uses, taken from MessageBubble rather than guessed:
+    // surface is the page itself in some themes, which drew a bubble that could not be seen
+    // against it. A channel post is incoming by definition — nobody reading it wrote it.
+    final dark = theme.brightness == Brightness.dark;
+    final bubble = dark ? const Color(0xFF1F2126) : Colors.white;
+
     return Align(
       alignment: Alignment.centerLeft,
       child: ConstrainedBox(
@@ -293,7 +299,7 @@ class _MessageCard extends StatelessWidget {
           maxWidth: MediaQuery.sizeOf(context).width * 0.82,
         ),
         child: Material(
-          color: scheme.surface,
+          color: bubble,
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(4),
             topRight: Radius.circular(16),

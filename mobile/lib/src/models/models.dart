@@ -118,6 +118,7 @@ class Channel {
     required this.subscriptionMode,
     required this.status,
     required this.createdAt,
+    this.avatarId,
     this.lastMessage,
     this.alias,
   });
@@ -133,6 +134,10 @@ class Channel {
   /// The channel's optional "phetag" — a human-friendly handle that can be used
   /// in place of [publicId] when joining. Null or empty when unset.
   final String? alias;
+
+  /// The channel's picture, when it has one. Served from /v1/images/{id}; without it the avatar
+  /// falls back to initials, which is what every channel showed before this was read.
+  final String? avatarId;
 
   /// The newest post, for the list row's preview line and its sort order.
   ///
@@ -156,6 +161,7 @@ class Channel {
     status: ChannelStatus.fromWire(j['status'] as String?),
     createdAt: j['createdAt'] as String? ?? '',
     alias: j['alias'] as String?,
+    avatarId: j['avatarId'] as String?,
     lastMessage: j['lastMessage'] == null
         ? null
         : ChannelLastMessage.fromJson(j['lastMessage'] as Map<String, dynamic>),
