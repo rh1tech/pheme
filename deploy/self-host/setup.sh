@@ -33,6 +33,20 @@ read -rp "Public hostname for this instance (e.g. talk.example.com): " api_host
 [[ -n "$api_host" ]] || die "a hostname is required."
 [[ "$api_host" =~ ^[a-zA-Z0-9.-]+$ ]] || die "that does not look like a hostname."
 
+# SNI carries the hostname in the clear on every connection. A name containing
+# "pheme" tells anything watching TLS what the host is, whatever the decoy says,
+# and one wildcard rule blocks every instance that picked such a name. The path
+# prefix cannot help with this; only the name can.
+if [[ "$(printf '%s' "$api_host" | tr '[:upper:]' '[:lower:]')" == *pheme* ]]; then
+  echo
+  echo "  Warning: '$api_host' contains 'pheme'."
+  echo "  The hostname travels in the clear in every TLS handshake, so this name"
+  echo "  identifies the host regardless of the decoy site or the path prefix."
+  echo "  A neutral name is the single most useful thing you can change."
+  read -rp "  Continue anyway? [y/N]: " anyway
+  [[ "$anyway" =~ ^[Yy] ]] || die "stopped. Pick a name that says nothing."
+fi
+
 read -rp "Admin email (gets the admin role on register): " admin_email
 [[ -n "$admin_email" ]] || die "an admin email is required."
 

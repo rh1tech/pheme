@@ -12,11 +12,16 @@ file carries the deployment's path prefix, so it is never committed.
 ```sh
 set -a; . /opt/pheme/prod/stack.env; set +a
 PHEME_API_HOST=pheme-prod-api.rh1.tech \
-PHEME_DECOY_DIR=decoy-prod \
+PHEME_DECOY_DIR=rh1-notes \
 PHEME_SSL_SNIPPET=/etc/nginx/snippets/rh1-tech-ssl.conf \
-  ./render.sh | sudo tee /etc/nginx/sites-available/pheme-prod-api.rh1.tech.conf
+  ./render.sh | sudo tee /etc/nginx/vhosts/pheme-prod-api.rh1.tech.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+On rh1 the vhosts live in `/etc/nginx/vhosts/`, not the Debian-conventional
+`sites-available` + `sites-enabled` pair — `sites-enabled` there holds only the
+distribution default. Check where your own host keeps them before copying the
+command above.
 
 `render.sh` refuses to emit a config that still contains a placeholder, and
 rejects a prefix that is short, guessable, or contains the hostname or the word
@@ -34,6 +39,15 @@ It is **not** a security boundary. Every endpoint behind it authenticates exactl
 as before. It is **not** a secret either: it is in the URL of every request, so
 any TLS-terminating middlebox in front of the host sees it. Treat it as
 *unlisted*.
+
+**And it does nothing about the hostname.** `pheme-prod-api.rh1.tech` contains
+the product name, and SNI carries the hostname in the clear on every connection,
+so anything watching TLS learns what this is no matter how good the decoy is —
+one `pheme-*` rule blocks it. The prefix hides the *endpoints*; only a neutral
+hostname hides the *deployment*. On rh1 that means a new name, a Cloudflare
+record for it, and repointing clients; it is the obvious next step and it is not
+done. A self-hoster picking a fresh domain gets this right for free by not
+putting "pheme" in it, which is why `setup.sh` never suggests a name.
 
 The three things that used to identify a Pheme host in one unauthenticated
 request — a `/healthz` naming the service, an unauthenticated `/v1/meta`, and a
