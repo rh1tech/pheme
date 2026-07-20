@@ -12,6 +12,7 @@ import '../widgets/adaptive/adaptive_refresh.dart';
 import '../widgets/adaptive/adaptive_scaffold.dart';
 import '../widgets/adaptive/adaptive_search_field.dart';
 import '../widgets/brand_logo.dart';
+import '../widgets/scroll_hiding_header.dart';
 import '../widgets/adaptive/platform.dart';
 import '../widgets/error_view.dart';
 import 'chat_providers.dart';
@@ -144,64 +145,62 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
               icon: const Icon(Icons.add),
               label: Text(l10n.t('chat.newChat')),
             ),
-      body: Column(
-        children: [
-          // Hidden when there is nothing to search — an empty account was offered a search box
-          // above the words "No chats yet", which asks the user to look for something the screen
-          // has just told them does not exist.
-          //
-          // It stays while a search is RUNNING, however empty the result. Hiding it the moment a
-          // query matched nothing would take away the only means of clearing that query, and the
-          // screen would be stuck showing "Nothing found" with no way back.
-          if ((conversations.value?.isNotEmpty ?? false) || _query.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-              child: AdaptiveSearchField(
-                controller: _search,
-                placeholder: l10n.t('chat.search'),
-                onChanged: (v) => setState(() => _query = v.trim()),
-              ),
-            ),
-          Expanded(
-            child: conversations.when(
-              loading: () => const Center(child: AdaptiveProgress()),
-              error: (e, _) => ErrorView(
-                message: e.toString(),
-                onRetry: () =>
-                    ref.read(conversationListProvider.notifier).refresh(),
-              ),
-              data: (all) {
-                final list = _filter(all, myUserId, l10n);
-
-                return AdaptiveRefreshableScrollView(
-                  onRefresh: () =>
-                      ref.read(conversationListProvider.notifier).refresh(),
-                  slivers: [
-                    if (list.isEmpty)
-                      SliverFillRemaining(
-                        hasScrollBody: false,
-                        child: _EmptyState(
-                          l10n: l10n,
-                          // "Nothing found" is a different thing from "no chats yet", and telling a
-                          // user to start a chat when they have twenty and mistyped a name is noise.
-                          searching: _query.isNotEmpty,
-                        ),
-                      )
-                    else
-                      SliverPadding(
-                        padding: const EdgeInsets.symmetric(vertical: 6),
-                        sliver: SliverList.builder(
-                          itemCount: list.length,
-                          itemBuilder: (context, i) =>
-                              _ConversationRow(conversation: list[i]),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
+      body: ScrollHidingHeader(
+        header:
+            // Hidden when there is nothing to search — an empty account was offered a search box
+            // above the words "No chats yet", which asks the user to look for something the screen
+            // has just told them does not exist.
+            //
+            // It stays while a search is RUNNING, however empty the result. Hiding it the moment a
+            // query matched nothing would take away the only means of clearing that query, and the
+            // screen would be stuck showing "Nothing found" with no way back.
+            ((conversations.value?.isNotEmpty ?? false) || _query.isNotEmpty)
+            ? Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                child: AdaptiveSearchField(
+                  controller: _search,
+                  placeholder: l10n.t('chat.search'),
+                  onChanged: (v) => setState(() => _query = v.trim()),
+                ),
+              )
+            : const SizedBox.shrink(),
+        child: conversations.when(
+          loading: () => const Center(child: AdaptiveProgress()),
+          error: (e, _) => ErrorView(
+            message: e.toString(),
+            onRetry: () =>
+                ref.read(conversationListProvider.notifier).refresh(),
           ),
-        ],
+          data: (all) {
+            final list = _filter(all, myUserId, l10n);
+
+            return AdaptiveRefreshableScrollView(
+              onRefresh: () =>
+                  ref.read(conversationListProvider.notifier).refresh(),
+              slivers: [
+                if (list.isEmpty)
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: _EmptyState(
+                      l10n: l10n,
+                      // "Nothing found" is a different thing from "no chats yet", and telling a
+                      // user to start a chat when they have twenty and mistyped a name is noise.
+                      searching: _query.isNotEmpty,
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    sliver: SliverList.builder(
+                      itemCount: list.length,
+                      itemBuilder: (context, i) =>
+                          _ConversationRow(conversation: list[i]),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }

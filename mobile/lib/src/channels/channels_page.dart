@@ -12,6 +12,7 @@ import '../push/push_service.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/adaptive/adaptive_search_field.dart';
 import '../widgets/brand_logo.dart';
+import '../widgets/scroll_hiding_header.dart';
 import 'widgets/channel_row.dart';
 import '../widgets/error_view.dart';
 import 'create_channel_sheet.dart';
@@ -172,70 +173,64 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
               icon: const Icon(Icons.add),
               label: Text(l10n.t('channels.newChannel')),
             ),
-      body: Column(
-        children: [
-          // Hidden when there is nothing to search, and kept while a search is running however
-          // empty its result — the same rule the Chats tab follows, for the same reasons.
-          if (_hasAnyChannel(channels, joined) || _query.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-              child: AdaptiveSearchField(
-                controller: _search,
-                placeholder: l10n.t('channels.search'),
-                onChanged: (v) => setState(() => _query = v.trim()),
+      body: ScrollHidingHeader(
+        // Hidden when there is nothing to search, and kept while a search is running however
+        // empty its result — the same rule the Chats tab follows, for the same reasons.
+        header: (_hasAnyChannel(channels, joined) || _query.isNotEmpty)
+            ? Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                child: AdaptiveSearchField(
+                  controller: _search,
+                  placeholder: l10n.t('channels.search'),
+                  onChanged: (v) => setState(() => _query = v.trim()),
+                ),
+              )
+            : const SizedBox.shrink(),
+        child: AdaptiveRefreshableScrollView(
+          onRefresh: () => Future.wait([
+            ref.read(channelsProvider.notifier).refresh(),
+            ref.read(joinedChannelsProvider.notifier).refresh(),
+          ]),
+          slivers: channels.when(
+            loading: () => const [
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(child: AdaptiveProgress()),
               ),
-            ),
-          Expanded(
-            child: AdaptiveRefreshableScrollView(
-              onRefresh: () => Future.wait([
-                ref.read(channelsProvider.notifier).refresh(),
-                ref.read(joinedChannelsProvider.notifier).refresh(),
-              ]),
-              slivers: channels.when(
-                loading: () => const [
-                  SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: Center(child: AdaptiveProgress()),
-                  ),
-                ],
-                error: (e, _) => [
-                  SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: ErrorView(
-                      message: l10n.t('channels.loadFailed'),
-                      onRetry: () =>
-                          ref.read(channelsProvider.notifier).refresh(),
-                    ),
-                  ),
-                ],
-                data: (allOwned) {
-                  final rows = _rows(
-                    _filterOwned(allOwned),
-                    _filterJoined(
-                      joined.asData?.value ?? const <JoinedChannel>[],
-                    ),
-                  );
-                  if (rows.isEmpty) {
-                    return [_emptyState(context, searching: _query.isNotEmpty)];
-                  }
-                  return [
-                    SliverPadding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      sliver: SliverList.builder(
-                        itemCount: rows.length,
-                        itemBuilder: (context, i) => ChannelRow(
-                          channel: rows[i].channel,
-                          role: rows[i].role,
-                        ),
-                      ),
-                    ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 96)),
-                  ];
-                },
+            ],
+            error: (e, _) => [
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: ErrorView(
+                  message: l10n.t('channels.loadFailed'),
+                  onRetry: () => ref.read(channelsProvider.notifier).refresh(),
+                ),
               ),
-            ),
+            ],
+            data: (allOwned) {
+              final rows = _rows(
+                _filterOwned(allOwned),
+                _filterJoined(joined.asData?.value ?? const <JoinedChannel>[]),
+              );
+              if (rows.isEmpty) {
+                return [_emptyState(context, searching: _query.isNotEmpty)];
+              }
+              return [
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  sliver: SliverList.builder(
+                    itemCount: rows.length,
+                    itemBuilder: (context, i) => ChannelRow(
+                      channel: rows[i].channel,
+                      role: rows[i].role,
+                    ),
+                  ),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 96)),
+              ];
+            },
           ),
-        ],
+        ),
       ),
     );
   }

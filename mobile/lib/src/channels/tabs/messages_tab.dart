@@ -10,6 +10,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../widgets/adaptive/adaptive.dart';
 import '../../widgets/adaptive/adaptive_search_field.dart';
+import '../../widgets/scroll_hiding_header.dart';
 import '../../widgets/error_view.dart';
 import '../../chat/chat_time.dart';
 import '../../chat/widgets/chat_wallpaper.dart';
@@ -164,36 +165,42 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
       );
     }
 
-    return Column(
-      children: [
-        // The field the Chats and Channels lists use. This screen had grown its own — a bare
-        // TextField on Android and a CupertinoSearchTextField on iOS, each with its own clear
-        // button — so searching inside a channel looked like a different app from searching for
-        // one.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-          child: AdaptiveSearchField(
-            controller: _search,
-            placeholder: l10n.t('channel.searchHint'),
-            onChanged: _onSearchChanged,
-          ),
-        ),
-        if (_activeQuery.isNotEmpty)
+    return ScrollHidingHeader(
+      // The feed runs backwards, so the gesture that means "further into the list" reports the
+      // opposite direction from a normal one.
+      reversed: true,
+      header: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // The field the Chats and Channels lists use. This screen had grown its own — a bare
+          // TextField on Android and a CupertinoSearchTextField on iOS, each with its own clear
+          // button — so searching inside a channel looked like a different app from searching for
+          // one.
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                l10n.tp('channel.filtering', {'query': _activeQuery}),
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: AdaptiveSearchField(
+              controller: _search,
+              placeholder: l10n.t('channel.searchHint'),
+              onChanged: _onSearchChanged,
+            ),
+          ),
+          if (_activeQuery.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  l10n.tp('channel.filtering', {'query': _activeQuery}),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             ),
-          ),
-        Expanded(child: _list(context, l10n)),
-      ],
+        ],
+      ),
+      child: _list(context, l10n),
     );
   }
 
