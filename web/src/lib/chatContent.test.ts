@@ -7,7 +7,7 @@
 // one does.
 
 import { describe, expect, it } from 'vitest'
-import { deserializeContent, serializeContent, type ChatContent } from './chatContent'
+import { contentJson, deserializeContent, serializeContent, type ChatContent } from './chatContent'
 import { openPhoto, sealPhotoBytes } from './photo'
 
 const hex = (bytes: Uint8Array): string =>
@@ -19,13 +19,25 @@ const unhex = (s: string): Uint8Array =>
 const decode = (bytes: Uint8Array): string => new TextDecoder().decode(bytes)
 const encode = (s: string): Uint8Array => new TextEncoder().encode(s)
 
+/**
+ * The serialised object with the length padding removed.
+ *
+ * Messages are padded to a fixed bucket so their ciphertext length says nothing
+ * about how much was written (see `padding` below). The contract vectors are
+ * asserted against the unpadded form, because what has to match across clients
+ * is the fields and their order — the padding is a variable-length tail that
+ * carries no meaning and is stripped by both ends as an unknown field.
+ */
+const withoutPadding = (bytes: Uint8Array): string =>
+  decode(bytes).replace(/,"_p":"\.*"}$/, '}')
+
 describe('content codec', () => {
   it('serialises a plain message exactly as the mobile client does', () => {
-    expect(decode(serializeContent({ body: 'hello' }))).toBe('{"body":"hello"}')
+    expect(withoutPadding(serializeContent({ body: 'hello' }))).toBe('{"body":"hello"}')
   })
 
   it('omits absent fields rather than writing them as null', () => {
-    const json = decode(serializeContent({ body: 'hi' }))
+    const json = withoutPadding(serializeContent({ body: 'hi' }))
     expect(json).not.toContain('null')
     expect(json).not.toContain('replyTo')
     expect(json).not.toContain('photos')
@@ -35,7 +47,7 @@ describe('content codec', () => {
     // Never the quoted TEXT. A client renders the quote from the message it already holds; copying the
     // text in would let a sender quote you as saying anything at all, with no way for the recipient
     // to check.
-    expect(decode(serializeContent({ body: 'agreed', replyTo: 'msg-1' }))).toBe(
+    expect(withoutPadding(serializeContent({ body: 'agreed', replyTo: 'msg-1' }))).toBe(
       '{"body":"agreed","replyTo":"msg-1"}',
     )
   })
@@ -45,7 +57,7 @@ describe('content codec', () => {
       body: 'look',
       photos: [{ id: 'blob-1', key: 'a2V5', w: 1200, h: 800, mime: 'image/jpeg', size: 4096 }],
     }
-    expect(decode(serializeContent(content))).toBe(
+    expect(withoutPadding(serializeContent(content))).toBe(
       '{"body":"look","photos":[{"id":"blob-1","key":"a2V5","w":1200,' +
         '"h":800,"mime":"image/jpeg","size":4096}]}',
     )
@@ -114,5 +126,92 @@ describe('photo encryption golden vector', () => {
     const tampered = unhex(SEALED_HEX)
     tampered[20] ^= 0x01
     await expect(openPhoto(KEY_B64, tampered)).rejects.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Length padding
+// ---------------------------------------------------------------------------
+//
+// Ciphertext length survives encryption. Without padding, "yes" and "no" and a
+// long paragraph are three visibly different packets on the wire, so an observer
+// who can see nothing of what was said can still see how much was said, and
+// match it against the rhythm of a conversation.
+
+describe('padding', () => {
+  const size = (c: ChatContent) => serializeContent(c).length
+
+  it('makes short messages indistinguishable by length', () => {
+    const lengths = new Set(
+      ['no', 'yes', 'ok', 'on my way', 'I will be about twenty minutes late'].map((body) =>
+        size({ body }),
+      ),
+    )
+    expect(lengths.size).toBe(1)
+  })
+
+  it('pads to a multiple of the bucket size', () => {
+    for (const body of ['', 'a', 'x'.repeat(200), 'y'.repeat(1000), 'z'.repeat(5000)]) {
+      expect(size({ body }) % 256).toBe(0)
+    }
+  })
+
+  // The overhead has to stay bounded, or padding a large message becomes a
+  // bandwidth problem. Rounding up to a fixed multiple costs at most one bucket
+  // whatever the size; rounding up to a power of two would double it.
+  it('never costs more than one bucket, however large the message', () => {
+    for (const n of [1, 500, 5_000, 50_000]) {
+      const body = 'x'.repeat(n)
+      expect(size({ body }) - n).toBeLessThan(256 + 64)
+    }
+  })
+
+  it('survives a round trip with the padding stripped', () => {
+    const content: ChatContent = { body: 'hello', replyTo: 'msg-1' }
+    const back = deserializeContent(serializeContent(content))
+    expect(back).toEqual(content)
+  })
+
+  // Multi-byte characters must be counted as bytes, not as UTF-16 code units, or
+  // the padded length is wrong for every non-Latin message -- which is most of
+  // them, for this app.
+  it('counts bytes rather than characters', () => {
+    for (const body of ['привет', '你好世界', '🙂🙂🙂', 'ok']) {
+      expect(size({ body }) % 256).toBe(0)
+    }
+  })
+
+  // Byte-for-byte agreement with the mobile client, so neither is identifiable by
+  // the size of what it sends. If the two bucketed differently, the bucket a
+  // message landed in would say which client wrote it — a fingerprint of exactly
+  // the kind this exists to remove. These same numbers are asserted in
+  // mobile/test/unit/chat_content_test.dart.
+  it('produces the same padded length the mobile client does', () => {
+    expect(size({ body: 'hello' })).toBe(256)
+    expect(size({ body: 'x'.repeat(300) })).toBe(512)
+    expect(size({ body: 'x'.repeat(600) })).toBe(768)
+  })
+
+  it('does not leak the body length through the padding field', () => {
+    // Two bodies of different length in the same bucket must produce the same
+    // number of bytes -- including the pad field itself.
+    expect(size({ body: 'a' })).toBe(size({ body: 'abcdefghij' }))
+  })
+})
+
+// The padded form goes on the wire; the unpadded form is what gets stored. A
+// local cache padded to buckets would carry up to 255 bytes of dots per message
+// on disk and hide nothing from anyone, since the length of a message is not a
+// secret from the device that already holds its text.
+describe('contentJson (the stored form)', () => {
+  it('carries no padding', () => {
+    expect(contentJson({ body: 'hello' })).toBe('{"body":"hello"}')
+    expect(contentJson({ body: 'hello' })).not.toContain('_p')
+  })
+
+  it('is what serializeContent pads, so the two cannot drift', () => {
+    const content: ChatContent = { body: 'look', replyTo: 'm1' }
+    const padded = new TextDecoder().decode(serializeContent(content))
+    expect(padded.startsWith(contentJson(content).slice(0, -1))).toBe(true)
   })
 })

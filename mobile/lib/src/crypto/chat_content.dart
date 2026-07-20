@@ -123,12 +123,29 @@ class ChatContent {
   bool get hasPhotos => photos.isNotEmpty;
 }
 
-/// Serialises content for encryption.
+/// Bucket the serialised length is rounded up to, in bytes.
 ///
-/// The exact bytes the web produces, because both ends have to agree or every cross-client message is
-/// gibberish. Absent fields are OMITTED rather than written as null — the web omits them, and a null
-/// where nothing is expected is a difference for no reason.
-Uint8List serializeContent(ChatContent content) {
+/// Encryption hides what was said; it does not hide how much. A ciphertext is as long as its
+/// plaintext, so without this "no" and "yes" and a paragraph are three visibly different packets, and
+/// an observer who cannot read a word of a conversation can still read its shape — who answers in
+/// monosyllables, who writes at length, when a short exchange turns into a long one.
+///
+/// A fixed multiple rather than the next power of two: the overhead is then at most one bucket
+/// whatever the message size, where powers of two would double a large one. 256 bytes makes every
+/// message shorter than that identical, which is nearly all of them.
+///
+/// MUST match PAD_BUCKET in web/src/lib/chatContent.ts.
+const int _padBucket = 256;
+
+/// Bytes that `,"_p":""` itself adds to the serialised object.
+const int _padOverhead = 8;
+
+/// The message as JSON, without padding.
+///
+/// This is the form to STORE. Padding hides a message's length from anything watching the wire; on
+/// this device the length is not a secret from anybody, so padding the local cache would buy nothing
+/// and cost up to a bucket per message in secure storage, which is not meant for bulk.
+String contentJson(ChatContent content) {
   final json = <String, dynamic>{'body': content.body};
 
   final replyTo = content.replyTo;
@@ -137,7 +154,31 @@ Uint8List serializeContent(ChatContent content) {
     json['photos'] = content.photos.map((p) => p.toJson()).toList();
   }
 
-  return Uint8List.fromList(utf8.encode(jsonEncode(json)));
+  return jsonEncode(json);
+}
+
+/// Serialises content for encryption, padded so the ciphertext length reveals only which bucket the
+/// message fell into.
+///
+/// The exact bytes the web produces, because both ends have to agree or every cross-client message is
+/// gibberish. Absent fields are OMITTED rather than written as null — the web omits them, and a null
+/// where nothing is expected is a difference for no reason.
+///
+/// The padding rides as an ordinary extra field, so a client that has never heard of `_p` reads these
+/// messages correctly: both codecs already ignore fields they do not know.
+Uint8List serializeContent(ChatContent content) {
+  final encoded = contentJson(content);
+  // Byte length, not character length: jsonEncode leaves non-ASCII literal, so for most of this
+  // app's messages the two differ and only bytes reach the wire.
+  final base = utf8.encode(encoded).length;
+  final target = ((base + _padOverhead) / _padBucket).ceil() * _padBucket;
+  final padding = '.' * (target - base - _padOverhead);
+
+  // Appended textually rather than as a map entry, so the result is exactly the target length:
+  // re-encoding with the field would re-escape the body and could shift the length again.
+  return Uint8List.fromList(
+    utf8.encode('${encoded.substring(0, encoded.length - 1)},"_p":"$padding"}'),
+  );
 }
 
 /// Reads decrypted plaintext back into content.

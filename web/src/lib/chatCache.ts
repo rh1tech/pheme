@@ -10,7 +10,7 @@
 // a weakening of E2EE: the plaintext is only ever on the devices that legitimately
 // hold it, exactly as the messages themselves are.
 
-import { deserializeContent, serializeContent, type ChatContent } from './chatContent'
+import { contentJson, deserializeContent, type ChatContent } from './chatContent'
 import { idbDelete, idbGet, idbKeys, idbSet } from './idb'
 
 // One IndexedDB entry holds the whole per-conversation body map, which keeps
@@ -97,7 +97,10 @@ export async function cacheContent(
   messageId: string,
   content: ChatContent,
 ): Promise<void> {
-  const serialised = decoder.decode(serializeContent(content))
+  // The UNPADDED form. Padding exists to hide a message's length from anything
+  // watching the wire; nothing here reaches the wire, and padding the cache would
+  // cost up to a bucket per message on disk for no privacy at all.
+  const serialised = contentJson(content)
 
   const map = await loadMap(conversationId)
   if (map[messageId] === serialised) return

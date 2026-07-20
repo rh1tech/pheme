@@ -45,17 +45,28 @@ void main() {
     });
   });
 
+  /// The serialised object with the length padding removed.
+  ///
+  /// Messages are padded to a fixed bucket so their ciphertext length says nothing about how much
+  /// was written. The contract vectors are asserted against the unpadded form, because what has to
+  /// match across clients is the fields and their order — the padding is a variable-length tail
+  /// that carries no meaning and is stripped by both ends as an unknown field.
+  String withoutPadding(Uint8List bytes) =>
+      utf8.decode(bytes).replaceFirst(RegExp(r',"_p":"\.*"}$'), '}');
+
   group('content codec', () {
     test('a plain message serialises exactly as the web serialises it', () {
       const content = ChatContent(body: 'hello');
-      expect(utf8.decode(serializeContent(content)), '{"body":"hello"}');
+      expect(withoutPadding(serializeContent(content)), '{"body":"hello"}');
     });
 
     // Absent fields are OMITTED, not written as null. The web omits them, and a null where nothing is
     // expected is a difference for no reason — but it is a difference, and AES-GCM does not care about
     // intent.
     test('absent fields are omitted rather than written as null', () {
-      final json = utf8.decode(serializeContent(const ChatContent(body: 'hi')));
+      final json = withoutPadding(
+        serializeContent(const ChatContent(body: 'hi')),
+      );
       expect(json.contains('null'), isFalse);
       expect(json.contains('replyTo'), isFalse);
       expect(json.contains('photos'), isFalse);
@@ -64,7 +75,7 @@ void main() {
     test('a reply carries only the id it is replying to', () {
       const content = ChatContent(body: 'agreed', replyTo: 'msg-1');
       expect(
-        utf8.decode(serializeContent(content)),
+        withoutPadding(serializeContent(content)),
         '{"body":"agreed","replyTo":"msg-1"}',
       );
     });
@@ -85,7 +96,7 @@ void main() {
       );
 
       expect(
-        utf8.decode(serializeContent(content)),
+        withoutPadding(serializeContent(content)),
         '{"body":"look","photos":[{"id":"blob-1","key":"a2V5","w":1200,'
         '"h":800,"mime":"image/jpeg","size":4096}]}',
       );
@@ -226,6 +237,88 @@ void main() {
       for (var i = 0; i < 100; i++) {
         expect(seen.add(_hex(newPhotoKey())), isTrue, reason: 'key repeated');
       }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Length padding — the web half is in web/src/lib/chatContent.test.ts
+  // ---------------------------------------------------------------------------
+  //
+  // Ciphertext length survives encryption. Without padding, "yes" and "no" and a long paragraph are
+  // three visibly different packets, so an observer who can see nothing of what was said can still
+  // see how much was said.
+  //
+  // The padded LENGTH is as much a cross-client contract as the field order: if the two clients
+  // bucketed differently, the bucket a message landed in would identify which client sent it, which
+  // is a fingerprint of exactly the kind this is meant to remove.
+  group('padding', () {
+    int size(ChatContent c) => serializeContent(c).length;
+
+    test('makes short messages indistinguishable by length', () {
+      final lengths = <int>{
+        for (final body in [
+          'no',
+          'yes',
+          'ok',
+          'on my way',
+          'I will be about twenty minutes late',
+        ])
+          size(ChatContent(body: body)),
+      };
+      expect(lengths.length, 1);
+    });
+
+    test('pads to a multiple of the bucket size', () {
+      for (final body in ['', 'a', 'x' * 200, 'y' * 1000, 'z' * 5000]) {
+        expect(size(ChatContent(body: body)) % 256, 0);
+      }
+    });
+
+    test('never costs more than one bucket, however large the message', () {
+      for (final n in [1, 500, 5000, 50000]) {
+        expect(size(ChatContent(body: 'x' * n)) - n, lessThan(256 + 64));
+      }
+    });
+
+    test('counts bytes rather than characters', () {
+      for (final body in ['привет', '你好世界', '🙂🙂🙂', 'ok']) {
+        expect(size(ChatContent(body: body)) % 256, 0);
+      }
+    });
+
+    test('survives a round trip with the padding stripped', () {
+      const content = ChatContent(body: 'hello', replyTo: 'msg-1');
+      final back = parseContent(serializeContent(content));
+      expect(back.body, 'hello');
+      expect(back.replyTo, 'msg-1');
+    });
+
+    // Byte-for-byte agreement with the web, so neither client is identifiable by the size of what
+    // it sends. These exact numbers are asserted on the web side too.
+    test('produces the same padded length the web does', () {
+      expect(size(const ChatContent(body: 'hello')), 256);
+      expect(size(ChatContent(body: 'x' * 300)), 512);
+      expect(size(ChatContent(body: 'x' * 600)), 768);
+    });
+  });
+
+  // The padded form goes on the wire; the unpadded form is what gets stored. A local cache padded to
+  // buckets would carry up to 255 bytes of dots per message in secure storage and hide nothing from
+  // anyone, since a message's length is not a secret from the device that already holds its text.
+  group('contentJson (the stored form)', () {
+    test('carries no padding', () {
+      expect(contentJson(const ChatContent(body: 'hello')), '{"body":"hello"}');
+      expect(
+        contentJson(const ChatContent(body: 'hello')),
+        isNot(contains('_p')),
+      );
+    });
+
+    test('is what serializeContent pads, so the two cannot drift', () {
+      const content = ChatContent(body: 'look', replyTo: 'm1');
+      final padded = utf8.decode(serializeContent(content));
+      final bare = contentJson(content);
+      expect(padded.startsWith(bare.substring(0, bare.length - 1)), isTrue);
     });
   });
 }

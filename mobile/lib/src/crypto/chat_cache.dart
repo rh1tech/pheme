@@ -119,7 +119,10 @@ class ChatCache {
     String messageId,
     ChatContent content,
   ) async {
-    final serialised = utf8.decode(serializeContent(content));
+    // The UNPADDED form. Padding exists to hide a message's length from anything
+    // watching the wire; nothing here reaches the wire, and padding the cache would
+    // cost up to a bucket per message in secure storage for no privacy at all.
+    final serialised = contentJson(content);
 
     final contents = await load(conversationId);
     if (contents[messageId] == serialised) return;

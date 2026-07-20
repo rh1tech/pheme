@@ -56,12 +56,61 @@ export interface ChatContent {
   photos?: ChatPhoto[]
 }
 
-/** Serialises message content to the bytes MLS will encrypt. */
-export function serializeContent(content: ChatContent): Uint8Array {
+/**
+ * Bucket the serialised length is rounded up to, in bytes.
+ *
+ * Encryption hides what was said; it does not hide how much. A ciphertext is as
+ * long as its plaintext, so without this "no" and "yes" and a paragraph are
+ * three visibly different packets, and an observer who cannot read a word of a
+ * conversation can still read its shape — who answers in monosyllables, who
+ * writes at length, when a short exchange turns into a long one.
+ *
+ * A fixed multiple rather than the next power of two: the overhead is then at
+ * most one bucket whatever the message size, where powers of two would double a
+ * large one. 256 bytes makes every message shorter than that identical, which is
+ * nearly all of them, and costs an eighth of a kilobyte to do it.
+ */
+const PAD_BUCKET = 256
+
+/** Bytes that `,"_p":""` itself adds to the serialised object. */
+const PAD_OVERHEAD = 8
+
+/**
+ * The message as JSON, without padding.
+ *
+ * This is the form to STORE. Padding hides a message's length from anything
+ * watching the wire; on this device the length is not a secret from anybody, so
+ * padding the local cache would buy nothing and cost up to a bucket per message
+ * in storage that is not meant for bulk.
+ */
+export function contentJson(content: ChatContent): string {
   const out: ChatContent = { body: content.body }
   if (content.replyTo) out.replyTo = content.replyTo
   if (content.photos?.length) out.photos = content.photos
-  return new TextEncoder().encode(JSON.stringify(out))
+  return JSON.stringify(out)
+}
+
+/**
+ * Serialises message content to the bytes MLS will encrypt, padded so the
+ * ciphertext length reveals only which bucket the message fell into.
+ *
+ * The padding rides as an ordinary extra field. Every client already ignores
+ * fields it does not know — that leniency is the cross-client contract this file
+ * opens by describing — so a client that has never heard of `_p` reads these
+ * messages correctly, and one that pads can be talked to by one that does not.
+ */
+export function serializeContent(content: ChatContent): Uint8Array {
+  const json = contentJson(content)
+  // Byte length, not string length: JSON.stringify leaves non-ASCII literal, so
+  // for most of this app's messages the two differ and only bytes reach the wire.
+  const base = new TextEncoder().encode(json).length
+  const target = Math.ceil((base + PAD_OVERHEAD) / PAD_BUCKET) * PAD_BUCKET
+  const padding = '.'.repeat(target - base - PAD_OVERHEAD)
+
+  // Appended textually rather than as a property, so the result is exactly the
+  // target length. Re-stringifying an object with the field would re-escape the
+  // body and could shift the length again.
+  return new TextEncoder().encode(`${json.slice(0, -1)},"_p":"${padding}"}`)
 }
 
 /** Parses decrypted bytes back into content. Returns null on garbage. */
