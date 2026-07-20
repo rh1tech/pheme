@@ -12,8 +12,8 @@ import '../push/push_service.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/adaptive/adaptive_search_field.dart';
 import '../widgets/brand_logo.dart';
+import 'widgets/channel_row.dart';
 import '../widgets/error_view.dart';
-import '../widgets/mode_badge.dart';
 import 'create_channel_sheet.dart';
 import 'join_channel_sheet.dart';
 
@@ -209,17 +209,26 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
                   ),
                 ],
                 data: (allOwned) {
-                  final owned = _filterOwned(allOwned);
-                  final joinedList = _filterJoined(
-                    joined.asData?.value ?? const <JoinedChannel>[],
+                  final rows = _rows(
+                    _filterOwned(allOwned),
+                    _filterJoined(
+                      joined.asData?.value ?? const <JoinedChannel>[],
+                    ),
                   );
-                  if (owned.isEmpty && joinedList.isEmpty) {
+                  if (rows.isEmpty) {
                     return [_emptyState(context, searching: _query.isNotEmpty)];
                   }
                   return [
-                    if (owned.isNotEmpty) ..._ownedSlivers(context, owned),
-                    if (joinedList.isNotEmpty)
-                      ..._joinedSlivers(context, joinedList),
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      sliver: SliverList.builder(
+                        itemCount: rows.length,
+                        itemBuilder: (context, i) => ChannelRow(
+                          channel: rows[i].channel,
+                          role: rows[i].role,
+                        ),
+                      ),
+                    ),
                     const SliverToBoxAdapter(child: SizedBox(height: 96)),
                   ];
                 },
@@ -229,6 +238,49 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
         ],
       ),
     );
+  }
+
+  /// The channels to show, newest activity first.
+  ///
+  /// Owned and joined channels came from two providers and were rendered as two labelled sections,
+  /// each in whatever order the server returned. Whether you happen to own a channel is a fact
+  /// about permissions, not about what has just happened in it, and it is a poor reason to bury a
+  /// channel that posted a minute ago under one that has been silent for a month. They are one list
+  /// now, ordered the way the chat list is ordered — which is also what makes the two tabs feel
+  /// like the same screen.
+  ///
+  /// A channel with no posts sorts by nothing and lands at the end; there is no activity to rank it
+  /// by, and inventing one would put empty channels above live ones.
+  List<_ChannelRowData> _rows(List<Channel> owned, List<JoinedChannel> joined) {
+    final rows = [
+      for (final c in owned) _ChannelRowData(channel: c),
+      for (final j in joined)
+        _ChannelRowData(channel: j.channel, role: _roleLabel(j)),
+    ];
+    rows.sort((a, b) {
+      final at = a.channel.lastMessage?.createdAt ?? '';
+      final bt = b.channel.lastMessage?.createdAt ?? '';
+      if (at.isEmpty && bt.isEmpty) {
+        return a.channel.name.toLowerCase().compareTo(
+          b.channel.name.toLowerCase(),
+        );
+      }
+      if (at.isEmpty) return 1;
+      if (bt.isEmpty) return -1;
+      return bt.compareTo(at);
+    });
+    return rows;
+  }
+
+  /// The quiet role suffix on a joined channel's row, or null for a plain subscriber — being one
+  /// is the unremarkable case and does not need saying.
+  String? _roleLabel(JoinedChannel j) {
+    final l10n = context.l10n;
+    if (j.memberStatus == MemberStatus.pending) {
+      return l10n.t('channel.statusPending');
+    }
+    if (j.role == ChannelRole.admin) return l10n.t('channel.roleAdmin');
+    return null;
   }
 
   /// Whether the account has any channel at all, before filtering — what decides if there is
@@ -298,236 +350,11 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
       ),
     );
   }
-
-  List<Widget> _ownedSlivers(BuildContext context, List<Channel> owned) {
-    final l10n = context.l10n;
-    if (isCupertino(context)) {
-      return [
-        SliverToBoxAdapter(
-          child: CupertinoListSection.insetGrouped(
-            header: Text(l10n.t('channels.ownedSection')),
-            margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            children: [
-              for (final c in owned)
-                CupertinoListTile.notched(
-                  title: Text(
-                    c.name.isEmpty ? l10n.t('channel.fallbackName') : c.name,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  subtitle: Text(c.publicId),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ModeBadge(mode: c.subscriptionMode),
-                      const SizedBox(width: 8),
-                      const CupertinoListTileChevron(),
-                    ],
-                  ),
-                  onTap: () => context.go('/channels/${c.id}'),
-                ),
-            ],
-          ),
-        ),
-      ];
-    }
-
-    return [
-      _MaterialSectionHeader(label: l10n.t('channels.ownedSection')),
-      SliverPadding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-        sliver: SliverList.separated(
-          itemCount: owned.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 10),
-          itemBuilder: (context, i) {
-            final c = owned[i];
-            return _MaterialChannelCard(
-              title: c.name.isEmpty ? l10n.t('channel.fallbackName') : c.name,
-              subtitle: c.publicId,
-              trailing: ModeBadge(mode: c.subscriptionMode),
-              onTap: () => context.go('/channels/${c.id}'),
-            );
-          },
-        ),
-      ),
-    ];
-  }
-
-  List<Widget> _joinedSlivers(
-    BuildContext context,
-    List<JoinedChannel> joined,
-  ) {
-    final l10n = context.l10n;
-    if (isCupertino(context)) {
-      return [
-        SliverToBoxAdapter(
-          child: CupertinoListSection.insetGrouped(
-            header: Text(l10n.t('channels.joinedSection')),
-            margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            children: [
-              for (final jc in joined)
-                CupertinoListTile.notched(
-                  title: Text(
-                    jc.channel.name.isEmpty
-                        ? l10n.t('channel.fallbackName')
-                        : jc.channel.name,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  subtitle: Text(jc.channel.publicId),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _RelationIndicator(joined: jc),
-                      const SizedBox(width: 8),
-                      const CupertinoListTileChevron(),
-                    ],
-                  ),
-                  onTap: () => context.go('/channels/${jc.channel.id}'),
-                ),
-            ],
-          ),
-        ),
-      ];
-    }
-
-    return [
-      _MaterialSectionHeader(label: l10n.t('channels.joinedSection')),
-      SliverPadding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-        sliver: SliverList.separated(
-          itemCount: joined.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 10),
-          itemBuilder: (context, i) {
-            final jc = joined[i];
-            return _MaterialChannelCard(
-              title: jc.channel.name.isEmpty
-                  ? l10n.t('channel.fallbackName')
-                  : jc.channel.name,
-              subtitle: jc.channel.publicId,
-              trailing: _RelationIndicator(joined: jc),
-              onTap: () => context.go('/channels/${jc.channel.id}'),
-            );
-          },
-        ),
-      ),
-    ];
-  }
 }
 
-class _MaterialSectionHeader extends StatelessWidget {
-  const _MaterialSectionHeader({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return SliverToBoxAdapter(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-        child: Text(
-          label.toUpperCase(),
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.6,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MaterialChannelCard extends StatelessWidget {
-  const _MaterialChannelCard({
-    required this.title,
-    required this.subtitle,
-    required this.trailing,
-    required this.onTap,
-  });
-
-  final String title;
-  final String subtitle;
-  final Widget trailing;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(
-            subtitle,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-              fontSize: 12,
-            ),
-          ),
-        ),
-        trailing: trailing,
-        onTap: onTap,
-      ),
-    );
-  }
-}
-
-/// Role/status pill(s) for a joined channel: an admin badge and/or a
-/// pending/blocked status badge (active members show nothing).
-class _RelationIndicator extends StatelessWidget {
-  const _RelationIndicator({required this.joined});
-
-  final JoinedChannel joined;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = context.l10n;
-    final scheme = Theme.of(context).colorScheme;
-    final pills = <Widget>[
-      if (joined.role == ChannelRole.admin)
-        _Pill(label: l10n.t('channel.roleAdmin'), color: scheme.primary),
-      if (joined.memberStatus == MemberStatus.pending)
-        _Pill(label: l10n.t('channel.statusPending'), color: scheme.secondary),
-      if (joined.memberStatus == MemberStatus.blocked)
-        _Pill(label: l10n.t('channel.statusBlocked'), color: scheme.error),
-    ];
-    if (pills.isEmpty) return const SizedBox.shrink();
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < pills.length; i++) ...[
-          if (i > 0) const SizedBox(width: 6),
-          pills[i],
-        ],
-        const SizedBox(width: 6),
-      ],
-    );
-  }
-}
-
-class _Pill extends StatelessWidget {
-  const _Pill({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(isCupertino(context) ? 100 : 8),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
+/// A row in the merged list: the channel, and the reader's role in it when that is worth showing.
+class _ChannelRowData {
+  const _ChannelRowData({required this.channel, this.role});
+  final Channel channel;
+  final String? role;
 }

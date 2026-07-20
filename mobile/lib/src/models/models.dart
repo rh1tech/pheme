@@ -118,6 +118,7 @@ class Channel {
     required this.subscriptionMode,
     required this.status,
     required this.createdAt,
+    this.lastMessage,
     this.alias,
   });
 
@@ -132,6 +133,12 @@ class Channel {
   /// The channel's optional "phetag" — a human-friendly handle that can be used
   /// in place of [publicId] when joining. Null or empty when unset.
   final String? alias;
+
+  /// The newest post, for the list row's preview line and its sort order.
+  ///
+  /// The server has always sent this (channelView.lastMessage); nothing here read it, which is why
+  /// a channel row could only show its public id where a chat row shows what was last said.
+  final ChannelLastMessage? lastMessage;
 
   /// The shareable reference others use to join: the [alias] when set,
   /// otherwise the [publicId].
@@ -149,7 +156,36 @@ class Channel {
     status: ChannelStatus.fromWire(j['status'] as String?),
     createdAt: j['createdAt'] as String? ?? '',
     alias: j['alias'] as String?,
+    lastMessage: j['lastMessage'] == null
+        ? null
+        : ChannelLastMessage.fromJson(j['lastMessage'] as Map<String, dynamic>),
   );
+}
+
+/// The newest post in a channel, as the list needs it: enough to draw a preview line and sort by.
+class ChannelLastMessage {
+  const ChannelLastMessage({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.imageCount,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String title;
+  final String body;
+  final int imageCount;
+  final String createdAt;
+
+  factory ChannelLastMessage.fromJson(Map<String, dynamic> j) =>
+      ChannelLastMessage(
+        id: j['id'] as String? ?? '',
+        title: j['title'] as String? ?? '',
+        body: j['body'] as String? ?? '',
+        imageCount: (j['imageCount'] as num?)?.toInt() ?? 0,
+        createdAt: j['createdAt'] as String? ?? '',
+      );
 }
 
 /// The caller's relationship to a channel, returned by `GET /channels/{id}`.
