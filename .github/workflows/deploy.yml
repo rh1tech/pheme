@@ -157,3 +157,66 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "API_IMAGE='${API_IMAGE}' WEB_IMAGE='${WEB_IMAGE}' /opt/pheme/deploy.sh '${ENV_NAME}'"
+
+  smoke:
+    name: Smoke test prod
+    needs: [build, deploy]
+    runs-on: [self-hosted, linux, deploy]
+    steps:
+      - uses: actions/checkout@v7
+
+      # What a release is actually checked by now.
+      #
+      # It is a smaller question than the browser suite asks, and it asks it of something the
+      # browser suite cannot reach: the containers now serving users. A green deploy only means
+      # the workflow's steps exited zero — it does not mean the new image is running, that the
+      # API can reach its database, or that the web app was rebuilt. Every one of those has been
+      # verified by hand after a deploy at some point; none of them was automated.
+      #
+      # Read-only on purpose. Smoke tests that create accounts or post messages leave litter in
+      # production forever, and litter that looks like real user data is worse than no test.
+      - name: Smoke
+        env:
+          WEB_URL: ${{ vars.PROD_WEB_URL || 'https://app.example.com' }}
+          API_URL: ${{ vars.PROD_API_URL || 'https://pheme-prod-api.rh1.tech' }}
+          EXPECTED_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          fail() { echo "SMOKE FAILED: $*" >&2; exit 1; }
+
+          # Containers are restarting as this begins, so give them a moment to come up rather
+          # than reporting the restart as a broken deploy.
+          for i in $(seq 1 30); do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' "$API_URL/healthz" 2>/dev/null || echo 000)
+            [ "$code" = "200" ] && break
+            [ "$i" = "30" ] && fail "API never became healthy: last status $code"
+            sleep 2
+          done
+          echo "  api healthy"
+
+          # THE check. A deploy can go green while the old image keeps serving — the workflow
+          # reports on its own steps, not on what the box ended up running. This is the only step
+          # here that would have caught that, and it is the failure most likely to go unnoticed
+          # because everything else still works: it just works with yesterday's code.
+          served=$(curl -fsS "$WEB_URL/version.json" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+          [ -n "$served" ] || fail "no version served at $WEB_URL/version.json"
+          [ "$served" = "$EXPECTED_VERSION" ] \
+            || fail "prod is serving $served, but this deploy was $EXPECTED_VERSION"
+          echo "  serving $served"
+
+          # The web app answers at all.
+          code=$(curl -fsS -o /dev/null -w '%{http_code}' "$WEB_URL/")
+          [ "$code" = "200" ] || fail "web root returned $code"
+          echo "  web root 200"
+
+          # Authentication reaches the database and rejects properly. Wrong credentials must be
+          # 401: a 500 here means the store is unreachable and every login on the service is
+          # failing, which the health endpoint alone does not notice. No account is created and
+          # nothing is written.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_URL/v1/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke-check@invalid.pheme.test","password":"not-a-real-password"}')
+          [ "$code" = "401" ] || fail "login with bad credentials returned $code, expected 401"
+          echo "  auth path alive (401 on bad credentials)"
+
+          echo "SMOKE PASSED"

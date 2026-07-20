@@ -8,10 +8,24 @@ on:
 permissions:
   contents: read
 
-# Only one CI run per branch at a time. The two runners share a host, so two runs in parallel put
-# two of the SAME-numbered E2E shard on that host at once — and per-shard ports (PW_PORT_OFFSET)
-# separate shards WITHIN a run, not across runs, so both would bind the same port and one would die
-# with "address already in use". A newer push supersedes an older one anyway, so cancel it.
+# THE FAST LANE. Everything here finishes in about two minutes, because everything here is a
+# check that a change can be judged by on its own: compilers, unit tests, conformance suites,
+# analysers.
+#
+# The browser E2E suite lives in e2e.yml and does NOT run here. It took thirteen minutes of a
+# fifteen-minute run, and the effect was not that releases were careful — it was that a one-line
+# fix waited a quarter of an hour behind a browser driving a chat, and that the suite's flakes
+# became the thing standing between a fix and production. Its last failure before this change was
+# a flake that passed on re-run, unchanged.
+#
+# What replaces it on the release path is a smoke test that runs AFTER the deploy, against the
+# real thing (see deploy.yml). That answers a question the E2E cannot: whether what is now serving
+# production actually works.
+#
+# Run the full suite whenever a change deserves it — the Actions tab, "E2E", "Run workflow" — and
+# it runs nightly regardless, so it cannot quietly rot.
+
+# Only one CI run per branch at a time. A newer push supersedes an older one anyway, so cancel it.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -235,49 +249,3 @@ jobs:
       # needs a compiled Rust lib would not run on this box, which means in practice it
       # would not run at all.
       - run: flutter test
-
-  e2e:
-    name: E2E (Playwright)
-    runs-on: [self-hosted, linux, ci]
-    # Sharded across the self-hosted runners. Each shard runs its OWN App API
-    # (go run, in-memory drivers) via the Playwright webServer, so the in-memory
-    # server's state — every device's sealed backup and history-sync blob — only
-    # accumulates over HALF the suite. The whole-suite volume was slowing late
-    # logins past their timeout on a single server; splitting it keeps each
-    # server's working set small enough that logins stay fast to the last test.
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: api/go.mod
-          cache-dependency-path: api/go.sum
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium webkit
-      # The Playwright config starts the Vite dev server and the App API (in-memory
-      # drivers, seeded admin), then tears them down. Two shards, one per runner, split
-      # the suite so no dev server carries the whole of it. CI=true disables server reuse
-      # so each shard is isolated.
-      #
-      # PW_PORT_OFFSET gives each shard its OWN ports (see e2e/constants.ts): the two
-      # runners share a host, so without it the shards' App APIs collide on one port.
-      - run: npx playwright test --shard=${{ matrix.shard }}/2
-        env:
-          PW_PORT_OFFSET: ${{ matrix.shard }}
-      - uses: actions/upload-artifact@v7
-        if: ${{ !cancelled() }}
-        with:
-          name: playwright-report-shard-${{ matrix.shard }}
-          path: web/playwright-report/
-          retention-days: 7

@@ -1,0 +1,100 @@
+name: E2E
+
+# The full browser suite, on demand and nightly — deliberately NOT on every push.
+#
+# It used to run in CI on every commit, where it was thirteen minutes of a fifteen-minute run. The
+# cost was not thoroughness, it was latency on the release path: a one-line fix waited a quarter of
+# an hour behind a browser driving a chat, and the suite's own flakes became the thing standing
+# between a fix and production. The last failure before this split was exactly that — the chat-e2ee
+# membership spec, which passed on re-run with no change at all.
+#
+# So it moved to where its cost is affordable. Run it from the Actions tab when a change deserves
+# it — anything touching MLS, group membership, calls, or the service worker — and it runs nightly
+# regardless, so nobody has to remember and it cannot quietly rot into permanent red.
+#
+# What guards the ordinary release instead is the smoke test in deploy.yml, which runs after the
+# deploy against production itself. It answers a narrower question than this suite, but it answers
+# it about the thing that is actually serving users.
+
+on:
+  workflow_dispatch:
+    inputs:
+      grep:
+        description: 'Only run specs matching this (Playwright --grep). Empty runs everything.'
+        required: false
+        type: string
+      project:
+        description: 'Browser project'
+        required: false
+        default: all
+        type: choice
+        options: [all, chromium, mobile-safari]
+  schedule:
+    # 03:00 UTC. Nothing else is using the runners, and a failure is waiting by morning.
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: E2E (Playwright)
+    runs-on: [self-hosted, linux, ci]
+    # Sharded across the self-hosted runners. Each shard runs its OWN App API
+    # (go run, in-memory drivers) via the Playwright webServer, so the in-memory
+    # server's state — every device's sealed backup and history-sync blob — only
+    # accumulates over HALF the suite. The whole-suite volume was slowing late
+    # logins past their timeout on a single server; splitting it keeps each
+    # server's working set small enough that logins stay fast to the last test.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+
+      # The Playwright config starts the Vite dev server and the App API (in-memory
+      # drivers, seeded admin), then tears them down. Two shards, one per runner, split
+      # the suite so no dev server carries the whole of it. CI=true disables server reuse
+      # so each shard is isolated.
+      #
+      # PW_PORT_OFFSET gives each shard its OWN ports (see e2e/constants.ts): the two
+      # runners share a host, so without it the shards' App APIs collide on one port.
+      - name: Run the suite
+        run: |
+          ARGS="--shard=${{ matrix.shard }}/2"
+          if [ -n "${{ inputs.grep }}" ]; then
+            ARGS="$ARGS --grep='${{ inputs.grep }}'"
+          fi
+          if [ "${{ inputs.project }}" != "all" ] && [ -n "${{ inputs.project }}" ]; then
+            ARGS="$ARGS --project=${{ inputs.project }}"
+          fi
+          echo "npx playwright test $ARGS"
+          eval "npx playwright test $ARGS"
+        env:
+          PW_PORT_OFFSET: ${{ matrix.shard }}
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-shard-${{ matrix.shard }}
+          path: web/playwright-report/
+          retention-days: 7
