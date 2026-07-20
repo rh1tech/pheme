@@ -124,7 +124,7 @@ class _MessagePageState extends ConsumerState<MessagePage> {
           // the comments were supposed to have.
           ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.35,
+              maxHeight: MediaQuery.sizeOf(context).height * 0.26,
             ),
             child: SingleChildScrollView(
               child: _PostBody(
@@ -225,7 +225,7 @@ class _PostBody extends StatelessWidget {
     ColorScheme scheme,
   ) {
     final l10n = context.l10n;
-    final cap = MediaQuery.sizeOf(context).height * 0.22;
+    final cap = MediaQuery.sizeOf(context).height * 0.16;
     return LayoutBuilder(
       builder: (context, constraints) {
         final painter = TextPainter(
@@ -263,7 +263,7 @@ class _PostBody extends StatelessWidget {
               TextButton(
                 onPressed: onToggle,
                 style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  padding: const EdgeInsets.only(top: 14, bottom: 4),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
