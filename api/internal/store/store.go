@@ -114,6 +114,21 @@ type Store interface {
 	ChannelByID(ctx context.Context, id string) (domain.Channel, error)
 	ChannelByPublicID(ctx context.Context, publicID string) (domain.Channel, error)
 	ChannelByAlias(ctx context.Context, aliasLower string) (domain.Channel, error)
+	// ChannelByOriginPublicID finds the local MIRROR of a remote channel — the
+	// stand-in created when one of our users subscribes across the network,
+	// identified by the origin host and the origin's public id. Used on the
+	// subscriber's host to route an inbound federated delivery to the right
+	// local channel.
+	ChannelByOriginPublicID(ctx context.Context, originDomain, originPublicID string) (domain.Channel, error)
+
+	// AddRemoteSubscription records, idempotently, that a peer host has a
+	// subscriber to one of this host's channels, so the dispatcher fans new
+	// messages out to it. Re-adding an existing (channelID, peerDomain) is a
+	// no-op — the origin tracks hosts, not their individual users.
+	AddRemoteSubscription(ctx context.Context, channelID, peerDomain string) error
+	// RemoteSubscriberHosts lists the peer hosts with at least one subscriber to
+	// a channel. The dispatcher delivers a new message to each.
+	RemoteSubscriberHosts(ctx context.Context, channelID string) ([]string, error)
 	ChannelsByOwner(ctx context.Context, ownerID string) ([]domain.Channel, error)
 	UpdateChannel(ctx context.Context, id, name string, mode domain.SubscriptionMode) (domain.Channel, error)
 	// SetChannelAlias sets (or clears, when alias is "") a channel's phetag.

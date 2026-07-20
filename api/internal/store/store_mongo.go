@@ -86,9 +86,11 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 		},
 		"subscriptions":  {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "deviceId", Value: 1}}}},
 		"channelMembers": {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}}}},
-		"messages":       {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "createdAt", Value: -1}}}},
-		"deliveries":     {{Keys: bson.D{{Key: "messageId", Value: 1}}}},
-		"comments":       {{Keys: bson.D{{Key: "messageId", Value: 1}, {Key: "createdAt", Value: -1}}}, {Keys: bson.D{{Key: "channelId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "createdAt", Value: -1}}}},
+		// A peer host is tracked once per channel; the upsert in AddRemoteSubscription relies on this.
+		"remoteSubscriptions": {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "peerDomain", Value: 1}}, Options: options.Index().SetUnique(true)}},
+		"messages":            {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "createdAt", Value: -1}}}},
+		"deliveries":          {{Keys: bson.D{{Key: "messageId", Value: 1}}}},
+		"comments":            {{Keys: bson.D{{Key: "messageId", Value: 1}, {Key: "createdAt", Value: -1}}}, {Keys: bson.D{{Key: "channelId", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}}}, {Keys: bson.D{{Key: "createdAt", Value: -1}}}},
 		// Conversations: a unique partial index on directKey enforces one direct
 		// chat per user pair; chatMessages sorts by (conversationId, createdAt desc)
 		// like messages does by channel.
@@ -450,6 +452,46 @@ func (m *Mongo) ChannelByAlias(ctx context.Context, aliasLower string) (domain.C
 	var c domain.Channel
 	err := m.db.Collection("channels").FindOne(ctx, bson.M{"aliasLower": aliasLower}).Decode(&c)
 	return c, mapErr(err)
+}
+
+func (m *Mongo) ChannelByOriginPublicID(ctx context.Context, originDomain, originPublicID string) (domain.Channel, error) {
+	var c domain.Channel
+	err := m.db.Collection("channels").
+		FindOne(ctx, bson.M{"originDomain": originDomain, "originPublicId": originPublicID}).Decode(&c)
+	return c, mapErr(err)
+}
+
+func (m *Mongo) AddRemoteSubscription(ctx context.Context, channelID, peerDomain string) error {
+	// Upsert on the pair, so a host is tracked exactly once however many of its
+	// users subscribe. The unique index on (channelId, peerDomain) is the real
+	// backstop; the upsert makes a repeat a no-op rather than an error.
+	_, err := m.db.Collection("remoteSubscriptions").UpdateOne(ctx,
+		bson.M{"channelId": channelID, "peerDomain": peerDomain},
+		bson.M{"$setOnInsert": bson.M{
+			"channelId":  channelID,
+			"peerDomain": peerDomain,
+			"createdAt":  time.Now().UTC(),
+		}},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
+func (m *Mongo) RemoteSubscriberHosts(ctx context.Context, channelID string) ([]string, error) {
+	cur, err := m.db.Collection("remoteSubscriptions").Find(ctx, bson.M{"channelId": channelID})
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var out []string
+	for cur.Next(ctx) {
+		var rs domain.RemoteSubscription
+		if err := cur.Decode(&rs); err != nil {
+			return nil, err
+		}
+		out = append(out, rs.PeerDomain)
+	}
+	return out, cur.Err()
 }
 
 func (m *Mongo) SetChannelAlias(ctx context.Context, channelID, alias string) (domain.Channel, error) {

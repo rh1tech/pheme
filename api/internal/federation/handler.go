@@ -20,15 +20,22 @@ type UserResolver interface {
 // Handler serves the host-to-host API. Every route except the public directory
 // requires a valid nodelist-anchored signature.
 type Handler struct {
-	Origin string    // this host's own domain
-	Lookup keyLookup // the nodelist
-	Users  UserResolver
-	now    func() time.Time
+	Origin   string    // this host's own domain
+	Lookup   keyLookup // the nodelist
+	Users    UserResolver
+	Channels ChannelService // optional; channel routes mount only when set
+	now      func() time.Time
 }
 
 // NewHandler builds the federation handler.
 func NewHandler(origin string, lookup keyLookup, users UserResolver) *Handler {
 	return &Handler{Origin: origin, Lookup: lookup, Users: users, now: time.Now}
+}
+
+// WithChannels enables the cross-host channel routes.
+func (h *Handler) WithChannels(c ChannelService) *Handler {
+	h.Channels = c
+	return h
 }
 
 // verifiedKey is the context key under which the proven caller is stored.
@@ -46,6 +53,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// peer, and can read who it is from the context.
 	mux.Handle("GET /federation/v1/liveness", h.verified(http.HandlerFunc(h.liveness)))
 	mux.Handle("POST /federation/v1/user-exists", h.verified(http.HandlerFunc(h.userExists)))
+
+	if h.Channels != nil {
+		h.registerChannels(mux)
+	}
 }
 
 // verified authenticates the request against the nodelist and, on success, runs
@@ -91,12 +102,17 @@ func verifiedBody(r *http.Request) []byte {
 
 // directory is the .well-known discovery document.
 func (h *Handler) directory(w http.ResponseWriter, _ *http.Request) {
+	endpoints := map[string]string{
+		"liveness":   "/federation/v1/liveness",
+		"userExists": "/federation/v1/user-exists",
+	}
+	if h.Channels != nil {
+		endpoints["channelSubscribe"] = "/federation/v1/channel-subscribe"
+		endpoints["channelDelivery"] = "/federation/v1/channel-delivery"
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"origin": h.Origin,
-		"endpoints": map[string]string{
-			"liveness":   "/federation/v1/liveness",
-			"userExists": "/federation/v1/user-exists",
-		},
+		"origin":    h.Origin,
+		"endpoints": endpoints,
 	})
 }
 

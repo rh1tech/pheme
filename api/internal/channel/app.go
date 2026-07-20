@@ -32,6 +32,10 @@ type AppHandler struct {
 	Admin          *AdminHandler
 	Chat           *chat.Handler
 	VAPIDPublicKey string
+	// Remote and HostDomain enable joining channels on other hosts. Nil Remote
+	// means this build does not federate, and the join-remote route 404s.
+	Remote     RemoteChannels
+	HostDomain string
 }
 
 // Routes registers the App API endpoints on a mux. Protected endpoints are
@@ -56,6 +60,7 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 	protected.HandleFunc("GET /v1/channels", h.listChannels)
 	// Literal segments; Go 1.22 mux prefers them over the {id} wildcard.
 	protected.HandleFunc("POST /v1/channels/join", h.joinChannel)
+	protected.HandleFunc("POST /v1/channels/join-remote", h.joinRemoteChannel)
 	protected.HandleFunc("GET /v1/channels/joined", h.listJoinedChannels)
 	protected.HandleFunc("GET /v1/channels/{id}", h.getChannel)
 	protected.HandleFunc("PATCH /v1/channels/{id}", h.updateChannel)

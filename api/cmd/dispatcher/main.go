@@ -45,6 +45,16 @@ func main() {
 	}
 
 	dispatcher := message.NewDispatcher(db, sender, bus, logger)
+	// When this host federates, the dispatcher also fans a new channel message
+	// out to peer hosts with subscribers. Nil when there is no host key, in which
+	// case fan-out is a no-op and behaviour is unchanged.
+	if peers, err := b.FederationClient(); err != nil {
+		logger.Error("federation client", "error", err)
+		os.Exit(1)
+	} else if peers != nil {
+		dispatcher.Peers = peers
+		logger.Info("federated channel fan-out enabled", "origin", cfg.HostDomain)
+	}
 
 	go func() {
 		stop := make(chan os.Signal, 1)

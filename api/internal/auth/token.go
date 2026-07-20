@@ -95,8 +95,7 @@ func (m *TokenManager) UseHostKey(key ed25519.PrivateKey, issuer string) {
 	m.signKey = key
 	m.verifyKey = key.Public().(ed25519.PublicKey)
 	m.issuer = issuer
-	sum := sha256.Sum256(m.verifyKey)
-	m.keyID = base64.RawURLEncoding.EncodeToString(sum[:12])
+	m.keyID = HostKeyID(m.verifyKey)
 }
 
 // KeyID is this host's current signing key id, empty in legacy mode.
@@ -274,4 +273,12 @@ func NewHostKey() (ed25519.PrivateKey, string, error) {
 		return nil, "", err
 	}
 	return ed25519.NewKeyFromSeed(seed), base64.RawURLEncoding.EncodeToString(seed), nil
+}
+
+// HostKeyID is the key id for a host public key: the same fingerprint UseHostKey
+// stamps into tokens, exposed so a component that signs federation requests
+// (which is not the TokenManager) names the key the same way.
+func HostKeyID(pub ed25519.PublicKey) string {
+	sum := sha256.Sum256(pub)
+	return base64.RawURLEncoding.EncodeToString(sum[:12])
 }

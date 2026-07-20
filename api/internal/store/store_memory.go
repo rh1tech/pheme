@@ -32,10 +32,11 @@ type Memory struct {
 	chatMessages    map[string]domain.ChatMessage
 	attachments     map[string]domain.Attachment
 	keyPackages     map[string]domain.MLSKeyPackage
-	keyBackups      map[string]domain.MLSKeyBackup // by userId (one per user)
-	mlsDevices      map[string]domain.MLSDevice    // by userId + ":" + deviceId
-	revokedSessions map[string]time.Time           // sid -> expiry (terminated sessions)
-	mlsGroupInfo    map[string]domain.MLSGroupInfo // by conversationId (one per group)
+	keyBackups      map[string]domain.MLSKeyBackup       // by userId (one per user)
+	mlsDevices      map[string]domain.MLSDevice          // by userId + ":" + deviceId
+	revokedSessions map[string]time.Time                 // sid -> expiry (terminated sessions)
+	mlsGroupInfo    map[string]domain.MLSGroupInfo       // by conversationId (one per group)
+	remoteSubs      map[string]domain.RemoteSubscription // by channelId + NUL + peerDomain
 	blobs           blob.Store
 }
 
@@ -62,6 +63,7 @@ func NewMemory(blobs blob.Store) *Memory {
 		mlsDevices:      map[string]domain.MLSDevice{},
 		revokedSessions: map[string]time.Time{},
 		mlsGroupInfo:    map[string]domain.MLSGroupInfo{},
+		remoteSubs:      map[string]domain.RemoteSubscription{},
 		blobs:           blobs,
 	}
 }
@@ -372,6 +374,45 @@ func (m *Memory) ChannelByPublicID(_ context.Context, publicID string) (domain.C
 		}
 	}
 	return domain.Channel{}, ErrNotFound
+}
+
+func (m *Memory) ChannelByOriginPublicID(_ context.Context, originDomain, originPublicID string) (domain.Channel, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, c := range m.channels {
+		if c.OriginDomain == originDomain && c.OriginPublicID == originPublicID {
+			return c, nil
+		}
+	}
+	return domain.Channel{}, ErrNotFound
+}
+
+func (m *Memory) AddRemoteSubscription(_ context.Context, channelID, peerDomain string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := channelID + "\x00" + peerDomain
+	if _, exists := m.remoteSubs[key]; exists {
+		return nil // idempotent: a host is tracked once, however many of its users subscribe
+	}
+	m.remoteSubs[key] = domain.RemoteSubscription{
+		ID:         newID(),
+		ChannelID:  channelID,
+		PeerDomain: peerDomain,
+		CreatedAt:  time.Now().UTC(),
+	}
+	return nil
+}
+
+func (m *Memory) RemoteSubscriberHosts(_ context.Context, channelID string) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var hosts []string
+	for _, rs := range m.remoteSubs {
+		if rs.ChannelID == channelID {
+			hosts = append(hosts, rs.PeerDomain)
+		}
+	}
+	return hosts, nil
 }
 
 func (m *Memory) ChannelByAlias(_ context.Context, aliasLower string) (domain.Channel, error) {

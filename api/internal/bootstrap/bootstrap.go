@@ -20,6 +20,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/calls"
 	"github.com/rh1tech/pheme/api/internal/config"
 	mailer "github.com/rh1tech/pheme/api/internal/email"
+	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/idempotency"
 	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/nodelist"
@@ -324,6 +325,21 @@ func (b *Builder) Nodelist() (*nodelist.Store, error) {
 	}
 	b.logger.Info("nodelist loaded", "serial", s.Serial())
 	return s, nil
+}
+
+// FederationClient builds the signing client this host uses to call peers, or
+// (nil, nil) when the host has no signing key — in which case it cannot federate
+// and callers do no cross-host work.
+func (b *Builder) FederationClient() (*federation.Client, error) {
+	key, err := auth.ParseHostKey(b.cfg.HostKey)
+	if err != nil {
+		return nil, fmt.Errorf("host key: %w", err)
+	}
+	if key == nil || b.cfg.HostDomain == "" {
+		return nil, nil
+	}
+	keyID := auth.HostKeyID(key.Public().(ed25519.PublicKey))
+	return federation.NewClient(b.cfg.HostDomain, keyID, key), nil
 }
 
 // Close releases shared resources (the cached Redis client and blob store).

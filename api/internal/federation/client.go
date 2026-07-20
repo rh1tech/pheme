@@ -23,6 +23,10 @@ type Client struct {
 	key    ed25519.PrivateKey
 	http   *http.Client
 	now    func() time.Time
+	// PeerURL maps a peer domain to its base URL. Defaults to https://<domain>,
+	// which is the production convention; overridable so a test can point at a
+	// loopback server, or an operator at a peer reachable at a non-default URL.
+	PeerURL func(domain string) string
 }
 
 // NewClient builds a signing client for this host's identity.
@@ -33,8 +37,9 @@ func NewClient(origin, keyID string, key ed25519.PrivateKey) *Client {
 		key:    key,
 		// A bounded timeout on every S2S call: a peer that hangs must not be
 		// able to tie up a request here indefinitely.
-		http: &http.Client{Timeout: 10 * time.Second},
-		now:  time.Now,
+		http:    &http.Client{Timeout: 10 * time.Second},
+		now:     time.Now,
+		PeerURL: PeerBaseURL,
 	}
 }
 

@@ -282,6 +282,38 @@ type Channel struct {
 	SubscriptionMode SubscriptionMode `bson:"subscriptionMode" json:"subscriptionMode"`
 	Status           ChannelStatus    `bson:"status" json:"status"`
 	CreatedAt        time.Time        `bson:"createdAt" json:"createdAt"`
+
+	// OriginDomain is set only on a MIRROR channel — a local stand-in for a
+	// channel that actually lives on another host, created when one of our users
+	// subscribes across the network. Empty means this channel is native to this
+	// host, so every existing channel is already correct with no backfill (the
+	// same convention as User.Domain).
+	//
+	// A mirror has its OWN local PublicID (fresh, so it never collides with a
+	// native channel's or another origin's under the global unique index) and
+	// records the origin's public id separately. (OriginDomain, OriginPublicID)
+	// identifies which remote channel it stands in for. Local subscription and
+	// delivery run against the mirror unchanged; the only difference is where new
+	// messages come from — a fan-out from the origin host, not a local publish.
+	OriginDomain   string `bson:"originDomain,omitempty" json:"originDomain,omitempty"`
+	OriginPublicID string `bson:"originPublicId,omitempty" json:"originPublicId,omitempty"`
+}
+
+// IsMirror reports whether this channel is a local stand-in for one that lives
+// on another host.
+func (c Channel) IsMirror() bool { return c.OriginDomain != "" }
+
+// RemoteSubscription records that a peer host has at least one subscriber to one
+// of THIS host's channels, so the dispatcher knows to fan a new message out to
+// that host. It is deduplicated per (ChannelID, PeerDomain): the origin tracks
+// which hosts to deliver to, never which of their users subscribed — that stays
+// the peer's business, and is exactly the metadata the origin has no need to
+// learn.
+type RemoteSubscription struct {
+	ID         string    `bson:"_id,omitempty" json:"id"`
+	ChannelID  string    `bson:"channelId" json:"channelId"`
+	PeerDomain string    `bson:"peerDomain" json:"peerDomain"`
+	CreatedAt  time.Time `bson:"createdAt" json:"createdAt"`
 }
 
 // MemberStatus is the lifecycle state of a user's membership in a channel. It

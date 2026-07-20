@@ -20,6 +20,8 @@ import (
 	"github.com/rh1tech/pheme/api/internal/config"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/federation"
+	"github.com/rh1tech/pheme/api/internal/message"
+	"github.com/rh1tech/pheme/api/internal/nodelist"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
@@ -102,7 +104,7 @@ func main() {
 		CodeTTL:      cfg.CodeTTL,
 		CodeCooldown: cfg.CodeCooldown,
 	}).Routes(mux)
-	(&channel.AppHandler{
+	appHandler := &channel.AppHandler{
 		Store:     db,
 		Live:      bus,
 		Tokens:    tokens,
@@ -134,7 +136,9 @@ func main() {
 			SessionTTL: cfg.RefreshTokenTTL,
 		},
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
-	}).Routes(mux)
+	}
+	// federation may set appHandler.Remote below; Routes is called after that so
+	// the join-remote endpoint sees the wiring.
 
 	// Host-to-host federation, mounted only when this instance is part of a
 	// network. Peers are authenticated against the nodelist, not the JWT
@@ -143,9 +147,28 @@ func main() {
 		logger.Error("nodelist", "error", err)
 		os.Exit(1)
 	} else if nodes != nil {
-		federation.NewHandler(cfg.HostDomain, nodes, userResolver{db}).Register(mux)
+		fedHandler := federation.NewHandler(cfg.HostDomain, nodes, userResolver{db})
+		// The channel service delivers an arriving message to local subscribers.
+		// It reuses a dispatcher purely for its local fan-out — this one never
+		// consumes the broker, it only runs DeliverLocally.
+		localFanout := message.NewDispatcher(db, pusher, bus, logger)
+		fedHandler.WithChannels(&message.ChannelFederation{Store: db, Dispatcher: localFanout})
+		fedHandler.Register(mux)
+
+		// The outbound side of joining a remote channel: this host's signing
+		// client plus the nodelist's peer check, handed to the channel handler.
+		if peers, perr := b.FederationClient(); perr != nil {
+			logger.Error("federation client", "error", perr)
+			os.Exit(1)
+		} else if peers != nil {
+			appHandler.Remote = remoteChannels{nodes: nodes, peers: peers}
+			appHandler.HostDomain = cfg.HostDomain
+		}
 		logger.Info("federation enabled", "origin", cfg.HostDomain, "nodelist_serial", nodes.Serial())
 	}
+
+	// Routes last, so it captures any federation wiring set above.
+	appHandler.Routes(mux)
 
 	// An empty allowlist is legal — a deployment whose SPA is same-origin with the
 	// API needs no CORS at all — but it is far more often a stack.env that predates
@@ -253,4 +276,18 @@ type userResolver struct{ db store.Store }
 func (u userResolver) UserExists(ctx context.Context, localID string) bool {
 	_, err := u.db.UserByID(ctx, localID)
 	return err == nil
+}
+
+// remoteChannels adapts the nodelist and the federation client to
+// channel.RemoteChannels: peer membership from the nodelist, the subscribe call
+// from the signing client.
+type remoteChannels struct {
+	nodes *nodelist.Store
+	peers *federation.Client
+}
+
+func (r remoteChannels) IsPeer(domain string) bool { return r.nodes.IsPeer(domain) }
+
+func (r remoteChannels) SubscribeToRemoteChannel(ctx context.Context, originDomain, channelPublicID string) (string, error) {
+	return r.peers.SubscribeToRemoteChannel(ctx, originDomain, channelPublicID)
 }

@@ -10,10 +10,17 @@ import (
 
 	"github.com/rh1tech/pheme/api/internal/broker"
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/push"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
+
+// peerDeliverer delivers a channel message to a peer host. *federation.Client
+// satisfies it; the interface keeps the dispatcher testable without a network.
+type peerDeliverer interface {
+	DeliverToPeer(ctx context.Context, peerDomain string, msg federation.RemoteMessage) error
+}
 
 // Dispatcher processes NotifyTasks pulled from the broker.
 type Dispatcher struct {
@@ -21,6 +28,9 @@ type Dispatcher struct {
 	Push   push.Sender
 	Live   live.Bus
 	Logger *slog.Logger
+	// Peers is optional: when nil, the dispatcher does no cross-host fan-out and
+	// behaves exactly as a non-federated deployment.
+	Peers peerDeliverer
 }
 
 // NewDispatcher constructs a Dispatcher.
@@ -48,9 +58,23 @@ func (d *Dispatcher) Handle(ctx context.Context, task domain.NotifyTask) error {
 		return err // persistence failed: retry, do not ack
 	}
 
-	devices, err := d.Store.ActiveDevicesForChannel(ctx, task.ChannelID)
+	d.DeliverLocally(ctx, msg)
+	d.fanOutToPeers(ctx, msg)
+	return nil
+}
+
+// DeliverLocally pushes a persisted message to this host's own subscribed
+// devices and emits the live event. It is the half of delivery that is the same
+// whether a message originated here or arrived from a peer — the subscriber's
+// host runs exactly this on a federated delivery, so a mirrored channel's
+// subscribers are served by identical code to a native one's.
+//
+// It deliberately does NOT fan out to peers: a message arriving from a peer must
+// not be re-federated, or a channel mirrored on two hosts would loop.
+func (d *Dispatcher) DeliverLocally(ctx context.Context, msg domain.Message) {
+	devices, err := d.Store.ActiveDevicesForChannel(ctx, msg.ChannelID)
 	if err != nil {
-		d.Logger.Error("load devices", "channel", task.ChannelID, "error", err)
+		d.Logger.Error("load devices", "channel", msg.ChannelID, "error", err)
 		devices = nil
 	}
 
@@ -76,7 +100,45 @@ func (d *Dispatcher) Handle(ctx context.Context, task domain.NotifyTask) error {
 	if d.Live != nil {
 		d.Live.Publish(live.Event{ChannelID: msg.ChannelID, Message: msg})
 	}
-	return nil
+}
+
+// fanOutToPeers delivers a message to every peer host with a subscriber to this
+// channel. Fire-and-forget: a peer that is down or slow must not hold up a
+// message that has already reached local subscribers, so failures are logged and
+// not retried. A message that matters to a peer whose delivery failed is
+// recoverable — the peer can pull history — where blocking on it is not.
+//
+// A no-op unless federation is wired in and the channel is native to this host
+// (a mirror has no remote subscribers of its own, and must never re-federate).
+func (d *Dispatcher) fanOutToPeers(ctx context.Context, msg domain.Message) {
+	if d.Peers == nil {
+		return
+	}
+	hosts, err := d.Store.RemoteSubscriberHosts(ctx, msg.ChannelID)
+	if err != nil {
+		d.Logger.Error("load remote subscribers", "channel", msg.ChannelID, "error", err)
+		return
+	}
+	if len(hosts) == 0 {
+		return
+	}
+	ch, err := d.Store.ChannelByID(ctx, msg.ChannelID)
+	if err != nil || ch.IsMirror() {
+		return // a mirror never re-federates
+	}
+	out := federation.RemoteMessage{
+		ChannelPublicID: ch.PublicID,
+		Title:           msg.Title,
+		Body:            msg.Body,
+		CreatedAt:       msg.CreatedAt,
+	}
+	for _, host := range hosts {
+		if err := d.Peers.DeliverToPeer(ctx, host, out); err != nil {
+			// Logged, not retried: local delivery already happened, and the
+			// peer can backfill from history.
+			d.Logger.Warn("federated delivery failed", "channel", ch.PublicID, "peer", host, "error", err)
+		}
+	}
 }
 
 // pruneDeadAddresses removes push addresses the provider has declared permanently dead.
