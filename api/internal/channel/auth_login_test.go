@@ -283,10 +283,3 @@ func TestRefreshRefusesARevokedSession(t *testing.T) {
 		t.Errorf("a revoked session refreshed successfully: %d", rec.Code)
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

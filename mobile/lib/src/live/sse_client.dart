@@ -153,7 +153,10 @@ class SseClient with WidgetsBindingObserver {
         data.clear();
         continue;
       }
-      if (line.startsWith(':')) continue; // a comment — the 25s heartbeat
+      // A comment — the idle heartbeat. Its interval and its length are both
+      // randomised server-side so the stream has no recognisable timing
+      // signature, so nothing here may assume either.
+      if (line.startsWith(':')) continue;
       if (line.startsWith('event:')) {
         event = line.substring(6).trim();
       } else if (line.startsWith('data:')) {

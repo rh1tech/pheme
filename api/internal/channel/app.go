@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -642,13 +643,60 @@ func (h *AppHandler) getMessage(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, h.withCommentCounts(r.Context(), []domain.Message{msg})[0])
 }
 
-// streamHeartbeat is how often an idle stream emits a comment line. Without it an
-// idle connection is indistinguishable from a dead one: intermediaries (nginx,
-// Cloudflare, a carrier NAT) drop a silent connection after their own timeout, and
-// the client only finds out the next time it tries to receive an event — which for
-// a ringing call is far too late. A comment costs a handful of bytes and keeps the
-// path warm.
-const streamHeartbeat = 25 * time.Second
+// An idle stream emits a comment line every so often. Without it an idle
+// connection is indistinguishable from a dead one: intermediaries (nginx,
+// Cloudflare, a carrier NAT) drop a silent connection after their own timeout,
+// and the client only finds out the next time it tries to receive an event —
+// which for a ringing call is far too late. A comment costs a handful of bytes
+// and keeps the path warm.
+//
+// The interval is drawn fresh for every beat instead of being a fixed 25s.
+// Packet timing survives encryption, so a connection that emitted a ~9-byte
+// frame every 25.000 seconds was recognisable as Pheme to anything watching the
+// shape of the traffic, without decrypting any of it. The ceiling stays well
+// inside the ~60s idle timeout of the intermediaries above.
+const (
+	streamHeartbeatMin = 20 * time.Second
+	streamHeartbeatMax = 40 * time.Second
+
+	// The most the stream teardown is pulled forward off the token's expiry.
+	// See stream() for why it is only ever earlier, never later.
+	streamExpiryJitter = 180 * time.Second
+
+	// Upper bound on the padding added to a heartbeat comment, so beats are not
+	// all identically sized either.
+	streamHeartbeatPadMax = 64
+)
+
+// nextHeartbeat draws the delay until the next idle comment.
+func nextHeartbeat() time.Duration {
+	return streamHeartbeatMin + rand.N(streamHeartbeatMax-streamHeartbeatMin)
+}
+
+// heartbeatComment builds an SSE comment line of unpredictable length. Comments
+// are ignored by every consumer — the browser's EventSource by spec, and the
+// mobile client's hand-rolled parser by skipping any line starting with ':'.
+func heartbeatComment() string {
+	return ": ping" + strings.Repeat(" ", rand.N(streamHeartbeatPadMax))
+}
+
+// jitteredExpiry scatters a stream's teardown within the token's remaining life.
+//
+// It only ever subtracts. The token is checked once, at connect, so a stream
+// that outlived it would be a session that never ends — a signed-out user would
+// keep receiving events until they closed the tab. Landing every teardown
+// exactly on expiry made the whole fleet reconnect on a clean ~15-minute
+// boundary, which is a pattern visible from outside the TLS.
+//
+// The jitter is capped at a fifth of what is left, so a deployment configured
+// with a short access-token TTL does not have its streams torn down on connect.
+func jitteredExpiry(remaining time.Duration) time.Duration {
+	jitter := min(streamExpiryJitter, remaining/5)
+	if jitter <= 0 {
+		return remaining
+	}
+	return remaining - rand.N(jitter)
+}
 
 // stream is a Server-Sent Events endpoint delivering live messages. It accepts
 // the access token via the "token" query parameter because EventSource cannot
@@ -696,12 +744,12 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 
 	var expiry <-chan time.Time
 	if exp := claims.ExpiresAt; exp != nil {
-		t := time.NewTimer(time.Until(exp.Time))
+		t := time.NewTimer(jitteredExpiry(time.Until(exp.Time)))
 		defer t.Stop()
 		expiry = t.C
 	}
 
-	beat := time.NewTicker(streamHeartbeat)
+	beat := time.NewTimer(nextHeartbeat())
 	defer beat.Stop()
 
 	fmt.Fprintf(w, ": connected\n\n")
@@ -714,8 +762,9 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 		case <-expiry:
 			return
 		case <-beat.C:
-			fmt.Fprintf(w, ": ping\n\n")
+			fmt.Fprintf(w, "%s\n\n", heartbeatComment())
 			flusher.Flush()
+			beat.Reset(nextHeartbeat())
 		case e, ok := <-events:
 			if !ok {
 				return
