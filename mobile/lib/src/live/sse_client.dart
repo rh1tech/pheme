@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
 
+import '../core/api_client.dart';
 import '../models/models.dart';
 
 /// Server-Sent Events client for the App API `/v1/stream`.
@@ -52,7 +53,21 @@ class SseClient with WidgetsBindingObserver {
   static const _staleAfterBackground = Duration(seconds: 30);
 
   final _controller = StreamController<LiveEvent>.broadcast();
-  final _dio = Dio();
+
+  /// Its own client, on the platform's HTTP stack like every other request.
+  ///
+  /// This one is easy to forget, because it is built here rather than handed in
+  /// by [buildDio]. Forgetting it would be the worst possible outcome: the live
+  /// stream is the app's LONGEST-lived connection, so it is the one an observer
+  /// has the most time to look at, and it would have been the only traffic still
+  /// carrying Dart's fingerprint — conspicuous precisely because everything
+  /// around it had stopped.
+  ///
+  /// Deliberately not the shared instance from [buildDio]: that one carries
+  /// `validateStatus: (_) => true` and the auth interceptor, both of which would
+  /// corrupt a streamed response.
+  final _dio = newNativeDio();
+
   final _random = Random();
 
   bool _closed = false;

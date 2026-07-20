@@ -12,6 +12,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../core/api_client.dart';
 import '../crypto/mls_device.dart';
 import '../data/pheme_repository.dart';
 import 'conversation_shortcuts.dart';
@@ -180,7 +181,17 @@ Future<AndroidBitmap<Object>?> _avatarIcon(String? url) async {
 Future<Uint8List?> _avatarBytes(String? url) async {
   if (url == null || url.isEmpty) return null;
   try {
-    final res = await Dio().get<List<int>>(
+    // On the platform HTTP stack like every other request. This one fetches from
+    // the SAME host as the API, from a background isolate, so leaving it on the
+    // Dart stack would put a second, different fingerprint against that host —
+    // and a host that is meant to look like a static site receiving two distinct
+    // non-browser clients is more conspicuous than one receiving a single one.
+    //
+    // The isolate calls DartPluginRegistrant.ensureInitialized() above, so the
+    // native adapter is available here. If it ever is not, the catch below
+    // degrades to a notification without an avatar, which is the existing
+    // behaviour for any other failure.
+    final res = await newNativeDio().get<List<int>>(
       url,
       options: Options(
         responseType: ResponseType.bytes,

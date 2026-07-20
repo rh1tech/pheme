@@ -122,8 +122,31 @@ in Xcode once and set a development team.
 
 ```bash
 flutter pub get
-flutter run                 # on a connected device/emulator
+flutter run --dart-define=cronetHttpNoPlay=true    # Android needs this; see below
 ```
+
+### Android builds need `cronetHttpNoPlay=true`
+
+Every Android build — `run`, `build apk`, `test integration_test/…` — must pass
+it. Without it the build fails with:
+
+```
+Namespace 'org.chromium.net' is used in multiple modules and/or libraries:
+org.chromium.net:cronet-api, org.chromium.net:cronet-shared
+```
+
+which says nothing about the actual cause. `cronet_http` defaults to Play
+Services Cronet, whose two AARs declare the same namespace — something AGP 8+
+rejects. The define switches to embedded Cronet, a single artifact, which
+builds.
+
+Being forced onto embedded Cronet is not a bad outcome here. It costs **6.2 MB
+per ABI** (arm64) in the APK, and in exchange the app no longer depends on Play
+Services being present and working — which matters in exactly the places this
+app is meant to keep working.
+
+Nothing is needed on iOS: `cupertino_http` uses NSURLSession, which is already
+there.
 
 With no `PHEME_API` define the app points at `http://10.0.2.2:8080`, the Android
 emulator's route to a `make dev` stack on the host (`http://localhost:8080` from

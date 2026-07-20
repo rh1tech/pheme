@@ -1,9 +1,50 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:native_dio_adapter/native_dio_adapter.dart';
 
 import 'api_exception.dart';
 import 'token_store.dart';
+import 'user_agent.dart';
+
+/// Routes a Dio instance through the platform's own HTTP stack — Cronet on
+/// Android, NSURLSession on iOS and macOS — instead of Dart's.
+///
+/// This is a privacy change, not a performance one. Dart's `dart:io` client
+/// sends NO ALPN extension and speaks only HTTP/1.1, giving it a fixed TLS
+/// fingerprint identical on every platform Flutter runs on. Measured on a Pixel
+/// 9 and an iOS simulator:
+///
+///   dart:io          JA4 t13d171000_…   no ALPN, no HTTP/2 fingerprint at all
+///   Cronet           JA4 t13d1516h2_…   h2, Chrome's HTTP/2 settings (m,a,s,p)
+///   NSURLSession     JA4 t13d1313h2_…   h2, Apple's HTTP/2 settings (m,s,p,a)
+///
+/// A Pheme host serves a decoy site, so it looks like an ordinary small website.
+/// Traffic to it that is recognisably not-a-browser contradicts that, and the
+/// contradiction is the tell — not the fingerprint on its own. Cronet also
+/// varies its JA3 per connection the way Chrome does, where Dart's was
+/// byte-identical across every run.
+///
+/// On any other platform the adapter falls back to the Dart stack by itself.
+void _useNativeStack(Dio dio) {
+  dio.httpClientAdapter = NativeAdapter();
+  // Both native stacks default to a User-Agent built from the bundle identity,
+  // which would name the app in cleartext on every request. See user_agent.dart.
+  dio.options.headers['user-agent'] = phemeUserAgent();
+}
+
+/// A bare Dio on the platform's HTTP stack, for callers that need their own
+/// client rather than the configured one from [buildDio] — the live stream,
+/// which must not inherit its interceptors or `validateStatus`.
+///
+/// Exists so that "make a Dio" and "make a Dio that is not conspicuous" are the
+/// same call, and a future client cannot quietly opt out of the transport by
+/// writing `Dio()`.
+Dio newNativeDio([BaseOptions? options]) {
+  final dio = options == null ? Dio() : Dio(options);
+  _useNativeStack(dio);
+  return dio;
+}
 
 /// Marks a request as public: no bearer token is attached and a 401 will not
 /// trigger a refresh attempt.
@@ -31,6 +72,7 @@ Dio buildDio({
       validateStatus: (_) => true,
     ),
   );
+  _useNativeStack(dio);
 
   // A bare client (no interceptors) used only for the refresh call to avoid loops.
   final refreshDio = Dio(
@@ -39,6 +81,11 @@ Dio buildDio({
       headers: {'Content-Type': 'application/json'},
     ),
   );
+  // The refresh client needs it too. Miss this and token refresh — a request
+  // made on every session, from every device — goes out over the Dart stack
+  // with a different fingerprint from everything around it, which is a louder
+  // signal than never having changed anything.
+  _useNativeStack(refreshDio);
   Completer<bool>? refreshing;
 
   Future<bool> refresh() async {
