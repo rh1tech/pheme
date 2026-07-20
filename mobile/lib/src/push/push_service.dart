@@ -143,35 +143,38 @@ Future<void> _showDecryptedInBackground(RemoteMessage message) async {
       >()
       ?.createNotificationChannel(_androidChannel);
 
-  await local.show(
+  await _showChatNotification(
+    local,
     id: _notificationIdFor(message),
     title: title,
     body: preview ?? fallbackBody,
-    notificationDetails: NotificationDetails(
-      android: await _chatNotificationDetails(
-        senderName: title,
-        avatarUrl: data['senderAvatar'] as String?,
-        body: preview ?? fallbackBody,
-        conversationId: conversationId,
-      ),
-      iOS: const DarwinNotificationDetails(),
-    ),
+    avatarUrl: data['senderAvatar'] as String?,
+    conversationId: conversationId,
   );
 }
 
-/// The sender's avatar bytes, for use as the notification's own icon.
+/// The sender's avatar, as the small round icon beside a notification.
 ///
 /// Android draws nothing unless the client supplies the bytes: the URL travels in the payload but
 /// there is no field that makes the system fetch it, which is why these notifications had no
 /// picture at all. FCM's own `image` field is the wrong slot — that is the hero-photograph one, and
 /// an avatar put there renders full-width across the notification.
 ///
-/// Returned as bytes rather than a bitmap because the conversation style needs an icon, not a
-/// largeIcon — see _chatNotificationDetails.
-///
 /// Best effort in every direction. It runs on the push path, where a slow or missing image must
 /// cost the notification nothing, so it is capped in both time and size and every failure returns
 /// null to draw the notification without a picture.
+/// The avatar as an icon for the conversation style, or null.
+Future<ByteArrayAndroidIcon?> _avatarPersonIcon(String? url) async {
+  final bytes = await _avatarBytes(url);
+  return bytes == null ? null : ByteArrayAndroidIcon(bytes);
+}
+
+/// The avatar as a largeIcon, for the plain notification the styled one falls back to.
+Future<AndroidBitmap<Object>?> _avatarIcon(String? url) async {
+  final bytes = await _avatarBytes(url);
+  return bytes == null ? null : ByteArrayAndroidBitmap(bytes);
+}
+
 Future<Uint8List?> _avatarBytes(String? url) async {
   if (url == null || url.isEmpty) return null;
   try {
@@ -198,48 +201,88 @@ Future<Uint8List?> _avatarBytes(String? url) async {
   }
 }
 
-/// The Android notification for one chat message, styled as a conversation.
+/// Draws a chat notification, styled as a conversation, and falls back to a plain one if that
+/// fails for any reason.
 ///
-/// MessagingStyle is what makes the sender's avatar the notification's own icon, with the app icon
-/// badged into its corner — the arrangement every messenger uses. Passing the avatar as a largeIcon
-/// instead, which is what this did, puts it small and on the RIGHT while the app icon keeps the
-/// main slot: the notification is identified by the app rather than by the person who wrote to you.
+/// The fallback is the whole point of this function existing. An earlier version drew only the
+/// conversation style, and when that failed on the device the notification did not degrade — it
+/// vanished. Nothing logged it, because the draw was fire-and-forget, so a phone that had been
+/// showing message previews simply went quiet and stayed quiet. Appearance is worth having; it is
+/// not worth a notification.
 ///
-/// The style also gives Android the sender as a Person, so a conversation can be threaded, muted or
-/// promoted on its own terms rather than as one undifferentiated stream of "Pheme".
-///
-/// Shared by both draw paths deliberately. The background isolate and the foreground handler each
-/// built their own details, so any change had to be made twice and had already drifted once.
-Future<AndroidNotificationDetails> _chatNotificationDetails({
-  required String? senderName,
-  required String? avatarUrl,
+/// MessagingStyle is what puts the sender's avatar in the notification's own icon slot with the app
+/// icon badged into its corner, rather than small and off to the right with the app in the main
+/// slot. It is the difference between a notification that is about a person and one that is about
+/// an app.
+Future<void> _showChatNotification(
+  FlutterLocalNotificationsPlugin local, {
+  required int id,
+  required String? title,
   required String body,
+  required String? avatarUrl,
   required String? conversationId,
 }) async {
-  final bytes = await _avatarBytes(avatarUrl);
-  final sender = Person(
-    name: senderName,
-    // Keyed on the conversation so Android treats successive messages from the same chat as one
-    // person's thread rather than a series of strangers.
-    key: conversationId,
-    icon: bytes == null ? null : ByteArrayAndroidIcon(bytes),
-  );
-  return AndroidNotificationDetails(
-    _androidChannel.id,
-    _androidChannel.name,
-    channelDescription: _androidChannel.description,
-    importance: Importance.high,
-    priority: Priority.high,
-    groupKey: (conversationId == null || conversationId.isEmpty)
-        ? null
-        : conversationId,
-    styleInformation: MessagingStyleInformation(
-      // The person the notification is addressed TO. Never rendered here, because every message
-      // this draws was written by somebody else — it exists so Android can tell incoming from
-      // outgoing, which matters only once replying from the notification is possible.
-      const Person(),
-      groupConversation: false,
-      messages: [Message(body, DateTime.now(), sender)],
+  final groupKey = (conversationId == null || conversationId.isEmpty)
+      ? null
+      : conversationId;
+
+  try {
+    final sender = Person(
+      name: title,
+      // Keyed on the conversation, so Android threads successive messages from the same chat
+      // together instead of treating each as a new correspondent.
+      key: groupKey,
+      icon: await _avatarPersonIcon(avatarUrl),
+    );
+    await local.show(
+      id: id,
+      title: title,
+      body: body,
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          _androidChannel.id,
+          _androidChannel.name,
+          channelDescription: _androidChannel.description,
+          importance: Importance.high,
+          priority: Priority.high,
+          groupKey: groupKey,
+          styleInformation: MessagingStyleInformation(
+            // The person this is addressed TO. Never rendered, because everything drawn here was
+            // written by somebody else; it exists so Android can tell incoming from outgoing. It
+            // is named anyway, because a Person with nothing set at all is a shape the platform is
+            // not obliged to accept and this path has already failed silently once.
+            const Person(name: 'You', key: 'self'),
+            groupConversation: false,
+            messages: [Message(body, DateTime.now(), sender)],
+          ),
+        ),
+        iOS: DarwinNotificationDetails(threadIdentifier: groupKey),
+      ),
+    );
+    return;
+  } on Object catch (e) {
+    debugPrint(
+      'Pheme: conversation-style notification failed, falling back: $e',
+    );
+  }
+
+  // Plain, with the avatar as a largeIcon. Less handsome, and it still tells the user a message
+  // arrived — which is the part that matters.
+  await local.show(
+    id: id,
+    title: title,
+    body: body,
+    notificationDetails: NotificationDetails(
+      android: AndroidNotificationDetails(
+        _androidChannel.id,
+        _androidChannel.name,
+        channelDescription: _androidChannel.description,
+        importance: Importance.high,
+        priority: Priority.high,
+        largeIcon: await _avatarIcon(avatarUrl),
+        groupKey: groupKey,
+      ),
+      iOS: DarwinNotificationDetails(threadIdentifier: groupKey),
     ),
   );
 }
@@ -430,7 +473,8 @@ class PushService {
       messageId: message.data['messageId'] as String?,
     );
 
-    await _local.show(
+    await _showChatNotification(
+      _local,
       // Keyed on the MESSAGE, not the notification object. n.hashCode is derived from the payload,
       // so two messages with identical text — "ok", twice — would collide and the second would
       // silently replace the first.
@@ -440,23 +484,13 @@ class PushService {
       title: n?.title ?? message.data['title'] as String?,
       // The server's generic body when there is no preview: no key material here, previews turned
       // off, or a decrypt that did not land. All of them still deserve a notification.
-      body: preview ?? n?.body ?? message.data['body'] as String?,
-      notificationDetails: NotificationDetails(
-        android: await _chatNotificationDetails(
-          senderName: n?.title ?? message.data['title'] as String?,
-          avatarUrl: message.data['senderAvatar'] as String?,
-          body:
-              preview ??
-              n?.body ??
-              message.data['body'] as String? ??
-              'New message',
-          conversationId: groupKey,
-        ),
-        // threadIdentifier is what iOS groups on. The server already sets it for pushes the
-        // system renders; this covers the foreground path, where we are drawing the notification
-        // ourselves and the server's aps payload is not what reaches the tray.
-        iOS: DarwinNotificationDetails(threadIdentifier: groupKey),
-      ),
+      body:
+          preview ??
+          n?.body ??
+          message.data['body'] as String? ??
+          'New message',
+      avatarUrl: message.data['senderAvatar'] as String?,
+      conversationId: groupKey,
     );
   }
 

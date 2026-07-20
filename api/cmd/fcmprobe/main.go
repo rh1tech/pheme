@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
@@ -43,6 +44,8 @@ func main() {
 		senderName = flag.String("sender-name", "Probe", "sender name the notification shows")
 		avatarID   = flag.String("avatar-id", "", "sender's avatar id, so the notification carries a picture")
 		baseURL    = flag.String("base-url", "", "public API base URL, used to build the avatar URL")
+		dataOnly   = flag.Bool("data-only", false, "send the way a PREVIEW is sent: data-only, which "+
+			"the device must wake the app to draw, rather than a notification the tray renders itself")
 	)
 	flag.Parse()
 
@@ -50,6 +53,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-credentials is required")
 		os.Exit(2)
 	}
+	probeDataOnly = *dataOnly
 	if err := run(*creds, *batch, *rounds, *concurrency, *realToken,
 		*senderName, *avatarID, *baseURL); err != nil {
 		fmt.Fprintf(os.Stderr, "\nfcmprobe failed: %v\n", err)
@@ -238,13 +242,27 @@ func syntheticToken() string {
 // to be named, so a probe that leaves privacy at its zero value tests a notification nobody
 // receives in practice.
 func chatNote() push.ChatNotification {
-	return push.ChatNotification{
+	// A DISTINCT message id per send. The client derives its notification id from this, so a
+	// constant one meant every probe notification replaced the one before it — a batch of five
+	// showed up as one, which reads exactly like messages being dropped and is not.
+	probeSeq.Add(1)
+	n := push.ChatNotification{
 		ConversationID: "probe-conversation",
-		MessageID:      "probe-message",
+		MessageID:      fmt.Sprintf("probe-message-%d", probeSeq.Load()),
 		SenderName:     probeSenderName,
 		SenderAvatarID: probeAvatarID,
 		Privacy:        domain.NotificationPrivacyPreview,
 	}
+	if probeDataOnly {
+		// Enough to make the server withhold the notification payload and send this data-only, which
+		// is the shape every preview takes. The ciphertext is nonsense on purpose: the device cannot
+		// decrypt it, falls back to the generic text, and still has to WAKE THE APP to draw
+		// anything — which is the property under test, not the decrypt.
+		n.DeviceRendersPreview = true
+		n.ContentType = domain.ContentTypeMLSApplication
+		n.Ciphertext = []byte("probe-ciphertext-that-will-not-decrypt")
+	}
+	return n
 }
 
 // Set once from the flags; chatNote is called from several places and threading these through all
@@ -252,4 +270,6 @@ func chatNote() push.ChatNotification {
 var (
 	probeSenderName = "Probe"
 	probeAvatarID   string
+	probeDataOnly   bool
+	probeSeq        atomic.Int64
 )
