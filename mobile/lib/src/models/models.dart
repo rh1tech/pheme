@@ -300,6 +300,7 @@ class Message {
     this.images = const [],
     this.data,
     this.commentsAllowed = true,
+    this.commentCount = 0,
   });
 
   final String id;
@@ -314,6 +315,11 @@ class Message {
   /// sending; defaults to true for older payloads without the field).
   final bool commentsAllowed;
 
+  /// How many comments the post has. Sent by the server with every message and, until now, thrown
+  /// away — which is why the feed could only show that comments were possible, never that any had
+  /// been written.
+  final int commentCount;
+
   factory Message.fromJson(Map<String, dynamic> j) => Message(
     id: j['id'] as String? ?? '',
     channelId: j['channelId'] as String? ?? '',
@@ -325,6 +331,7 @@ class Message {
         .toList(),
     data: (j['data'] as Map?)?.cast<String, dynamic>(),
     commentsAllowed: j['commentsAllowed'] as bool? ?? true,
+    commentCount: (j['commentCount'] as num?)?.toInt() ?? 0,
   );
 }
 

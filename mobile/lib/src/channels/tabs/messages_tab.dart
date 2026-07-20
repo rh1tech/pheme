@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +9,7 @@ import '../../data/app_providers.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../widgets/adaptive/adaptive.dart';
+import '../../widgets/adaptive/adaptive_search_field.dart';
 import '../../widgets/error_view.dart';
 import '../../chat/chat_time.dart';
 import '../../chat/widgets/call_event_bubble.dart';
@@ -27,6 +28,19 @@ class MessagesTab extends ConsumerStatefulWidget {
 
 class _MessagesTabState extends ConsumerState<MessagesTab> {
   final _search = TextEditingController();
+
+  /// Waits for typing to settle before asking the server.
+  ///
+  /// The two lists filter as you type because they filter a list they already hold. This search is
+  /// a request per query, so typing "weather" unthrottled is seven searches of which six are
+  /// thrown away — and on a slow link the answer to "weath" can land after the answer to
+  /// "weather" and overwrite it.
+  Timer? _debounce;
+
+  /// A reversed list starts at offset 0 showing the NEWEST item, so opening on the latest post
+  /// needs no scrolling at all — the controller is here for the load-more button's sake and for
+  /// anything later that wants to jump.
+  final _scroll = ScrollController();
   List<Message> _messages = const [];
   String _cursor = '';
   String _activeQuery = '';
@@ -42,7 +56,9 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _search.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -139,32 +155,17 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
 
     return Column(
       children: [
+        // The field the Chats and Channels lists use. This screen had grown its own — a bare
+        // TextField on Android and a CupertinoSearchTextField on iOS, each with its own clear
+        // button — so searching inside a channel looked like a different app from searching for
+        // one.
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: isCupertino(context)
-              ? CupertinoSearchTextField(
-                  controller: _search,
-                  placeholder: l10n.t('channel.searchHint'),
-                  onSubmitted: (_) => _runSearch(),
-                  onSuffixTap: _clearSearch,
-                )
-              : TextField(
-                  controller: _search,
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: (_) => _runSearch(),
-                  decoration: InputDecoration(
-                    hintText: l10n.t('channel.searchHint'),
-                    prefixIcon: const Icon(Icons.search, size: 20),
-                    suffixIcon:
-                        (_search.text.isNotEmpty || _activeQuery.isNotEmpty)
-                        ? IconButton(
-                            icon: const Icon(Icons.close, size: 18),
-                            onPressed: _clearSearch,
-                          )
-                        : null,
-                    isDense: true,
-                  ),
-                ),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: AdaptiveSearchField(
+            controller: _search,
+            placeholder: l10n.t('channel.searchHint'),
+            onChanged: _onSearchChanged,
+          ),
         ),
         if (_activeQuery.isNotEmpty)
           Padding(
@@ -185,6 +186,19 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
     );
   }
 
+  void _onSearchChanged(String value) {
+    setState(() {});
+    _debounce?.cancel();
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      // Clearing is immediate: there is nothing to ask the server, and waiting to restore the full
+      // feed would feel like a stall.
+      if (_activeQuery.isNotEmpty) _clearSearch();
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 400), _runSearch);
+  }
+
   Widget _list(BuildContext context, AppLocalizations l10n) {
     if (_messages.isEmpty) {
       return Center(
@@ -201,75 +215,55 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
         ),
       );
     }
-    return AdaptiveRefreshableScrollView(
-      onRefresh: () => _load(query: _activeQuery),
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate((context, i) {
-              // Preserve the 8px inter-item spacing the old ListView.separated
-              // provided, without a real separator builder for slivers.
-              final top = i == 0 ? 0.0 : 8.0;
-              if (i >= _messages.length) {
-                return Padding(
-                  padding: EdgeInsets.only(top: top),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Center(
-                      child: _loadingMore
-                          ? const AdaptiveProgress(size: 24)
-                          : AdaptiveButton.outlined(
-                              onPressed: _loadMore,
-                              child: Text(l10n.t('channel.loadMore')),
-                            ),
+    return ListView.builder(
+      // Reversed, like the chat feed: the newest post sits at the BOTTOM and the channel opens on
+      // it. It used to render newest-first top-down, so opening a channel showed the latest post at
+      // the top of the screen and reading forward meant scrolling up — the opposite of every other
+      // message list in the app.
+      reverse: true,
+      controller: _scroll,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      itemCount: _messages.length + (_cursor.isNotEmpty ? 1 : 0),
+      itemBuilder: (context, i) {
+        // In a reversed list the last index draws at the TOP, which is where "load older" belongs.
+        if (i >= _messages.length) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Center(
+              child: _loadingMore
+                  ? const AdaptiveProgress(size: 24)
+                  : AdaptiveButton.outlined(
+                      onPressed: _loadMore,
+                      child: Text(l10n.t('channel.loadMore')),
                     ),
-                  ),
-                );
-              }
-              // A day separator wherever the date changes, exactly as the chat feed marks one.
-              // The list runs newest-first, so the message BELOW this one in time is the next
-              // index — the separator therefore belongs above index i when i is the last post of
-              // its day.
-              final message = _messages[i];
-              final day = messageDay(message.createdAt);
-              final newerDay = i == 0
-                  ? null
-                  : messageDay(_messages[i - 1].createdAt);
-              final endsDay =
-                  day != null && (newerDay == null || newerDay != day);
-              return Padding(
-                padding: EdgeInsets.only(top: top),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _MessageCard(message: message),
-                    if (endsDay) DateSeparator(day: day),
-                  ],
-                ),
-              );
-            }, childCount: _messages.length + (_cursor.isNotEmpty ? 1 : 0)),
-          ),
-        ),
-      ],
+            ),
+          );
+        }
+
+        final message = _messages[i];
+        // The array runs newest-first and the list is reversed, so index+1 is the post ABOVE this
+        // one on screen — the older one. A separator belongs above the first post of a day, which
+        // means comparing against that older neighbour. Comparing against the newer one put
+        // "Today" underneath the only message of today.
+        final older = i + 1 < _messages.length ? _messages[i + 1] : null;
+        final day = messageDay(message.createdAt);
+        final olderDay = older == null ? null : messageDay(older.createdAt);
+        final startsDay = day != null && (olderDay == null || day != olderDay);
+
+        return Column(
+          children: [
+            if (startsDay) DateSeparator(day: day),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _MessageCard(message: message),
+            ),
+          ],
+        );
+      },
     );
   }
 }
 
-/// One post, drawn as the message it is.
-///
-/// It was a full-width Card: a cover image across the top, then the title, then two lines of body.
-/// That is how a blog lists articles, and it is why a channel read like a feed reader while the
-/// chat beside it read like a conversation.
-///
-/// Now it is a bubble, aligned left and only as wide as it needs to be — the same shape as an
-/// incoming chat message, for the same reason: somebody sent this to you. It stays left-aligned
-/// even for the channel's owner, because a broadcast has one voice and there is no other side to
-/// align against.
-///
-/// The title keeps its weight and the comment count sits beneath it, as on the web. What is gone is
-/// the two-line body clamp: a bubble that shows the whole of a short post and opens for a long one
-/// beats a card that truncates everything to exactly two lines.
 class _MessageCard extends StatelessWidget {
   const _MessageCard({required this.message});
 
@@ -341,13 +335,24 @@ class _MessageCard extends StatelessWidget {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (message.commentsAllowed) ...[
+                          // The COUNT, and only when there is one. An icon on every post said
+                          // "comments are possible here", which is not news — it was on every post
+                          // in the channel. A number says somebody replied, which is.
+                          if (message.commentCount > 0) ...[
                             Icon(
                               Icons.mode_comment_outlined,
                               size: 13,
                               color: scheme.primary,
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 3),
+                            Text(
+                              '${message.commentCount}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: scheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ],
                           const Spacer(),
                           Text(

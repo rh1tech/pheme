@@ -104,6 +104,7 @@ const Map<String, String> enStrings = {
   'channel.noMessagesSearch': 'No messages match your search.',
   'channel.loadMore': 'Load more',
   'channel.noTitle': '(no title)',
+  'channel.showMore': 'Show more',
   'channel.searchFailed': 'Search failed',
   'channel.sendTitle': 'Title',
   'channel.sendBody': 'Body',

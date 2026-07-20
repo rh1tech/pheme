@@ -100,6 +100,7 @@ const Map<String, String> ruStrings = {
   'channel.noMessagesSearch': 'Нет сообщений по запросу.',
   'channel.loadMore': 'Загрузить ещё',
   'channel.noTitle': '(без заголовка)',
+  'channel.showMore': 'Показать полностью',
   'channel.searchFailed': 'Ошибка поиска',
   'channel.sendTitle': 'Заголовок',
   'channel.sendBody': 'Текст',
