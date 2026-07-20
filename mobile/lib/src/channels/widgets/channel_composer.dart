@@ -182,6 +182,19 @@ class _ChannelComposerState extends ConsumerState<ChannelComposer> {
                 ),
                 const SizedBox(width: 4),
                 IconButton.filled(
+                  // Explicit colours. The filled default resolves to primary on primaryContainer,
+                  // which on this palette is a violet arrow on a violet disc — the button was there
+                  // and could not be read.
+                  style: IconButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                    disabledBackgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
+                    disabledForegroundColor: Theme.of(
+                      context,
+                    ).colorScheme.onSurfaceVariant,
+                  ),
                   icon: _sending
                       ? const SizedBox(
                           width: 18,

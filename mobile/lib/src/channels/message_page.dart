@@ -150,6 +150,9 @@ class _PostBody extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     const bodyStyle = TextStyle(fontSize: 15);
 
+    // What the post actually says: its body, or its title when the body is empty.
+    final text = message.body.isNotEmpty ? message.body : message.title;
+
     // A third of the screen, as asked. Applied to the text alone: pictures are the post's subject
     // and clipping them to half a photograph helps nobody.
     final cap = MediaQuery.sizeOf(context).height * 0.3;
@@ -168,23 +171,27 @@ class _PostBody extends StatelessWidget {
             formatDateTime(message.createdAt),
             style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
           ),
-          if (message.body.isNotEmpty) ...[
+          // The composer makes the first line the title and the rest the body, so a one-line post
+          // has a title and NOTHING else. Its only copy of the text was then the app bar, which
+          // truncates — the message simply did not appear on its own screen. Falling back to the
+          // title here means the text is always somewhere it can be read in full.
+          if (text.isNotEmpty) ...[
             const SizedBox(height: 10),
             LayoutBuilder(
               builder: (context, constraints) {
                 final painter = TextPainter(
-                  text: TextSpan(text: message.body, style: bodyStyle),
+                  text: TextSpan(text: text, style: bodyStyle),
                   textDirection: Directionality.of(context),
                 )..layout(maxWidth: constraints.maxWidth);
                 final overflows = painter.height > cap;
 
-                final text = Text(message.body, style: bodyStyle);
+                final rendered = Text(text, style: bodyStyle);
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (!overflows || expanded)
-                      text
+                      rendered
                     else
                       // Clipped rather than scrolled: a scrollable box inside a scrollable page
                       // fights the reader for the gesture.
@@ -194,7 +201,7 @@ class _PostBody extends StatelessWidget {
                           width: double.infinity,
                           child: Align(
                             alignment: Alignment.topLeft,
-                            child: text,
+                            child: rendered,
                           ),
                         ),
                       ),
@@ -385,18 +392,22 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
           child: _loading
               ? const Center(child: AdaptiveProgress())
               : _comments.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      l10n.t('comment.empty'),
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                )
+              // "No comments yet. Be the first to comment." under a post that does not accept
+              // comments invites the reader to do something the screen will refuse.
+              ? (widget.commentsAllowed
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Text(
+                            l10n.t('comment.empty'),
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink())
               : ListView(
                   padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
                   children: [
@@ -457,6 +468,19 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
                 ),
                 const SizedBox(width: 6),
                 IconButton.filled(
+                  // Explicit colours. The filled default resolves to primary on primaryContainer,
+                  // which on this palette is a violet arrow on a violet disc — the button was there
+                  // and could not be read.
+                  style: IconButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                    disabledBackgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
+                    disabledForegroundColor: Theme.of(
+                      context,
+                    ).colorScheme.onSurfaceVariant,
+                  ),
                   icon: _posting
                       ? const SizedBox(
                           width: 18,
@@ -473,9 +497,15 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
             ),
           ),
         if (!widget.commentsAllowed)
-          Text(
-            l10n.t('comment.closed'),
-            style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Center(
+              child: Text(
+                l10n.t('comment.closed'),
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+              ),
+            ),
           ),
         if (widget.commentsAllowed && !canComment)
           Text(
