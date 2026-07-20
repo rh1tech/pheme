@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/format.dart';
 import '../../core/providers.dart';
 import '../../core/snackbar.dart';
 import '../../data/app_providers.dart';
@@ -11,6 +10,8 @@ import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../widgets/adaptive/adaptive.dart';
 import '../../widgets/error_view.dart';
+import '../../chat/chat_time.dart';
+import '../../chat/widgets/call_event_bubble.dart';
 import '../../widgets/message_carousel.dart';
 
 /// Message history for a channel: searchable, paginated, and updated live from
@@ -226,9 +227,26 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
                   ),
                 );
               }
+              // A day separator wherever the date changes, exactly as the chat feed marks one.
+              // The list runs newest-first, so the message BELOW this one in time is the next
+              // index — the separator therefore belongs above index i when i is the last post of
+              // its day.
+              final message = _messages[i];
+              final day = messageDay(message.createdAt);
+              final newerDay = i == 0
+                  ? null
+                  : messageDay(_messages[i - 1].createdAt);
+              final endsDay =
+                  day != null && (newerDay == null || newerDay != day);
               return Padding(
                 padding: EdgeInsets.only(top: top),
-                child: _MessageCard(message: _messages[i]),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _MessageCard(message: message),
+                    if (endsDay) DateSeparator(day: day),
+                  ],
+                ),
               );
             }, childCount: _messages.length + (_cursor.isNotEmpty ? 1 : 0)),
           ),
@@ -238,6 +256,20 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
   }
 }
 
+/// One post, drawn as the message it is.
+///
+/// It was a full-width Card: a cover image across the top, then the title, then two lines of body.
+/// That is how a blog lists articles, and it is why a channel read like a feed reader while the
+/// chat beside it read like a conversation.
+///
+/// Now it is a bubble, aligned left and only as wide as it needs to be — the same shape as an
+/// incoming chat message, for the same reason: somebody sent this to you. It stays left-aligned
+/// even for the channel's owner, because a broadcast has one voice and there is no other side to
+/// align against.
+///
+/// The title keeps its weight and the comment count sits beneath it, as on the web. What is gone is
+/// the two-line body clamp: a bubble that shows the whole of a short post and opens for a long one
+/// beats a card that truncates everything to exactly two lines.
 class _MessageCard extends StatelessWidget {
   const _MessageCard({required this.message});
 
@@ -246,61 +278,87 @@ class _MessageCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => context.push(
-          '/channels/${message.channelId}/messages/${message.id}',
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final title = message.title.isEmpty
+        ? l10n.t('channel.noTitle')
+        : message.title;
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        // The same ceiling a chat bubble keeps, so a one-word post does not stretch the screen and
+        // a long one still wraps well short of the edge.
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * 0.82,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // List shows only the first image as a cover; the detail view shows
-            // the full carousel.
-            if (message.images.isNotEmpty) MessageCover(images: message.images),
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+        child: Material(
+          color: scheme.surface,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(4),
+            topRight: Radius.circular(16),
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(16),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () => context.push(
+              '/channels/${message.channelId}/messages/${message.id}',
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message.images.isNotEmpty)
+                  MessageCover(images: message.images),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Expanded(
-                        child: Text(
-                          message.title.isEmpty
-                              ? l10n.t('channel.noTitle')
-                              : message.title,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 15,
-                          ),
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Text(
-                        formatDateTime(message.createdAt),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: scheme.onSurfaceVariant,
+                      if (message.body.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          message.body,
+                          style: const TextStyle(fontSize: 14),
                         ),
+                      ],
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (message.commentsAllowed) ...[
+                            Icon(
+                              Icons.mode_comment_outlined,
+                              size: 13,
+                              color: scheme.primary,
+                            ),
+                            const SizedBox(width: 4),
+                          ],
+                          const Spacer(),
+                          Text(
+                            bubbleTime(l10n, message.createdAt),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                  if (message.body.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      message.body,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 14),
-                    ),
-                  ],
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

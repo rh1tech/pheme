@@ -90,6 +90,7 @@ const Map<String, String> ruStrings = {
   'channel.tabSend': 'Отправить',
   'channel.menu': 'Меню канала',
   'channel.newMessage': 'Новое сообщение',
+  'channel.writeMessage': 'Написать сообщение...',
   'channel.tabKeys': 'Ключи',
   'channel.tabSubscribers': 'Подписчики',
   'channel.tabSettings': 'Настройки',

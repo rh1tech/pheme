@@ -7,10 +7,10 @@ import '../models/models.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/error_view.dart';
 import 'channel_sheets.dart';
+import 'widgets/channel_composer.dart';
 import 'tabs/channel_settings_tab.dart';
 import 'tabs/keys_tab.dart';
 import 'tabs/messages_tab.dart';
-import 'tabs/send_tab.dart';
 import 'tabs/subscribers_tab.dart';
 
 /// A channel, as one screen.
@@ -86,21 +86,22 @@ class _ChannelView extends ConsumerWidget {
           ],
         ),
       ],
-      // Posting is a button that opens a composer, exactly as starting a chat is. Shown only to
-      // those who may post: a channel is a broadcast, and for most readers there is nothing here
-      // to press.
-      floatingActionButton: relation.canManage
-          ? FloatingActionButton.extended(
-              onPressed: () => showChannelSheet<void>(
-                context,
-                title: l10n.t('channel.tabSend'),
-                child: SendTab(channelId: channel.id),
-              ),
-              icon: const Icon(Icons.add),
-              label: Text(l10n.t('channel.newMessage')),
-            )
-          : null,
-      body: MessagesTab(channelId: channel.id),
+      body: Column(
+        children: [
+          Expanded(child: MessagesTab(channelId: channel.id)),
+          // Where a chat keeps its message box. Only for those who may post — a channel is a
+          // broadcast, and a reader who cannot post should not be shown a box that will refuse
+          // them.
+          if (relation.canManage)
+            ChannelComposer(
+              channelId: channel.id,
+              // Nothing to refresh: the feed already prepends the post when it comes back down the
+              // live stream, and it de-duplicates by id — reloading here would race that and could
+              // show the post twice.
+              onSent: () {},
+            ),
+        ],
+      ),
     );
   }
 

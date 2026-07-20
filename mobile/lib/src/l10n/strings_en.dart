@@ -94,6 +94,7 @@ const Map<String, String> enStrings = {
   'channel.tabSend': 'Send',
   'channel.menu': 'Channel menu',
   'channel.newMessage': 'New message',
+  'channel.writeMessage': 'Write a message...',
   'channel.tabKeys': 'Keys',
   'channel.tabSubscribers': 'Subscribers',
   'channel.tabSettings': 'Settings',
