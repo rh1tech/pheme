@@ -11,6 +11,7 @@ import '../widgets/adaptive/adaptive_controls.dart';
 import '../widgets/adaptive/adaptive_refresh.dart';
 import '../widgets/adaptive/adaptive_scaffold.dart';
 import '../widgets/adaptive/adaptive_search_field.dart';
+import '../widgets/brand_logo.dart';
 import '../widgets/adaptive/platform.dart';
 import '../widgets/error_view.dart';
 import 'chat_providers.dart';
@@ -108,7 +109,10 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
     );
 
     return AdaptiveScaffold(
-      title: Text(l10n.t('chat.title')),
+      // The same brand mark the Channels tab shows. The two are one app and one screen with
+      // different contents; titling one with a logo and the other with the word "Chats" made them
+      // look like different products sharing a tab bar.
+      title: const BrandLogo(size: 26),
       trailing: [
         // iOS keeps the button in the bar: a floating action button is a Material idiom and looks
         // imported on a Cupertino screen. Android gets the labelled button at the bottom instead —
@@ -142,14 +146,22 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
             ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: AdaptiveSearchField(
-              controller: _search,
-              placeholder: l10n.t('chat.search'),
-              onChanged: (v) => setState(() => _query = v.trim()),
+          // Hidden when there is nothing to search — an empty account was offered a search box
+          // above the words "No chats yet", which asks the user to look for something the screen
+          // has just told them does not exist.
+          //
+          // It stays while a search is RUNNING, however empty the result. Hiding it the moment a
+          // query matched nothing would take away the only means of clearing that query, and the
+          // screen would be stuck showing "Nothing found" with no way back.
+          if ((conversations.value?.isNotEmpty ?? false) || _query.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: AdaptiveSearchField(
+                controller: _search,
+                placeholder: l10n.t('chat.search'),
+                onChanged: (v) => setState(() => _query = v.trim()),
+              ),
             ),
-          ),
           Expanded(
             child: conversations.when(
               loading: () => const Center(child: AdaptiveProgress()),

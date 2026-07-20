@@ -56,6 +56,8 @@ const Map<String, String> enStrings = {
   'channels.subscriptionMode': 'Subscription mode',
   'channels.create': 'Create',
   'channels.noChannels': 'No channels yet',
+  'channels.noResults': 'Nothing found',
+  'channels.search': 'Search channels',
   'channels.noChannelsHint':
       'Create a channel and your posts will appear here.',
   'channels.created': 'Channel created',

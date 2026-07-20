@@ -53,6 +53,8 @@ const Map<String, String> ruStrings = {
   'channels.subscriptionMode': 'Режим подписки',
   'channels.create': 'Создать',
   'channels.noChannels': 'Пока нет каналов',
+  'channels.noResults': 'Ничего не найдено',
+  'channels.search': 'Поиск каналов',
   'channels.noChannelsHint': 'Создайте канал — и записи появятся здесь.',
   'channels.created': 'Канал создан',
   'channels.createFailed': 'Не удалось создать',

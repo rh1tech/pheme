@@ -10,6 +10,7 @@ import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../push/push_service.dart';
 import '../widgets/adaptive/adaptive.dart';
+import '../widgets/adaptive/adaptive_search_field.dart';
 import '../widgets/brand_logo.dart';
 import '../widgets/error_view.dart';
 import '../widgets/mode_badge.dart';
@@ -18,8 +19,42 @@ import 'join_channel_sheet.dart';
 
 /// Home screen: the channels the user owns plus those they have joined. Tapping
 /// one opens its detail page; the bell action registers this device for push.
-class ChannelsPage extends ConsumerWidget {
+class ChannelsPage extends ConsumerStatefulWidget {
   const ChannelsPage({super.key});
+
+  @override
+  ConsumerState<ChannelsPage> createState() => _ChannelsPageState();
+}
+
+class _ChannelsPageState extends ConsumerState<ChannelsPage> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Filters on the channel name, which is what the row shows and therefore the only thing a
+  /// reader can be looking for. Client-side against the already-loaded list: this endpoint returns
+  /// the channels you own and the ones you have joined, with no filter and no paging, so there is
+  /// nothing to ask the server for that it has not already sent.
+  List<Channel> _filterOwned(List<Channel> all) {
+    if (_query.isEmpty) return all;
+    final needle = _query.toLowerCase();
+    return all
+        .where((c) => c.name.toLowerCase().contains(needle))
+        .toList(growable: false);
+  }
+
+  List<JoinedChannel> _filterJoined(List<JoinedChannel> all) {
+    if (_query.isEmpty) return all;
+    final needle = _query.toLowerCase();
+    return all
+        .where((j) => j.channel.name.toLowerCase().contains(needle))
+        .toList(growable: false);
+  }
 
   Future<void> _enableNotifications(BuildContext context, WidgetRef ref) async {
     final l10n = context.l10n;
@@ -87,7 +122,7 @@ class ChannelsPage extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final l10n = context.l10n;
     final ios = isCupertino(context);
     final channels = ref.watch(channelsProvider);
@@ -137,44 +172,77 @@ class ChannelsPage extends ConsumerWidget {
               icon: const Icon(Icons.add),
               label: Text(l10n.t('channels.newChannel')),
             ),
-      body: AdaptiveRefreshableScrollView(
-        onRefresh: () => Future.wait([
-          ref.read(channelsProvider.notifier).refresh(),
-          ref.read(joinedChannelsProvider.notifier).refresh(),
-        ]),
-        slivers: channels.when(
-          loading: () => const [
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: Center(child: AdaptiveProgress()),
-            ),
-          ],
-          error: (e, _) => [
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: ErrorView(
-                message: l10n.t('channels.loadFailed'),
-                onRetry: () => ref.read(channelsProvider.notifier).refresh(),
+      body: Column(
+        children: [
+          // Hidden when there is nothing to search, and kept while a search is running however
+          // empty its result — the same rule the Chats tab follows, for the same reasons.
+          if (_hasAnyChannel(channels, joined) || _query.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: AdaptiveSearchField(
+                controller: _search,
+                placeholder: l10n.t('channels.search'),
+                onChanged: (v) => setState(() => _query = v.trim()),
               ),
             ),
-          ],
-          data: (owned) {
-            final joinedList = joined.asData?.value ?? const <JoinedChannel>[];
-            if (owned.isEmpty && joinedList.isEmpty) {
-              return [_emptyState(context)];
-            }
-            return [
-              if (owned.isNotEmpty) ..._ownedSlivers(context, owned),
-              if (joinedList.isNotEmpty) ..._joinedSlivers(context, joinedList),
-              const SliverToBoxAdapter(child: SizedBox(height: 96)),
-            ];
-          },
-        ),
+          Expanded(
+            child: AdaptiveRefreshableScrollView(
+              onRefresh: () => Future.wait([
+                ref.read(channelsProvider.notifier).refresh(),
+                ref.read(joinedChannelsProvider.notifier).refresh(),
+              ]),
+              slivers: channels.when(
+                loading: () => const [
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(child: AdaptiveProgress()),
+                  ),
+                ],
+                error: (e, _) => [
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: ErrorView(
+                      message: l10n.t('channels.loadFailed'),
+                      onRetry: () =>
+                          ref.read(channelsProvider.notifier).refresh(),
+                    ),
+                  ),
+                ],
+                data: (allOwned) {
+                  final owned = _filterOwned(allOwned);
+                  final joinedList = _filterJoined(
+                    joined.asData?.value ?? const <JoinedChannel>[],
+                  );
+                  if (owned.isEmpty && joinedList.isEmpty) {
+                    return [_emptyState(context, searching: _query.isNotEmpty)];
+                  }
+                  return [
+                    if (owned.isNotEmpty) ..._ownedSlivers(context, owned),
+                    if (joinedList.isNotEmpty)
+                      ..._joinedSlivers(context, joinedList),
+                    const SliverToBoxAdapter(child: SizedBox(height: 96)),
+                  ];
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _emptyState(BuildContext context) {
+  /// Whether the account has any channel at all, before filtering — what decides if there is
+  /// anything worth searching.
+  bool _hasAnyChannel(
+    AsyncValue<List<Channel>> owned,
+    AsyncValue<List<JoinedChannel>> joined,
+  ) {
+    final hasOwned = owned.asData?.value.isNotEmpty ?? false;
+    final hasJoined = joined.asData?.value.isNotEmpty ?? false;
+    return hasOwned || hasJoined;
+  }
+
+  Widget _emptyState(BuildContext context, {required bool searching}) {
     final l10n = context.l10n;
     final theme = Theme.of(context);
     return SliverFillRemaining(
@@ -193,27 +261,37 @@ class ChannelsPage extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                isCupertino(context)
-                    ? CupertinoIcons.antenna_radiowaves_left_right
-                    : Icons.campaign_outlined,
+                searching
+                    ? (isCupertino(context)
+                          ? CupertinoIcons.search
+                          : Icons.search_off)
+                    : (isCupertino(context)
+                          ? CupertinoIcons.antenna_radiowaves_left_right
+                          : Icons.campaign_outlined),
                 size: 44,
                 color: theme.colorScheme.onSurfaceVariant,
               ),
               const SizedBox(height: 12),
               Text(
-                l10n.t('channels.noChannels'),
+                l10n.t(
+                  searching ? 'channels.noResults' : 'channels.noChannels',
+                ),
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                l10n.t('channels.noChannelsHint'),
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+              // Telling someone to create a channel because they mistyped the name of one they
+              // already have is noise, so the hint belongs to the empty case only.
+              if (!searching) ...[
+                const SizedBox(height: 4),
+                Text(
+                  l10n.t('channels.noChannelsHint'),
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
