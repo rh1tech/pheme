@@ -101,6 +101,9 @@ class _MessagePageState extends ConsumerState<MessagePage> {
     // the comments off the bottom entirely, so a post with fifty replies looked like a post with
     // none until you scrolled past the whole of it.
     return Column(
+      // Stretch, not the default centre: the post sizes to its content, so a centring parent put
+      // the date and the text in the middle of the screen however left-aligned they were inside.
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _PostBody(
           message: message,
@@ -375,13 +378,6 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-          child: Text(
-            l10n.t('comment.title'),
-            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-          ),
-        ),
         // The comments scroll on their own, so the composer below stays put — the same
         // arrangement a chat has. They used to be part of one long page scroll with the post, so
         // the field you type into drifted off the bottom as the thread grew.
