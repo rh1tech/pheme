@@ -378,21 +378,26 @@ func (h *Handler) senderIdentity(ctx context.Context, userID string) (name, avat
 
 // isControlContent reports whether a content type must not raise a push notification.
 //
-// The MLS types are protocol traffic and nobody wrote them. A call event is different: it is
-// user-visible, and it is the "missed call" line in the transcript — but the phone was rung
-// when the call came in, and buzzing it again to say the call it just announced went
-// unanswered is not a notification, it is a nag.
+// Inverted, and the inversion is the point: everything is control traffic EXCEPT the one type a
+// person actually writes. This used to list the protocol types it knew about and notify for
+// anything else, which meant the default for a type nobody had thought about was to buzz every
+// member of the conversation.
+//
+// That default cost real users real notifications. Signing in on a new device posts a history
+// request to every conversation the account is in, and a rejoin posts another; neither was on the
+// list, so every member's phone lit up because somebody else had opened the app on a new phone.
+// application/mls-rejoin does not appear anywhere in this server's source at all — it is a content
+// type the client invented, and under the old rule an invented type notified by default.
+//
+// A protocol message added by a future client cannot do this again. It has to be named
+// application/mls and carry something a human typed to reach anybody's lock screen.
+//
+// The one deliberate loss is a call event, which IS user-visible — it is the "missed call" line in
+// the transcript. It stays silent for the same reason it always did: the phone rang when the call
+// came in, and buzzing again to report that the call it just announced went unanswered is not a
+// notification, it is a nag.
 func isControlContent(contentType string) bool {
-	switch contentType {
-	case contentTypeMLSWelcome, contentTypeMLSCommit, contentTypeMLSDevice, contentTypeCallEvent:
-		return true
-	// A roster change is worth SEEING in the conversation and not worth being buzzed about. Nobody
-	// wrote it; the server did, because the membership changed.
-	case domain.ContentTypeMembership:
-		return true
-	default:
-		return false
-	}
+	return contentType != domain.ContentTypeMLSApplication
 }
 
 // The MLS protocol content types, defined once in domain (the store orders a catch-up

@@ -398,3 +398,45 @@ func TestChatPushWithholdsCiphertextFromUnrevocableDevices(t *testing.T) {
 		t.Error("no notification at all was sent; the device should still be told a message arrived")
 	}
 }
+
+// Only a message a person wrote may raise a notification.
+//
+// The rule used to work the other way round: it listed the protocol content types it knew about and
+// notified for everything else. Signing in on a new device posts a history request to every
+// conversation the account is in, and a rejoin posts another — neither was on the list, so every
+// member's phone lit up because somebody else had opened the app on a new phone. It happened on
+// production and was reported as "each time medved logs in, everyone receives messages".
+//
+// application/mls-rejoin is in the table on purpose: it appears nowhere in this server's source. It
+// is a content type the client invented and the server has never been told about, which is exactly
+// the case the old default got wrong and the reason this rule is now an allowlist of one.
+func TestOnlyHumanMessagesNotify(t *testing.T) {
+	notifiable := map[string]bool{
+		domain.ContentTypeMLSApplication: true,
+
+		domain.ContentTypeMLSWelcome:        false,
+		domain.ContentTypeMLSCommit:         false,
+		domain.ContentTypeMLSDevice:         false,
+		domain.ContentTypeMLSHistoryRequest: false,
+		domain.ContentTypeMLSHistoryOffer:   false,
+		domain.ContentTypeMembership:        false,
+		domain.ContentTypeCallEvent:         false,
+		"application/mls-rejoin":            false,
+		"application/some-future-protocol":  false,
+		"application/octet-stream":          false,
+	}
+
+	for contentType, wantNotify := range notifiable {
+		if got := !isControlContent(contentType); got != wantNotify {
+			if wantNotify {
+				t.Errorf("%s does not notify, but it is what a person wrote — the message arrives "+
+					"silently and nobody knows it is there", contentType)
+			} else {
+				t.Errorf("%s raises a notification. Nobody wrote it: every member of the "+
+					"conversation is buzzed by protocol traffic, which is what happened when a "+
+					"device signing in posted a history request to every chat the account is in",
+					contentType)
+			}
+		}
+	}
+}
