@@ -110,11 +110,15 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
     return AdaptiveScaffold(
       title: Text(l10n.t('chat.title')),
       trailing: [
-        AdaptiveIconButton(
-          icon: Icons.add,
-          semanticLabel: l10n.t('chat.newChat'),
-          onPressed: () => showNewChatSheet(context),
-        ),
+        // iOS keeps the button in the bar: a floating action button is a Material idiom and looks
+        // imported on a Cupertino screen. Android gets the labelled button at the bottom instead —
+        // see floatingActionButton below, and Channels, which this now matches.
+        if (isCupertino(context))
+          AdaptiveIconButton(
+            icon: Icons.add,
+            semanticLabel: l10n.t('chat.newChat'),
+            onPressed: () => showNewChatSheet(context),
+          ),
         // Settings used to live only on the Channels tab, so someone who only uses Chats had no
         // route to them at all — including to the notification-preview setting, which is about
         // chats. /settings is a top-level route; both tabs can reach the same screen.
@@ -126,6 +130,16 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
           onPressed: () => context.push('/settings'),
         ),
       ],
+      // A labelled button where the Channels tab has one, rather than a bare "+" in the far
+      // corner. The two tabs are the same screen with different contents; putting their primary
+      // action in different places, with different affordances, made them look unrelated.
+      floatingActionButton: isCupertino(context)
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => showNewChatSheet(context),
+              icon: const Icon(Icons.add),
+              label: Text(l10n.t('chat.newChat')),
+            ),
       body: Column(
         children: [
           Padding(

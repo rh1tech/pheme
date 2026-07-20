@@ -55,7 +55,9 @@ const Map<String, String> enStrings = {
   'channels.channelNamePlaceholder': 'Site Alerts',
   'channels.subscriptionMode': 'Subscription mode',
   'channels.create': 'Create',
-  'channels.noChannels': 'No channels yet — create one with the + button.',
+  'channels.noChannels': 'No channels yet',
+  'channels.noChannelsHint':
+      'Create a channel and your posts will appear here.',
   'channels.created': 'Channel created',
   'channels.createFailed': 'Create failed',
   'channels.loadFailed': 'Could not load channels',
@@ -220,6 +222,10 @@ const Map<String, String> enStrings = {
   // settings
   'settings.title': 'Settings',
   'settings.appearance': 'Appearance',
+  'settings.about': 'About',
+  'settings.aboutLockScreen': 'Lock screen',
+  'settings.aboutVersion': 'Version',
+  'settings.serverSection': 'Server',
   'settings.theme': 'Theme',
   'settings.themeSystem': 'System',
   'settings.themeLight': 'Light',

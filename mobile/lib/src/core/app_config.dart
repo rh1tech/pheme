@@ -10,6 +10,20 @@ import 'package:flutter/material.dart';
 /// tests already select their API. An empty define (the default) falls through
 /// to production.
 const String _envBaseUrl = String.fromEnvironment('PHEME_API');
+
+/// The release this build came from, for the About screen.
+///
+/// Passed at build time the same way the web app takes it, so the two report the same string for
+/// the same release: --dart-define=PHEME_VERSION=v1.2.3. A local build says "dev", which is the
+/// honest answer for something that did not come from a tag.
+const String appVersion = String.fromEnvironment(
+  'PHEME_VERSION',
+  defaultValue: 'dev',
+);
+
+/// Shown in About. Not translated: a name is a name.
+const String appCopyright = '© 2026 Mikhail Matveev';
+const String appWebsite = 'https://app.example.com';
 const String kDefaultBaseUrl = _envBaseUrl == ''
     ? 'https://pheme-prod-api.rh1.tech'
     : _envBaseUrl;

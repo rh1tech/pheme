@@ -176,33 +176,46 @@ class ChannelsPage extends ConsumerWidget {
 
   Widget _emptyState(BuildContext context) {
     final l10n = context.l10n;
+    final theme = Theme.of(context);
     return SliverFillRemaining(
       hasScrollBody: false,
-      // Sat mid-screen, by way of a hardcoded 96px top padding, while pointing at a button in the
-      // bottom corner — the reader had to travel the length of the screen to connect the sentence
-      // to the thing it names. Held to the bottom instead, just above the button it refers to.
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 96),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Icon(
-              isCupertino(context)
-                  ? CupertinoIcons.antenna_radiowaves_left_right
-                  : Icons.campaign_outlined,
-              size: 48,
-              color: Theme.of(context).colorScheme.outline,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              l10n.t('channels.noChannels'),
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+      // Centred, with a heading and a line under it — the same shape the Chats tab uses, because
+      // the two tabs are the same screen with different contents and had no business greeting an
+      // empty account in two different ways.
+      //
+      // It used to sit at the bottom, pinned above the button, so the sentence and the button it
+      // described were adjacent. That reads well and looks like a different app from the tab next
+      // to it; consistency between the two is worth more than the adjacency.
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isCupertino(context)
+                    ? CupertinoIcons.antenna_radiowaves_left_right
+                    : Icons.campaign_outlined,
+                size: 44,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              Text(
+                l10n.t('channels.noChannels'),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                l10n.t('channels.noChannelsHint'),
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

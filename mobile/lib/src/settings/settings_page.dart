@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/app_config.dart';
 import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../crypto/recovery_gate.dart';
@@ -135,79 +136,35 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         _SectionHeader(title: l10n.t('settings.appearance')),
-        ListTile(
-          leading: const Icon(Icons.brightness_6_outlined),
-          title: Text(l10n.t('settings.theme')),
-          trailing: DropdownButton<ThemeMode>(
-            value: settings.themeMode,
-            underline: const SizedBox.shrink(),
-            onChanged: (mode) {
-              if (mode != null) controller.setThemeMode(mode);
-            },
-            items: [
-              DropdownMenuItem(
-                value: ThemeMode.system,
-                child: Text(l10n.t('settings.themeSystem')),
-              ),
-              DropdownMenuItem(
-                value: ThemeMode.light,
-                child: Text(l10n.t('settings.themeLight')),
-              ),
-              DropdownMenuItem(
-                value: ThemeMode.dark,
-                child: Text(l10n.t('settings.themeDark')),
-              ),
-            ],
-          ),
+        // Every setting here is a row that states its current value and opens a chooser.
+        //
+        // They used to be the controls themselves — a dropdown here, a text field and a Save
+        // button there, three radio rows for the lock screen — so the screen was a mix of widgets
+        // at different heights, and reading off what a setting was CURRENTLY set to meant
+        // interpreting a different control each time. The iOS tree already worked this way; this
+        // is the Material one catching up, and the two now describe the same screen.
+        _ValueRow(
+          icon: Icons.brightness_6_outlined,
+          title: l10n.t('settings.theme'),
+          value: _themeLabel(l10n, settings.themeMode),
+          onTap: () => _pickTheme(l10n, settings, controller),
         ),
-        ListTile(
-          leading: const Icon(Icons.translate_outlined),
-          title: Text(l10n.t('settings.language')),
-          trailing: DropdownButton<String>(
-            value: settings.locale?.languageCode ?? 'system',
-            underline: const SizedBox.shrink(),
-            onChanged: (code) {
-              controller.setLocale(
-                code == null || code == 'system' ? null : Locale(code),
-              );
-            },
-            items: [
-              DropdownMenuItem(
-                value: 'system',
-                child: Text(l10n.t('settings.languageSystem')),
-              ),
-              DropdownMenuItem(
-                value: 'en',
-                child: Text(l10n.t('settings.languageEn')),
-              ),
-              DropdownMenuItem(
-                value: 'ru',
-                child: Text(l10n.t('settings.languageRu')),
-              ),
-            ],
+        _ValueRow(
+          icon: Icons.translate_outlined,
+          title: l10n.t('settings.language'),
+          value: _languageLabel(
+            l10n,
+            settings.locale?.languageCode ?? 'system',
           ),
+          onTap: () => _pickLanguage(l10n, settings, controller),
         ),
         const Divider(height: 24),
         _SectionHeader(title: l10n.t('settings.server')),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: AdaptiveTextField(
-                  controller: _baseUrl,
-                  label: l10n.t('settings.serverUrl'),
-                  keyboardType: TextInputType.url,
-                  onSubmitted: (_) => _saveBaseUrl(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              AdaptiveButton.filled(
-                onPressed: _saveBaseUrl,
-                child: Text(l10n.t('common.save')),
-              ),
-            ],
-          ),
+        _ValueRow(
+          icon: Icons.dns_outlined,
+          title: l10n.t('settings.serverUrl'),
+          value: _baseUrl.text,
+          onTap: () => _editBaseUrl(l10n),
         ),
         const Divider(height: 24),
         _SectionHeader(title: l10n.t('settings.device')),
@@ -223,29 +180,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 : l10n.t('settings.deviceNotRegistered'),
           ),
         ),
-        if (_privacy != null) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: Text(
-              l10n.t('settings.lockScreenHint'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+        if (_privacy != null)
+          _ValueRow(
+            icon: Icons.lock_outline,
+            title: l10n.t('settings.aboutLockScreen'),
+            value: _privacyLabel(l10n, _privacy!),
+            onTap: () => _pickPrivacy(l10n),
           ),
-          // A tapped row with a check, rather than RadioListTile: the Radio group API is
-          // deprecated in favour of a RadioGroup ancestor, and this matches the Cupertino tree
-          // exactly, so the two cannot drift into looking like different features.
-          for (final option in _privacyOptions)
-            ListTile(
-              leading: Icon(
-                option.$1 == _privacy
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked,
-              ),
-              title: Text(l10n.t(option.$2)),
-              subtitle: Text(l10n.t(option.$3)),
-              onTap: () => _setPrivacy(option.$1),
-            ),
-        ],
         const Divider(height: 24),
         _SectionHeader(title: l10n.t('settings.account')),
         ListTile(
@@ -276,6 +217,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
           onTap: () => ref.read(authControllerProvider.notifier).logout(),
+        ),
+        const Divider(height: 24),
+        _SectionHeader(title: l10n.t('settings.about')),
+        _ValueRow(
+          icon: Icons.info_outline,
+          title: l10n.t('settings.about'),
+          value: appVersion,
+          onTap: () => _showAbout(l10n),
         ),
       ],
     );
@@ -400,7 +349,172 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
           ],
         ),
+        CupertinoListSection.insetGrouped(
+          header: Text(l10n.t('settings.about')),
+          children: [
+            CupertinoListTile.notched(
+              leading: const Icon(CupertinoIcons.info),
+              title: Text(l10n.t('settings.about')),
+              additionalInfo: Text(appVersion),
+              trailing: const CupertinoListTileChevron(),
+              onTap: () => _showAbout(l10n),
+            ),
+          ],
+        ),
       ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Choosers (Material). The iOS tree has its own pickers; these are the equivalents.
+  // ---------------------------------------------------------------------------
+
+  String _privacyLabel(AppLocalizations l10n, String value) {
+    for (final option in _privacyOptions) {
+      if (option.$1 == value) return l10n.t(option.$2);
+    }
+    return value;
+  }
+
+  /// One chooser for every setting that picks from a fixed set.
+  ///
+  /// Written once rather than per setting: three near-identical dialogs is three places for the
+  /// selected-state rendering to drift, and this screen has already had two idioms living side by
+  /// side for exactly that reason.
+  Future<T?> _choose<T>({
+    required String title,
+    required List<(T, String, String?)> options,
+    required T current,
+  }) {
+    return showDialog<T>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: Text(title),
+        children: [
+          for (final option in options)
+            ListTile(
+              // A tapped row with a check rather than RadioListTile: the Radio group API wants a
+              // RadioGroup ancestor now, and this matches the rows the rest of the screen uses.
+              leading: Icon(
+                option.$1 == current
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+              ),
+              title: Text(option.$2),
+              subtitle: option.$3 == null ? null : Text(option.$3!),
+              onTap: () => Navigator.of(context).pop(option.$1),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickTheme(
+    AppLocalizations l10n,
+    SettingsState settings,
+    SettingsController controller,
+  ) async {
+    final picked = await _choose<ThemeMode>(
+      title: l10n.t('settings.theme'),
+      current: settings.themeMode,
+      options: [
+        (ThemeMode.system, l10n.t('settings.themeSystem'), null),
+        (ThemeMode.light, l10n.t('settings.themeLight'), null),
+        (ThemeMode.dark, l10n.t('settings.themeDark'), null),
+      ],
+    );
+    if (picked != null) controller.setThemeMode(picked);
+  }
+
+  Future<void> _pickLanguage(
+    AppLocalizations l10n,
+    SettingsState settings,
+    SettingsController controller,
+  ) async {
+    final picked = await _choose<String>(
+      title: l10n.t('settings.language'),
+      current: settings.locale?.languageCode ?? 'system',
+      options: [
+        ('system', l10n.t('settings.languageSystem'), null),
+        ('en', l10n.t('settings.languageEn'), null),
+        ('ru', l10n.t('settings.languageRu'), null),
+      ],
+    );
+    if (picked == null) return;
+    controller.setLocale(picked == 'system' ? null : Locale(picked));
+  }
+
+  Future<void> _pickPrivacy(AppLocalizations l10n) async {
+    final picked = await _choose<String>(
+      title: l10n.t('settings.aboutLockScreen'),
+      current: _privacy ?? 'sender',
+      options: [
+        for (final option in _privacyOptions)
+          (option.$1, l10n.t(option.$2), l10n.t(option.$3)),
+      ],
+    );
+    if (picked != null) await _setPrivacy(picked);
+  }
+
+  /// The server address, in a dialog rather than a text field wired into the page.
+  ///
+  /// It sat inline with its own Save button, which is the one control on this screen that could be
+  /// left half-edited: type a new address, never press Save, and the screen shows something that
+  /// is not what the app is talking to.
+  Future<void> _editBaseUrl(AppLocalizations l10n) async {
+    final field = TextEditingController(text: _baseUrl.text);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.t('settings.serverUrl')),
+        content: TextField(
+          controller: field,
+          keyboardType: TextInputType.url,
+          autofocus: true,
+          onSubmitted: (_) => Navigator.of(context).pop(true),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(l10n.t('common.cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(l10n.t('common.save')),
+          ),
+        ],
+      ),
+    );
+    if (saved ?? false) {
+      _baseUrl.text = field.text.trim();
+      await _saveBaseUrl();
+    }
+    field.dispose();
+  }
+
+  Future<void> _showAbout(AppLocalizations l10n) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.t('settings.about')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${l10n.t('settings.aboutVersion')} $appVersion'),
+            const SizedBox(height: 8),
+            Text(appWebsite),
+            const SizedBox(height: 8),
+            Text(appCopyright),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(l10n.t('common.close')),
+          ),
+        ],
+      ),
     );
   }
 
@@ -496,6 +610,51 @@ class _SectionHeader extends StatelessWidget {
           color: Theme.of(context).colorScheme.primary,
         ),
       ),
+    );
+  }
+}
+
+/// A settings row: what it is on the left, what it is set to on the right, a chooser on tap.
+class _ValueRow extends StatelessWidget {
+  const _ValueRow({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListTile(
+      leading: Icon(icon),
+      title: Text(title),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Bounded, because a server URL is longer than the space for it and an unbounded Text in
+          // a trailing Row throws rather than eliding.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 180),
+            child: Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.end,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const Icon(Icons.chevron_right),
+        ],
+      ),
+      onTap: onTap,
     );
   }
 }

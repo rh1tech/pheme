@@ -188,6 +188,32 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
     }
   }
 
+  /// Leaves a group, and takes it out of the list.
+  ///
+  /// Leaving used to call the repository straight from the menu, which removed the caller on the
+  /// server and told this controller nothing — so the group sat in the list, with its old last
+  /// message, until something else happened to refresh it. Tapping it then opened a conversation
+  /// the account was no longer a member of.
+  ///
+  /// It mirrors [delete] deliberately: same local forgetting, same state update. The difference
+  /// between the two is only who else is affected — deleting removes the conversation for
+  /// everybody, leaving removes only you — and that difference belongs in the API call, not in
+  /// whether the list is kept honest afterwards.
+  Future<void> leave(String conversationId, String myUserId) async {
+    await ref
+        .read(repositoryProvider)
+        .removeConversationMember(conversationId, myUserId);
+    await _forgetLocal(conversationId);
+    await ref.read(lastSeenStoreProvider).forget(conversationId);
+
+    final current = state.value;
+    if (current != null) {
+      state = AsyncData(
+        current.where((c) => c.id != conversationId).toList(growable: false),
+      );
+    }
+  }
+
   /// Clears a conversation's history server-side and locally, keeping the conversation
   /// in the list. The server hides the caller's messages (a per-member watermark); here
   /// we forget the local plaintext bodies and cached envelope so nothing stale lingers.

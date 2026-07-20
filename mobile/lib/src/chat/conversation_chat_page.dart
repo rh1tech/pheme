@@ -15,7 +15,6 @@ import 'package:image_picker/image_picker.dart';
 import '../crypto/chat_content.dart';
 
 import '../core/api_exception.dart';
-import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../crypto/mls_errors.dart';
 import '../l10n/app_localizations.dart';
@@ -1171,8 +1170,8 @@ Future<void> _confirmLeaveGroup(
 
   try {
     await ref
-        .read(repositoryProvider)
-        .removeConversationMember(conversation.id, myUserId);
+        .read(conversationListProvider.notifier)
+        .leave(conversation.id, myUserId);
     if (!context.mounted) return;
     context.go('/');
   } on Object catch (e) {
