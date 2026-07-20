@@ -60,8 +60,8 @@ void main() {
   group('a base URL with no prefix', () {
     test('still resolves exactly as before', () {
       expect(
-        urlFor('https://pheme-prod-api.rh1.tech', '/v1/me').toString(),
-        'https://pheme-prod-api.rh1.tech/v1/me',
+        urlFor('https://hub.example.com', '/v1/me').toString(),
+        'https://hub.example.com/v1/me',
       );
     });
 

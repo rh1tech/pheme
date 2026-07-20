@@ -11,10 +11,10 @@ file carries the deployment's path prefix, so it is never committed.
 
 ```sh
 set -a; . /opt/pheme/prod/stack.env; set +a
-PHEME_API_HOST=pheme-prod-api.rh1.tech \
+PHEME_API_HOST=hub.example.com \
 PHEME_DECOY_DIR=rh1-notes \
 PHEME_SSL_SNIPPET=/etc/nginx/snippets/rh1-tech-ssl.conf \
-  ./render.sh | sudo tee /etc/nginx/vhosts/pheme-prod-api.rh1.tech.conf
+  ./render.sh | sudo tee /etc/nginx/vhosts/hub.example.com.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
@@ -40,14 +40,18 @@ as before. It is **not** a secret either: it is in the URL of every request, so
 any TLS-terminating middlebox in front of the host sees it. Treat it as
 *unlisted*.
 
-**And it does nothing about the hostname.** `pheme-prod-api.rh1.tech` contains
-the product name, and SNI carries the hostname in the clear on every connection,
-so anything watching TLS learns what this is no matter how good the decoy is —
-one `pheme-*` rule blocks it. The prefix hides the *endpoints*; only a neutral
-hostname hides the *deployment*. On rh1 that means a new name, a Cloudflare
-record for it, and repointing clients; it is the obvious next step and it is not
-done. A self-hoster picking a fresh domain gets this right for free by not
-putting "pheme" in it, which is why `setup.sh` never suggests a name.
+**And it does nothing about the hostname**, which is why the API hosts are named
+`kn86r-*` rather than `pheme-*`. SNI carries the hostname in the clear on every
+connection, so a name containing the product identifies the deployment however
+good the decoy is, and one wildcard rule blocks every host that shares it. The
+prefix hides the *endpoints*; only a neutral name hides the *deployment*. Both
+are needed and neither substitutes for the other. `setup.sh` refuses a hostname
+containing "pheme" for the same reason.
+
+The web app deliberately keeps `app.example.com`. A publicly served SPA is
+identifiable by its content wherever it sits, so a neutral name there would buy
+nothing — see the note below on why only the API is prefixed. What matters is
+that the host the *mobile* app talks to says nothing, and that one does not.
 
 The three things that used to identify a Pheme host in one unauthenticated
 request — a `/healthz` naming the service, an unauthenticated `/v1/meta`, and a

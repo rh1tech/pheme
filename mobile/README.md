@@ -125,6 +125,30 @@ flutter pub get
 flutter run                 # on a connected device/emulator
 ```
 
+With no `PHEME_API` define the app points at `http://10.0.2.2:8080`, the Android
+emulator's route to a `make dev` stack on the host (`http://localhost:8080` from
+the iOS simulator).
+
+## Building against a real server
+
+```bash
+flutter build apk --dart-define=PHEME_API=https://host.example/<path-prefix>
+```
+
+**The base URL must include the server's path prefix.** A server mounts its API
+under an unlisted path with a decoy site at the document root, so the bare
+hostname reaches the decoy rather than the API — a build without the prefix
+fails as though the server were down.
+
+The prefix is deliberately in no committed file; it lives in the deployment's
+`stack.env` (`PHEME_PATH_PREFIX`) and nowhere else, so it has to be passed at
+build time. There is no default to fall back on, which is why a release build
+that forgets the define fails immediately rather than quietly reaching the wrong
+host.
+
+Users of a self-hosted instance never see any of this: they scan the QR their
+operator hands them, or paste the URL, in **Settings → Server**.
+
 ## Quality gate
 
 Before committing, all of these must pass clean:
