@@ -1,0 +1,96 @@
+# Pheme App API vhost — path-prefixed, with a decoy site at the document root.
+#
+# Rendered by render.sh, which substitutes the double-underscored placeholders
+# below. Do not apply this file directly: a literal placeholder is a valid nginx
+# location, so nginx would start happily and serve the API at a path every
+# reader of this repository knows. render.sh refuses to emit a config with any
+# placeholder left in it.
+#
+# WHY THE PREFIX
+#
+# The API is the one thing on this host that behaves like an API. Anything else
+# reachable here is a static site, so an unauthenticated prober — the cheap,
+# automated kind that sweeps address space looking for services to blocklist —
+# finds a small website and stops. It cannot tell this host from any other
+# static host without already knowing the prefix.
+#
+# The prefix is NOT a security boundary. Every endpoint behind it still
+# authenticates exactly as it did before; the prefix hides that there is an API
+# here at all. Treat it as unlisted, not as secret: it travels in the URL of
+# every request, so anything that terminates TLS in front of this host (a CDN,
+# a corporate middlebox) sees it.
+#
+# WHY THE DECOY MUST BE REAL
+#
+# A blank page, a default nginx welcome, or the same decoy every Pheme host
+# serves are all themselves fingerprints. It should be a plausible small site,
+# and it should differ between deployments.
+
+server {
+    server_name __PHEME_API_HOST__;
+    client_max_body_size 100M;
+
+    access_log /var/log/nginx/__PHEME_API_HOST___access.log;
+    error_log /var/log/nginx/__PHEME_API_HOST___error.log;
+
+    # --- The API, mounted under the unlisted prefix -------------------------
+    #
+    # proxy_pass carries a URI on every one of these, so nginx replaces the
+    # matched prefix rather than appending to it: the upstream sees the same
+    # /v1/... paths it always has and needs to know nothing about the prefix.
+
+    # Live SSE stream. proxy_buffering off is load-bearing, not tuning: with it
+    # on, nginx holds events back until its buffer fills and a live stream
+    # becomes a batched one. The app used to also send X-Accel-Buffering: no as
+    # a belt-and-braces measure; that header came off because it was a
+    # distinctive thing to put on the wire, which makes this the only thing
+    # keeping the stream live.
+    location = /__PHEME_PATH_PREFIX__/v1/stream {
+        proxy_pass http://127.0.0.1:__PHEME_APP_PORT__/v1/stream;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+    }
+
+    # Public website triggers -> ingest service.
+    location /__PHEME_PATH_PREFIX__/v1/ingest/ {
+        proxy_pass http://127.0.0.1:__PHEME_INGEST_PORT__/v1/ingest/;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # Everything else -> app service.
+    location /__PHEME_PATH_PREFIX__/ {
+        proxy_pass http://127.0.0.1:__PHEME_APP_PORT__/;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # --- Everything else is the decoy site ----------------------------------
+    #
+    # Including a request for the prefix without its trailing slash, and every
+    # probe for /healthz, /v1/meta, /v1/auth/login and friends. They get the
+    # decoy's 404, which is what a static host answers.
+    location / {
+        root /var/www/__PHEME_DECOY_DIR__;
+        try_files $uri $uri/ =404;
+    }
+
+    listen 443 ssl;
+    include __PHEME_SSL_SNIPPET__;
+}
+
+# Plain HTTP redirects to HTTPS, as any ordinary site does. Answering anything
+# else here — or not answering at all — would itself stand out.
+server {
+    listen 80;
+    server_name __PHEME_API_HOST__;
+    return 301 https://$host$request_uri;
+}

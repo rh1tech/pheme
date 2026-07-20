@@ -178,11 +178,20 @@ jobs:
       - name: Smoke
         env:
           WEB_URL: ${{ vars.PROD_WEB_URL || 'https://app.example.com' }}
-          API_URL: ${{ vars.PROD_API_URL || 'https://pheme-prod-api.rh1.tech' }}
+          # Must include the unlisted path prefix the API is mounted under, exactly
+          # as PHEME_API_BASE in stack.env does — without it every request below
+          # lands on the decoy site and the smoke test measures nothing. Held as a
+          # secret rather than a var so it stays out of the workflow logs.
+          API_URL: ${{ secrets.PROD_API_URL }}
           EXPECTED_VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           fail() { echo "SMOKE FAILED: $*" >&2; exit 1; }
+
+          # An unset PROD_API_URL would make every check below hit the decoy site,
+          # and a decoy that 404s cleanly would look exactly like a broken deploy.
+          # Say which it is.
+          [ -n "$API_URL" ] || fail "PROD_API_URL secret is not set (it must include the path prefix)"
 
           # Containers are restarting as this begins, so give them a moment to come up rather
           # than reporting the restart as a broken deploy.
@@ -218,5 +227,24 @@ jobs:
             -d '{"email":"smoke-check@invalid.pheme.test","password":"not-a-real-password"}')
           [ "$code" = "401" ] || fail "login with bad credentials returned $code, expected 401"
           echo "  auth path alive (401 on bad credentials)"
+
+          # The API must be invisible without the prefix. This is the one property
+          # the decoy exists to provide, and it is the one most likely to be lost
+          # quietly -- an unprefixed location left in a vhost, a proxy_pass edited
+          # during an unrelated fix. Nothing else here would notice, because the
+          # app itself would keep working perfectly.
+          #
+          # Derives the bare origin from API_URL by stripping the prefix path.
+          origin=$(printf '%s' "$API_URL" | sed -E 's#^(https?://[^/]+).*#\1#')
+          for probe in /healthz /v1/meta /v1/stream; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$origin$probe")
+            [ "$code" = "404" ] \
+              || fail "$probe answered $code without the path prefix, expected 404 from the decoy"
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$origin/v1/auth/login" \
+            -H 'Content-Type: application/json' -d '{"email":"x@invalid.pheme.test","password":"x"}')
+          [ "$code" = "404" ] \
+            || fail "unprefixed login answered $code, expected 404 — the API is reachable without the prefix"
+          echo "  api invisible without the prefix"
 
           echo "SMOKE PASSED"
