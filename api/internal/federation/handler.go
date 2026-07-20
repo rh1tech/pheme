@@ -20,11 +20,12 @@ type UserResolver interface {
 // Handler serves the host-to-host API. Every route except the public directory
 // requires a valid nodelist-anchored signature.
 type Handler struct {
-	Origin   string    // this host's own domain
-	Lookup   keyLookup // the nodelist
-	Users    UserResolver
-	Channels ChannelService // optional; channel routes mount only when set
-	now      func() time.Time
+	Origin      string    // this host's own domain
+	Lookup      keyLookup // the nodelist
+	Users       UserResolver
+	Channels    ChannelService    // optional; channel routes mount only when set
+	KeyPackages KeyPackageService // optional; key-package routes mount only when set
+	now         func() time.Time
 }
 
 // NewHandler builds the federation handler.
@@ -35,6 +36,12 @@ func NewHandler(origin string, lookup keyLookup, users UserResolver) *Handler {
 // WithChannels enables the cross-host channel routes.
 func (h *Handler) WithChannels(c ChannelService) *Handler {
 	h.Channels = c
+	return h
+}
+
+// WithKeyPackages enables the cross-host key-package claim route.
+func (h *Handler) WithKeyPackages(k KeyPackageService) *Handler {
+	h.KeyPackages = k
 	return h
 }
 
@@ -56,6 +63,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	if h.Channels != nil {
 		h.registerChannels(mux)
+	}
+	if h.KeyPackages != nil {
+		h.registerKeyPackages(mux)
 	}
 }
 
@@ -109,6 +119,9 @@ func (h *Handler) directory(w http.ResponseWriter, _ *http.Request) {
 	if h.Channels != nil {
 		endpoints["channelSubscribe"] = "/federation/v1/channel-subscribe"
 		endpoints["channelDelivery"] = "/federation/v1/channel-delivery"
+	}
+	if h.KeyPackages != nil {
+		endpoints["claimKeyPackages"] = "/federation/v1/claim-key-packages"
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"origin":    h.Origin,

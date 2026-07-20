@@ -157,6 +157,7 @@ func main() {
 		// consumes the broker, it only runs DeliverLocally.
 		localFanout := message.NewDispatcher(db, pusher, bus, logger)
 		fedHandler.WithChannels(&message.ChannelFederation{Store: db, Dispatcher: localFanout})
+		fedHandler.WithKeyPackages(keyPackageAdapter{db})
 		fedHandler.Register(mux)
 
 		// The outbound side of joining a remote channel: this host's signing
@@ -293,4 +294,26 @@ func (r remoteChannels) IsPeer(domain string) bool { return r.nodes.IsPeer(domai
 
 func (r remoteChannels) SubscribeToRemoteChannel(ctx context.Context, originDomain, channelPublicID string) (string, error) {
 	return r.peers.SubscribeToRemoteChannel(ctx, originDomain, channelPublicID)
+}
+
+// keyPackageAdapter serves a peer's request for one of this host's users' MLS
+// key packages, so a remote hub can add that user to a group. ClaimKeyPackage
+// already falls back to the reusable last-resort package, so a device is
+// reachable as long as it has ever published.
+type keyPackageAdapter struct{ db store.Store }
+
+func (k keyPackageAdapter) DevicesWithKeyPackages(ctx context.Context, userID string) ([]string, error) {
+	byUser, err := k.db.DevicesWithKeyPackages(ctx, []string{userID})
+	if err != nil {
+		return nil, err
+	}
+	return byUser[userID], nil
+}
+
+func (k keyPackageAdapter) ClaimKeyPackage(ctx context.Context, userID, deviceID string) ([]byte, error) {
+	kp, err := k.db.ClaimKeyPackage(ctx, userID, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return kp.KeyPackage, nil
 }
