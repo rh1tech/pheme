@@ -191,6 +191,18 @@ impl Client {
             // to store beyond the Welcome itself.
             .use_ratchet_tree_extension(true)
             .max_past_epochs(MAX_PAST_EPOCHS)
+            // Handshake messages (Commits and Proposals) go out as PublicMessage,
+            // so the delivery service can read the epoch a Commit is built on and
+            // stop serialising the group on a number the client merely claims.
+            // Application messages are ALWAYS encrypted regardless of this — RFC
+            // 9420 §6 requires it — so nothing a person types is exposed. See the
+            // server side in api/internal/chat and docs/federation.md (F4).
+            //
+            // MIXED, not pure plaintext: outgoing handshakes are plaintext, but
+            // incoming ones are accepted in either framing, so a client that has
+            // not adopted this yet is still understood. That tolerance is what
+            // lets the rollout happen without a flag day.
+            .wire_format_policy(MIXED_PLAINTEXT_WIRE_FORMAT_POLICY)
             .build();
         MlsGroup::new_with_group_id(
             &self.provider,
@@ -217,6 +229,9 @@ impl Client {
         MlsGroupJoinConfig::builder()
             .use_ratchet_tree_extension(true)
             .max_past_epochs(MAX_PAST_EPOCHS)
+            // Match the creator's handshake framing, or a joiner rejects the very
+            // Commits it needs to stay in step. See create_group.
+            .wire_format_policy(MIXED_PLAINTEXT_WIRE_FORMAT_POLICY)
             .build()
     }
 
@@ -869,6 +884,38 @@ mod tests {
             m.join_from_welcome(&add.welcome).unwrap();
         }
         add
+    }
+
+    // F4: handshake Commits are PublicMessage now, so the delivery service can read
+    // the epoch a Commit is built on rather than trusting a number the client sends
+    // alongside it. This asserts the framing, and prints a fixture the Go epoch parser
+    // (api/internal/mlswire) is tested against, so the two never drift.
+    #[test]
+    fn commits_are_public_and_carry_a_readable_epoch() {
+        let alice = Client::new("alice", "dev-a").unwrap();
+        let bob = Client::new("bob", "dev-b").unwrap();
+        alice.create_group(GID).unwrap();
+
+        // A Commit built at epoch 0 (the add is the group's first Commit).
+        let kp = bob.key_package().unwrap();
+        let add = alice.stage_add(GID, &[kp]).unwrap();
+
+        // The commit deserializes as an MlsMessage whose body is a PublicMessage.
+        let msg = MlsMessageIn::tls_deserialize(&mut &add.commit[..]).unwrap();
+        match msg.extract() {
+            MlsMessageBodyIn::PublicMessage(pm) => {
+                assert_eq!(pm.epoch().as_u64(), 0, "the add is built on epoch 0");
+                assert_eq!(pm.content_type(), ContentType::Commit);
+            }
+            other => panic!("commit was not a PublicMessage: {other:?}"),
+        }
+
+        // Emit the fixture. Run with --nocapture to regenerate it for the Go test.
+        eprintln!("GO_FIXTURE_COMMIT_EPOCH0={}", hex_of(&add.commit));
+    }
+
+    fn hex_of(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
     }
 
     #[test]

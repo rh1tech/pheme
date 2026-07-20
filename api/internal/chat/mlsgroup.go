@@ -9,6 +9,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/live"
+	"github.com/rh1tech/pheme/api/internal/mlswire"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
@@ -315,6 +316,33 @@ func (h *Handler) postMLSCommit(w http.ResponseWriter, r *http.Request) {
 	if req.BaseEpoch < 0 {
 		httpx.Error(w, http.StatusBadRequest, "baseEpoch must not be negative")
 		return
+	}
+
+	// Opportunistically verify the commit's own epoch against the declared one.
+	//
+	// Handshake messages are PublicMessage now (see the pheme-mls crate), so the
+	// epoch a Commit is built on is in the clear. When we CAN read it, it must
+	// match req.BaseEpoch — otherwise the compare-and-set below would serialise
+	// the group on a number the commit does not actually support, which is the
+	// exact lie the old PrivateMessage framing could not catch.
+	//
+	// When we cannot read it — a PrivateMessage from a client that has not
+	// adopted the new framing (MIXED allows both during the rollout), or anything
+	// this minimal parser does not understand — the commit proceeds on its
+	// declared value, exactly as before F4. That is not a regression: the CAS
+	// still guards ordering, and a client that forged an epoch it cannot back up
+	// produces a commit the other members reject on apply. The new guarantee is
+	// strictly additional: a real, parseable commit can no longer lie about its
+	// epoch.
+	if parsed, err := mlswire.ParseHandshake(req.Commit); err == nil {
+		if parsed.ContentType != mlswire.ContentTypeCommit {
+			httpx.Error(w, http.StatusBadRequest, "handshake is not a commit")
+			return
+		}
+		if int64(parsed.Epoch) != req.BaseEpoch {
+			httpx.Error(w, http.StatusBadRequest, "commit epoch does not match baseEpoch")
+			return
+		}
 	}
 
 	now := time.Now().UTC()

@@ -212,12 +212,19 @@ Each stage ships and is useful before the next one starts.
 - **F3 — Federated channels first.** Broadcast has no group state, no epoch, no
   ordering authority. It delivers visible cross-host value early and exercises
   F1/F2 in production before the hard part.
-- **F4 — Server-inspectable handshakes.** `mlsgroup.go:264-278` already names
-  this: commits are `PrivateMessage`, so the server cannot validate a claimed
-  `baseEpoch` or a claimed `Removes`. It calls PublicMessage framing "the right
-  fix and it is not done here." A hub validating a *remote* host's clients needs
-  it. MIMI also allows SemiPrivateMessage, which leaks less — but depends on
-  another individual draft, so: PublicMessage now, revisit.
+- **F4 — Server-inspectable handshakes.** *Shipped (epoch).* Handshake Commits
+  are now `PublicMessage` (`wire_format_policy` in the pheme-mls crate, MIXED so
+  the rollout needs no flag day). A ~200-line dependency-free Go decoder
+  (`internal/mlswire`) reads the epoch a Commit is built on, and `postMLSCommit`
+  refuses a Commit whose declared `baseEpoch` disagrees with the parsed one —
+  the lie the old framing could not catch. Opportunistic: an opaque
+  PrivateMessage still proceeds on its declared value, so nothing breaks during
+  the rollout. NOT done: parsing the Remove proposals to enforce admin-only
+  removal — that needs a server-side leaf→user map and, for real authenticity,
+  the GroupContext hashes a stateless server does not have (RFC 9420 §6). Full
+  commit authenticity is inherently the hub's job, which is F5. MIMI's
+  SemiPrivateMessage (leaks less than PublicMessage) is the eventual target but
+  depends on a younger draft OpenMLS 0.8 may not implement.
 - **F5 — MLS hub model.** Hub assignment, follower proxying, the signed ordering
   chain from Decision 2, cross-host key-package claim, credential migration.
 - **F6 — Ordering rework.** Hub-assigned sequence numbers replacing wall-clock
