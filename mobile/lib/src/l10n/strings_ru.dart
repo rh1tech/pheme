@@ -101,6 +101,7 @@ const Map<String, String> ruStrings = {
   'channel.loadMore': 'Загрузить ещё',
   'channel.noTitle': '(без заголовка)',
   'channel.showMore': 'Показать полностью',
+  'channel.showLess': 'Свернуть',
   'channel.searchFailed': 'Ошибка поиска',
   'channel.sendTitle': 'Заголовок',
   'channel.sendBody': 'Текст',

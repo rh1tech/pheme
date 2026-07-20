@@ -102,21 +102,10 @@ class _MessagePageState extends ConsumerState<MessagePage> {
     // none until you scrolled past the whole of it.
     return Column(
       children: [
-        Flexible(
-          child: SingleChildScrollView(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: _expanded
-                    ? double.infinity
-                    : MediaQuery.sizeOf(context).height * 0.3,
-              ),
-              child: _PostBody(
-                message: message,
-                expanded: _expanded,
-                onToggle: () => setState(() => _expanded = !_expanded),
-              ),
-            ),
-          ),
+        _PostBody(
+          message: message,
+          expanded: _expanded,
+          onToggle: () => setState(() => _expanded = !_expanded),
         ),
         const Divider(height: 1),
         Expanded(
@@ -133,6 +122,14 @@ class _MessagePageState extends ConsumerState<MessagePage> {
 }
 
 /// The post itself: its pictures, when it was sent, and what it says.
+///
+/// Only the TEXT collapses, and only when there is enough of it to be worth collapsing. The first
+/// version showed "Show more" under every post — including one-line ones, where there was nothing
+/// more to show — and expanding re-laid-out the whole column, which read as the message jumping.
+///
+/// Whether it overflows is measured rather than guessed: the same text, style and width are laid
+/// out with a TextPainter and compared against the cap. A character-count heuristic would be wrong
+/// for one long word and wrong again for a narrow screen.
 class _PostBody extends StatelessWidget {
   const _PostBody({
     required this.message,
@@ -148,44 +145,95 @@ class _PostBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final scheme = Theme.of(context).colorScheme;
+    const bodyStyle = TextStyle(fontSize: 15);
 
-    return InkWell(
-      // The whole post toggles, not a small chevron: the thing you want bigger is the thing you
-      // are already looking at.
-      onTap: onToggle,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (message.images.isNotEmpty) ...[
-              MessageCarousel(images: message.images),
-              const SizedBox(height: 12),
-            ],
-            Text(
-              formatDateTime(message.createdAt),
-              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-            ),
-            if (message.body.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Text(message.body, style: const TextStyle(fontSize: 15)),
-            ],
-            if (!expanded) ...[
-              const SizedBox(height: 6),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    l10n.t('channel.showMore'),
-                    style: TextStyle(fontSize: 12, color: scheme.primary),
-                  ),
-                  Icon(Icons.expand_more, size: 16, color: scheme.primary),
-                ],
-              ),
-            ],
+    // A third of the screen, as asked. Applied to the text alone: pictures are the post's subject
+    // and clipping them to half a photograph helps nobody.
+    final cap = MediaQuery.sizeOf(context).height * 0.3;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (message.images.isNotEmpty) ...[
+            MessageCarousel(images: message.images),
+            const SizedBox(height: 12),
           ],
-        ),
+          Text(
+            formatDateTime(message.createdAt),
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
+          if (message.body.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final painter = TextPainter(
+                  text: TextSpan(text: message.body, style: bodyStyle),
+                  textDirection: Directionality.of(context),
+                )..layout(maxWidth: constraints.maxWidth);
+                final overflows = painter.height > cap;
+
+                final text = Text(message.body, style: bodyStyle);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!overflows || expanded)
+                      text
+                    else
+                      // Clipped rather than scrolled: a scrollable box inside a scrollable page
+                      // fights the reader for the gesture.
+                      ClipRect(
+                        child: SizedBox(
+                          height: cap,
+                          width: double.infinity,
+                          child: Align(
+                            alignment: Alignment.topLeft,
+                            child: text,
+                          ),
+                        ),
+                      ),
+                    // Offered only when there is genuinely more to see, and it turns back into
+                    // "Show less" once open — a control that only ever expands leaves the reader
+                    // with no way back.
+                    if (overflows)
+                      TextButton(
+                        onPressed: onToggle,
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              l10n.t(
+                                expanded
+                                    ? 'channel.showLess'
+                                    : 'channel.showMore',
+                              ),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: scheme.primary,
+                              ),
+                            ),
+                            Icon(
+                              expanded ? Icons.expand_less : Icons.expand_more,
+                              size: 16,
+                              color: scheme.primary,
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -334,6 +382,46 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
           ),
         ),
+        // The comments scroll on their own, so the composer below stays put — the same
+        // arrangement a chat has. They used to be part of one long page scroll with the post, so
+        // the field you type into drifted off the bottom as the thread grew.
+        Expanded(
+          child: _loading
+              ? const Center(child: AdaptiveProgress())
+              : _comments.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      l10n.t('comment.empty'),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                  children: [
+                    ..._comments.map(
+                      (c) => _CommentTile(
+                        comment: c,
+                        canDelete: canModerate || c.userId == myId,
+                        onDelete: () => _delete(c),
+                      ),
+                    ),
+                    if (_nextCursor.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: AdaptiveButton.text(
+                          onPressed: _loadMore,
+                          child: Text(l10n.t('comment.loadMore')),
+                        ),
+                      ),
+                  ],
+                ),
+        ),
         // The same bar the channel composes a post with — rounded field, filled send button. A
         // labelled "Comment" button beside a plain box was a form; this is a place to say something.
         if (widget.commentsAllowed && canComment)
@@ -387,46 +475,6 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
             style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
           ),
         const SizedBox(height: 12),
-        // The comments scroll on their own, so the composer below stays put — the same
-        // arrangement a chat has. They used to be part of one long page scroll with the post, so
-        // the field you type into drifted off the bottom as the thread grew.
-        Expanded(
-          child: _loading
-              ? const Center(child: AdaptiveProgress())
-              : _comments.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      l10n.t('comment.empty'),
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                )
-              : ListView(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                  children: [
-                    ..._comments.map(
-                      (c) => _CommentTile(
-                        comment: c,
-                        canDelete: canModerate || c.userId == myId,
-                        onDelete: () => _delete(c),
-                      ),
-                    ),
-                    if (_nextCursor.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: AdaptiveButton.text(
-                          onPressed: _loadMore,
-                          child: Text(l10n.t('comment.loadMore')),
-                        ),
-                      ),
-                  ],
-                ),
-        ),
       ],
     );
   }
