@@ -1,41 +1,30 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
-import '../core/snackbar.dart';
 import '../data/app_providers.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/error_view.dart';
-import '../widgets/mode_badge.dart';
+import 'channel_sheets.dart';
 import 'tabs/channel_settings_tab.dart';
 import 'tabs/keys_tab.dart';
 import 'tabs/messages_tab.dart';
 import 'tabs/send_tab.dart';
 import 'tabs/subscribers_tab.dart';
 
-/// One section of the channel detail's tab bar.
-class _ChannelTab {
-  const _ChannelTab({
-    required this.label,
-    required this.materialIcon,
-    required this.cupertinoIcon,
-    required this.body,
-  });
-
-  final String label;
-  final IconData materialIcon;
-  final IconData cupertinoIcon;
-  final Widget body;
-}
-
-/// Channel detail: a header with the trigger ID plus the sections the caller is
-/// entitled to. Everyone sees Messages and Settings; owners and admins also see
-/// Send and Subscribers; only the owner sees Keys. iOS presents the sections as
-/// a native bottom tab bar; Android uses a Material top tab bar.
+/// A channel, as one screen.
+///
+/// It used to be a five-tab container — Messages, Send, Keys, Subscribers, Settings — where a chat
+/// is a single page with its actions behind a ⋮ menu. Four of those tabs were things you do to a
+/// channel occasionally and one was the channel itself, all given equal billing, so opening a
+/// channel put the reason you opened it behind a row of things you mostly did not want. Two of them
+/// existed twice over besides, once for Material and once for Cupertino.
+///
+/// Now it opens on its messages, like a chat does. Posting is a button rather than a tab, the way
+/// starting a chat is a button rather than a tab. Everything else lives in the menu, shown only to
+/// the roles that may act on it — the same arrangement the web moved to, and the same sections in
+/// the same order.
 class ChannelPage extends ConsumerWidget {
   const ChannelPage({super.key, required this.channelId});
 
@@ -55,207 +44,87 @@ class ChannelPage extends ConsumerWidget {
           onRetry: () => ref.invalidate(channelRelationProvider(channelId)),
         ),
       ),
-      data: (rel) {
-        final tabs = _tabs(context, rel);
-        return isCupertino(context)
-            ? _CupertinoChannelView(channel: rel.channel, tabs: tabs)
-            : _MaterialChannelView(channel: rel.channel, tabs: tabs);
-      },
+      data: (rel) => _ChannelView(relation: rel),
     );
-  }
-
-  List<_ChannelTab> _tabs(BuildContext context, ChannelRelation rel) {
-    final l10n = context.l10n;
-    return [
-      _ChannelTab(
-        label: l10n.t('channel.tabMessages'),
-        materialIcon: Icons.forum_outlined,
-        cupertinoIcon: CupertinoIcons.bubble_left_bubble_right,
-        body: MessagesTab(channelId: channelId),
-      ),
-      if (rel.canManage)
-        _ChannelTab(
-          label: l10n.t('channel.tabSend'),
-          materialIcon: Icons.send_outlined,
-          cupertinoIcon: CupertinoIcons.paperplane,
-          body: SendTab(channelId: channelId),
-        ),
-      if (rel.isOwner)
-        _ChannelTab(
-          label: l10n.t('channel.tabKeys'),
-          materialIcon: Icons.key_outlined,
-          cupertinoIcon: CupertinoIcons.lock,
-          body: KeysTab(channelId: channelId),
-        ),
-      if (rel.canManage)
-        _ChannelTab(
-          label: l10n.t('channel.tabSubscribers'),
-          materialIcon: Icons.group_outlined,
-          cupertinoIcon: CupertinoIcons.person_2,
-          body: SubscribersTab(channelId: channelId),
-        ),
-      _ChannelTab(
-        label: l10n.t('channel.tabSettings'),
-        materialIcon: Icons.settings_outlined,
-        cupertinoIcon: CupertinoIcons.gear,
-        body: ChannelSettingsTab(relation: rel),
-      ),
-    ];
   }
 }
 
-/// Android: Material app bar + top tab bar.
-class _MaterialChannelView extends StatelessWidget {
-  const _MaterialChannelView({required this.channel, required this.tabs});
+class _ChannelView extends ConsumerWidget {
+  const _ChannelView({required this.relation});
 
-  final Channel channel;
-  final List<_ChannelTab> tabs;
+  final ChannelRelation relation;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final l10n = context.l10n;
-    return DefaultTabController(
-      length: tabs.length,
-      child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => context.canPop() ? context.pop() : context.go('/'),
-          ),
-          title: Text(
-            channel.name.isEmpty
-                ? l10n.t('channel.fallbackName')
-                : channel.name,
-          ),
-          actions: [
-            ModeBadge(mode: channel.subscriptionMode),
-            const SizedBox(width: 12),
+    final channel = relation.channel;
+
+    return AdaptiveScaffold(
+      title: Text(channel.name),
+      trailing: [
+        // Everything that is not "read the channel". Only the entries this reader may act on are
+        // built, so a plain subscriber sees a short menu rather than a long one full of refusals.
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          tooltip: l10n.t('channel.menu'),
+          onSelected: (value) => _onMenu(context, value),
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'info',
+              child: Text(l10n.t('channel.tabSettings')),
+            ),
+            if (relation.canManage)
+              PopupMenuItem(
+                value: 'subscribers',
+                child: Text(l10n.t('channel.tabSubscribers')),
+              ),
+            if (relation.isOwner)
+              PopupMenuItem(
+                value: 'keys',
+                child: Text(l10n.t('channel.tabKeys')),
+              ),
           ],
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(96),
-            child: Column(
-              children: [
-                _TriggerIdBar(channel: channel),
-                TabBar(
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  tabs: [for (final t in tabs) Tab(text: t.label)],
-                ),
-              ],
-            ),
-          ),
         ),
-        body: TabBarView(children: [for (final t in tabs) t.body]),
-      ),
+      ],
+      // Posting is a button that opens a composer, exactly as starting a chat is. Shown only to
+      // those who may post: a channel is a broadcast, and for most readers there is nothing here
+      // to press.
+      floatingActionButton: relation.canManage
+          ? FloatingActionButton.extended(
+              onPressed: () => showChannelSheet<void>(
+                context,
+                title: l10n.t('channel.tabSend'),
+                child: SendTab(channelId: channel.id),
+              ),
+              icon: const Icon(Icons.add),
+              label: Text(l10n.t('channel.newMessage')),
+            )
+          : null,
+      body: MessagesTab(channelId: channel.id),
     );
   }
-}
 
-/// iOS: Cupertino nav bar + a bottom tab bar switching the sections via an
-/// [IndexedStack] (so tab state is preserved and go_router's back chevron keeps
-/// working, unlike a nested CupertinoTabScaffold navigator).
-class _CupertinoChannelView extends StatefulWidget {
-  const _CupertinoChannelView({required this.channel, required this.tabs});
-
-  final Channel channel;
-  final List<_ChannelTab> tabs;
-
-  @override
-  State<_CupertinoChannelView> createState() => _CupertinoChannelViewState();
-}
-
-class _CupertinoChannelViewState extends State<_CupertinoChannelView> {
-  int _index = 0;
-
-  @override
-  Widget build(BuildContext context) {
+  void _onMenu(BuildContext context, String value) {
     final l10n = context.l10n;
-    final channel = widget.channel;
-    final tabs = widget.tabs;
-    // Guard against an out-of-range index if the tab set shrinks on reload.
-    final index = _index.clamp(0, tabs.length - 1);
-    return CupertinoPageScaffold(
-      navigationBar: CupertinoNavigationBar(
-        middle: Text(
-          channel.name.isEmpty ? l10n.t('channel.fallbackName') : channel.name,
-        ),
-        trailing: ModeBadge(mode: channel.subscriptionMode),
-        backgroundColor: CupertinoTheme.of(context).scaffoldBackgroundColor,
-      ),
-      // CupertinoPageScaffold under MaterialApp supplies no DefaultTextStyle, so
-      // seed the Cupertino label style for the tab bodies' raw Text widgets.
-      child: DefaultTextStyle(
-        style: CupertinoTheme.of(context).textTheme.textStyle,
-        child: SafeArea(
-          top: false,
-          child: Column(
-            children: [
-              _TriggerIdBar(channel: channel),
-              Expanded(
-                child: IndexedStack(
-                  index: index,
-                  children: [for (final t in tabs) t.body],
-                ),
-              ),
-              CupertinoTabBar(
-                currentIndex: index,
-                onTap: (i) => setState(() => _index = i),
-                items: [
-                  for (final t in tabs)
-                    BottomNavigationBarItem(
-                      icon: Icon(t.cupertinoIcon),
-                      label: t.label,
-                    ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TriggerIdBar extends StatelessWidget {
-  const _TriggerIdBar({required this.channel});
-
-  final Channel channel;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = context.l10n;
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-      child: Row(
-        children: [
-          Text(
-            '${l10n.t('channel.triggerId')}: ',
-            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-          ),
-          Flexible(
-            child: Text(
-              channel.publicId,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          AdaptiveIconButton(
-            icon: isCupertino(context) ? CupertinoIcons.doc_on_doc : Icons.copy,
-            semanticLabel: l10n.t('common.copy'),
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: channel.publicId));
-              if (context.mounted) {
-                notifySuccess(context, l10n.t('channel.idCopied'));
-              }
-            },
-          ),
-        ],
-      ),
-    );
+    switch (value) {
+      case 'info':
+        showChannelSheet<void>(
+          context,
+          title: l10n.t('channel.tabSettings'),
+          child: ChannelSettingsTab(relation: relation),
+        );
+      case 'subscribers':
+        showChannelSheet<void>(
+          context,
+          title: l10n.t('channel.tabSubscribers'),
+          child: SubscribersTab(channelId: relation.channel.id),
+        );
+      case 'keys':
+        showChannelSheet<void>(
+          context,
+          title: l10n.t('channel.tabKeys'),
+          child: KeysTab(channelId: relation.channel.id),
+        );
+    }
   }
 }

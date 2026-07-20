@@ -88,6 +88,8 @@ const Map<String, String> ruStrings = {
   'channel.idCopied': 'ID триггера скопирован',
   'channel.tabMessages': 'Сообщения',
   'channel.tabSend': 'Отправить',
+  'channel.menu': 'Меню канала',
+  'channel.newMessage': 'Новое сообщение',
   'channel.tabKeys': 'Ключи',
   'channel.tabSubscribers': 'Подписчики',
   'channel.tabSettings': 'Настройки',

@@ -92,6 +92,8 @@ const Map<String, String> enStrings = {
   'channel.idCopied': 'Trigger ID copied',
   'channel.tabMessages': 'Messages',
   'channel.tabSend': 'Send',
+  'channel.menu': 'Channel menu',
+  'channel.newMessage': 'New message',
   'channel.tabKeys': 'Keys',
   'channel.tabSubscribers': 'Subscribers',
   'channel.tabSettings': 'Settings',
