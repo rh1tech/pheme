@@ -95,6 +95,27 @@ type Config struct {
 	// gets no CORS headers at all rather than a wildcard.
 	CORSOrigins []string
 
+	// HostDomain is this instance's own domain, e.g. "hub.example.com".
+	// It becomes the issuer and audience of every token, and in a federated
+	// network it is the name peers know this host by and the key the nodelist
+	// entry is filed under. Empty keeps the pre-federation behaviour.
+	HostDomain string
+
+	// HostKey is this instance's Ed25519 signing key, base64url-encoded 32-byte
+	// seed. Generate one with `pheme-hostkey`.
+	//
+	// Empty means tokens keep being signed HS256 with PHEME_JWT_SECRET, which is
+	// what every deployment did before federation. That mode cannot survive
+	// federation: a token's subject is a bare user id, so two hosts sharing a
+	// secret would each accept the other's tokens and authenticate as whichever
+	// local user held the same id, with a signature that verifies and nothing
+	// visibly wrong.
+	//
+	// Turning this on does not sign anyone out — tokens issued under the secret
+	// keep verifying until they expire. Drop PHEME_JWT_SECRET once the longest
+	// refresh token issued under it has aged out (30 days by default).
+	HostKey string
+
 	// Authorization
 	AdminEmails []string // emails granted the admin role on register/login
 
@@ -169,6 +190,9 @@ func Load() Config {
 		// Defaults to the Vite dev server so `make dev` works untouched. Every
 		// real deployment must set this to its web origin.
 		CORSOrigins: envListDefault("PHEME_CORS_ORIGINS", "http://localhost:5173"),
+
+		HostDomain: env("PHEME_HOST_DOMAIN", ""),
+		HostKey:    env("PHEME_HOST_KEY", ""),
 
 		AdminEmails: envList("PHEME_ADMIN_EMAILS"),
 

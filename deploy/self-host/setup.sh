@@ -82,6 +82,16 @@ vapid_private=$(sed -n 's/^PHEME_VAPID_PRIVATE=//p' <<<"$vapid" | tr -d '\r')
 $vapid"
 note "vapid keypair: generated"
 
+# This instance's own signing identity. It signs the tokens this host issues,
+# and when the host joins a network its PUBLIC half is its nodelist entry --
+# what every other host uses to tell this host's word from a forgery.
+say "Generating this instance's signing key"
+host_key=$(docker run --rm --entrypoint /usr/local/bin/pheme-hostkey "$api_image" -env \
+  | sed -n 's/^PHEME_HOST_KEY=//p' | tr -d '\r') \
+  || die "could not run pheme-hostkey from $api_image"
+[[ -n "$host_key" ]] || die "pheme-hostkey produced nothing"
+note "host key: generated (keep it — losing it re-identifies this host)"
+
 # A decoy that differs per deployment. The same decoy on every Pheme host would
 # itself be the fingerprint the decoy exists to remove.
 # Portable: find -printf and mapfile are GNU/bash-4 only, and a self-hoster on
@@ -113,7 +123,8 @@ cat > "$env_file" <<EOF
 #
 # Losing PHEME_JWT_SECRET signs every user out. Losing PHEME_PATH_PREFIX makes
 # the instance unreachable until you re-render nginx with a new one and tell
-# every user. Back this file up.
+# every user. Losing PHEME_HOST_KEY changes who this host IS to every other
+# host on the network. Back this file up.
 
 PHEME_API_HOST=$api_host
 PHEME_PATH_PREFIX=$path_prefix
@@ -126,6 +137,12 @@ PHEME_ADMIN_EMAILS=$admin_email
 
 PHEME_VAPID_PUBLIC=$vapid_public
 PHEME_VAPID_PRIVATE=$vapid_private
+
+# This instance's signing identity. Tokens are signed EdDSA under this key and
+# stamped with PHEME_API_HOST as issuer, rather than HS256 under a shared
+# secret -- which cannot survive federation, because a token's subject is a bare
+# user id and two hosts sharing a secret would each accept the other's tokens.
+PHEME_HOST_KEY=$host_key
 
 MONGO_USER=pheme
 MONGO_PASS=$mongo_pass

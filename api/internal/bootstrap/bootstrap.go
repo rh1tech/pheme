@@ -277,6 +277,18 @@ func (b *Builder) Tokens() *auth.TokenManager {
 	// silently. There is one caller today; this makes a second one safe rather than subtly wrong.
 	if b.tokens == nil {
 		b.tokens = auth.NewTokenManager(b.cfg.JWTSecret, b.cfg.AccessTokenTTL, b.cfg.RefreshTokenTTL)
+		if key, err := auth.ParseHostKey(b.cfg.HostKey); err != nil {
+			// Refuse to start rather than fall back to the shared secret. A host
+			// that silently ignored a malformed key would keep issuing tokens
+			// its operator believed were asymmetric, and the whole point of the
+			// key is that nobody has to wonder which mode a host is in.
+			panic(fmt.Sprintf("PHEME_HOST_KEY is set but unusable: %v", err))
+		} else if key != nil {
+			if b.cfg.HostDomain == "" {
+				panic("PHEME_HOST_KEY is set without PHEME_HOST_DOMAIN: a signing key with no issuer")
+			}
+			b.tokens.UseHostKey(key, b.cfg.HostDomain)
+		}
 	}
 	return b.tokens
 }
