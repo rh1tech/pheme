@@ -23,7 +23,7 @@ class PhemeApp extends ConsumerStatefulWidget {
 }
 
 class _PhemeAppState extends ConsumerState<PhemeApp> {
-  StreamSubscription<MessageRef>? _tapSub;
+  StreamSubscription<NotificationTarget>? _tapSub;
 
   @override
   void initState() {
@@ -43,12 +43,19 @@ class _PhemeAppState extends ConsumerState<PhemeApp> {
     super.dispose();
   }
 
-  void _openMessage(MessageRef target) {
+  void _openMessage(NotificationTarget target) {
     // Deep-linking requires auth; recipients are normally signed in.
     if (!ref.read(authControllerProvider).isAuthenticated) return;
-    ref
-        .read(routerProvider)
-        .go('/channels/${target.channelId}/messages/${target.messageId}');
+    final router = ref.read(routerProvider);
+    switch (target) {
+      case ChannelMessageTarget(:final channelId, :final messageId):
+        router.go('/channels/$channelId/messages/$messageId');
+      // Chats had no case at all: the tap plumbing was written for channel broadcasts, so a
+      // notification about a message from a person resolved to nothing and the app simply opened
+      // wherever it had been left. That is indistinguishable from the tap being ignored.
+      case ConversationTarget(:final conversationId):
+        router.go('/chats/$conversationId');
+    }
   }
 
   @override

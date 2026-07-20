@@ -26,6 +26,14 @@ class SettingsStore {
   /// early shows "New message" forever unless it registers again.
   static const _registeredMlsKey = 'pheme.registeredMlsIdentity';
 
+  /// When this device first looked at its chats.
+  ///
+  /// Read state is per-device and does not sync, so a freshly installed app knows nothing about
+  /// what has already been read elsewhere — and treating "no record" as unread lit up every
+  /// conversation the account had ever had. This is the line before which history is taken as
+  /// already dealt with.
+  static const _readBaselineKey = 'pheme.readBaseline';
+
   final FlutterSecureStorage _storage;
 
   Future<String?> read(String key) => _storage.read(key: key);
@@ -76,6 +84,11 @@ class SettingsStore {
 
   Future<void> saveRegisteredPushToken(String token) =>
       _storage.write(key: _registeredTokenKey, value: token);
+
+  Future<String?> loadReadBaseline() => _storage.read(key: _readBaselineKey);
+
+  Future<void> saveReadBaseline(String iso) =>
+      _storage.write(key: _readBaselineKey, value: iso);
 
   Future<bool> loadRegisteredMlsIdentity() async =>
       await _storage.read(key: _registeredMlsKey) == 'true';

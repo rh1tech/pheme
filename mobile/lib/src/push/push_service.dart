@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:ui' show DartPluginRegistrant;
 
@@ -223,6 +224,13 @@ Future<void> _showChatNotification(
   required String? avatarUrl,
   required String? conversationId,
 }) async {
+  // What a tap on this notification should open. A notification the APP draws is not one Firebase
+  // knows about, so onMessageOpenedApp never fires for it and the only route back to the chat is
+  // this payload. Every preview is drawn by the app, so without it the notifications people
+  // actually tap were the ones that went nowhere.
+  final payload = (conversationId == null || conversationId.isEmpty)
+      ? null
+      : jsonEncode({'conversationId': conversationId});
   final groupKey = (conversationId == null || conversationId.isEmpty)
       ? null
       : conversationId;
@@ -250,6 +258,7 @@ Future<void> _showChatNotification(
       id: id,
       title: title,
       body: body,
+      payload: payload,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           _androidChannel.id,
@@ -289,6 +298,7 @@ Future<void> _showChatNotification(
     id: id,
     title: title,
     body: body,
+    payload: payload,
     notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
         _androidChannel.id,
@@ -335,14 +345,57 @@ class MessageRef {
   final String messageId;
 }
 
-/// Extracts a [MessageRef] from a push message's data, or null if it lacks the
-/// channelId/messageId the server injects.
-MessageRef? _refOf(RemoteMessage? message) {
-  if (message == null) return null;
-  final cid = message.data['channelId'];
-  final mid = message.data['messageId'];
-  if (cid is String && cid.isNotEmpty && mid is String && mid.isNotEmpty) {
-    return MessageRef(cid, mid);
+/// Where tapping a notification should take the user.
+///
+/// There are two kinds and only one of them ever worked. The tap plumbing was written for channel
+/// broadcasts and looked for a channelId; a chat notification carries a conversationId and nothing
+/// else, so every tap on a message from a person produced null and went nowhere. The app opened on
+/// whatever screen it had been on, which reads as the tap having been ignored — and it had been.
+sealed class NotificationTarget {
+  const NotificationTarget();
+}
+
+/// A post in a broadcast channel.
+final class ChannelMessageTarget extends NotificationTarget {
+  const ChannelMessageTarget(this.channelId, this.messageId);
+  final String channelId;
+  final String messageId;
+}
+
+/// A conversation with a person or a group.
+final class ConversationTarget extends NotificationTarget {
+  const ConversationTarget(this.conversationId);
+  final String conversationId;
+}
+
+/// Reads the target out of a push payload, or null if it names neither.
+NotificationTarget? _targetOfData(Map<String, dynamic> data) {
+  final channelId = data['channelId'];
+  final messageId = data['messageId'];
+  if (channelId is String &&
+      channelId.isNotEmpty &&
+      messageId is String &&
+      messageId.isNotEmpty) {
+    return ChannelMessageTarget(channelId, messageId);
+  }
+  final conversationId = data['conversationId'];
+  if (conversationId is String && conversationId.isNotEmpty) {
+    return ConversationTarget(conversationId);
+  }
+  return null;
+}
+
+NotificationTarget? _targetOf(RemoteMessage? message) =>
+    message == null ? null : _targetOfData(message.data);
+
+/// The target carried in a locally-drawn notification's payload.
+NotificationTarget? _targetOfPayload(String? payload) {
+  if (payload == null || payload.isEmpty) return null;
+  try {
+    final decoded = jsonDecode(payload);
+    if (decoded is Map<String, dynamic>) return _targetOfData(decoded);
+  } on FormatException {
+    // A payload we cannot read is not worth failing a tap over; the app still opens.
   }
   return null;
 }
@@ -354,11 +407,11 @@ class PushService {
   PushService();
 
   final _local = FlutterLocalNotificationsPlugin();
-  final _taps = StreamController<MessageRef>.broadcast();
+  final _taps = StreamController<NotificationTarget>.broadcast();
 
   bool _available = false;
   bool _initialized = false;
-  MessageRef? _initial;
+  NotificationTarget? _initial;
 
   /// Called when FCM issues this device a new token, so the server can be told. Set by the
   /// controller that owns registration; null before the app has one.
@@ -379,11 +432,11 @@ class PushService {
   bool get available => _available;
 
   /// Emits when the user taps a notification while the app is running.
-  Stream<MessageRef> get onMessageTap => _taps.stream;
+  Stream<NotificationTarget> get onMessageTap => _taps.stream;
 
   /// Returns (once) the message a notification opened the app with from a cold
   /// start, or null. Clears it so it is consumed only once.
-  MessageRef? takeInitialMessage() {
+  NotificationTarget? takeInitialMessage() {
     final ref = _initial;
     _initial = null;
     return ref;
@@ -400,7 +453,16 @@ class PushService {
           android: AndroidInitializationSettings('@mipmap/ic_launcher'),
           iOS: DarwinInitializationSettings(),
         ),
+        onDidReceiveNotificationResponse: _onLocalNotificationTap,
       );
+
+      // A tap that COLD-STARTED the app. The callback above only fires while this isolate is
+      // alive, and the commonest case of all — phone locked, notification tapped, app launched from
+      // nothing — is not that.
+      final launch = await _local.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp ?? false) {
+        _initial ??= _targetOfPayload(launch?.notificationResponse?.payload);
+      }
       await _local
           .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin
@@ -424,16 +486,24 @@ class PushService {
       // Notification taps: while backgrounded (onMessageOpenedApp) and the tap
       // that cold-started the app (getInitialMessage).
       FirebaseMessaging.onMessageOpenedApp.listen((message) {
-        final ref = _refOf(message);
-        if (ref != null) _taps.add(ref);
+        final target = _targetOf(message);
+        if (target != null) _taps.add(target);
       });
-      _initial = _refOf(await FirebaseMessaging.instance.getInitialMessage());
+      _initial = _targetOf(
+        await FirebaseMessaging.instance.getInitialMessage(),
+      );
 
       _available = true;
     } catch (e) {
       _available = false;
       debugPrint('Pheme: push unavailable (Firebase not configured): $e');
     }
+  }
+
+  /// A tap on a notification this app drew itself.
+  void _onLocalNotificationTap(NotificationResponse response) {
+    final target = _targetOfPayload(response.payload);
+    if (target != null) _taps.add(target);
   }
 
   void _showForeground(RemoteMessage message) {

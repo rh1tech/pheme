@@ -138,4 +138,80 @@ void main() {
       },
     );
   });
+
+  _baselineGroup();
+}
+
+/// The baseline that stops a fresh install declaring an entire account unread.
+///
+/// Read state is per-device and does not sync, so a newly installed app has no record of any
+/// conversation. Treating that as "unread" lit up every chat the account had ever had, which is not
+/// information — it is noise, and it buries the one conversation that genuinely does have something
+/// new in it.
+void _baselineGroup() {
+  group('isConversationUnread with a fresh-install baseline', () {
+    const baseline = '2026-07-20T10:00:00.000Z';
+
+    test('history older than the baseline is treated as read', () {
+      expect(
+        isConversationUnread(
+          last: msg(createdAt: '2026-07-19T09:00:00.000Z'),
+          myUserId: 'me',
+          seenAt: null,
+          baseline: baseline,
+        ),
+        isFalse,
+      );
+    });
+
+    test('a message that arrives after the baseline is unread', () {
+      expect(
+        isConversationUnread(
+          last: msg(createdAt: '2026-07-20T11:00:00.000Z'),
+          myUserId: 'me',
+          seenAt: null,
+          baseline: baseline,
+        ),
+        isTrue,
+      );
+    });
+
+    test('a real seenAt still wins over the baseline', () {
+      // The baseline is only a fallback for conversations this device has no record of. Once it has
+      // displayed something, that is the better answer and must not be overridden.
+      expect(
+        isConversationUnread(
+          last: msg(createdAt: '2026-07-20T12:00:00.000Z'),
+          myUserId: 'me',
+          seenAt: '2026-07-20T12:00:00.000Z',
+          baseline: baseline,
+        ),
+        isFalse,
+      );
+    });
+
+    test('without a baseline an unseen message is still unread', () {
+      // A device that has been signed in all along, where no record genuinely means unseen.
+      expect(
+        isConversationUnread(
+          last: msg(createdAt: '2026-07-20T11:00:00.000Z'),
+          myUserId: 'me',
+          seenAt: null,
+        ),
+        isTrue,
+      );
+    });
+
+    test('our own message is never unread, baseline or not', () {
+      expect(
+        isConversationUnread(
+          last: msg(senderId: 'me', createdAt: '2026-07-20T11:00:00.000Z'),
+          myUserId: 'me',
+          seenAt: null,
+          baseline: baseline,
+        ),
+        isFalse,
+      );
+    });
+  });
 }

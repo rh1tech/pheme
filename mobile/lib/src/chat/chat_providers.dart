@@ -109,7 +109,28 @@ final unreadProvider = Provider.family<bool, Conversation>((ref, conversation) {
     last: conversation.lastMessage,
     myUserId: ref.watch(myUserIdProvider),
     seenAt: ref.watch(lastSeenProvider).value?[conversation.id],
+    baseline: ref.watch(readBaselineProvider).value,
   );
+});
+
+/// When this device first looked at its chats; history older than this is treated as read.
+///
+/// Read state lives on the device and does not sync, so a fresh install has no record of anything.
+/// Without a baseline every conversation the account has ever had lights up unread the moment you
+/// sign in on a new phone — which is not information, it is noise, and it hides the one chat that
+/// genuinely does have something new.
+///
+/// A baseline cannot be right, only least wrong. This device honestly does not know what was read
+/// elsewhere; assuming everything up to the moment it arrived has been dealt with is the assumption
+/// that costs the user nothing when it is wrong, because anything arriving afterwards still counts.
+/// The real answer is read state on the server, which is a larger change.
+final readBaselineProvider = FutureProvider<String>((ref) async {
+  final store = ref.watch(settingsStoreProvider);
+  final existing = await store.loadReadBaseline();
+  if (existing != null && existing.isNotEmpty) return existing;
+  final now = DateTime.now().toUtc().toIso8601String();
+  await store.saveReadBaseline(now);
+  return now;
 });
 
 /// The unread rule, as a plain function so it can be tested without a provider container.
@@ -121,6 +142,7 @@ bool isConversationUnread({
   required LastChatMessage? last,
   required String myUserId,
   required String? seenAt,
+  String? baseline,
 }) {
   if (last == null) return false;
   // Protocol traffic is not a message; nobody wrote it and there is nothing to read.
@@ -130,7 +152,13 @@ bool isConversationUnread({
   if (ContentType.system.contains(last.contentType)) return false;
   if (last.senderId == myUserId) return false;
 
-  if (seenAt == null) return true;
+  // Nothing recorded for this conversation. On a device that has been here a while that means
+  // genuinely unseen; on a fresh install it means only that this phone was not present for it — so
+  // fall back to the baseline rather than declaring the entire account unread.
+  if (seenAt == null) {
+    if (baseline == null) return true;
+    return last.createdAt.compareTo(baseline) > 0;
+  }
   return last.createdAt.compareTo(seenAt) > 0;
 }
 
