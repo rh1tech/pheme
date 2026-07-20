@@ -105,14 +105,27 @@ class _MessagePageState extends ConsumerState<MessagePage> {
       // the date and the text in the middle of the screen however left-aligned they were inside.
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _PostBody(
-          message: message,
-          expanded: _expanded,
-          onToggle: () => setState(() => _expanded = !_expanded),
-        ),
+        // Open, the post takes most of the screen and scrolls within it; closed, it sizes to its
+        // own (capped) content. A Flexible child cannot scroll against an unbounded height, which
+        // is why this is not simply always intrinsic.
+        if (_expanded)
+          Expanded(
+            flex: 3,
+            child: _PostBody(
+              message: message,
+              expanded: true,
+              onToggle: () => setState(() => _expanded = false),
+            ),
+          )
+        else
+          _PostBody(
+            message: message,
+            expanded: false,
+            onToggle: () => setState(() => _expanded = true),
+          ),
         const SizedBox(height: 8),
         Expanded(
-          flex: 2,
+          flex: _expanded ? 1 : 2,
           child: _CommentsSection(
             channelId: widget.channelId,
             messageId: widget.messageId,
@@ -146,22 +159,17 @@ class _PostBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = context.l10n;
     final scheme = Theme.of(context).colorScheme;
     const bodyStyle = TextStyle(fontSize: 15);
 
     // What the post actually says: its body, or its title when the body is empty.
     final text = message.body.isNotEmpty ? message.body : message.title;
 
-    // A third of the screen, as asked. Applied to the text alone: pictures are the post's subject
-    // and clipping them to half a photograph helps nobody.
-    final cap = MediaQuery.sizeOf(context).height * 0.3;
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
+        mainAxisSize: expanded ? MainAxisSize.max : MainAxisSize.min,
         children: [
           if (message.images.isNotEmpty) ...[
             MessageCarousel(images: message.images),
@@ -177,74 +185,87 @@ class _PostBody extends StatelessWidget {
           // title here means the text is always somewhere it can be read in full.
           if (text.isNotEmpty) ...[
             const SizedBox(height: 10),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final painter = TextPainter(
-                  text: TextSpan(text: text, style: bodyStyle),
-                  textDirection: Directionality.of(context),
-                )..layout(maxWidth: constraints.maxWidth);
-                final overflows = painter.height > cap;
-
-                final rendered = Text(text, style: bodyStyle);
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (!overflows || expanded)
-                      rendered
-                    else
-                      // Clipped rather than scrolled: a scrollable box inside a scrollable page
-                      // fights the reader for the gesture.
-                      ClipRect(
-                        child: SizedBox(
-                          height: cap,
-                          width: double.infinity,
-                          child: Align(
-                            alignment: Alignment.topLeft,
-                            child: rendered,
-                          ),
-                        ),
-                      ),
-                    // Offered only when there is genuinely more to see, and it turns back into
-                    // "Show less" once open — a control that only ever expands leaves the reader
-                    // with no way back.
-                    if (overflows)
-                      TextButton(
-                        onPressed: onToggle,
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              l10n.t(
-                                expanded
-                                    ? 'channel.showLess'
-                                    : 'channel.showMore',
-                              ),
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: scheme.primary,
-                              ),
-                            ),
-                            Icon(
-                              expanded ? Icons.expand_less : Icons.expand_more,
-                              size: 16,
-                              color: scheme.primary,
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
+            // Expanded when open so the scrollable inside is bounded; intrinsic when closed so the
+            // post takes only the room its clipped text needs.
+            if (expanded)
+              Expanded(child: _bodyBlock(context, text, bodyStyle, scheme))
+            else
+              _bodyBlock(context, text, bodyStyle, scheme),
           ],
         ],
       ),
+    );
+  }
+
+  Widget _bodyBlock(
+    BuildContext context,
+    String text,
+    TextStyle bodyStyle,
+    ColorScheme scheme,
+  ) {
+    final l10n = context.l10n;
+    final cap = MediaQuery.sizeOf(context).height * 0.3;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: bodyStyle),
+          textDirection: Directionality.of(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        final overflows = painter.height > cap;
+
+        final rendered = Text(text, style: bodyStyle);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: expanded ? MainAxisSize.max : MainAxisSize.min,
+          children: [
+            if (expanded)
+              // Scrolls against the height the page granted, so a post longer than the
+              // screen can be read to the end — and "Show less" below stays put rather
+              // than sitting somewhere off the bottom of it.
+              Flexible(child: SingleChildScrollView(child: rendered))
+            else if (!overflows)
+              rendered
+            else
+              // Clipped rather than scrolled: a scrollable box inside a scrollable page
+              // fights the reader for the gesture.
+              ClipRect(
+                child: SizedBox(
+                  height: cap,
+                  width: double.infinity,
+                  child: Align(alignment: Alignment.topLeft, child: rendered),
+                ),
+              ),
+            // Offered only when there is genuinely more to see, and it turns back into
+            // "Show less" once open — a control that only ever expands leaves the reader
+            // with no way back.
+            if (overflows)
+              TextButton(
+                onPressed: onToggle,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      l10n.t(
+                        expanded ? 'channel.showLess' : 'channel.showMore',
+                      ),
+                      style: TextStyle(fontSize: 12, color: scheme.primary),
+                    ),
+                    Icon(
+                      expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 16,
+                      color: scheme.primary,
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
