@@ -111,6 +111,22 @@ class MlsService {
   /// the answer could change — a wipe, a restore, or the user choosing to start fresh.
   bool? _restoreNeeded;
 
+  /// Fetched once from the server: the home domain that qualifies this host's MLS
+  /// credentials. Best-effort — a failure leaves the 'local' default.
+  Future<void>? _homeDomainReady;
+
+  Future<void> _ensureHomeDomain() {
+    return _homeDomainReady ??= _repo
+        .homeDomain()
+        .then((d) {
+          setHomeDomain(d);
+        })
+        .catchError((_) {
+          // Leave the default; do not cache the failure so a later load can retry.
+          _homeDomainReady = null;
+        });
+  }
+
   /// ensureGroup in flight, per conversation. Several callers ask at once — opening the chat, sending
   /// into it, a device announcing itself — and they must not all claim key packages and all try to
   /// establish the group.
@@ -167,6 +183,10 @@ class MlsService {
   }
 
   Future<MlsSession> _load(String userId) async {
+    // Learn the home domain before minting any credential, so this device's
+    // identity is qualified by the right host. Best-effort: a failure leaves the
+    // 'local' default, correct for a non-federated host.
+    await _ensureHomeDomain();
     final session = await MlsSession.load(
       store: _store,
       userId: userId,
@@ -1012,8 +1032,11 @@ class MlsService {
     }
 
     for (var attempt = 0; attempt < _commitAttempts; attempt++) {
+      // The crate matches removal targets against qualified credentials, so the
+      // target is the qualified user key; the server-side `removes` claim stays
+      // the bare user id, which is what conversation membership is keyed by.
       final outcome = await session.commitRemoveUsers(state.groupId, [
-        memberUserId,
+        userKey(memberUserId),
       ], _offer(conversationId, state.groupId, removes: [memberUserId]));
       if (outcome == CommitOutcome.accepted) break;
 

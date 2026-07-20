@@ -32,9 +32,12 @@ type AppHandler struct {
 	Admin          *AdminHandler
 	Chat           *chat.Handler
 	VAPIDPublicKey string
-	// Remote and HostDomain enable joining channels on other hosts. Nil Remote
-	// means this build does not federate, and the join-remote route 404s.
-	Remote     RemoteChannels
+	// Remote enables joining channels on other hosts. Nil means this build does
+	// not federate, and the join-remote route 404s.
+	Remote RemoteChannels
+	// HostDomain is this instance's own domain, used to qualify MLS credentials
+	// and to route join-remote. Empty on a non-federated host (meta reports the
+	// "local" sentinel then).
 	HostDomain string
 }
 
@@ -111,7 +114,25 @@ func (h *AppHandler) Routes(mux *http.ServeMux) {
 func (h *AppHandler) meta(w http.ResponseWriter, _ *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"vapidPublicKey": h.VAPIDPublicKey,
+		// The home host this account belongs to. It qualifies the account's MLS
+		// credentials (mimi://<homeDomain>/d/<user>/<device>) so a member on one
+		// host is distinct from a same-named member on another — the foundation
+		// cross-host groups rest on. Every client on this host must agree on it,
+		// which is why it comes from the server and not from each client's own
+		// config. Defaults to "local" when the host is not federated, so a
+		// single-host deployment has a stable value with no configuration.
+		"homeDomain": h.homeDomain(),
 	})
+}
+
+// homeDomain is the domain this host's accounts are credentialed under. Falls
+// back to a fixed sentinel so a non-federated deployment still qualifies its
+// credentials consistently.
+func (h *AppHandler) homeDomain() string {
+	if h.HostDomain != "" {
+		return h.HostDomain
+	}
+	return "local"
 }
 
 // requireUser resolves the calling user from the JWT context.

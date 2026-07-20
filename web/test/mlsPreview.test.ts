@@ -27,8 +27,8 @@ beforeAll(async () => {
 
 /** Alice and Bob in one group, with Bob joined from Alice's Welcome. */
 function establishPair(): { alice: MlsClient; bob: MlsClient } {
-  const alice = new MlsClient('alice', 'dev-a')
-  const bob = new MlsClient('bob', 'dev-b')
+  const alice = new MlsClient('test.example', 'alice', 'dev-a')
+  const bob = new MlsClient('test.example', 'bob', 'dev-b')
   alice.createGroup(enc.encode(GROUP))
   const staged = alice.stageAdd(enc.encode(GROUP), [bob.keyPackage()])
   alice.commitAccepted(enc.encode(GROUP))
@@ -61,7 +61,7 @@ describe('MlsPreviewClient', () => {
 
   it('refuses a commit instead of advancing the epoch', () => {
     const { alice, bob } = establishPair()
-    const carol = new MlsClient('carol', 'dev-c')
+    const carol = new MlsClient('test.example', 'carol', 'dev-c')
     const staged = alice.stageAdd(enc.encode(GROUP), [carol.keyPackage()])
     alice.commitAccepted(enc.encode(GROUP))
 

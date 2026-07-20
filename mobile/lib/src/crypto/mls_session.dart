@@ -244,7 +244,11 @@ class MlsSession {
     String userId,
     String deviceId,
   ) async {
-    final state = await rust.mlsCreate(userId: userId, deviceId: deviceId);
+    final state = await rust.mlsCreate(
+      domain: homeDomain(),
+      userId: userId,
+      deviceId: deviceId,
+    );
     await store.writeState(state);
   }
 

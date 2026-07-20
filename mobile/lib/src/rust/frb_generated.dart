@@ -103,6 +103,7 @@ abstract class RustLibApi extends BaseApi {
   Future<Applied> crateApiMlsMlsCommitRejected({required List<int> groupId});
 
   Future<Uint8List> crateApiMlsMlsCreate({
+    required String domain,
     required String userId,
     required String deviceId,
   });
@@ -403,6 +404,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<Uint8List> crateApiMlsMlsCreate({
+    required String domain,
     required String userId,
     required String deviceId,
   }) {
@@ -410,6 +412,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(domain, serializer);
           sse_encode_String(userId, serializer);
           sse_encode_String(deviceId, serializer);
           pdeCallFfi(
@@ -424,7 +427,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_AnyhowException,
         ),
         constMeta: kCrateApiMlsMlsCreateConstMeta,
-        argValues: [userId, deviceId],
+        argValues: [domain, userId, deviceId],
         apiImpl: this,
       ),
     );
@@ -432,7 +435,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiMlsMlsCreateConstMeta => const TaskConstMeta(
     debugName: "mls_create",
-    argNames: ["userId", "deviceId"],
+    argNames: ["domain", "userId", "deviceId"],
   );
 
   @override

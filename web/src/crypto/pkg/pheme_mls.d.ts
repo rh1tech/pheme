@@ -106,11 +106,13 @@ export class MlsClient {
      */
     memberIdentities(group_id: Uint8Array): Array<any>;
     /**
-     * Creates a fresh identity for one DEVICE of one user. Both ids are required —
-     * an MLS leaf is a device, and a client that cannot say which device it is ends up
-     * sharing a leaf with the user's other devices, which then cannot decrypt.
+     * Creates a fresh identity for one DEVICE of one user, on a given home host.
+     * All three are required: the domain qualifies the member so that a person on
+     * one host is distinct from a same-named person on another (the credential is
+     * `mimi://<domain>/d/<user>/<device>`), and the device id is what keeps a
+     * user's leaves apart.
      */
-    constructor(user_id: string, device_id: string);
+    constructor(domain: string, user_id: string, device_id: string);
     /**
      * The safety number for a group: the digits two people compare, out of band, to
      * prove the server did not substitute a key and put itself in the middle.
@@ -234,7 +236,7 @@ export interface InitOutput {
     readonly mlsclient_keyPackage: (a: number) => [number, number, number, number];
     readonly mlsclient_lastResortKeyPackage: (a: number) => [number, number, number, number];
     readonly mlsclient_memberIdentities: (a: number, b: number, c: number) => [number, number, number];
-    readonly mlsclient_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly mlsclient_new: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly mlsclient_safetyNumber: (a: number, b: number, c: number) => [number, number, number, number];
     readonly mlsclient_stageAdd: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly mlsclient_stageRemoveDevices: (a: number, b: number, c: number, d: any) => [number, number, number, number];

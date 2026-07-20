@@ -8,21 +8,79 @@
  * Everything here is pure: strings in, strings out, no session, no network. That is the point.
  */
 
-/** A leaf identity: `userId:deviceId`. */
-export function deviceIdentity(userId: string, deviceId: string): string {
-  return `${userId}:${deviceId}`
+// The home domain this client's own credentials are qualified under. It comes
+// from the server (GET /v1/meta), so every client on a host agrees on it, and
+// is set once at startup before any MLS work. A domain-qualified credential is
+// what makes a member on one host distinct from a same-named member on another.
+let homeDomainValue = 'local'
+
+/** Sets the home domain used to build THIS client's own credential identities. */
+export function setHomeDomain(domain: string): void {
+  if (domain) homeDomainValue = domain
 }
 
-/** The device half of a credential identity, or '' for a legacy identity that has no device. */
+/** The home domain in effect. */
+export function homeDomain(): string {
+  return homeDomainValue
+}
+
+/**
+ * A leaf identity: `mimi://<domain>/d/<userId>/<deviceId>`, matching the bytes
+ * the pheme-mls crate puts in a credential.
+ *
+ * The domain defaults to this client's home domain — the only identities this
+ * function builds are for the local client's own devices. A REMOTE member's
+ * identity is never built here; it is read from their credential and parsed by
+ * userOf/deviceOf, which take whatever domain the credential actually carries.
+ */
+export function deviceIdentity(userId: string, deviceId: string, domain = homeDomainValue): string {
+  return `mimi://${domain}/d/${userId}/${deviceId}`
+}
+
+// Parses `mimi://<domain>/d/<user>/<device>` into its parts, or null if it is
+// not that form.
+function parseIdentity(identity: string): { domain: string; user: string; device: string } | null {
+  const rest = identity.startsWith('mimi://') ? identity.slice('mimi://'.length) : ''
+  if (!rest) return null
+  const parts = rest.split('/')
+  // domain / "d" / user / device
+  if (parts.length !== 4 || parts[1] !== 'd') return null
+  return { domain: parts[0], user: parts[2], device: parts[3] }
+}
+
+/** The device half of a credential identity, or '' if it does not parse. */
 export function deviceOf(identity: string): string {
-  const sep = identity.indexOf(':')
-  return sep === -1 ? '' : identity.slice(sep + 1)
+  return parseIdentity(identity)?.device ?? ''
 }
 
-/** The user half of a credential identity, or '' for a legacy identity. */
+/**
+ * The bare user id of a credential — the host-local user segment. Returns '' for
+ * an identity that does not parse (a legacy `user:device` leaf, whose keys no
+ * one holds).
+ *
+ * Deliberately BARE, not domain-qualified: the roster compares this against the
+ * server's membership and key-package directory, both keyed by the host-local
+ * user id. Distinctness across hosts is carried by the full leaf identity (which
+ * includes the domain), not by this. `userKey` builds the qualified form for the
+ * one place that needs it — a removal target the crate matches against a
+ * credential.
+ */
 export function userOf(identity: string): string {
-  const sep = identity.indexOf(':')
-  return sep === -1 ? '' : identity.slice(0, sep)
+  return parseIdentity(identity)?.user ?? ''
+}
+
+/** The domain a credential is under, or '' if it does not parse. */
+export function domainOf(identity: string): string {
+  return parseIdentity(identity)?.domain ?? ''
+}
+
+/**
+ * The qualified user key `mimi://<domain>/u/<user>` — the form the pheme-mls
+ * crate's `user_of` returns, and therefore the form a removal target must take
+ * to match a member's credential. Defaults to this client's home domain.
+ */
+export function userKey(userId: string, domain = homeDomainValue): string {
+  return `mimi://${domain}/u/${userId}`
 }
 
 /**
@@ -57,12 +115,12 @@ export function staleLeaves(
   for (const leaf of leaves) {
     if (leaf === selfIdentity) continue // never prune ourselves
 
-    if (leaf.indexOf(':') === -1) {
-      out.push(leaf) // legacy identity: nobody can hold its keys
+    const userId = userOf(leaf)
+    if (userId === '') {
+      out.push(leaf) // unparseable / legacy identity: nobody can hold its keys
       continue
     }
 
-    const userId = userOf(leaf)
     if (!members.has(userId)) {
       out.push(leaf) // departed member
       continue

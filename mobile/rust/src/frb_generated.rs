@@ -289,13 +289,15 @@ fn wire__crate__api__mls__mls_create_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_domain = <String>::sse_decode(&mut deserializer);
             let api_user_id = <String>::sse_decode(&mut deserializer);
             let api_device_id = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
                     (move || {
-                        let output_ok = crate::api::mls::mls_create(api_user_id, api_device_id)?;
+                        let output_ok =
+                            crate::api::mls::mls_create(api_domain, api_user_id, api_device_id)?;
                         Ok(output_ok)
                     })(),
                 )

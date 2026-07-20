@@ -72,6 +72,14 @@ class PhemeRepository {
   /// The authenticated user's own account and profile.
   Future<User> getMe() => _get('/v1/me').then((d) => User.fromJson(d));
 
+  /// This host's home domain, from GET /v1/meta. Falls back to 'local' when the
+  /// server omits it (an older server) so MLS credentials stay qualified
+  /// consistently.
+  Future<String> homeDomain() => _get('/v1/meta').then((d) {
+    final v = d['homeDomain'];
+    return v is String && v.isNotEmpty ? v : 'local';
+  });
+
   /// Updates the caller's username and contact fields. An empty [username]
   /// clears it. The server returns 409 when the username is taken.
   ///

@@ -174,8 +174,8 @@ mod tests {
 
     /// Alice and Bob in a group, Bob's state sealed exactly as MlsStore seals it on disk.
     fn fixture() -> (Client, Client, Vec<u8>, Vec<u8>) {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new("test.example", "alice", "dev-a").unwrap();
+        let bob = Client::new("test.example", "bob", "dev-b").unwrap();
         alice.create_group(GID).unwrap();
         let staged = alice.stage_add(GID, &[bob.key_package().unwrap()]).unwrap();
         alice.commit_accepted(GID).unwrap();
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn a_commit_is_refused_so_the_epoch_cannot_move() {
         let (alice, bob, key, sealed) = fixture();
-        let carol = Client::new("carol", "dev-c").unwrap();
+        let carol = Client::new("test.example", "carol", "dev-c").unwrap();
         let staged = alice
             .stage_add(GID, &[carol.key_package().unwrap()])
             .unwrap();

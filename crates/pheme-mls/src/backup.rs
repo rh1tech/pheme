@@ -165,7 +165,13 @@ mod integrity_tests {
         let other = encrypt(b"passphrase", b"the state").expect("seal");
 
         assert!(
-            decrypt(b"passphrase", &backup.salt, &other.nonce, &backup.ciphertext).is_err(),
+            decrypt(
+                b"passphrase",
+                &backup.salt,
+                &other.nonce,
+                &backup.ciphertext
+            )
+            .is_err(),
             "a backup opened under another backup's nonce"
         );
     }
@@ -178,7 +184,13 @@ mod integrity_tests {
         // A different salt derives a different key from the same passphrase, so this must fail even
         // though the passphrase is correct.
         assert!(
-            decrypt(b"passphrase", &other.salt, &backup.nonce, &backup.ciphertext).is_err(),
+            decrypt(
+                b"passphrase",
+                &other.salt,
+                &backup.nonce,
+                &backup.ciphertext
+            )
+            .is_err(),
             "a backup opened under another backup's salt"
         );
     }
@@ -208,8 +220,14 @@ mod integrity_tests {
         let first = encrypt(b"passphrase", b"the state").expect("seal");
         let second = encrypt(b"passphrase", b"the state").expect("seal");
 
-        assert_ne!(first.salt, second.salt, "the salt repeated across two seals");
-        assert_ne!(first.nonce, second.nonce, "the nonce repeated across two seals");
+        assert_ne!(
+            first.salt, second.salt,
+            "the salt repeated across two seals"
+        );
+        assert_ne!(
+            first.nonce, second.nonce,
+            "the nonce repeated across two seals"
+        );
         assert_ne!(
             first.ciphertext, second.ciphertext,
             "sealing identical plaintext twice produced identical ciphertext"
@@ -227,7 +245,13 @@ mod integrity_tests {
             b"the state"
         );
         assert_eq!(
-            decrypt(b"passphrase", &second.salt, &second.nonce, &second.ciphertext).unwrap(),
+            decrypt(
+                b"passphrase",
+                &second.salt,
+                &second.nonce,
+                &second.ciphertext
+            )
+            .unwrap(),
             b"the state"
         );
     }
@@ -254,7 +278,13 @@ mod integrity_tests {
     fn an_empty_state_round_trips() {
         let backup = encrypt(b"passphrase", b"").expect("seal");
         assert_eq!(
-            decrypt(b"passphrase", &backup.salt, &backup.nonce, &backup.ciphertext).unwrap(),
+            decrypt(
+                b"passphrase",
+                &backup.salt,
+                &backup.nonce,
+                &backup.ciphertext
+            )
+            .unwrap(),
             b""
         );
     }
@@ -266,7 +296,13 @@ mod integrity_tests {
         let backup = encrypt(b"passphrase", &state).expect("seal");
 
         assert_eq!(
-            decrypt(b"passphrase", &backup.salt, &backup.nonce, &backup.ciphertext).unwrap(),
+            decrypt(
+                b"passphrase",
+                &backup.salt,
+                &backup.nonce,
+                &backup.ciphertext
+            )
+            .unwrap(),
             state
         );
     }
@@ -278,13 +314,23 @@ mod integrity_tests {
         let backup = encrypt("пароль".as_bytes(), b"the state").expect("seal");
 
         assert_eq!(
-            decrypt("пароль".as_bytes(), &backup.salt, &backup.nonce, &backup.ciphertext).unwrap(),
+            decrypt(
+                "пароль".as_bytes(),
+                &backup.salt,
+                &backup.nonce,
+                &backup.ciphertext
+            )
+            .unwrap(),
             b"the state"
         );
         // One byte different in the middle of a multi-byte character.
-        assert!(
-            decrypt("паролъ".as_bytes(), &backup.salt, &backup.nonce, &backup.ciphertext).is_err()
-        );
+        assert!(decrypt(
+            "паролъ".as_bytes(),
+            &backup.salt,
+            &backup.nonce,
+            &backup.ciphertext
+        )
+        .is_err());
     }
 
     /// The salt is what makes two users with the SAME passphrase produce different keys. Without

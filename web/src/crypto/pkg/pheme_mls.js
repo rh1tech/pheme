@@ -453,18 +453,23 @@ export class MlsClient {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
-     * Creates a fresh identity for one DEVICE of one user. Both ids are required —
-     * an MLS leaf is a device, and a client that cannot say which device it is ends up
-     * sharing a leaf with the user's other devices, which then cannot decrypt.
+     * Creates a fresh identity for one DEVICE of one user, on a given home host.
+     * All three are required: the domain qualifies the member so that a person on
+     * one host is distinct from a same-named person on another (the credential is
+     * `mimi://<domain>/d/<user>/<device>`), and the device id is what keeps a
+     * user's leaves apart.
+     * @param {string} domain
      * @param {string} user_id
      * @param {string} device_id
      */
-    constructor(user_id, device_id) {
-        const ptr0 = passStringToWasm0(user_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    constructor(domain, user_id, device_id) {
+        const ptr0 = passStringToWasm0(domain, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(device_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const ptr1 = passStringToWasm0(user_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.mlsclient_new(ptr0, len0, ptr1, len1);
+        const ptr2 = passStringToWasm0(device_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.mlsclient_new(ptr0, len0, ptr1, len1, ptr2, len2);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

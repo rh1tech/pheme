@@ -98,20 +98,50 @@ String normalizeRecoveryCode(String input) => input
     .replaceAll('O', '0')
     .replaceAll(RegExp('[^0-9A-Z]'), '');
 
-/// A leaf identity: `userId:deviceId`.
-String deviceIdentity(String userId, String deviceId) => '$userId:$deviceId';
+/// The home domain this client's own MLS credentials are qualified under. It
+/// comes from the server (GET /v1/meta) so every client on a host agrees, and is
+/// set once before any MLS work. Defaults to 'local', which is correct and
+/// consistent for a non-federated host. Domain-qualification is what makes a
+/// member on one host distinct from a same-named member on another.
+String _homeDomain = 'local';
 
-/// The user half of a leaf identity.
-String userOf(String identity) {
-  final sep = identity.indexOf(':');
-  return sep == -1 ? '' : identity.substring(0, sep);
+/// Sets the home domain used to build THIS client's own credential identities.
+void setHomeDomain(String domain) {
+  if (domain.isNotEmpty) _homeDomain = domain;
 }
 
-/// The device half of a leaf identity. Empty for a legacy identity that names only a person.
-String deviceOf(String identity) {
-  final sep = identity.indexOf(':');
-  return sep == -1 ? '' : identity.substring(sep + 1);
+/// The home domain in effect.
+String homeDomain() => _homeDomain;
+
+/// A leaf identity: `mimi://<domain>/d/<userId>/<deviceId>`, matching the bytes
+/// the pheme-mls crate puts in a credential. The domain defaults to this
+/// client's home domain — this only ever builds the LOCAL client's own
+/// identities; a remote member's is parsed from their credential.
+String deviceIdentity(String userId, String deviceId, [String? domain]) =>
+    'mimi://${domain ?? _homeDomain}/d/$userId/$deviceId';
+
+/// Parses `mimi://<domain>/d/<user>/<device>`, or null if not that form.
+({String domain, String user, String device})? _parseIdentity(String identity) {
+  if (!identity.startsWith('mimi://')) return null;
+  final parts = identity.substring('mimi://'.length).split('/');
+  if (parts.length != 4 || parts[1] != 'd') return null;
+  return (domain: parts[0], user: parts[2], device: parts[3]);
 }
+
+/// The bare, host-local user id of a leaf, or '' if it does not parse. Bare (not
+/// qualified) because the roster compares it against the server's membership and
+/// key-package directory, both keyed by the host-local id; distinctness across
+/// hosts is carried by the domain in the full leaf.
+String userOf(String identity) => _parseIdentity(identity)?.user ?? '';
+
+/// The device half of a leaf identity, or '' if it does not parse.
+String deviceOf(String identity) => _parseIdentity(identity)?.device ?? '';
+
+/// The qualified user key `mimi://<domain>/u/<user>` — the form the crate's
+/// `user_of` returns, and so the form a removal target must take to match a
+/// member's credential. Defaults to this client's home domain.
+String userKey(String userId, [String? domain]) =>
+    'mimi://${domain ?? _homeDomain}/u/$userId';
 
 /// A v4 UUID — a fresh MLS device id, and the id of a call.
 ///

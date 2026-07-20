@@ -102,10 +102,11 @@ fn bytes(r: Result<(Vec<u8>, Vec<u8>)>) -> Result<Bytes> {
 
 /// Mints a fresh identity for one DEVICE of one user and installs it as the live client.
 ///
-/// Both ids are required. An MLS leaf is a device, not a person: a client that cannot say which
-/// device it is shares a leaf with the user's other devices, and then none of them can decrypt.
-pub fn mls_create(user_id: String, device_id: String) -> Result<Vec<u8>> {
-    let client = Client::new(&user_id, &device_id).map_err(|e| anyhow!(e))?;
+/// All three are required. The domain qualifies the member so a person on one host is distinct
+/// from a same-named person on another (the credential is `mimi://<domain>/d/<user>/<device>`);
+/// an MLS leaf is a device, so the device id keeps a user's leaves apart.
+pub fn mls_create(domain: String, user_id: String, device_id: String) -> Result<Vec<u8>> {
+    let client = Client::new(&domain, &user_id, &device_id).map_err(|e| anyhow!(e))?;
     let state = client.export_state().map_err(|e| anyhow!(e))?;
     *CLIENT.lock() = Some(client);
     Ok(state)
@@ -414,14 +415,14 @@ mod tests {
 
     /// Mints a device and returns the state to persist for it.
     fn fresh(user: &str, device: &str) -> Vec<u8> {
-        mls_create(user.into(), device.into()).unwrap()
+        mls_create("test.example".into(), user.into(), device.into()).unwrap()
     }
 
     #[test]
-    fn identity_is_user_colon_device() {
+    fn identity_is_domain_qualified() {
         let _guard = TEST.lock();
         fresh("alice", "phone");
-        assert_eq!(mls_identity().unwrap(), "alice:phone");
+        assert_eq!(mls_identity().unwrap(), "mimi://test.example/d/alice/phone");
     }
 
     #[test]
@@ -473,7 +474,7 @@ mod tests {
 
         mls_load(state).unwrap();
         assert!(mls_has_group(gid).unwrap());
-        assert_eq!(mls_identity().unwrap(), "carol:laptop");
+        assert_eq!(mls_identity().unwrap(), "mimi://test.example/d/carol/laptop");
     }
 
     #[test]

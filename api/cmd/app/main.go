@@ -136,9 +136,13 @@ func main() {
 			SessionTTL: cfg.RefreshTokenTTL,
 		},
 		VAPIDPublicKey: cfg.VAPIDPublicKey,
+		// Always set, even without federation: meta reports it as the account's
+		// home domain so MLS credentials are qualified consistently (it falls back
+		// to a sentinel when empty). federation may set appHandler.Remote below.
+		HostDomain: cfg.HostDomain,
 	}
-	// federation may set appHandler.Remote below; Routes is called after that so
-	// the join-remote endpoint sees the wiring.
+	// Routes is called after any federation wiring below, so the join-remote
+	// endpoint sees it.
 
 	// Host-to-host federation, mounted only when this instance is part of a
 	// network. Peers are authenticated against the nodelist, not the JWT
@@ -162,7 +166,6 @@ func main() {
 			os.Exit(1)
 		} else if peers != nil {
 			appHandler.Remote = remoteChannels{nodes: nodes, peers: peers}
-			appHandler.HostDomain = cfg.HostDomain
 		}
 		logger.Info("federation enabled", "origin", cfg.HostDomain, "nodelist_serial", nodes.Serial())
 	}

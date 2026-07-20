@@ -284,6 +284,7 @@ export interface MessagesPage {
 
 export interface Meta {
   vapidPublicKey: string
+  homeDomain?: string
 }
 
 // Live event delivered over the one per-user SSE stream. Either a channel

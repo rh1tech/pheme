@@ -10,12 +10,15 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Mints a fresh identity for one DEVICE of one user and installs it as the live client.
 ///
-/// Both ids are required. An MLS leaf is a device, not a person: a client that cannot say which
-/// device it is shares a leaf with the user's other devices, and then none of them can decrypt.
+/// All three are required. The domain qualifies the member so a person on one host is distinct
+/// from a same-named person on another (the credential is `mimi://<domain>/d/<user>/<device>`);
+/// an MLS leaf is a device, so the device id keeps a user's leaves apart.
 Future<Uint8List> mlsCreate({
+  required String domain,
   required String userId,
   required String deviceId,
 }) => RustLib.instance.api.crateApiMlsMlsCreate(
+  domain: domain,
   userId: userId,
   deviceId: deviceId,
 );

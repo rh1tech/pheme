@@ -1,33 +1,38 @@
 import { describe, expect, it } from 'vitest'
-import { deviceIdentity, deviceOf, missingDevices, staleLeaves, userOf } from './roster'
+import { deviceIdentity, deviceOf, missingDevices, staleLeaves, userKey, userOf } from './roster'
 
 // The rules that decide who can read a conversation.
 //
 // These were reachable only through a session that needs WASM, a server and a real group, so they
 // were exercised end to end or not at all — and one of them shipped broken: a revoked device kept
 // its leaf, because the check for it came after a bail that swallowed the case.
-
-const ME = 'me:my-device'
+//
+// Leaf identities are the qualified credential form, `mimi://<domain>/d/<user>/<device>`, built via
+// deviceIdentity (default domain 'local'). Membership and the key-package directory stay keyed by
+// the host-local user id, which is what userOf returns — distinctness across hosts is carried by
+// the domain in the leaf, not by these keys.
+const L = (user: string, device: string) => deviceIdentity(user, device)
+const ME = L('me', 'my-device')
 
 describe('identity halves', () => {
-  it('splits a leaf into its user and device', () => {
-    expect(userOf('alice:phone')).toBe('alice')
-    expect(deviceOf('alice:phone')).toBe('phone')
-    expect(deviceIdentity('alice', 'phone')).toBe('alice:phone')
+  it('splits a qualified leaf into its bare user and device', () => {
+    const leaf = L('alice', 'phone')
+    expect(leaf).toBe('mimi://local/d/alice/phone')
+    expect(userOf(leaf)).toBe('alice')
+    expect(deviceOf(leaf)).toBe('phone')
   })
 
-  // A legacy identity is a bare user id with no device. Both halves must report '' rather than
-  // guessing, because a mangled user id reads as a departed member and prunes the wrong leaf.
-  it('reports both halves as empty for a legacy identity', () => {
+  it('userKey builds the qualified removal-target form the crate matches', () => {
+    expect(userKey('alice')).toBe('mimi://local/u/alice')
+  })
+
+  // An identity that does not parse — a legacy `user:device` leaf, or a bare user — reports both
+  // halves as '' rather than guessing, because a mangled user id reads as a departed member and
+  // would prune the wrong leaf.
+  it('reports both halves as empty for an unparseable identity', () => {
+    expect(userOf('alice:phone')).toBe('')
+    expect(deviceOf('alice:phone')).toBe('')
     expect(userOf('alice')).toBe('')
-    expect(deviceOf('alice')).toBe('')
-  })
-
-  // A device id is a uuid and contains no colon, but the user half must still be the FIRST field
-  // if one ever did.
-  it('splits on the first colon only', () => {
-    expect(userOf('alice:has:colons')).toBe('alice')
-    expect(deviceOf('alice:has:colons')).toBe('has:colons')
   })
 })
 
@@ -37,13 +42,13 @@ describe('staleLeaves', () => {
     expect(staleLeaves(ME, [ME], [], {}, {})).toEqual([])
   })
 
-  it('prunes a legacy leaf that nobody can hold keys for', () => {
-    expect(staleLeaves(ME, ['alice'], ['alice'], { alice: ['phone'] })).toEqual(['alice'])
+  it('prunes an unparseable leaf that nobody can hold keys for', () => {
+    expect(staleLeaves(ME, ['legacy'], ['alice'], { alice: ['phone'] })).toEqual(['legacy'])
   })
 
   it('prunes a departed member', () => {
-    const stale = staleLeaves(ME, ['gone:phone'], ['still-here'], { 'gone': ['phone'] })
-    expect(stale).toEqual(['gone:phone'])
+    const stale = staleLeaves(ME, [L('gone', 'phone')], ['still-here'], { gone: ['phone'] })
+    expect(stale).toEqual([L('gone', 'phone')])
   })
 
   // THE ONE THAT SHIPPED BROKEN. Terminating a device deletes its KeyPackages, so a revoked device
@@ -52,43 +57,43 @@ describe('staleLeaves', () => {
   it('prunes a revoked device even though it has published nothing', () => {
     const stale = staleLeaves(
       ME,
-      ['alice:old-browser'],
+      [L('alice', 'old-browser')],
       ['alice'],
       { alice: [] }, // its packages were deleted on termination
       { alice: ['old-browser'] },
     )
-    expect(stale).toEqual(['alice:old-browser'])
+    expect(stale).toEqual([L('alice', 'old-browser')])
   })
 
   it('prunes a revoked device when the user has OTHER live devices', () => {
     const stale = staleLeaves(
       ME,
-      ['alice:phone', 'alice:old-browser'],
+      [L('alice', 'phone'), L('alice', 'old-browser')],
       ['alice'],
       { alice: ['phone'] },
       { alice: ['old-browser'] },
     )
-    expect(stale).toEqual(['alice:old-browser'])
+    expect(stale).toEqual([L('alice', 'old-browser')])
   })
 
   it('prunes a ghost device the member no longer publishes', () => {
-    const stale = staleLeaves(ME, ['alice:ghost'], ['alice'], { alice: ['phone'] })
-    expect(stale).toEqual(['alice:ghost'])
+    const stale = staleLeaves(ME, [L('alice', 'ghost')], ['alice'], { alice: ['phone'] })
+    expect(stale).toEqual([L('alice', 'ghost')])
   })
 
   // A member who has never opened the app publishes nothing. Evicting them would make the app
   // unusable for anyone invited before they first sign in.
   it('leaves a member with no published devices alone', () => {
-    expect(staleLeaves(ME, ['newcomer:phone'], ['newcomer'], {})).toEqual([])
-    expect(staleLeaves(ME, ['newcomer:phone'], ['newcomer'], { newcomer: [] })).toEqual([])
+    expect(staleLeaves(ME, [L('newcomer', 'phone')], ['newcomer'], {})).toEqual([])
+    expect(staleLeaves(ME, [L('newcomer', 'phone')], ['newcomer'], { newcomer: [] })).toEqual([])
   })
 
   it('keeps a member whose device is published', () => {
-    expect(staleLeaves(ME, ['alice:phone'], ['alice'], { alice: ['phone'] })).toEqual([])
+    expect(staleLeaves(ME, [L('alice', 'phone')], ['alice'], { alice: ['phone'] })).toEqual([])
   })
 
   it('keeps every device of a member with several', () => {
-    const leaves = ['alice:phone', 'alice:laptop', 'alice:tablet']
+    const leaves = [L('alice', 'phone'), L('alice', 'laptop'), L('alice', 'tablet')]
     expect(staleLeaves(ME, leaves, ['alice'], { alice: ['phone', 'laptop', 'tablet'] })).toEqual([])
   })
 
@@ -96,11 +101,11 @@ describe('staleLeaves', () => {
   it('prunes every device of a departed member', () => {
     const stale = staleLeaves(
       ME,
-      ['gone:phone', 'gone:laptop'],
+      [L('gone', 'phone'), L('gone', 'laptop')],
       ['still-here'],
       { gone: ['phone', 'laptop'] },
     )
-    expect(stale).toEqual(['gone:phone', 'gone:laptop'])
+    expect(stale).toEqual([L('gone', 'phone'), L('gone', 'laptop')])
   })
 
   it('handles an empty group without inventing work', () => {
@@ -111,7 +116,7 @@ describe('staleLeaves', () => {
   it('does not prune a live device because a sibling was revoked', () => {
     const stale = staleLeaves(
       ME,
-      ['alice:phone'],
+      [L('alice', 'phone')],
       ['alice'],
       { alice: ['phone'] },
       { alice: ['old-browser'] },
@@ -122,12 +127,20 @@ describe('staleLeaves', () => {
   it('mixes every reason in one pass', () => {
     const stale = staleLeaves(
       ME,
-      [ME, 'legacy', 'gone:phone', 'alice:revoked', 'alice:ghost', 'alice:phone', 'newcomer:phone'],
+      [
+        ME,
+        'legacy',
+        L('gone', 'phone'),
+        L('alice', 'revoked'),
+        L('alice', 'ghost'),
+        L('alice', 'phone'),
+        L('newcomer', 'phone'),
+      ],
       ['alice', 'newcomer'],
       { alice: ['phone'] },
       { alice: ['revoked'] },
     )
-    expect(stale).toEqual(['legacy', 'gone:phone', 'alice:revoked', 'alice:ghost'])
+    expect(stale).toEqual(['legacy', L('gone', 'phone'), L('alice', 'revoked'), L('alice', 'ghost')])
   })
 })
 
@@ -137,7 +150,7 @@ describe('missingDevices', () => {
   })
 
   it('ignores devices that are already leaves', () => {
-    expect(missingDevices(ME, { alice: ['phone'] }, ['alice:phone'])).toEqual([])
+    expect(missingDevices(ME, { alice: ['phone'] }, [L('alice', 'phone')])).toEqual([])
   })
 
   // Claiming our own KeyPackage burns one for nothing: we hold the group already.
@@ -148,12 +161,12 @@ describe('missingDevices', () => {
   // A zombie's package produces a leaf that does not answer to its own identity, so it stays
   // "missing" forever. Re-claiming it every round is half of an add/prune war.
   it('never returns a known zombie', () => {
-    const zombies = new Set(['alice:zombie'])
+    const zombies = new Set([L('alice', 'zombie')])
     expect(missingDevices(ME, { alice: ['zombie'] }, [], zombies)).toEqual([])
   })
 
   it('returns the live devices of a user who also has a zombie', () => {
-    const zombies = new Set(['alice:zombie'])
+    const zombies = new Set([L('alice', 'zombie')])
     expect(missingDevices(ME, { alice: ['zombie', 'phone'] }, [], zombies)).toEqual([
       { userId: 'alice', deviceId: 'phone' },
     ])
@@ -167,7 +180,7 @@ describe('missingDevices', () => {
   })
 
   it('finds nothing when everyone is already in', () => {
-    expect(missingDevices(ME, { alice: ['phone'] }, ['alice:phone', ME])).toEqual([])
+    expect(missingDevices(ME, { alice: ['phone'] }, [L('alice', 'phone'), ME])).toEqual([])
   })
 
   it('handles a user with no published devices', () => {

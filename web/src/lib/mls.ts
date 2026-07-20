@@ -35,6 +35,9 @@ import {
   deviceOf,
   missingDevices as rosterMissingDevices,
   staleLeaves as rosterStaleLeaves,
+  homeDomain,
+  setHomeDomain,
+  userKey,
 } from './roster'
 import { cacheContent, clearPreviews, exportAllContents, importContents } from './chatCache'
 import { clearSafetyPins } from './safety'
@@ -199,6 +202,25 @@ const HISTORY_SYNC_LABEL = 'pheme/history-sync/v1'
 let ready: Promise<Session> | null = null
 let readyUserId = ''
 let wasmReady: Promise<void> | null = null
+// Fetched once from the server: the home domain that qualifies this host's MLS
+// credentials. Best-effort — a failure leaves the 'local' default in roster.ts.
+let homeDomainReady: Promise<void> | null = null
+
+async function ensureHomeDomain(): Promise<void> {
+  if (!homeDomainReady) {
+    homeDomainReady = api
+      .meta()
+      .then((m) => {
+        if (m.homeDomain) setHomeDomain(m.homeDomain)
+      })
+      .catch(() => {
+        // Leave the default. Not cached as failed: another attempt on the next
+        // session load is cheap and may succeed once the network is back.
+        homeDomainReady = null
+      })
+  }
+  return homeDomainReady
+}
 // Memoized answer to "must this device restore before it can have an identity?" —
 // null until asked. Reset whenever the answer could change.
 let restoreNeeded: boolean | null = null
@@ -348,6 +370,11 @@ class Session {
    */
   static async load(userId: string): Promise<Session> {
     await ensureWasm()
+    // Learn the home domain before minting any credential, so this device's
+    // identity is qualified by the right host. Cached and best-effort: a fetch
+    // failure leaves the 'local' default, which is correct for a non-federated
+    // host and the only case where the network could be down before first use.
+    await ensureHomeDomain()
 
     // Would we have to mint a brand-new identity? Answered BEFORE taking the lock,
     // because answering it may need the network (does a backup exist?), and a network
@@ -417,7 +444,7 @@ class Session {
         retiredDeviceId = loadMlsDeviceId() ?? ''
         deviceId = crypto.randomUUID()
         saveMlsDeviceId(deviceId)
-        client = new MlsClient(userId, deviceId)
+        client = new MlsClient(homeDomain(), userId, deviceId)
       }
 
       const s = new Session(client, userId, deviceId, await storedVersion(), await storedEpoch())
@@ -1661,7 +1688,7 @@ export async function removeGroupMember(
   }
 
   for (let attempt = 0; attempt < COMMIT_ATTEMPTS; attempt++) {
-    const result = await session.commitRemoveUsers(conversationId, state.groupId, [memberUserId])
+    const result = await session.commitRemoveUsers(conversationId, state.groupId, [userKey(memberUserId)])
     if (result === 'accepted') break
     // Somebody else moved the group. Catch up and remove them from the epoch that
     // actually happened — they must not be left in it.

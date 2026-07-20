@@ -32,38 +32,51 @@ const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA2
 /// device compromised now also exposes messages from its last 32 epochs.
 const MAX_PAST_EPOCHS: usize = 32;
 
-/// Separates the user id from the device id inside a credential. Neither half can
-/// contain it: user ids are hex Mongo ids and device ids are UUIDs.
-const IDENTITY_SEP: u8 = b':';
-
-/// The bytes Pheme puts in an MLS credential: `userId:deviceId`.
+/// The bytes Pheme puts in an MLS credential: a domain-qualified device identifier,
+/// `mimi://<domain>/d/<user>/<device>`.
+///
+/// **Domain-qualified**, so a member is named by which host they belong to. Without
+/// the domain, alice on one host and alice on another would carry the same credential
+/// and a federated group could not tell them apart — the whole reason cross-host
+/// membership needs this. The form is the MIMI working group's device identifier, and
+/// its user half is itself a `mimi://<domain>/u/<user>` (see `user_of`).
 ///
 /// **An MLS leaf is a device, not a person.** Two devices of the same user are two
 /// independent clients holding different private keys; each must occupy its own leaf
-/// or it simply cannot decrypt the group's messages. Naming only the user in the
-/// credential — as this crate used to — meant a group could hold at most one of
-/// somebody's devices, and every other device of theirs saw an unreadable
-/// conversation.
+/// or it simply cannot decrypt the group's messages. Carrying the device id here also
+/// gives removal something to work with: with a bare user, two leaves of one person
+/// are indistinguishable, and removing "them" takes out whichever leaf was found first
+/// while the other keeps on reading.
 ///
-/// Carrying the device id here also gives `remove_user` something to work with: with
-/// a bare user id, two leaves of the same person are indistinguishable, and removing
-/// "them" takes out whichever leaf was found first while the other keeps on reading.
-pub fn identity(user_id: &str, device_id: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(user_id.len() + 1 + device_id.len());
-    out.extend_from_slice(user_id.as_bytes());
-    out.push(IDENTITY_SEP);
-    out.extend_from_slice(device_id.as_bytes());
-    out
+/// user and device are opaque host-local ids (hex Mongo ids, UUIDs) that contain no
+/// `/`, so the four path segments are unambiguous.
+pub fn identity(domain: &str, user_id: &str, device_id: &str) -> Vec<u8> {
+    format!("mimi://{domain}/d/{user_id}/{device_id}").into_bytes()
 }
 
-/// The user half of a credential identity — everything before the first separator.
-/// Falls back to the whole string, so a credential minted before device ids existed
-/// still resolves to its user rather than to nothing.
+/// The qualified USER identifier a credential belongs to: `mimi://<domain>/u/<user>`.
+///
+/// This is the key devices of one person are grouped under — for removal, for the
+/// roster — so it must be stable across a user's devices and distinct across hosts.
+/// A credential that does not parse as the device form falls back to its whole self,
+/// so nothing silently resolves to the empty user.
 pub fn user_of(identity: &[u8]) -> Vec<u8> {
-    match identity.iter().position(|&b| b == IDENTITY_SEP) {
-        Some(i) => identity[..i].to_vec(),
-        None => identity.to_vec(),
+    if let Ok(s) = std::str::from_utf8(identity) {
+        if let Some(rest) = s.strip_prefix("mimi://") {
+            // rest = <domain>/d/<user>/<device>
+            let parts: Vec<&str> = rest.splitn(4, '/').collect();
+            if parts.len() == 4 && parts[1] == "d" {
+                return format!("mimi://{}/u/{}", parts[0], parts[2]).into_bytes();
+            }
+        }
     }
+    identity.to_vec()
+}
+
+/// Builds the qualified user identifier for removal targets and roster comparison,
+/// matching what `user_of` returns for that user's credentials.
+pub fn user_key(domain: &str, user_id: &str) -> String {
+    format!("mimi://{domain}/u/{user_id}")
 }
 
 /// A Pheme MLS client: one identity plus every group it belongs to, all held in a
@@ -89,11 +102,11 @@ impl Client {
     /// Both halves are required, and that is deliberate: an MLS leaf is a device, so a
     /// client that knows only which user it belongs to cannot be told apart from that
     /// user's other devices, and the group ends up holding one of them at random.
-    pub fn new(user_id: &str, device_id: &str) -> Result<Self, String> {
-        if user_id.is_empty() || device_id.is_empty() {
-            return Err("both a user id and a device id are required".into());
+    pub fn new(domain: &str, user_id: &str, device_id: &str) -> Result<Self, String> {
+        if domain.is_empty() || user_id.is_empty() || device_id.is_empty() {
+            return Err("a domain, a user id and a device id are all required".into());
         }
-        let identity = identity(user_id, device_id);
+        let identity = identity(domain, user_id, device_id);
         let provider = OpenMlsRustCrypto::default();
         let signer =
             SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).map_err(err("signer"))?;
@@ -871,6 +884,7 @@ mod tests {
     /// A conversation's group id, as the server would mint it: opaque and unrelated to
     /// the conversation id, so a group can never be silently created twice.
     const GID: &[u8] = b"grp-0123456789abcdef";
+    const DOM: &str = "test.example";
 
     /// Establishes a group with the given members and hands everyone their state.
     /// Mirrors what the client does: create, stage one Add for ALL devices, and — since
@@ -892,8 +906,8 @@ mod tests {
     // (api/internal/mlswire) is tested against, so the two never drift.
     #[test]
     fn commits_are_public_and_carry_a_readable_epoch() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         alice.create_group(GID).unwrap();
 
         // A Commit built at epoch 0 (the add is the group's first Commit).
@@ -920,8 +934,8 @@ mod tests {
 
     #[test]
     fn stateful_two_party_round_trip() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let ct = alice.encrypt(GID, b"the eagle lands at dawn").unwrap();
@@ -945,9 +959,9 @@ mod tests {
     // blanks. This is the test that would have caught it.
     #[test]
     fn every_device_of_a_member_can_read() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob_phone = Client::new("bob", "phone").unwrap();
-        let bob_laptop = Client::new("bob", "laptop").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob_phone = Client::new(DOM, "bob", "phone").unwrap();
+        let bob_laptop = Client::new(DOM, "bob", "laptop").unwrap();
 
         establish(&alice, GID, &[&bob_phone, &bob_laptop]);
 
@@ -982,8 +996,8 @@ mod tests {
     // newcomer reads everything from its epoch onward.
     #[test]
     fn a_new_device_is_added_without_destroying_the_group() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob_phone = Client::new("bob", "phone").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob_phone = Client::new(DOM, "bob", "phone").unwrap();
         establish(&alice, GID, &[&bob_phone]);
 
         let early = alice.encrypt(GID, b"before the laptop existed").unwrap();
@@ -994,7 +1008,7 @@ mod tests {
 
         // Bob signs in on a laptop. Alice notices the device is missing from the group
         // and adds it — one Commit, one Welcome.
-        let bob_laptop = Client::new("bob", "laptop").unwrap();
+        let bob_laptop = Client::new(DOM, "bob", "laptop").unwrap();
         let add = alice
             .stage_add(GID, &[bob_laptop.key_package().unwrap()])
             .unwrap();
@@ -1030,15 +1044,17 @@ mod tests {
     // from their other device — a confidentiality failure, not a cosmetic one.
     #[test]
     fn removing_a_user_removes_all_of_their_devices() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob_phone = Client::new("bob", "phone").unwrap();
-        let bob_laptop = Client::new("bob", "laptop").unwrap();
-        let carol = Client::new("carol", "dev-c").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob_phone = Client::new(DOM, "bob", "phone").unwrap();
+        let bob_laptop = Client::new(DOM, "bob", "laptop").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
         establish(&alice, GID, &[&bob_phone, &bob_laptop, &carol]);
 
         assert_eq!(alice.member_identities(GID).unwrap().len(), 4);
 
-        let commit = alice.stage_remove_users(GID, &["bob".to_string()]).unwrap();
+        let commit = alice
+            .stage_remove_users(GID, &[user_key(DOM, "bob")])
+            .unwrap();
         alice.commit_accepted(GID).unwrap();
         carol.apply_commit(GID, &commit).unwrap();
 
@@ -1069,12 +1085,12 @@ mod tests {
     // epoch nobody else is in, and is silently cut off for good.
     #[test]
     fn a_rejected_commit_leaves_the_loser_able_to_catch_up() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
-        let carol = Client::new("carol", "dev-c").unwrap();
-        let dave = Client::new("dave", "dev-d").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
+        let dave = Client::new(DOM, "dave", "dev-d").unwrap();
 
         // Both members stage an Add against epoch 1, concurrently.
         let base = alice.epoch(GID).unwrap();
@@ -1131,15 +1147,15 @@ mod tests {
     // cannot read a word from before it joined.
     #[test]
     fn a_new_device_joins_by_external_commit_without_a_welcome() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         // Said before the newcomer existed — it must never be able to read this.
         let before = alice.encrypt(GID, b"before carol").unwrap();
 
         // Carol is not in the group. Alice, who is, exports the GroupInfo; Carol external-joins from it.
-        let carol = Client::new("carol", "dev-c").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
         let group_info = alice.export_group_info(GID).unwrap();
         let commit = carol.join_by_external_commit(&group_info).unwrap();
 
@@ -1181,12 +1197,12 @@ mod tests {
     // GroupInfo — rather than fork off.
     #[test]
     fn a_rejected_external_join_recovers_from_fresh_group_info() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
-        let carol = Client::new("carol", "dev-c").unwrap();
-        let dave = Client::new("dave", "dev-d").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
+        let dave = Client::new(DOM, "dave", "dev-d").unwrap();
 
         // Both external-join against the same epoch, concurrently.
         let gi = alice.export_group_info(GID).unwrap();
@@ -1229,15 +1245,15 @@ mod tests {
     // lost, which is a conversation full of blanks after anybody joins.
     #[test]
     fn messages_from_a_past_epoch_still_decrypt_after_a_commit() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         // Alice speaks. Bob does not read it yet — it is still in flight.
         let in_flight = alice.encrypt(GID, b"sent before carol joined").unwrap();
 
         // Carol joins; Bob applies the Commit and moves to the new epoch.
-        let carol = Client::new("carol", "dev-c").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
         let add = alice
             .stage_add(GID, &[carol.key_package().unwrap()])
             .unwrap();
@@ -1258,8 +1274,8 @@ mod tests {
     // export → drop → import, and the restored client can still decrypt.
     #[test]
     fn state_survives_persistence_round_trip() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let saved = bob.export_state().unwrap();
@@ -1284,8 +1300,8 @@ mod tests {
     // live group state must survive the attempt intact.
     #[test]
     fn replayed_welcome_is_refused_and_state_survives() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         let add = establish(&alice, GID, &[&bob]);
 
         let ct = alice.encrypt(GID, b"before the replay").unwrap();
@@ -1308,8 +1324,8 @@ mod tests {
     // KeyPackage changes it, which is the signal the two humans need.
     #[test]
     fn safety_number_agrees_between_members_and_changes_under_substitution() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let from_alice = safety_number(&alice.member_keys(GID).unwrap());
@@ -1323,8 +1339,8 @@ mod tests {
             .all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
 
         // The server hands Alice an impostor's KeyPackage in place of Bob's.
-        let mallory = Client::new("bob", "dev-b").unwrap(); // claims to be Bob's device
-        let alice2 = Client::new("alice", "dev-a").unwrap();
+        let mallory = Client::new(DOM, "bob", "dev-b").unwrap(); // claims to be Bob's device
+        let alice2 = Client::new(DOM, "alice", "dev-a").unwrap();
         let group2 = b"grp-second";
         establish(&alice2, group2, &[&mallory]);
         let under_mitm = safety_number(&alice2.member_keys(group2).unwrap());
@@ -1339,16 +1355,16 @@ mod tests {
     // first join. This is why a user's published stock is exhaustible.
     #[test]
     fn ordinary_key_package_is_single_use() {
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         let kp = bob.key_package().unwrap();
 
-        let alice = Client::new("alice", "dev-a").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
         alice.create_group(b"group-a").unwrap();
         let add_a = alice.stage_add(b"group-a", &[kp.clone()]).unwrap();
         alice.commit_accepted(b"group-a").unwrap();
         bob.join_from_welcome(&add_a.welcome).unwrap();
 
-        let carol = Client::new("carol", "dev-c").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
         carol.create_group(b"group-c").unwrap();
         let add_c = carol.stage_add(b"group-c", &[kp]).unwrap();
         carol.commit_accepted(b"group-c").unwrap();
@@ -1359,16 +1375,16 @@ mod tests {
     // repeatedly and a user can always be reached.
     #[test]
     fn last_resort_key_package_can_be_used_repeatedly() {
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         let kp = bob.last_resort_key_package().unwrap();
 
-        let alice = Client::new("alice", "dev-a").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
         alice.create_group(b"group-a").unwrap();
         let add_a = alice.stage_add(b"group-a", &[kp.clone()]).unwrap();
         alice.commit_accepted(b"group-a").unwrap();
         bob.join_from_welcome(&add_a.welcome).unwrap();
 
-        let carol = Client::new("carol", "dev-c").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
         carol.create_group(b"group-c").unwrap();
         let add_c = carol.stage_add(b"group-c", &[kp]).unwrap();
         carol.commit_accepted(b"group-c").unwrap();
@@ -1395,10 +1411,10 @@ mod tests {
     // from conversation members) exist entirely because of it.
     #[test]
     fn forged_welcome_burns_an_ordinary_key_package() {
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         let kp = bob.key_package().unwrap();
 
-        let alice = Client::new("alice", "dev-a").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
         alice.create_group(b"group-a").unwrap();
         let valid = alice.stage_add(b"group-a", &[kp]).unwrap().welcome;
         alice.commit_accepted(b"group-a").unwrap();
@@ -1421,10 +1437,10 @@ mod tests {
     // denial of service into a temporary loss of the single-use stock.
     #[test]
     fn forged_welcome_cannot_burn_the_last_resort_key_package() {
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         let kp = bob.last_resort_key_package().unwrap();
 
-        let alice = Client::new("alice", "dev-a").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
         alice.create_group(b"group-a").unwrap();
         let valid = alice.stage_add(b"group-a", &[kp]).unwrap().welcome;
         alice.commit_accepted(b"group-a").unwrap();
@@ -1449,9 +1465,9 @@ mod tests {
     // A third client not in the group cannot decrypt — the whole point.
     #[test]
     fn outsider_cannot_decrypt() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
-        let mallory = Client::new("mallory", "dev-m").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
+        let mallory = Client::new(DOM, "mallory", "dev-m").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let ct = alice.encrypt(GID, b"secret").unwrap();
@@ -1464,20 +1480,24 @@ mod tests {
     // pins both halves: the refusal, and the pruning that stands in for it.
     #[test]
     fn a_member_cannot_commit_their_own_removal_but_others_can_prune_them() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "phone").unwrap();
-        let bob_laptop = Client::new("bob", "laptop").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "phone").unwrap();
+        let bob_laptop = Client::new(DOM, "bob", "laptop").unwrap();
         establish(&alice, GID, &[&bob, &bob_laptop]);
 
         // Bob cannot remove himself, on either device.
-        assert!(bob.stage_remove_users(GID, &["bob".to_string()]).is_err());
+        assert!(bob
+            .stage_remove_users(GID, &[user_key(DOM, "bob")])
+            .is_err());
         // Nor can he do it by sneaking his own id into a longer list.
         assert!(bob
-            .stage_remove_users(GID, &["bob".to_string(), "bob".to_string()])
+            .stage_remove_users(GID, &[user_key(DOM, "bob"), user_key(DOM, "bob")])
             .is_err());
 
         // Alice prunes him — both of his devices — and Bob is out.
-        let commit = alice.stage_remove_users(GID, &["bob".to_string()]).unwrap();
+        let commit = alice
+            .stage_remove_users(GID, &[user_key(DOM, "bob")])
+            .unwrap();
         alice.commit_accepted(GID).unwrap();
         assert_eq!(alice.member_identities(GID).unwrap().len(), 1);
 
@@ -1492,12 +1512,12 @@ mod tests {
     // of them can win.
     #[test]
     fn removing_a_user_who_is_not_in_the_group_is_refused_not_fatal() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let err = alice
-            .stage_remove_users(GID, &["nobody".to_string()])
+            .stage_remove_users(GID, &[user_key(DOM, "nobody")])
             .unwrap_err();
         assert!(err.contains("none of those users"), "got: {err}");
         // And the group is untouched — Alice can still talk to Bob.
@@ -1516,15 +1536,18 @@ mod tests {
     // phone out of the group with it — so the prune has to name the leaf, not the person.
     #[test]
     fn pruning_a_ghost_device_leaves_the_persons_other_devices_alone() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob_phone = Client::new("bob", "phone").unwrap();
-        let bob_ghost = Client::new("bob", "evicted-browser").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob_phone = Client::new(DOM, "bob", "phone").unwrap();
+        let bob_ghost = Client::new(DOM, "bob", "evicted-browser").unwrap();
         establish(&alice, GID, &[&bob_phone, &bob_ghost]);
         assert_eq!(alice.member_identities(GID).unwrap().len(), 3);
 
         // Prune only the ghost leaf.
         let commit = alice
-            .stage_remove_devices(GID, &["bob:evicted-browser".to_string()])
+            .stage_remove_devices(
+                GID,
+                &[String::from_utf8(identity(DOM, "bob", "evicted-browser")).unwrap()],
+            )
             .unwrap();
         alice.commit_accepted(GID).unwrap();
         bob_phone.apply_commit(GID, &commit).unwrap();
@@ -1545,15 +1568,18 @@ mod tests {
     // The same client must never prune itself, however it is asked.
     #[test]
     fn a_client_never_removes_its_own_leaf() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         assert!(alice
-            .stage_remove_devices(GID, &["alice:dev-a".to_string()])
+            .stage_remove_devices(
+                GID,
+                &[String::from_utf8(identity(DOM, "alice", "dev-a")).unwrap()]
+            )
             .is_err());
         assert!(alice
-            .stage_remove_users(GID, &["alice".to_string()])
+            .stage_remove_users(GID, &[user_key(DOM, "alice")])
             .is_err());
 
         // Still a healthy two-member group.
@@ -1570,9 +1596,9 @@ mod tests {
     // fingerprint inside it and put itself in the middle of the call.
     #[test]
     fn every_device_of_every_member_derives_the_same_call_key() {
-        let alice = Client::new("alice", "laptop").unwrap();
-        let bob_phone = Client::new("bob", "phone").unwrap();
-        let bob_desktop = Client::new("bob", "desktop").unwrap();
+        let alice = Client::new(DOM, "alice", "laptop").unwrap();
+        let bob_phone = Client::new(DOM, "bob", "phone").unwrap();
+        let bob_desktop = Client::new(DOM, "bob", "desktop").unwrap();
         establish(&alice, GID, &[&bob_phone, &bob_desktop]);
 
         let call = b"call-abc";
@@ -1601,9 +1627,9 @@ mod tests {
     // the possibility rather than relying on 96 random bits not repeating.
     #[test]
     fn each_sending_device_derives_a_distinct_key() {
-        let alice = Client::new("alice", "laptop").unwrap();
-        let bob_phone = Client::new("bob", "phone").unwrap();
-        let bob_desktop = Client::new("bob", "desktop").unwrap();
+        let alice = Client::new(DOM, "alice", "laptop").unwrap();
+        let bob_phone = Client::new(DOM, "bob", "phone").unwrap();
+        let bob_desktop = Client::new(DOM, "bob", "desktop").unwrap();
         establish(&alice, GID, &[&bob_phone, &bob_desktop]);
 
         let phone_key = alice
@@ -1628,8 +1654,8 @@ mod tests {
     // into a new one even by a server that kept them.
     #[test]
     fn a_different_call_derives_a_different_key() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let one = alice
@@ -1646,9 +1672,9 @@ mod tests {
     // cannot read a byte of it.
     #[test]
     fn an_outsider_cannot_derive_the_call_key() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
-        let mallory = Client::new("mallory", "dev-m").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
+        let mallory = Client::new(DOM, "mallory", "dev-m").unwrap();
         establish(&alice, GID, &[&bob]);
 
         assert!(mallory
@@ -1661,8 +1687,8 @@ mod tests {
     // message — this test is the reason that rule exists.
     #[test]
     fn the_call_key_changes_when_the_epoch_does() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let before = alice
@@ -1670,7 +1696,7 @@ mod tests {
             .unwrap();
 
         // Somebody signs in on a new device: a Commit, and a new epoch.
-        let carol = Client::new("carol", "dev-c").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
         let add = alice
             .stage_add(GID, &[carol.key_package().unwrap()])
             .unwrap();
@@ -1696,8 +1722,8 @@ mod tests {
     // anything, placing a call would corrupt the chat.
     #[test]
     fn exporting_does_not_touch_the_group() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let epoch_before = alice.epoch(GID).unwrap();
@@ -1717,11 +1743,36 @@ mod tests {
     }
 
     #[test]
-    fn identity_round_trips_and_splits_on_the_user() {
-        let id = identity("507f1f77bcf86cd799439011", "a-b-c-uuid");
-        assert_eq!(user_of(&id), b"507f1f77bcf86cd799439011".to_vec());
-        // A credential with no device half (nothing mints these any more) still resolves.
-        assert_eq!(user_of(b"bare-user"), b"bare-user".to_vec());
+    fn identity_is_domain_qualified_and_splits_on_the_user() {
+        let id = identity("a.example", "507f1f77bcf86cd799439011", "a-b-c-uuid");
+        assert_eq!(
+            id,
+            b"mimi://a.example/d/507f1f77bcf86cd799439011/a-b-c-uuid"
+        );
+        // user_of yields the qualified USER identifier, stable across a person's devices.
+        assert_eq!(
+            user_of(&id),
+            b"mimi://a.example/u/507f1f77bcf86cd799439011".to_vec()
+        );
+        // And it matches what user_key builds for removal targets.
+        assert_eq!(
+            user_of(&id),
+            user_key("a.example", "507f1f77bcf86cd799439011").into_bytes()
+        );
+    }
+
+    #[test]
+    fn same_user_on_different_hosts_is_distinct() {
+        // The whole reason for qualification: alice@a and alice@b are two people.
+        let a = user_of(&identity("a.example", "alice", "d1"));
+        let b = user_of(&identity("b.example", "alice", "d1"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_credential_that_does_not_parse_falls_back_to_itself() {
+        // Never resolves to the empty user, whatever the bytes are.
+        assert_eq!(user_of(b"not-a-mimi-uri"), b"not-a-mimi-uri".to_vec());
     }
 
     // THE PROPERTY THE WHOLE PREVIEW FEATURE RESTS ON.
@@ -1739,8 +1790,8 @@ mod tests {
     // the symptom in production would be silent, permanent message loss.
     #[test]
     fn a_preview_decrypt_leaves_the_real_client_able_to_read_the_message() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let ct = alice.encrypt(GID, b"the quick brown fox").unwrap();
@@ -1773,11 +1824,11 @@ mod tests {
     // to prevent. A preview declines Commits entirely: there is nothing in one to show a user.
     #[test]
     fn a_preview_refuses_a_commit_and_leaves_the_epoch_alone() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
-        let carol = Client::new("carol", "dev-c").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
         let add = alice
             .stage_add(GID, &[carol.key_package().unwrap()])
             .unwrap();
@@ -1807,8 +1858,8 @@ mod tests {
     // Previewing the same message twice — two devices, or a retried push — must also be safe.
     #[test]
     fn repeated_previews_are_harmless() {
-        let alice = Client::new("alice", "dev-a").unwrap();
-        let bob = Client::new("bob", "dev-b").unwrap();
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
         establish(&alice, GID, &[&bob]);
 
         let ct = alice.encrypt(GID, b"delivered twice").unwrap();
