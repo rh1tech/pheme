@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/push"
@@ -134,7 +135,28 @@ func (h *Handler) postCallSignal(w http.ResponseWriter, r *http.Request) {
 	if req.Cancel {
 		h.ringMembers(convID, uid, callID, push.KindCallCancel)
 	}
+
+	// Carry the signal to any member on another host: their host lands it in its own
+	// mailbox, nudges their devices, and rings them. Without this a call in a
+	// cross-host conversation reaches only the devices on the caller's own host.
+	if h.Fed != nil {
+		h.Fed.RelayCallSignal(r.Context(), federation.CallSignalRelay{
+			ConversationID: convID, CallID: callID, FromUserID: uid,
+			Ciphertext: req.Ciphertext, Ring: req.Ring, Cancel: req.Cancel,
+		})
+	}
 	httpx.JSON(w, http.StatusOK, signal)
+}
+
+// RingForCall wakes a conversation's local devices for an incoming or cancelled
+// call, on behalf of a caller who may be on another host. It is the callRinger the
+// federation layer uses when it delivers a relayed signal that asked to ring.
+func (h *Handler) RingForCall(_ context.Context, convID, callerID, callID string, cancel bool) {
+	kind := push.KindCall
+	if cancel {
+		kind = push.KindCallCancel
+	}
+	h.ringMembers(convID, callerID, callID, kind)
 }
 
 // postCallRing re-nudges the other end while a call is still ringing.
@@ -182,6 +204,14 @@ func (h *Handler) postCallRing(w http.ResponseWriter, r *http.Request) {
 		Recipients:     to,
 		CallSignal:     &live.CallSignal{CallID: callID, FromUserID: uid},
 	})
+
+	// Re-nudge members on other hosts too, so a callee whose live stream blinked
+	// while the invite was in flight still gets pulled back to the mailbox.
+	if h.Fed != nil {
+		h.Fed.RelayCallNudge(r.Context(), federation.CallNudge{
+			ConversationID: convID, CallID: callID, FromUserID: uid,
+		})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

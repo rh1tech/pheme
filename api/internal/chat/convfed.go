@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/calls"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/live"
@@ -30,6 +31,21 @@ type peerConversations interface {
 	SubmitCommitToHub(ctx context.Context, hubDomain string, s federation.SubmittedCommit) (federation.CommitResult, error)
 	SubmitReceiptToHub(ctx context.Context, hubDomain string, s federation.ReceiptUpdate) error
 	RelayReceiptToPeer(ctx context.Context, peerDomain string, s federation.ReceiptUpdate) error
+	RelayCallSignalToPeer(ctx context.Context, peerDomain string, s federation.CallSignalRelay) error
+	RelayCallNudgeToPeer(ctx context.Context, peerDomain string, s federation.CallNudge) error
+}
+
+// callMailbox is the append side of the per-call signalling channel — enough for a
+// relayed signal to land in this host's mailbox so a local device fetches it in
+// order. *calls.Memory / the Redis mailbox satisfy it.
+type callMailbox interface {
+	Append(ctx context.Context, callID string, ciphertext []byte) (calls.Signal, error)
+}
+
+// callRinger wakes a conversation's local devices for an incoming (or cancelled)
+// call. The chat Handler implements it over its existing push fan-out.
+type callRinger interface {
+	RingForCall(ctx context.Context, convID, callerID, callID string, cancel bool)
 }
 
 // ConvFederation carries an encrypted conversation across hosts. It is both the
@@ -52,8 +68,13 @@ type ConvFederation struct {
 	HostKey ed25519.PrivateKey
 	// Keys resolves a hub domain to its public key for verifying an incoming link.
 	// Nil skips verification (single-host or a deployment without a nodelist here).
-	Keys   hubKeys
-	Logger *slog.Logger
+	Keys hubKeys
+	// Mailbox and Ringer let a relayed call signal land locally: appended to this
+	// host's call mailbox and rung to its devices. Nil disables cross-host calling
+	// (a deployment with no calling configured).
+	Mailbox callMailbox
+	Ringer  callRinger
+	Logger  *slog.Logger
 }
 
 func (c *ConvFederation) log() *slog.Logger {
@@ -397,6 +418,96 @@ func (c *ConvFederation) relayReceipt(ctx context.Context, conv domain.Conversat
 	}
 }
 
+// --- calls: a mesh, not a hub ---
+//
+// A call has no ordering authority. Every participant host relays its own members'
+// sealed signals to every other participant host, which lands them in its mailbox
+// and nudges its devices; so each host holds a complete copy and every device
+// fetches from home. The answer lock stays host-local on purpose — a member's
+// devices all live on that member's home host, which is exactly the set the lock
+// arbitrates.
+
+// RelayCallSignal sends a local member's sealed signal to every participant host.
+// Called on the host the signal was posted to, after it has been delivered locally.
+func (c *ConvFederation) RelayCallSignal(ctx context.Context, s federation.CallSignalRelay) {
+	if c.Peers == nil {
+		return
+	}
+	for _, host := range c.participantHosts(ctx, s.ConversationID) {
+		if err := c.Peers.RelayCallSignalToPeer(ctx, host, s); err != nil {
+			c.log().Warn("call signal relay failed", "conversation", s.ConversationID, "peer", host, "error", err)
+		}
+	}
+}
+
+// RelayCallNudge re-nudges every participant host about a still-ringing call.
+func (c *ConvFederation) RelayCallNudge(ctx context.Context, s federation.CallNudge) {
+	if c.Peers == nil {
+		return
+	}
+	for _, host := range c.participantHosts(ctx, s.ConversationID) {
+		if err := c.Peers.RelayCallNudgeToPeer(ctx, host, s); err != nil {
+			c.log().Warn("call nudge relay failed", "conversation", s.ConversationID, "peer", host, "error", err)
+		}
+	}
+}
+
+// DeliverCallSignal (inbound): a peer relayed one of its members' signals. Append it
+// to the local mailbox so a device here fetches it in order, nudge the local
+// members, and ring them if the signal asked to.
+func (c *ConvFederation) DeliverCallSignal(ctx context.Context, fromDomain string, s federation.CallSignalRelay) error {
+	if c.Mailbox == nil {
+		return errNoCalling
+	}
+	if _, err := c.Store.ConversationByID(ctx, s.ConversationID); err != nil {
+		return errNotMember
+	}
+	// The signal must come from the host that homes its sender — a host cannot place
+	// a call as a user it does not home.
+	if !c.isMemberFromHost(ctx, s.ConversationID, s.FromUserID, fromDomain) {
+		return errNotMember
+	}
+	signal, err := c.Mailbox.Append(ctx, callKey(s.ConversationID, s.CallID), s.Ciphertext)
+	if err != nil {
+		return err
+	}
+	c.nudgeCall(ctx, s.ConversationID, s.CallID, s.FromUserID, signal.Seq)
+	if (s.Ring || s.Cancel) && c.Ringer != nil {
+		c.Ringer.RingForCall(ctx, s.ConversationID, s.FromUserID, s.CallID, s.Cancel)
+	}
+	return nil
+}
+
+// DeliverCallNudge (inbound): re-nudge local members about a ringing call.
+func (c *ConvFederation) DeliverCallNudge(ctx context.Context, fromDomain string, s federation.CallNudge) error {
+	if _, err := c.Store.ConversationByID(ctx, s.ConversationID); err != nil {
+		return errNotMember
+	}
+	c.nudgeCall(ctx, s.ConversationID, s.CallID, s.FromUserID, 0)
+	return nil
+}
+
+// nudgeCall publishes a call nudge to the conversation's local members, the same
+// "come and fetch" event a locally-posted signal raises.
+func (c *ConvFederation) nudgeCall(ctx context.Context, convID, callID, fromUID string, seq int) {
+	if c.Live == nil {
+		return
+	}
+	members, err := c.Store.ConversationMembers(ctx, convID)
+	if err != nil {
+		return
+	}
+	to := make([]string, 0, len(members))
+	for _, m := range members {
+		to = append(to, m.UserID)
+	}
+	c.Live.Publish(live.Event{
+		ConversationID: convID,
+		Recipients:     to,
+		CallSignal:     &live.CallSignal{CallID: callID, Seq: seq, FromUserID: fromUID},
+	})
+}
+
 // ReportReceipt is the outbound hook the chat handler calls after it has advanced a
 // local member's watermarks. On the hub it relays them to every participant host;
 // on a mirror it forwards them to the hub, which relays them onward. Best-effort:
@@ -480,6 +591,7 @@ var (
 	errNotMember     = convFedError("sender is not a member from that host")
 	errChainMismatch = convFedError("ordering chain hash does not match")
 	errChainUnsigned = convFedError("ordering chain signature invalid")
+	errNoCalling     = convFedError("calling is not configured on this host")
 )
 
 type convFedError string

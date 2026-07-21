@@ -184,7 +184,12 @@ func main() {
 				HostDomain: cfg.HostDomain,
 				HostKey:    hostSigningKey,
 				Keys:       nodes,
-				Logger:     logger,
+				// Cross-host calling lands a relayed signal in this host's own call
+				// mailbox and rings its devices. The mailbox is the same one the chat
+				// handler serves; the handler itself is the ringer.
+				Mailbox: b.CallMailbox(),
+				Ringer:  appHandler.Chat,
+				Logger:  logger,
 			}
 			fedHandler.WithConversations(convFed)
 			appHandler.Chat.Fed = convFed

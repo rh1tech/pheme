@@ -48,6 +48,37 @@ type ConversationService interface {
 	// DeliverReceipt runs on a FOLLOWER. A member's watermarks that the hub accepted
 	// arrive here and advance the local copy, so a sender on this host sees them.
 	DeliverReceipt(ctx context.Context, hubDomain string, s ReceiptUpdate) error
+
+	// DeliverCallSignal delivers a sealed call signal a member on another host sent:
+	// it lands in this host's call mailbox (so a local device fetches it in order),
+	// nudges the local members, and rings them if the signal asked to. Calls have no
+	// hub — every participant host relays its members' signals to every other, so
+	// each host's mailbox is a complete copy and every device fetches from home.
+	DeliverCallSignal(ctx context.Context, fromDomain string, s CallSignalRelay) error
+
+	// DeliverCallNudge re-nudges local members that a still-ringing call has
+	// something to refetch — the cross-host half of the keep-ringing re-ping.
+	DeliverCallNudge(ctx context.Context, fromDomain string, s CallNudge) error
+}
+
+// CallSignalRelay is one sealed call signal on the wire between hosts. The
+// ciphertext is opaque — SDP/ICE sealed under the conversation's MLS exporter key,
+// which no server holds.
+type CallSignalRelay struct {
+	ConversationID string `json:"conversationId"`
+	CallID         string `json:"callId"`
+	FromUserID     string `json:"fromUserId"`
+	Ciphertext     []byte `json:"ciphertext"`
+	Ring           bool   `json:"ring,omitempty"`
+	Cancel         bool   `json:"cancel,omitempty"`
+}
+
+// CallNudge asks a peer to re-nudge its members about a ringing call, without a new
+// signal — the cross-host form of postCallRing.
+type CallNudge struct {
+	ConversationID string `json:"conversationId"`
+	CallID         string `json:"callId"`
+	FromUserID     string `json:"fromUserId"`
 }
 
 // ReceiptUpdate is one member's receipt watermarks moving, on the wire between
@@ -149,6 +180,8 @@ func (h *Handler) registerConversations(mux *http.ServeMux) {
 	mux.Handle("POST /federation/v1/conversation-submit-commit", h.verified(http.HandlerFunc(h.convSubmitCommit)))
 	mux.Handle("POST /federation/v1/conversation-submit-receipt", h.verified(http.HandlerFunc(h.convSubmitReceipt)))
 	mux.Handle("POST /federation/v1/conversation-relay-receipt", h.verified(http.HandlerFunc(h.convRelayReceipt)))
+	mux.Handle("POST /federation/v1/conversation-call-signal", h.verified(http.HandlerFunc(h.convCallSignal)))
+	mux.Handle("POST /federation/v1/conversation-call-nudge", h.verified(http.HandlerFunc(h.convCallNudge)))
 }
 
 // convProvision (follower): the hub asks us to stand up a mirror for one of our
@@ -245,6 +278,34 @@ func (h *Handler) convRelayReceipt(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"delivered": true})
 }
 
+// convCallSignal: a peer relays a member's sealed call signal; deliver it locally.
+func (h *Handler) convCallSignal(w http.ResponseWriter, r *http.Request) {
+	var s CallSignalRelay
+	if err := json.Unmarshal(verifiedBody(r), &s); err != nil || s.ConversationID == "" || s.CallID == "" || s.FromUserID == "" {
+		httpx.Error(w, http.StatusBadRequest, "malformed call signal")
+		return
+	}
+	if err := h.Conversations.DeliverCallSignal(r.Context(), caller(r).Origin, s); err != nil {
+		httpx.Error(w, http.StatusForbidden, "could not accept call signal")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"delivered": true})
+}
+
+// convCallNudge: a peer asks us to re-nudge a ringing call's local members.
+func (h *Handler) convCallNudge(w http.ResponseWriter, r *http.Request) {
+	var s CallNudge
+	if err := json.Unmarshal(verifiedBody(r), &s); err != nil || s.ConversationID == "" || s.CallID == "" {
+		httpx.Error(w, http.StatusBadRequest, "malformed call nudge")
+		return
+	}
+	if err := h.Conversations.DeliverCallNudge(r.Context(), caller(r).Origin, s); err != nil {
+		httpx.Error(w, http.StatusNotFound, "no such conversation")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"nudged": true})
+}
+
 // --- client side ---
 
 // ProvisionRemoteMirror tells a peer host to stand up a mirror for one of its users.
@@ -280,4 +341,14 @@ func (c *Client) SubmitReceiptToHub(ctx context.Context, hubDomain string, s Rec
 // RelayReceiptToPeer relays a member's advanced watermarks to a participant host.
 func (c *Client) RelayReceiptToPeer(ctx context.Context, peerDomain string, s ReceiptUpdate) error {
 	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-relay-receipt", s, nil)
+}
+
+// RelayCallSignalToPeer sends a local member's sealed call signal to a participant host.
+func (c *Client) RelayCallSignalToPeer(ctx context.Context, peerDomain string, s CallSignalRelay) error {
+	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-call-signal", s, nil)
+}
+
+// RelayCallNudgeToPeer re-nudges a participant host's members about a ringing call.
+func (c *Client) RelayCallNudgeToPeer(ctx context.Context, peerDomain string, s CallNudge) error {
+	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-call-nudge", s, nil)
 }

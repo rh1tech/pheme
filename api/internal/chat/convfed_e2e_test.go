@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/calls"
 	"github.com/rh1tech/pheme/api/internal/chat"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/federation"
@@ -216,6 +217,89 @@ func TestCrossHostCommitRoundTrip(t *testing.T) {
 	if res2.Status != "conflict" || res2.Epoch != 1 {
 		t.Errorf("stale commit = %+v, want conflict at epoch 1", res2)
 	}
+}
+
+// Federated calls: a signal alice places on host A reaches bob's host B — it lands
+// in B's own call mailbox (so bob's device fetches it in order) and rings bob.
+func TestCrossHostCallSignalReachesCallee(t *testing.T) {
+	aKey := hostKey5d(1)
+	bKey := hostKey5d(2)
+	roster := fakeRoster{
+		"a.example": aKey.Public().(ed25519.PublicKey),
+		"b.example": bKey.Public().(ed25519.PublicKey),
+	}
+	aStore := store.NewMemory(nil)
+	bStore := store.NewMemory(nil)
+
+	var aURL, bURL string
+	aClient := federation.NewClient("a.example", "ak", aKey)
+	aClient.PeerURL = func(d string) string { return map[string]string{"b.example": bURL}[d] }
+	bClient := federation.NewClient("b.example", "bk", bKey)
+	bClient.PeerURL = func(d string) string { return map[string]string{"a.example": aURL}[d] }
+
+	bMailbox := calls.NewMemory()
+	ringer := &recordingRinger{}
+	aFed := &chat.ConvFederation{Store: aStore, Live: live.NewMemoryBus(), Peers: aClient, HostDomain: "a.example"}
+	bFed := &chat.ConvFederation{Store: bStore, Live: live.NewMemoryBus(), Peers: bClient, HostDomain: "b.example", Mailbox: bMailbox, Ringer: ringer}
+
+	aMux := http.NewServeMux()
+	federation.NewHandler("a.example", roster, nil).WithConversations(aFed).Register(aMux)
+	aSrv := httptest.NewServer(aMux)
+	defer aSrv.Close()
+	aURL = aSrv.URL
+	bMux := http.NewServeMux()
+	federation.NewHandler("b.example", roster, nil).WithConversations(bFed).Register(bMux)
+	bSrv := httptest.NewServer(bMux)
+	defer bSrv.Close()
+	bURL = bSrv.URL
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	conv, _ := aStore.CreateConversation(ctx, domain.Conversation{
+		ID: "conv-call", Kind: domain.ConversationGroup, CreatedAt: now,
+	}, []domain.ConversationMember{{UserID: "alice", Role: domain.RoleAdmin, JoinedAt: now}})
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+		t.Fatal(err)
+	}
+
+	// alice's host relays her ringing invite to every participant host.
+	aFed.RelayCallSignal(ctx, federation.CallSignalRelay{
+		ConversationID: "conv-call", CallID: "call-1", FromUserID: "alice",
+		Ciphertext: []byte("sealed-sdp-offer"), Ring: true,
+	})
+
+	// B's mailbox must now hold alice's offer, in order, for bob to fetch.
+	sigs, err := bMailbox.Since(ctx, "conv-call:call-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sigs) != 1 || string(sigs[0].Ciphertext) != "sealed-sdp-offer" {
+		t.Fatalf("B's mailbox = %d signals, want alice's offer", len(sigs))
+	}
+	// bob was rung, on behalf of the remote caller.
+	if ringer.calls != 1 || ringer.lastCaller != "alice" || ringer.lastCancel {
+		t.Errorf("ringer = %d calls (caller %q, cancel %v), want 1 ring for alice", ringer.calls, ringer.lastCaller, ringer.lastCancel)
+	}
+
+	// A host may not place a call as a user it does not home.
+	err = bFed.DeliverCallSignal(ctx, "c.example", federation.CallSignalRelay{
+		ConversationID: "conv-call", CallID: "call-1", FromUserID: "alice", Ciphertext: []byte("forged"),
+	})
+	if err == nil {
+		t.Error("a host delivered a call signal for a user it does not home")
+	}
+}
+
+type recordingRinger struct {
+	calls      int
+	lastCaller string
+	lastCancel bool
+}
+
+func (r *recordingRinger) RingForCall(_ context.Context, _, callerID, _ string, cancel bool) {
+	r.calls++
+	r.lastCaller = callerID
+	r.lastCancel = cancel
 }
 
 // F6: a receipt reported on the follower reaches the hub, so a sender there sees

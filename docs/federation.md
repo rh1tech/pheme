@@ -329,9 +329,22 @@ Each stage ships and is useful before the next one starts.
       the hub (`conversation-submit-receipt`), which relays it to every participant
       host (`conversation-relay-receipt`), so a sender on one host sees a reader on
       another move their ticks — proven live in the federation E2E.
-    - **Remaining:** pagination cursors still key on `createdAt` (with `seq` as a
-      tiebreak in the sort); moving the cursor itself to `(createdAt, seq)` is a
-      smaller follow-up that removes the last tie ambiguity at page boundaries.
+    - **Done:** the message pagination cursor is now the compound `(createdAt, seq)`
+      bound matching the sort, so a page boundary inside a group of same-instant
+      messages neither skips nor repeats them.
+
+- **Calls — federated.** A 1:1 voice call in a cross-host conversation now
+  connects. Calls have no hub: every participant host relays its members' sealed
+  signals to every other (`conversation-call-signal`), which lands them in that
+  host's own call mailbox — so each host holds a complete ordered copy and every
+  device fetches from home — nudges its local members, and rings them if the signal
+  asked (`conversation-call-nudge` is the keep-ringing re-ping). The sealed SDP/ICE
+  is opaque to every server, exactly as in a single-host call. The answer lock
+  stays deliberately host-local: a member's devices all live on that member's home
+  host, which is the set the first-to-answer lock arbitrates. What is NOT solved is
+  a shared TURN relay — each host mints its own credentials, so a pair that needs
+  relaying falls back to each side's own coturn; direct and single-host-TURN paths
+  are unaffected.
 
 ## What federation does not fix
 
