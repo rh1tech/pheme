@@ -1661,14 +1661,25 @@ export async function addGroupMember(
 
   // Membership first, then the group. It has to be that way round now that the key
   // directory is scoped to a conversation: we cannot ask which devices someone has until
-  // they are in it. If it turns out they have none — they have never opened Pheme — take
-  // them back off the roster, so an admin is told they could not be reached rather than
-  // being left with a member who can never read anything.
-  await api.addConversationMember(conversationId, newUserId)
-  const { published: devices } = await api.mlsDevices(conversationId)
-  if ((devices[newUserId] ?? []).length === 0) {
-    await api.removeConversationMember(conversationId, newUserId).catch(() => {})
-    throw new PeerKeysMissingError()
+  // they are in it. The server accepts a bare id, a mimi:// identity, or a
+  // `username@host` handle and returns the member it actually created — so we key the
+  // rest of this on the RESOLVED id, not on whatever spelling the caller typed.
+  const added = await api.addConversationMember(conversationId, newUserId)
+
+  // A remote member's devices live on their home host, not in this host's published
+  // directory; they are claimed during reconcile. So the "no devices yet, roll back"
+  // check below is only meaningful for a local member. A remote one goes straight to
+  // reconcile — the same path a freshly-opened cross-host group takes to claim the
+  // peer's key package.
+  if (!added.domain) {
+    // If it turns out they have no devices — they have never opened Pheme — take them
+    // back off the roster, so an admin is told they could not be reached rather than
+    // being left with a member who can never read anything.
+    const { published: devices } = await api.mlsDevices(conversationId)
+    if ((devices[added.userId] ?? []).length === 0) {
+      await api.removeConversationMember(conversationId, added.userId).catch(() => {})
+      throw new PeerKeysMissingError()
+    }
   }
 
   await reconcileDevices(session, conversationId, state.groupId)

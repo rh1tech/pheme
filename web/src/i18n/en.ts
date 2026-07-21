@@ -195,6 +195,7 @@ const en = {
     members: 'Members ({{count}})',
     addMember: 'Add someone',
     addName: 'Add {{name}}',
+    addRemote: 'Add {{handle}} from another server',
     admin: 'Admin',
     you: 'you',
     memberActions: 'Member actions',

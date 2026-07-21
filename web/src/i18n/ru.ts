@@ -197,6 +197,7 @@ const ru: Resources = {
     members: 'Участники ({{count}})',
     addMember: 'Добавить участника',
     addName: 'Добавить {{name}}',
+    addRemote: 'Добавить {{handle}} с другого сервера',
     admin: 'Админ',
     you: 'вы',
     memberActions: 'Действия с участником',

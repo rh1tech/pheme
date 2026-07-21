@@ -5,16 +5,22 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/httpx"
 )
 
-// UserResolver answers whether a local user exists, by local id. The federation
-// handler needs almost nothing from the rest of the system yet; this keeps the
-// coupling to exactly what the first endpoints use.
+// UserResolver answers questions a peer may ask about this host's users: whether
+// a local id exists, and — so a person on another host can be addressed as
+// `username@thishost` rather than by an opaque id — what local id a username maps
+// to. It stays deliberately small; both answers reveal only what addressing a
+// user for a conversation genuinely needs.
 type UserResolver interface {
 	UserExists(ctx context.Context, localID string) bool
+	// ResolveUsername maps a (case-insensitive) username to its local id and
+	// display name. ok is false when no such user exists here.
+	ResolveUsername(ctx context.Context, usernameLower string) (id, displayName string, ok bool)
 }
 
 // Handler serves the host-to-host API. Every route except the public directory
@@ -67,6 +73,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// peer, and can read who it is from the context.
 	mux.Handle("GET /federation/v1/liveness", h.verified(http.HandlerFunc(h.liveness)))
 	mux.Handle("POST /federation/v1/user-exists", h.verified(http.HandlerFunc(h.userExists)))
+	mux.Handle("POST /federation/v1/resolve-user", h.verified(http.HandlerFunc(h.resolveUser)))
 
 	if h.Channels != nil {
 		h.registerChannels(mux)
@@ -123,8 +130,9 @@ func verifiedBody(r *http.Request) []byte {
 // directory is the .well-known discovery document.
 func (h *Handler) directory(w http.ResponseWriter, _ *http.Request) {
 	endpoints := map[string]string{
-		"liveness":   "/federation/v1/liveness",
-		"userExists": "/federation/v1/user-exists",
+		"liveness":    "/federation/v1/liveness",
+		"userExists":  "/federation/v1/user-exists",
+		"resolveUser": "/federation/v1/resolve-user",
 	}
 	if h.Channels != nil {
 		endpoints["channelSubscribe"] = "/federation/v1/channel-subscribe"
@@ -167,5 +175,28 @@ func (h *Handler) userExists(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"exists": h.Users.UserExists(r.Context(), req.UserID),
+	})
+}
+
+// resolveUser maps one of this host's usernames to its local id, so a peer whose
+// user typed `username@thishost` can turn that into an id it can add to a
+// conversation. It returns the id and display name for a match and 404 for none —
+// the same information a peer would get by knowing the id already, no more.
+func (h *Handler) resolveUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(verifiedBody(r), &req); err != nil || req.Username == "" {
+		httpx.Error(w, http.StatusBadRequest, "username required")
+		return
+	}
+	id, displayName, ok := h.Users.ResolveUsername(r.Context(), strings.ToLower(strings.TrimSpace(req.Username)))
+	if !ok {
+		httpx.Error(w, http.StatusNotFound, "no such user")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"userId":      id,
+		"displayName": displayName,
 	})
 }

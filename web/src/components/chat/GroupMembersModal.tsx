@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ActionIcon, Avatar, Badge, Group, Loader, Menu, Stack, Text, TextInput, UnstyledButton } from '@mantine/core'
-import { IconDots, IconSearch, IconUserPlus } from '@tabler/icons-react'
+import { IconDots, IconSearch, IconUserPlus, IconWorld } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { api, imageUrl } from '../../lib/api'
 import { addGroupMember, removeGroupMember, PeerKeysMissingError } from '../../lib/mls'
@@ -66,6 +66,11 @@ export function GroupMembersModal({ conversation, opened, onClose, onChanged }: 
               onPick={async (u) => {
                 setAdding(true)
                 await act(u.id, () => addGroupMember(conversation.id, userId ?? '', u.id), 'group.added')
+                setAdding(false)
+              }}
+              onAddHandle={async (handle) => {
+                setAdding(true)
+                await act(handle, () => addGroupMember(conversation.id, userId ?? '', handle), 'group.added')
                 setAdding(false)
               }}
             />
@@ -167,14 +172,24 @@ interface AddMemberSearchProps {
   exclude: Set<string>
   busy: boolean
   onPick: (user: PublicUser) => void
+  onAddHandle: (handle: string) => void
 }
 
+// A `username@host` handle for someone on another server. Local user search never
+// returns these — the directory a search hits is one host's — so a federated member
+// is added by typing their full handle. A dotted host distinguishes it from a stray
+// '@' in a name query.
+const REMOTE_HANDLE = /^[a-zA-Z0-9_.]{3,30}@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
+
 /** A debounced user search that lists people not already in the group. */
-function AddMemberSearch({ exclude, busy, onPick }: AddMemberSearchProps) {
+function AddMemberSearch({ exclude, busy, onPick, onAddHandle }: AddMemberSearchProps) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PublicUser[]>([])
   const [searching, setSearching] = useState(false)
+
+  const trimmed = query.trim()
+  const remoteHandle = REMOTE_HANDLE.test(trimmed) ? trimmed : null
 
   useEffect(() => {
     const q = query.trim()
@@ -190,7 +205,7 @@ function AddMemberSearch({ exclude, busy, onPick }: AddMemberSearchProps) {
     return () => window.clearTimeout(handle)
   }, [query, exclude])
 
-  const shown = query.trim().length < 2 ? [] : results
+  const shown = trimmed.length < 2 ? [] : results
 
   return (
     <Stack gap="xs">
@@ -208,6 +223,26 @@ function AddMemberSearch({ exclude, busy, onPick }: AddMemberSearchProps) {
         spellCheck={false}
         enterKeyHint="search"
       />
+      {remoteHandle && (
+        <UnstyledButton
+          onClick={() => onAddHandle(remoteHandle)}
+          disabled={busy}
+          aria-label={t('group.addRemote', { handle: remoteHandle })}
+          p="xs"
+          style={{ borderRadius: 'var(--mantine-radius-md)' }}
+          className="pheme-user-pick"
+        >
+          <Group gap="sm" wrap="nowrap">
+            <Avatar radius="xl" size={30} color="iris">
+              <IconWorld size={16} />
+            </Avatar>
+            <Text size="sm" truncate>
+              {t('group.addRemote', { handle: remoteHandle })}
+            </Text>
+            <IconUserPlus size={16} style={{ marginLeft: 'auto', flex: '0 0 auto' }} />
+          </Group>
+        </UnstyledButton>
+      )}
       {shown.map((u) => (
         <UnstyledButton
           key={u.id}

@@ -35,6 +35,7 @@ type peerConversations interface {
 	RelayCallNudgeToPeer(ctx context.Context, peerDomain string, s federation.CallNudge) error
 	RequestTurnFromPeer(ctx context.Context, peerDomain, conversationID string) (federation.TurnGrant, error)
 	ClaimRemoteKeyPackages(ctx context.Context, homeDomain, userID string) ([]federation.ClaimedKeyPackage, error)
+	ResolveRemoteUser(ctx context.Context, homeDomain, username string) (federation.RemoteUser, error)
 }
 
 // callMailbox is the append side of the per-call signalling channel — enough for a
@@ -731,6 +732,13 @@ func (c *ConvFederation) ForwardCommit(ctx context.Context, hubDomain string, s 
 
 // AddRemoteMember (hub side) records a member who lives on another host and
 // provisions the mirror there, so that user's devices can read and post. The
+// ResolveRemoteUser turns a `username@remoteDomain` handle into the local id that
+// remote host knows the user by — the id AddRemoteMember then adds. It is how a
+// person on another host is addressed by name instead of by an opaque id.
+func (c *ConvFederation) ResolveRemoteUser(ctx context.Context, remoteDomain, username string) (federation.RemoteUser, error) {
+	return c.Peers.ResolveRemoteUser(ctx, remoteDomain, username)
+}
+
 // caller then reconciles the MLS group to add the member's devices.
 func (c *ConvFederation) AddRemoteMember(ctx context.Context, conv domain.Conversation, remoteUserID, remoteDomain string) error {
 	now := time.Now().UTC()

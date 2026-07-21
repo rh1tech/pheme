@@ -3,8 +3,10 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
@@ -13,6 +15,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/ident"
 	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/push"
+	"github.com/rh1tech/pheme/api/internal/store"
 )
 
 // Bytes on the wire per message. The server never inspects the content, but a
@@ -456,6 +459,50 @@ type addMemberRequest struct {
 	UserID string `json:"userId"`
 }
 
+// addTarget classifies the "userId" of an add-member request into the local id to
+// store and whether that member lives on another host. It accepts three spellings:
+//
+//   - a bare local id                     → (id, "", false)
+//   - mimi://host/u/id                    → local: (id, "", false); remote: (id, host, true)
+//   - username@host                       → this host: (resolved id, "", false);
+//     another host: (id resolved on that host, host, true)
+//
+// A remote target's id is the id its OWN host knows it by, resolved there for the
+// handle form and carried verbatim in the mimi:// form. Callers must have checked
+// h.Fed != nil && h.HostDomain != "" — the remote resolutions use both.
+func (h *Handler) addTarget(ctx context.Context, raw string) (localID, remoteDomain string, remote bool, err error) {
+	raw = strings.TrimSpace(raw)
+
+	// The canonical, unambiguous identity form.
+	if id, perr := ident.Parse(raw); perr == nil && id.Kind == ident.KindUser {
+		if id.IsLocal(h.HostDomain) {
+			return id.Local, "", false, nil
+		}
+		return id.Local, id.Domain, true, nil
+	}
+
+	// The human handle form. A username cannot contain '@', so the last '@' splits
+	// it from the host with no ambiguity.
+	if at := strings.LastIndex(raw, "@"); at > 0 && at < len(raw)-1 {
+		username, host := raw[:at], raw[at+1:]
+		if host == h.HostDomain {
+			u, uerr := h.Store.UserByUsername(ctx, strings.ToLower(username))
+			if uerr != nil {
+				return "", "", false, uerr // store.ErrNotFound on a miss → 404
+			}
+			return u.ID, "", false, nil
+		}
+		ru, rerr := h.Fed.ResolveRemoteUser(ctx, host, username)
+		if rerr != nil {
+			return "", "", false, rerr
+		}
+		return ru.UserID, host, true, nil
+	}
+
+	// A bare local id.
+	return raw, "", false, nil
+}
+
 func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 	_, convID, member, ok := h.requireMember(w, r)
 	if !ok {
@@ -481,21 +528,32 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A qualified id whose domain is not ours names a member on another host. Record
-	// it as a remote member and provision the mirror there, rather than looking it up
-	// in the local user store where it does not exist. This host becomes (or already
-	// is) the hub for the conversation.
+	// The member can be named three ways: a bare local id, a `mimi://host/u/id`
+	// identity, or a human `username@host` handle. The latter two may name another
+	// host — in which case this host becomes (or already is) the hub and the member
+	// is provisioned as a mirror there rather than looked up locally, where they do
+	// not exist. A handle naming this host is resolved to a local id and added
+	// normally.
 	if h.Fed != nil && h.HostDomain != "" {
-		if id, err := ident.Parse(req.UserID); err == nil && id.Kind == ident.KindUser && !id.IsLocal(h.HostDomain) {
+		localID, remoteDomain, remote, terr := h.addTarget(r.Context(), req.UserID)
+		if terr != nil {
+			if errors.Is(terr, store.ErrNotFound) || errors.Is(terr, federation.ErrRemoteUserNotFound) {
+				httpx.Error(w, http.StatusNotFound, "user not found")
+				return
+			}
+			httpx.Error(w, http.StatusBadGateway, "could not reach the remote host")
+			return
+		}
+		if remote {
 			if conv.IsMirror() {
 				httpx.Error(w, http.StatusConflict, "add remote members on the conversation's hub")
 				return
 			}
-			if err := h.Fed.AddRemoteMember(r.Context(), conv, id.Local, id.Domain); err != nil {
+			if err := h.Fed.AddRemoteMember(r.Context(), conv, localID, remoteDomain); err != nil {
 				httpx.Error(w, http.StatusBadGateway, "could not add the remote member's host")
 				return
 			}
-			added, err := h.Store.ConversationMembership(r.Context(), convID, id.Local)
+			added, err := h.Store.ConversationMembership(r.Context(), convID, localID)
 			if err != nil {
 				httpx.Error(w, http.StatusInternalServerError, "could not add member")
 				return
@@ -504,6 +562,8 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 			httpx.JSON(w, http.StatusCreated, added)
 			return
 		}
+		// A local target — the bare id, or one resolved from a handle. Add it below.
+		req.UserID = localID
 	}
 
 	if _, err := h.Store.UserByID(r.Context(), req.UserID); err != nil {

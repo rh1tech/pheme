@@ -60,8 +60,16 @@ async function signInOnHost(browser: Browser, apiBase: string, email: string) {
   return { context, page, userId }
 }
 
-// A signed-in page's fetch against its own host, carrying its bearer token.
-function api<T>(page: import('@playwright/test').Page, base: string, path: string, body?: unknown) {
+// A signed-in page's fetch against its own host, carrying its bearer token. The
+// method defaults to POST when a body is given and GET otherwise; pass one
+// explicitly for PATCH/DELETE.
+function api<T>(
+  page: import('@playwright/test').Page,
+  base: string,
+  path: string,
+  body?: unknown,
+  methodOverride?: string,
+) {
   return page.evaluate(
     async ([b, p, method, payload]) => {
       const res = await fetch(`${b}${p}`, {
@@ -75,7 +83,7 @@ function api<T>(page: import('@playwright/test').Page, base: string, path: strin
       if (!res.ok) throw new Error(`${p} -> ${res.status}`)
       return (await res.json()) as unknown
     },
-    [base, path, body ? 'POST' : 'GET', body ? JSON.stringify(body) : ''] as const,
+    [base, path, methodOverride ?? (body ? 'POST' : 'GET'), body ? JSON.stringify(body) : ''] as const,
   ) as Promise<T>
 }
 
@@ -83,16 +91,26 @@ test('alice on host A and bob on host B exchange an encrypted message', async ({
   const alice = await signInOnHost(browser, FED_A_URL, 'alice@a.test')
   const bob = await signInOnHost(browser, FED_B_URL, 'bob@b.test')
 
-  // Alice (on A) makes a group and adds bob, who lives on B, by his qualified id.
-  // This records him as a remote member and provisions the mirror on B over S2S.
+  // Bob picks a username on his own host, so alice can address him as a human
+  // handle (`bobfed@b.test`) instead of an opaque id.
+  await api(bob.page, FED_B_URL, '/v1/me', { username: 'bobfed' }, 'PATCH')
+
+  // Alice (on A) makes a group and adds bob, who lives on B, by his `username@host`
+  // handle. Alice's host resolves that username on B over S2S, records him as a
+  // remote member, and provisions the mirror on B.
   const conv = await api<{ id: string }>(alice.page, FED_A_URL, '/v1/conversations', {
     kind: 'group',
     title: 'cross-host',
     memberIds: [],
   })
-  await api(alice.page, FED_A_URL, `/v1/conversations/${conv.id}/members`, {
-    userId: `mimi://${FED_B_DOMAIN}/u/${bob.userId}`,
-  })
+  const bobMember = await api<{ userId: string }>(
+    alice.page,
+    FED_A_URL,
+    `/v1/conversations/${conv.id}/members`,
+    { userId: `bobfed@${FED_B_DOMAIN}` },
+  )
+  // The handle resolved to bob's real id on B — not stored as the literal string.
+  expect(bobMember.userId).toBe(bob.userId)
 
   // Alice opens the chat: her client establishes the MLS group, claims bob's key
   // package from host B (the server routes the claim), and sends.

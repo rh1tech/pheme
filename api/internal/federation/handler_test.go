@@ -13,6 +13,15 @@ type fakeUsers map[string]bool
 
 func (f fakeUsers) UserExists(_ context.Context, id string) bool { return f[id] }
 
+// ResolveUsername treats each present key as both a username and its id, which is
+// all the resolve-user test needs.
+func (f fakeUsers) ResolveUsername(_ context.Context, username string) (string, string, bool) {
+	if f[username] {
+		return username, username, true
+	}
+	return "", "", false
+}
+
 // serverFor builds a running federation server for host `origin`, trusting the
 // given domain->key nodelist, and returns its base URL.
 func serverFor(t *testing.T, origin string, lookup fakeLookup, users fakeUsers) string {
@@ -76,6 +85,33 @@ func TestUserExistsEndToEnd(t *testing.T) {
 	}
 	if out.Exists {
 		t.Error("a nonexistent user was reported present")
+	}
+}
+
+func TestResolveUserEndToEnd(t *testing.T) {
+	aKey := hostKey(t, 1)
+	aPub := aKey.Public().(ed25519.PublicKey)
+	base := serverFor(t, "b.example", fakeLookup{"a.example": aPub}, fakeUsers{"alice": true})
+	client := NewClient("a.example", "a-key-1", aKey)
+
+	var out struct {
+		UserID      string `json:"userId"`
+		DisplayName string `json:"displayName"`
+	}
+	if err := client.PostJSON(context.Background(),
+		base+"/federation/v1/resolve-user", map[string]string{"username": "alice"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.UserID != "alice" {
+		t.Errorf("userId = %q, want the resolved id", out.UserID)
+	}
+
+	// An unknown username is a 404, which PostJSON surfaces as an error — never a
+	// silent empty id the caller might add as a member.
+	err := client.PostJSON(context.Background(),
+		base+"/federation/v1/resolve-user", map[string]string{"username": "nobody"}, &out)
+	if err == nil {
+		t.Error("resolving a nonexistent username succeeded")
 	}
 }
 
