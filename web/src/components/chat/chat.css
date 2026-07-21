@@ -107,6 +107,13 @@
   --pheme-sidebar-w: 21rem;
   --pheme-info-w: 24rem;
   --pheme-bubble-max: 34rem;
+  /* The chrome rows the sidebar and the chat pane share. Both columns' top header
+     and bottom footer take these heights, so the divider lines between the panes
+     meet at the same y on either side of the vertical border — the sidebar's search
+     field and the chat's taller avatar header would otherwise sit the borders a few
+     pixels apart. */
+  --pheme-chrome-header-h: 3.5rem;
+  --pheme-chrome-footer-h: 3.5rem;
 
   display: grid;
   grid-template-columns: var(--pheme-sidebar-w) minmax(0, 1fr);
@@ -168,8 +175,22 @@
 .pheme-sidebar-header,
 .pheme-chat-header {
   flex: 0 0 auto;
-  padding: 0.625rem var(--pheme-pane-x);
+  /* One fixed height on both, content vertically centred, so the header's
+     border-bottom lands at the same y in each column regardless of whether it
+     holds a search field or a taller avatar. */
+  display: flex;
+  align-items: center;
+  min-height: var(--pheme-chrome-header-h);
+  box-sizing: border-box;
+  padding: 0.375rem var(--pheme-pane-x);
   border-bottom: 1px solid var(--pheme-pane-border);
+}
+/* The single Group each header wraps fills the row, so centring the header does not
+   reflow its contents. */
+.pheme-sidebar-header > *,
+.pheme-chat-header > * {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .pheme-sidebar-list {
@@ -192,6 +213,10 @@
   flex: 0 0 auto;
   display: grid;
   grid-template-columns: 1fr 1fr;
+  /* Same resting height as the composer across the divider, so the two footers'
+     border-tops meet. The composer grows upward past this as a message is typed;
+     the tab bar stays. */
+  min-height: var(--pheme-chrome-footer-h);
   border-top: 1px solid var(--pheme-pane-border);
 }
 .pheme-sidebar-tab {
@@ -577,6 +602,13 @@
 
 .pheme-composer {
   flex: 0 0 auto;
+  /* Rests at the shared footer height so its border-top aligns with the sidebar
+     tabs' across the divider; grows upward from there as the message wraps. */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: var(--pheme-chrome-footer-h);
+  box-sizing: border-box;
   padding: 0.5rem var(--pheme-pane-x);
   padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
   border-top: 1px solid var(--pheme-pane-border);
