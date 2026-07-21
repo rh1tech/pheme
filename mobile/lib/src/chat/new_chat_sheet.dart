@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/api_exception.dart';
 import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../crypto/mls_errors.dart';
@@ -15,6 +16,7 @@ import '../widgets/adaptive/adaptive_controls.dart';
 import '../widgets/adaptive/adaptive_text_field.dart';
 import 'chat_providers.dart';
 import 'conversation_title.dart';
+import 'handles.dart';
 import 'widgets/conversation_avatar.dart';
 
 /// The server wants at least two characters, and a search on every keystroke is a search on every
@@ -50,6 +52,10 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
   final _picked = <PublicUser>[];
 
   bool _searching = false;
+  // Whether the last COMPLETED search found nobody. Tracked separately from
+  // [_searching] so "No one found" stays put while the next keystroke's search runs,
+  // instead of blinking off and back. Only a search that returns people clears it.
+  bool _emptyResult = false;
   bool _busy = false;
   bool _groupMode = false;
 
@@ -65,7 +71,10 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
     _debounceTimer?.cancel();
     final query = value.trim();
 
-    if (query.length < _minQuery) {
+    // Too short, or a handle: no server query. A `username@host` handle is resolved
+    // on demand when the user taps "start a chat with…", never by local search — so an
+    // '@' stops us hitting the server at all.
+    if (query.length < _minQuery || query.contains('@')) {
       setState(() {
         _results = const [];
         _searching = false;
@@ -88,11 +97,34 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
         _results = users
             .where((u) => u.id != myUserId && !pickedIds.contains(u.id))
             .toList();
+        _emptyResult = _results.isEmpty;
         _searching = false;
       });
     } on Object {
       if (!mounted) return;
-      setState(() => _searching = false);
+      setState(() {
+        _emptyResult = false;
+        _searching = false;
+      });
+    }
+  }
+
+  /// Starts a direct chat with someone on another host, addressed by their handle.
+  /// The server resolves `username@host` and provisions the mirror — the same path a
+  /// local direct chat takes, just with a handle instead of an id.
+  Future<void> _startWithRemote(String handle) async {
+    setState(() => _busy = true);
+    try {
+      final conversation = await ref
+          .read(conversationListProvider.notifier)
+          .startDirect(handle);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      context.push('/chats/${conversation.id}');
+    } on Object catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _reportFailure(e);
     }
   }
 
@@ -134,10 +166,16 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
   void _reportFailure(Object error) {
     final l10n = AppLocalizations.of(context);
     // A peer with no keys is not a failure of ours, and saying "could not start the chat" would send
-    // the user looking for a problem on their end. Tell them what actually has to happen.
-    final message = error is PeerKeysMissingException
-        ? l10n.t('chat.peerNotReady')
-        : l10n.t('chat.startFailed');
+    // the user looking for a problem on their end. Tell them what actually has to happen. A 404 on a
+    // handle is the far host saying "no user by that username" — usually just an unset one.
+    final String message;
+    if (error is PeerKeysMissingException) {
+      message = l10n.t('chat.peerNotReady');
+    } else if (error is ApiException && error.statusCode == 404) {
+      message = l10n.t('chat.remoteUserNotFound');
+    } else {
+      message = l10n.t('chat.startFailed');
+    }
     notifyError(context, message, error);
   }
 
@@ -252,7 +290,32 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
   Widget _results_(AppLocalizations l10n, ThemeData theme) {
     // The sheet no longer shrinks for the keyboard, so the list has to make room for it itself.
     final insets = MediaQuery.viewInsetsOf(context).bottom;
-    if (_searching) {
+    final trimmed = _query.text.trim();
+
+    // A `username@host` handle: offer to start a chat with them directly, no search.
+    // Direct chats only — a remote member joins a GROUP through its "Add member", not
+    // at create time, because createConversation cannot provision a mirror.
+    final handle = _groupMode ? null : remoteHandle(trimmed);
+    if (handle != null) {
+      return ListView(
+        padding: EdgeInsets.only(bottom: insets),
+        children: [
+          ListTile(
+            leading: const CircleAvatar(
+              radius: 18,
+              child: Icon(Icons.public, size: 20),
+            ),
+            title: Text(l10n.tp('chat.startRemote', {'handle': handle})),
+            enabled: !_busy,
+            onTap: () => _startWithRemote(handle),
+          ),
+        ],
+      );
+    }
+
+    // Spinner only until the FIRST result/empty verdict; a re-search then keeps the
+    // current list or "No one found" showing instead of blanking to a spinner.
+    if (_searching && _results.isEmpty && !_emptyResult) {
       return const Padding(
         padding: EdgeInsets.all(24),
         child: Center(child: AdaptiveProgress()),
@@ -260,12 +323,15 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
     }
 
     if (_results.isEmpty) {
-      final tooShort = _query.text.trim().length < _minQuery;
+      // Held steady on the last completed empty search, so it does not blink while the
+      // next keystroke's search runs.
+      final show =
+          _emptyResult && trimmed.length >= _minQuery && !trimmed.contains('@');
       return Padding(
         padding: const EdgeInsets.all(24),
         child: Center(
           child: Text(
-            tooShort ? '' : l10n.t('chat.noPeople'),
+            show ? l10n.t('chat.noPeople') : '',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),

@@ -306,6 +306,9 @@ const Map<String, String> ruStrings = {
   'chat.tabChannels': 'Каналы',
   'chat.searchPeople': 'Поиск людей по имени или @username',
   'chat.noPeople': 'Никого не найдено',
+  'chat.startRemote': 'Начать чат с {handle}',
+  'chat.remoteUserNotFound':
+      'На том сервере нет пользователя с таким именем — возможно, ему нужно задать имя пользователя',
   'chat.noChats': 'Пока нет чатов',
   'chat.pickChatHint': 'Начните чат — и сообщения появятся здесь.',
   'chat.noChatMessages': 'Сообщений пока нет. Поздоровайтесь.',
@@ -349,6 +352,7 @@ const Map<String, String> ruStrings = {
   'group.membersTitle': 'Участники',
   'group.members': 'Участники ({count})',
   'group.addMember': 'Добавить участника',
+  'group.addRemote': 'Добавить {handle} с другого сервера',
   'group.admin': 'Админ',
   'group.you': 'вы',
   'group.memberActions': 'Действия с участником',

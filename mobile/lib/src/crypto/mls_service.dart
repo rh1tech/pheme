@@ -1018,14 +1018,23 @@ class MlsService {
       throw const NotInGroupException();
     }
 
-    await _repo.addConversationMember(conversationId, newUserId);
+    // The server accepts a bare id, a mimi:// identity, or a `username@host` handle
+    // and returns the member it actually created — so key the rest of this on the
+    // RESOLVED id, not on whatever spelling the caller typed.
+    final added = await _repo.addConversationMember(conversationId, newUserId);
 
-    final devices = (await _repo.mlsDevices(conversationId)).published;
-    if ((devices[newUserId] ?? const []).isEmpty) {
-      await _repo
-          .removeConversationMember(conversationId, newUserId)
-          .catchError((_) {});
-      throw const PeerKeysMissingException();
+    // A remote member's devices live on their home host, claimed during reconcile,
+    // not in this host's published directory — so the "no devices yet, roll back"
+    // check is only meaningful for a local member. A remote one goes straight to
+    // reconcile, the same path a freshly-opened cross-host group takes.
+    if (added.domain.isEmpty) {
+      final devices = (await _repo.mlsDevices(conversationId)).published;
+      if ((devices[added.userId] ?? const []).isEmpty) {
+        await _repo
+            .removeConversationMember(conversationId, added.userId)
+            .catchError((_) {});
+        throw const PeerKeysMissingException();
+      }
     }
 
     await _reconcileDevices(session, conversationId, state.groupId);

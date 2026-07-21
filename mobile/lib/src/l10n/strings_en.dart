@@ -307,6 +307,9 @@ const Map<String, String> enStrings = {
   'chat.tabChannels': 'Channels',
   'chat.searchPeople': 'Search people by name or @username',
   'chat.noPeople': 'No one found',
+  'chat.startRemote': 'Start a chat with {handle}',
+  'chat.remoteUserNotFound':
+      'No user with that username on that server — they may need to set a username there',
   'chat.noChats': 'No chats yet',
   'chat.pickChatHint': 'Start a chat and your messages will appear here.',
   'chat.noChatMessages': 'No messages yet. Say hello.',
@@ -351,6 +354,7 @@ const Map<String, String> enStrings = {
   'group.membersTitle': 'Members',
   'group.members': 'Members ({count})',
   'group.addMember': 'Add someone',
+  'group.addRemote': 'Add {handle} from another server',
   'group.admin': 'Admin',
   'group.you': 'you',
   'group.memberActions': 'Member actions',

@@ -9,6 +9,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/api_exception.dart';
 import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../crypto/mls_errors.dart';
@@ -19,6 +20,7 @@ import '../widgets/adaptive/adaptive_controls.dart';
 import '../widgets/adaptive/adaptive_text_field.dart';
 import 'chat_providers.dart';
 import 'conversation_title.dart';
+import 'handles.dart';
 import 'widgets/conversation_avatar.dart';
 
 const _minQuery = 2;
@@ -76,7 +78,9 @@ class _GroupMembersSheetState extends ConsumerState<_GroupMembersSheet> {
     _debounceTimer?.cancel();
     final query = value.trim();
 
-    if (query.length < _minQuery) {
+    // Too short, or a handle: no server query — a `username@host` handle is resolved
+    // on demand when the user taps "add … from another server", not by local search.
+    if (query.length < _minQuery || query.contains('@')) {
       setState(() {
         _results = const [];
         _searching = false;
@@ -118,9 +122,15 @@ class _GroupMembersSheetState extends ConsumerState<_GroupMembersSheet> {
     } on Object catch (e) {
       if (!mounted) return;
       // A person with no keys cannot be added, and that is about them, not about the action failing.
-      final message = e is PeerKeysMissingException
-          ? l10n.t('chat.peerNotReady')
-          : l10n.t('group.actionFailed');
+      // A 404 is the (possibly remote) host saying it has no user by that username.
+      final String message;
+      if (e is PeerKeysMissingException) {
+        message = l10n.t('chat.peerNotReady');
+      } else if (e is ApiException && e.statusCode == 404) {
+        message = l10n.t('chat.remoteUserNotFound');
+      } else {
+        message = l10n.t('group.actionFailed');
+      }
       notifyError(context, message, e);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -175,6 +185,27 @@ class _GroupMembersSheetState extends ConsumerState<_GroupMembersSheet> {
                   const Padding(
                     padding: EdgeInsets.all(12),
                     child: Center(child: AdaptiveProgress(size: 18)),
+                  ),
+                // A `username@host` handle for someone on another server: the local
+                // search never returns them, so offer to add them by handle. The server
+                // resolves it and provisions the mirror.
+                if (remoteHandle(_query.text) case final handle?)
+                  ListTile(
+                    leading: const CircleAvatar(
+                      radius: 17,
+                      child: Icon(Icons.public, size: 19),
+                    ),
+                    title: Text(l10n.tp('group.addRemote', {'handle': handle})),
+                    trailing: const Icon(Icons.person_add_alt),
+                    enabled: !_busy,
+                    onTap: () => _run(
+                      () => mls.addGroupMember(
+                        _conversation.id,
+                        myUserId,
+                        handle,
+                      ),
+                      'group.added',
+                    ),
                   ),
                 for (final user in _results)
                   ListTile(
