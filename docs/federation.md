@@ -271,7 +271,10 @@ Each stage ships and is useful before the next one starts.
      federation handlers. Remaining: F5b's signed ordering chain (below) and the
      live two-server encrypted decrypt test.
 
-  Before F5b, write the hub-migration ADR Decision 5 calls for.
+  The hub-migration ADR this called for is written: `docs/adr-federation-hub-migration.md`
+  (creator's host is the hub, immutably; hub-down pauses new events but never
+  splits; permanent loss freezes the conversation read-only, with a manual
+  re-home escape hatch and no automatic migration in v1).
 
   5. **Signed ordering chain (F5b).** Its consumer (F5d) now exists, so the chain
      can be built against a real verifier: each accepted commit gets
