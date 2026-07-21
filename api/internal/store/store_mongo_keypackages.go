@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"github.com/rh1tech/pheme/api/internal/mlschain"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -255,11 +256,26 @@ func (m *Mongo) CommitMLSGroup(
 		filter["mlsEpoch"] = baseEpoch
 	}
 
+	// Extend the ordering chain in the same $set as the epoch advance. prevHash is
+	// the current head; reading it before the CAS is race-safe because the CAS
+	// filter still pins mlsEpoch == baseEpoch — if another commit advances the epoch
+	// (and so the chain) between this read and the update, the filter misses and we
+	// return a conflict rather than writing a link on a stale prevHash. On an
+	// establish there is no prior head, so prevHash is nil.
+	var prevHash []byte
+	if baseEpoch != 0 {
+		if cur, cerr := m.MLSGroupState(ctx, conversationID); cerr == nil {
+			prevHash = cur.ChainHash
+		}
+	}
+	newHash := mlschain.Link(prevHash, baseEpoch+1, groupID, commitCiphertext(msgs))
+	msgs = stampChainHash(msgs, newHash)
+
 	var updated domain.Conversation
 	err := m.db.Collection("conversations").FindOneAndUpdate(
 		ctx,
 		filter,
-		bson.M{"$set": bson.M{"mlsGroupId": groupID, "mlsEpoch": baseEpoch + 1}},
+		bson.M{"$set": bson.M{"mlsGroupId": groupID, "mlsEpoch": baseEpoch + 1, "mlsChainHash": newHash}},
 		options.FindOneAndUpdate().SetReturnDocument(options.After),
 	).Decode(&updated)
 	if err != nil {
@@ -285,7 +301,7 @@ func (m *Mongo) CommitMLSGroup(
 		// The rollback is itself conditional on the state we just wrote, so it cannot
 		// undo somebody else's later Commit: if another member has already advanced past
 		// us, their Commit IS in the log and the group is healthy.
-		m.rollbackMLSGroup(ctx, conversationID, groupID, baseEpoch)
+		m.rollbackMLSGroup(ctx, conversationID, groupID, baseEpoch, prevHash)
 		return domain.MLSGroupState{}, nil, err
 	}
 	return updated.MLS, stored, nil
@@ -294,11 +310,11 @@ func (m *Mongo) CommitMLSGroup(
 // rollbackMLSGroup undoes a compare-and-set whose Commit could not be relayed. Best
 // effort: if it fails there is nothing further to try, so it is logged by the caller's
 // error rather than reported here.
-func (m *Mongo) rollbackMLSGroup(ctx context.Context, conversationID, groupID string, baseEpoch int64) {
-	restore := bson.M{"mlsGroupId": groupID, "mlsEpoch": baseEpoch}
+func (m *Mongo) rollbackMLSGroup(ctx context.Context, conversationID, groupID string, baseEpoch int64, prevHash []byte) {
+	restore := bson.M{"mlsGroupId": groupID, "mlsEpoch": baseEpoch, "mlsChainHash": prevHash}
 	if baseEpoch == 0 {
 		// It was an establish: there was no group before us, so there must be none after.
-		restore = bson.M{"mlsGroupId": "", "mlsEpoch": int64(0)}
+		restore = bson.M{"mlsGroupId": "", "mlsEpoch": int64(0), "mlsChainHash": nil}
 	}
 	_, _ = m.db.Collection("conversations").UpdateOne(
 		ctx,

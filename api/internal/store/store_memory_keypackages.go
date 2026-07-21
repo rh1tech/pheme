@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"github.com/rh1tech/pheme/api/internal/mlschain"
 )
 
 // AddKeyPackages stores exactly what it is given. Whether a package is last-resort
@@ -236,7 +237,19 @@ func (m *Memory) CommitMLSGroup(
 		return c.MLS, nil, ErrEpochConflict
 	}
 
-	c.MLS = domain.MLSGroupState{GroupID: groupID, Epoch: baseEpoch + 1}
+	// Extend the ordering chain in the same atomic step as the epoch advance, so
+	// prevHash is read and the new head written under one lock — a chain that races
+	// the CAS would be no chain at all. Stamp the commit message with its link.
+	epoch := baseEpoch + 1
+	newHash := mlschain.Link(c.MLS.ChainHash, epoch, groupID, commitCiphertext(msgs))
+	msgs = stampChainHash(msgs, newHash)
+
+	c.MLS = domain.MLSGroupState{
+		GroupID:       groupID,
+		Epoch:         epoch,
+		PriorGroupIDs: c.MLS.PriorGroupIDs,
+		ChainHash:     newHash,
+	}
 	m.conversations[conversationID] = c
 
 	stored := make([]domain.ChatMessage, 0, len(msgs))

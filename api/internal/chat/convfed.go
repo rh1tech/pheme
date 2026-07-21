@@ -2,14 +2,23 @@ package chat
 
 import (
 	"context"
+	"crypto/ed25519"
 	"log/slog"
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/live"
+	"github.com/rh1tech/pheme/api/internal/mlschain"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
+
+// hubKeys resolves a host domain to its nodelist public key, so a follower can
+// verify a hub's signature on an ordering-chain link. The nodelist store
+// satisfies it.
+type hubKeys interface {
+	KeyFor(domain string) (ed25519.PublicKey, error)
+}
 
 // peerConversations is the outbound federation surface the chat handler needs:
 // relay to a participant host, forward to a hub, provision a mirror. *federation.Client
@@ -35,7 +44,14 @@ type ConvFederation struct {
 	Live       live.Bus
 	Peers      peerConversations
 	HostDomain string
-	Logger     *slog.Logger
+	// HostKey signs this host's ordering-chain links when it is the hub. Nil leaves
+	// links unsigned — a follower with a hub key configured then rejects them, which
+	// is the safe default: unsigned ordering is not to be trusted across hosts.
+	HostKey ed25519.PrivateKey
+	// Keys resolves a hub domain to its public key for verifying an incoming link.
+	// Nil skips verification (single-host or a deployment without a nodelist here).
+	Keys   hubKeys
+	Logger *slog.Logger
 }
 
 func (c *ConvFederation) log() *slog.Logger {
@@ -81,7 +97,7 @@ func (c *ConvFederation) RelayAppended(ctx context.Context, conv domain.Conversa
 	}
 	relayed := make([]federation.RelayedMessage, len(msgs))
 	for i, m := range msgs {
-		relayed[i] = toRelayed(m, senderDomain)
+		relayed[i] = c.toRelayed(m, senderDomain)
 	}
 	for _, host := range hosts {
 		if err := c.Peers.RelayToPeer(ctx, host, conv.ID, relayed); err != nil {
@@ -90,8 +106,12 @@ func (c *ConvFederation) RelayAppended(ctx context.Context, conv domain.Conversa
 	}
 }
 
-func toRelayed(m domain.ChatMessage, senderDomain string) federation.RelayedMessage {
-	return federation.RelayedMessage{
+// toRelayed puts a stored message on the wire. For a Commit it attaches the
+// ordering-chain link the store stamped and, as the hub, signs it with the host
+// key so the receiving mirror can verify the hub — not the relay — set this
+// position.
+func (c *ConvFederation) toRelayed(m domain.ChatMessage, senderDomain string) federation.RelayedMessage {
+	r := federation.RelayedMessage{
 		ID:           m.ID,
 		SenderID:     m.SenderID,
 		SenderDomain: senderDomain,
@@ -100,7 +120,12 @@ func toRelayed(m domain.ChatMessage, senderDomain string) federation.RelayedMess
 		MLSEpoch:     m.MLSEpoch,
 		MLSGroupID:   m.MLSGroupID,
 		CreatedAt:    m.CreatedAt,
+		ChainHash:    m.MLSChainHash,
 	}
+	if len(m.MLSChainHash) > 0 && len(c.HostKey) == ed25519.PrivateKeySize {
+		r.ChainSig = mlschain.Sign(c.HostKey, m.MLSChainHash)
+	}
+	return r
 }
 
 // --- inbound: federation.ConversationService ---
@@ -131,6 +156,7 @@ func (c *ConvFederation) ProvisionMirror(ctx context.Context, hubDomain string, 
 	if spec.GroupState != nil {
 		conv.MLS.GroupID = spec.GroupState.GroupID
 		conv.MLS.Epoch = spec.GroupState.Epoch
+		conv.MLS.ChainHash = spec.GroupState.ChainHash
 	}
 	_, err := c.Store.CreateConversation(ctx, conv, members)
 	return err
@@ -146,6 +172,15 @@ func (c *ConvFederation) DeliverRelayed(ctx context.Context, hubDomain, conversa
 		// into a conversation it does not host for us.
 		return errNoMirror
 	}
+	// A relayed commit is not an ordinary message: it advances the group's epoch and
+	// ordering chain, so it must go through CommitMLSGroup after the chain is
+	// verified — never be appended as plain content. Everything else is delivered
+	// as-is.
+	for i := range msgs {
+		if msgs[i].ContentType == contentTypeMLSCommit {
+			return c.applyRelayedCommit(ctx, conv, hubDomain, msgs, msgs[i])
+		}
+	}
 	for _, rm := range msgs {
 		stored, err := c.Store.AppendChatMessage(ctx, fromRelayed(conversationID, rm))
 		if err != nil {
@@ -153,6 +188,49 @@ func (c *ConvFederation) DeliverRelayed(ctx context.Context, hubDomain, conversa
 			continue
 		}
 		c.publishLocal(ctx, conversationID, stored)
+	}
+	return nil
+}
+
+// applyRelayedCommit verifies a hub's ordering link against the mirror's own head
+// and the hub's signature, then advances the mirror to the hub's epoch. A hash
+// that does not match is the hub reordering, dropping, or forking the log — the
+// mirror refuses it rather than silently diverging.
+func (c *ConvFederation) applyRelayedCommit(ctx context.Context, conv domain.Conversation, hubDomain string, batch []federation.RelayedMessage, commit federation.RelayedMessage) error {
+	state, err := c.Store.MLSGroupState(ctx, conv.ID)
+	if err != nil {
+		return err
+	}
+	expected := mlschain.Link(state.ChainHash, commit.MLSEpoch, commit.MLSGroupID, commit.Ciphertext)
+	if !bytesEqual(expected, commit.ChainHash) {
+		c.log().Error("ordering chain mismatch — refusing relayed commit",
+			"conversation", conv.ID, "hub", hubDomain, "epoch", commit.MLSEpoch)
+		return errChainMismatch
+	}
+	if !c.verifyHubSig(hubDomain, commit.ChainHash, commit.ChainSig) {
+		c.log().Error("ordering chain signature invalid — refusing relayed commit",
+			"conversation", conv.ID, "hub", hubDomain, "epoch", commit.MLSEpoch)
+		return errChainUnsigned
+	}
+	// Apply the whole batch (Welcome first, then Commit) atomically. CommitMLSGroup
+	// recomputes the identical hash from the mirror's head, so the mirror's stored
+	// chain stays byte-for-byte the hub's.
+	ordered := make([]domain.ChatMessage, 0, len(batch))
+	for _, rm := range batch {
+		ordered = append(ordered, fromRelayed(conv.ID, rm))
+	}
+	_, stored, err := c.Store.CommitMLSGroup(ctx, conv.ID, commit.MLSGroupID, commit.MLSEpoch-1, ordered)
+	if err == store.ErrEpochConflict {
+		// A duplicate relay, or we are behind — not corruption. The verified hash
+		// already proved the order; nothing to apply twice.
+		c.log().Warn("relayed commit not applicable at this epoch", "conversation", conv.ID, "epoch", commit.MLSEpoch)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for i := range stored {
+		c.publishLocal(ctx, conv.ID, stored[i])
 	}
 	return nil
 }
@@ -183,7 +261,7 @@ func (c *ConvFederation) SubmitMessage(ctx context.Context, fromDomain string, s
 	// Relay to every participant host EXCEPT the one that submitted it — it will
 	// echo the message to its own devices from the response.
 	c.relayExcept(ctx, conv, fromDomain, []domain.ChatMessage{stored})
-	return toRelayed(stored, fromDomain), nil
+	return c.toRelayed(stored, fromDomain), nil
 }
 
 // SubmitCommit runs on the hub: a follower forwards a device's MLS commit. Run
@@ -221,7 +299,41 @@ func (c *ConvFederation) SubmitCommit(ctx context.Context, fromDomain string, s 
 		c.publishLocal(ctx, s.ConversationID, stored[i])
 	}
 	c.relayExcept(ctx, conv, fromDomain, stored)
-	return federation.CommitResult{Status: "accepted", Epoch: epoch, GroupID: s.GroupID}, nil
+	// Hand the follower the ordering link this commit got, signed, so it can apply
+	// it under the same chain the other participant hosts will.
+	hash := commitChainHashOf(stored)
+	res := federation.CommitResult{Status: "accepted", Epoch: epoch, GroupID: s.GroupID, ChainHash: hash}
+	if len(hash) > 0 && len(c.HostKey) == ed25519.PrivateKeySize {
+		res.ChainSig = mlschain.Sign(c.HostKey, hash)
+	}
+	return res, nil
+}
+
+// commitChainHashOf returns the ordering-chain hash the store stamped on the
+// Commit in a stored batch.
+func commitChainHashOf(stored []domain.ChatMessage) []byte {
+	for _, m := range stored {
+		if m.ContentType == contentTypeMLSCommit {
+			return m.MLSChainHash
+		}
+	}
+	return nil
+}
+
+// verifyHubSig checks a hub's signature over a chain hash against its nodelist
+// key. With no key lookup configured (single-host, or tests) verification is
+// skipped — but a configured lookup that cannot produce the hub's key, or a bad
+// signature, is a rejection: a missing signature must never pass for a present
+// one across hosts.
+func (c *ConvFederation) verifyHubSig(hubDomain string, hash, sig []byte) bool {
+	if c.Keys == nil {
+		return true
+	}
+	key, err := c.Keys.KeyFor(hubDomain)
+	if err != nil {
+		return false
+	}
+	return mlschain.Verify(key, hash, sig)
 }
 
 // relayExcept relays to every participant host but one (the submitter).
@@ -231,7 +343,7 @@ func (c *ConvFederation) relayExcept(ctx context.Context, conv domain.Conversati
 	}
 	relayed := make([]federation.RelayedMessage, len(msgs))
 	for i, m := range msgs {
-		relayed[i] = toRelayed(m, c.HostDomain)
+		relayed[i] = c.toRelayed(m, c.HostDomain)
 	}
 	for _, host := range c.participantHosts(ctx, conv.ID) {
 		if host == except {
@@ -264,15 +376,30 @@ func fromRelayed(convID string, rm federation.RelayedMessage) domain.ChatMessage
 		ContentType:    rm.ContentType,
 		MLSEpoch:       rm.MLSEpoch,
 		MLSGroupID:     rm.MLSGroupID,
+		MLSChainHash:   rm.ChainHash,
 		CreatedAt:      rm.CreatedAt,
 	}
 }
 
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // Errors returned to the federation handler, mapped to opaque HTTP statuses there.
 var (
-	errNoMirror  = convFedError("no mirror for this conversation from this hub")
-	errNotHub    = convFedError("this host is not the hub for this conversation")
-	errNotMember = convFedError("sender is not a member from that host")
+	errNoMirror      = convFedError("no mirror for this conversation from this hub")
+	errNotHub        = convFedError("this host is not the hub for this conversation")
+	errNotMember     = convFedError("sender is not a member from that host")
+	errChainMismatch = convFedError("ordering chain hash does not match")
+	errChainUnsigned = convFedError("ordering chain signature invalid")
 )
 
 type convFedError string
@@ -308,6 +435,25 @@ func (c *ConvFederation) ForwardCommit(ctx context.Context, hubDomain string, s 
 	res, err := c.Peers.SubmitCommitToHub(ctx, hubDomain, s)
 	if err != nil || res.Status != "accepted" {
 		return res, err
+	}
+	// The hub returned the ordering link it assigned. Confirm it is the link this
+	// follower would compute from its own head, and that the hub signed it, before
+	// advancing local state — the follower does not take the hub's order on faith
+	// any more than a relayed commit does.
+	state, serr := c.Store.MLSGroupState(ctx, s.ConversationID)
+	if serr != nil {
+		return res, serr
+	}
+	expected := mlschain.Link(state.ChainHash, res.Epoch, s.GroupID, s.Commit)
+	if !bytesEqual(expected, res.ChainHash) {
+		c.log().Error("hub returned a divergent ordering link — not applying",
+			"conversation", s.ConversationID, "epoch", res.Epoch)
+		return res, errChainMismatch
+	}
+	if !c.verifyHubSig(hubDomain, res.ChainHash, res.ChainSig) {
+		c.log().Error("hub ordering link signature invalid — not applying",
+			"conversation", s.ConversationID, "epoch", res.Epoch)
+		return res, errChainUnsigned
 	}
 	now := time.Now().UTC()
 	var msgs []domain.ChatMessage
@@ -363,7 +509,9 @@ func (c *ConvFederation) AddRemoteMember(ctx context.Context, conv domain.Conver
 		RemoteMembers:  remotes,
 	}
 	if conv.MLS.GroupID != "" {
-		spec.GroupState = &federation.MirrorGroupSt{GroupID: conv.MLS.GroupID, Epoch: conv.MLS.Epoch}
+		spec.GroupState = &federation.MirrorGroupSt{
+			GroupID: conv.MLS.GroupID, Epoch: conv.MLS.Epoch, ChainHash: conv.MLS.ChainHash,
+		}
 	}
 	return c.Peers.ProvisionRemoteMirror(ctx, remoteDomain, spec)
 }

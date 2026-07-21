@@ -276,10 +276,19 @@ Each stage ships and is useful before the next one starts.
   splits; permanent loss freezes the conversation read-only, with a manual
   re-home escape hatch and no automatic migration in v1).
 
-  5. **Signed ordering chain (F5b).** Its consumer (F5d) now exists, so the chain
-     can be built against a real verifier: each accepted commit gets
-     `(seq, prevHash, hash, hubSig)` in the same atomic CAS, and a follower's
-     `ForwardCommit`/`DeliverRelayed` verifies the links before applying.
+  5. **Signed ordering chain (F5b).** *Built.* `internal/mlschain` is the
+     primitive: `hash = H(prevHash ‖ seq ‖ groupID ‖ commit)` (seq = the epoch the
+     commit produces, so nothing new is counted) plus a hub Ed25519 signature over
+     it. The store extends the chain inside the same atomic CAS as the epoch
+     advance (`CommitMLSGroup`, both backends), so `prevHash` is read and the new
+     head written under one lock — the chain cannot race the order it certifies.
+     The hub signs each link with its host key; a follower's `DeliverRelayed` and
+     `ForwardCommit` recompute the hash from their own head, compare it to the
+     hub's, and verify the signature before advancing — a mismatch (reorder, drop,
+     fork) or a non-hub signature is refused and the mirror does not move. Covered
+     by `mlschain/*_test.go` and `chat/convfed_e2e_test.go`
+     (`TestSignedOrderingChainConvergesAcrossHosts`,
+     `TestMirrorRefusesTamperedOrderingLink`).
 
   **On F5d's verification blocker:** the delivery service is a Go server with no
   MLS, so the *plaintext-decrypt* half of a cross-host round-trip can only be

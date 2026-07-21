@@ -1,6 +1,7 @@
 package chat_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/live"
+	"github.com/rh1tech/pheme/api/internal/mlschain"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
@@ -202,6 +204,133 @@ func TestCrossHostCommitRoundTrip(t *testing.T) {
 	}
 	if res2.Status != "conflict" || res2.Epoch != 1 {
 		t.Errorf("stale commit = %+v, want conflict at epoch 1", res2)
+	}
+}
+
+// F5b: with host keys configured, the hub signs each commit's ordering link and
+// the follower verifies both the link and the signature. After a round trip the
+// mirror's chain head is byte-for-byte the hub's — proof the two computed the
+// same order independently.
+func TestSignedOrderingChainConvergesAcrossHosts(t *testing.T) {
+	aKey := hostKey5d(1)
+	bKey := hostKey5d(2)
+	roster := fakeRoster{
+		"a.example": aKey.Public().(ed25519.PublicKey),
+		"b.example": bKey.Public().(ed25519.PublicKey),
+	}
+	aStore := store.NewMemory(nil)
+	bStore := store.NewMemory(nil)
+
+	var aURL, bURL string
+	aClient := federation.NewClient("a.example", "ak", aKey)
+	aClient.PeerURL = func(d string) string { return map[string]string{"b.example": bURL}[d] }
+	bClient := federation.NewClient("b.example", "bk", bKey)
+	bClient.PeerURL = func(d string) string { return map[string]string{"a.example": aURL}[d] }
+
+	// Each host signs with its own key and verifies peers against the shared roster.
+	aFed := &chat.ConvFederation{Store: aStore, Live: live.NewMemoryBus(), Peers: aClient, HostDomain: "a.example", HostKey: aKey, Keys: roster}
+	bFed := &chat.ConvFederation{Store: bStore, Live: live.NewMemoryBus(), Peers: bClient, HostDomain: "b.example", HostKey: bKey, Keys: roster}
+
+	aMux := http.NewServeMux()
+	federation.NewHandler("a.example", roster, nil).WithConversations(aFed).Register(aMux)
+	aSrv := httptest.NewServer(aMux)
+	defer aSrv.Close()
+	aURL = aSrv.URL
+	bMux := http.NewServeMux()
+	federation.NewHandler("b.example", roster, nil).WithConversations(bFed).Register(bMux)
+	bSrv := httptest.NewServer(bMux)
+	defer bSrv.Close()
+	bURL = bSrv.URL
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	conv, _ := aStore.CreateConversation(ctx, domain.Conversation{
+		ID: "conv-s", Kind: domain.ConversationGroup, CreatedAt: now,
+	}, []domain.ConversationMember{{UserID: "alice", Role: domain.RoleAdmin, JoinedAt: now}})
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := bFed.ForwardCommit(ctx, "a.example", federation.SubmittedCommit{
+		ConversationID: "conv-s", SenderID: "bob", GroupID: "grp-s", BaseEpoch: 0,
+		Welcome: []byte("w"), Commit: []byte("c1"),
+	})
+	if err != nil {
+		t.Fatalf("signed forward commit: %v", err)
+	}
+	if len(res.ChainHash) == 0 || len(res.ChainSig) == 0 {
+		t.Fatalf("hub must return a signed chain link, got hash=%d sig=%d", len(res.ChainHash), len(res.ChainSig))
+	}
+	// The hub's signature must verify under the hub's key over the returned hash.
+	if !mlschain.Verify(aKey.Public().(ed25519.PublicKey), res.ChainHash, res.ChainSig) {
+		t.Error("hub signature does not verify")
+	}
+	aState, _ := aStore.MLSGroupState(ctx, "conv-s")
+	bState, _ := bStore.MLSGroupState(ctx, "conv-s")
+	if len(aState.ChainHash) == 0 {
+		t.Fatal("hub advanced no chain head")
+	}
+	if !bytes.Equal(aState.ChainHash, bState.ChainHash) {
+		t.Errorf("chain heads diverged: hub %x vs mirror %x", aState.ChainHash, bState.ChainHash)
+	}
+}
+
+// F5b: a mirror refuses a relayed commit whose ordering link has been tampered
+// with, and one whose signature is not the hub's — it does not advance its group.
+func TestMirrorRefusesTamperedOrderingLink(t *testing.T) {
+	aKey := hostKey5d(1)
+	bKey := hostKey5d(2)
+	roster := fakeRoster{
+		"a.example": aKey.Public().(ed25519.PublicKey),
+		"b.example": bKey.Public().(ed25519.PublicKey),
+	}
+	bStore := store.NewMemory(nil)
+	bFed := &chat.ConvFederation{Store: bStore, Live: live.NewMemoryBus(), HostDomain: "b.example", Keys: roster}
+
+	// Stand up a fresh mirror whose hub is a.example (no commits yet).
+	if err := bFed.ProvisionMirror(context.Background(), "a.example", federation.MirrorSpec{
+		ConversationID: "conv-t", Kind: "group", LocalUserID: "bob",
+		RemoteMembers: []federation.RemoteMember{{UserID: "alice", Domain: "a.example"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	commit := []byte("c1")
+	goodHash := mlschain.Link(nil, 1, "grp-t", commit) // epoch 1, prevHash nil
+	goodSig := mlschain.Sign(aKey, goodHash)
+	base := federation.RelayedMessage{
+		SenderID: "alice", SenderDomain: "a.example", Ciphertext: commit,
+		ContentType: domain.ContentTypeMLSCommit, MLSEpoch: 1, MLSGroupID: "grp-t",
+		ChainHash: goodHash, ChainSig: goodSig, CreatedAt: time.Now().UTC(),
+	}
+
+	// Tampered hash → rejected, mirror epoch stays 0.
+	bad := base
+	bad.ChainHash = append([]byte{}, goodHash...)
+	bad.ChainHash[0] ^= 0xff
+	if err := bFed.DeliverRelayed(context.Background(), "a.example", "conv-t", []federation.RelayedMessage{bad}); err == nil {
+		t.Error("mirror accepted a commit with a tampered ordering hash")
+	}
+	if st, _ := bStore.MLSGroupState(context.Background(), "conv-t"); st.Epoch != 0 {
+		t.Errorf("mirror advanced to epoch %d on a tampered commit", st.Epoch)
+	}
+
+	// Right hash, but signed by the wrong host → rejected.
+	forged := base
+	forged.ChainSig = mlschain.Sign(bKey, goodHash) // not the hub's key
+	if err := bFed.DeliverRelayed(context.Background(), "a.example", "conv-t", []federation.RelayedMessage{forged}); err == nil {
+		t.Error("mirror accepted a commit signed by a non-hub key")
+	}
+	if st, _ := bStore.MLSGroupState(context.Background(), "conv-t"); st.Epoch != 0 {
+		t.Errorf("mirror advanced to epoch %d on a forged signature", st.Epoch)
+	}
+
+	// The genuine, hub-signed link is accepted and advances the mirror.
+	if err := bFed.DeliverRelayed(context.Background(), "a.example", "conv-t", []federation.RelayedMessage{base}); err != nil {
+		t.Fatalf("mirror refused a valid hub-signed commit: %v", err)
+	}
+	if st, _ := bStore.MLSGroupState(context.Background(), "conv-t"); st.Epoch != 1 || !bytes.Equal(st.ChainHash, goodHash) {
+		t.Errorf("mirror did not apply the valid commit: epoch=%d hash=%x", st.Epoch, st.ChainHash)
 	}
 }
 

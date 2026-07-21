@@ -648,6 +648,13 @@ type ChatMessage struct {
 	// group lifetimes, and every catch-up — which is every send — fetched and replayed all of them,
 	// because from epoch 0 there was no way to say "only this group's".
 	MLSGroupID string `bson:"mlsGroupId,omitempty" json:"mlsGroupId,omitempty"`
+	// MLSChainHash is the signed-ordering-chain link for a Commit (see
+	// internal/mlschain): H(prevHash ‖ epoch ‖ groupId ‖ ciphertext), stamped in
+	// the same atomic commit that advanced the group. Empty on everything but a
+	// Commit, and on a standalone deployment that does not order across hosts. A
+	// federated relay carries it alongside the hub's signature so a mirror can
+	// confirm the commit's position before applying it.
+	MLSChainHash []byte `bson:"mlsChainHash,omitempty" json:"mlsChainHash,omitempty"`
 }
 
 // The content types clients use for MLS protocol traffic. They mirror the MLS_*
@@ -758,6 +765,14 @@ type MLSGroupState struct {
 	// the "rebuild the group" behaviour that used to wipe a conversation for everyone in it —
 	// that one deleted the old group; this one keeps it.
 	PriorGroupIDs []string `bson:"mlsPriorGroupIds,omitempty" json:"priorGroupIds,omitempty"`
+	// ChainHash is the signed-ordering-chain head: the hash of the last accepted
+	// commit's link (see internal/mlschain). Empty before the first commit. It is
+	// the prevHash the next commit's link is computed from, so it advances in the
+	// same atomic step as Epoch. The hub and every mirror derive it identically
+	// from the same commit stream — a mirror that computes a different value has
+	// caught the hub reordering or forking the group. Only meaningful for a
+	// federated conversation; a standalone deployment sets it and never reads it.
+	ChainHash []byte `bson:"mlsChainHash,omitempty" json:"-"`
 }
 
 // MLSGroupInfo is the signed snapshot a NON-MEMBER needs to join a group by external commit

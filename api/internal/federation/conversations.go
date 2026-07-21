@@ -62,6 +62,10 @@ type RemoteMember struct {
 type MirrorGroupSt struct {
 	GroupID string `json:"groupId"`
 	Epoch   int64  `json:"epoch"`
+	// ChainHash is the ordering-chain head at provisioning time, so a mirror stood
+	// up mid-conversation verifies the next commit against the same prevHash the hub
+	// holds. Empty when the group has no commits yet.
+	ChainHash []byte `json:"chainHash,omitempty"`
 }
 
 // RelayedMessage is one conversation message on the wire between hosts. The
@@ -75,6 +79,13 @@ type RelayedMessage struct {
 	MLSEpoch     int64     `json:"mlsEpoch,omitempty"`
 	MLSGroupID   string    `json:"mlsGroupId,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
+	// ChainHash and ChainSig carry the signed ordering chain for a Commit (see
+	// internal/mlschain). ChainHash is the hub-computed link; ChainSig is the hub's
+	// signature over it. A mirror recomputes the hash from its own head and checks
+	// both before applying the commit — that is what makes the hub's ordering
+	// tamper-evident rather than merely trusted. Empty on non-commit messages.
+	ChainHash []byte `json:"chainHash,omitempty"`
+	ChainSig  []byte `json:"chainSig,omitempty"`
 }
 
 // SubmittedMessage is a follower's device message, forwarded to the hub.
@@ -102,6 +113,11 @@ type CommitResult struct {
 	// GroupID/Epoch of the conversation as it actually is, for a conflict so the
 	// follower can tell its device to catch up.
 	GroupID string `json:"groupId,omitempty"`
+	// ChainHash and ChainSig are the hub's ordering-chain link for an accepted
+	// commit, so the follower can confirm the link it computed locally matches the
+	// hub's and is signed by it. Empty on a conflict.
+	ChainHash []byte `json:"chainHash,omitempty"`
+	ChainSig  []byte `json:"chainSig,omitempty"`
 }
 
 func (h *Handler) registerConversations(mux *http.ServeMux) {

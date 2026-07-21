@@ -170,12 +170,20 @@ func main() {
 			// Cross-host conversations: the hub relays every accepted message and
 			// commit to the participant hosts; a mirror forwards its devices' posts
 			// to the hub. One service is both the inbound handler and the outbound
-			// helper the chat handler calls.
+			// helper the chat handler calls. The host key signs ordering-chain links
+			// when this host is a hub; the nodelist verifies a peer hub's links.
+			hostSigningKey, hkErr := auth.ParseHostKey(cfg.HostKey)
+			if hkErr != nil {
+				logger.Error("federation: host key unusable for ordering chain", "error", hkErr)
+				os.Exit(1)
+			}
 			convFed := &chat.ConvFederation{
 				Store:      db,
 				Live:       bus,
 				Peers:      peers,
 				HostDomain: cfg.HostDomain,
+				HostKey:    hostSigningKey,
+				Keys:       nodes,
 				Logger:     logger,
 			}
 			fedHandler.WithConversations(convFed)
