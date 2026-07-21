@@ -283,20 +283,30 @@ func (m *Mongo) ChatMessagesByConversation(ctx context.Context, conversationID, 
 		// mostly Commits and device announcements showed a nearly empty page.
 		"contentType": bson.M{"$nin": domain.MLSProtocolContentTypes},
 	}
-	// The caller's clear-history watermark and the load-older cursor both bound
-	// createdAt, so they combine into one range condition rather than overwriting.
-	created := bson.M{}
+	// The clear-history watermark floors createdAt.
 	if !after.IsZero() {
-		created["$gt"] = after
+		filter["createdAt"] = bson.M{"$gt": after}
 	}
+	// The load-older cursor is a compound (createdAt, seq) bound, matching the
+	// (createdAt desc, seq desc) sort exactly: everything strictly BEFORE the anchor
+	// in that order. A plain createdAt < anchor.createdAt used to skip — or, as $lte,
+	// duplicate — every other message that shared the anchor's millisecond, dropping
+	// or repeating messages at a page boundary. Pairing seq removes the tie.
 	if cursor != "" {
 		var anchor domain.ChatMessage
 		if err := m.db.Collection("chatMessages").FindOne(ctx, bson.M{"_id": cursor}).Decode(&anchor); err == nil {
-			created["$lt"] = anchor.CreatedAt
+			before := bson.A{
+				bson.M{"createdAt": bson.M{"$lt": anchor.CreatedAt}},
+				bson.M{"createdAt": anchor.CreatedAt, "seq": bson.M{"$lt": anchor.Seq}},
+			}
+			// AND the cursor with the clear-history floor if one is already set.
+			if floor, ok := filter["createdAt"]; ok {
+				delete(filter, "createdAt")
+				filter["$and"] = bson.A{bson.M{"createdAt": floor}, bson.M{"$or": before}}
+			} else {
+				filter["$or"] = before
+			}
 		}
-	}
-	if len(created) > 0 {
-		filter["createdAt"] = created
 	}
 	// createdAt is the primary key; seq breaks ties deterministically so two
 	// messages sharing a millisecond never come back in a random, page-dependent

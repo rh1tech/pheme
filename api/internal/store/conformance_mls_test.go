@@ -541,3 +541,54 @@ func TestConformance_DeletingKeyPackagesIsScopedToTheOwner(t *testing.T) {
 		}
 	})
 }
+
+// Paging back through messages that all share one timestamp must return each one
+// exactly once. The load-older cursor bounds (createdAt, seq), not createdAt
+// alone, so a page boundary that falls inside a group of same-millisecond
+// messages neither skips nor repeats them.
+func TestConformance_PaginationTiesBySeq(t *testing.T) {
+	eachStore(t, func(t *testing.T, s storeUnderTest) {
+		ctx := context.Background()
+		owner := mustUser(t, s.store, "pager@pheme.test")
+		conv := mustConversation(t, s.store, owner.ID)
+
+		// Six messages, ALL at the same instant — only their hub-assigned seq orders them.
+		ts := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+		const n = 6
+		for i := 0; i < n; i++ {
+			if _, err := s.store.AppendChatMessage(ctx, domain.ChatMessage{
+				ConversationID: conv.ID, SenderID: owner.ID,
+				Ciphertext: []byte{byte('a' + i)}, ContentType: "application/octet-stream",
+				CreatedAt: ts,
+			}); err != nil {
+				t.Fatalf("append %d: %v", i, err)
+			}
+		}
+
+		// Page back two at a time, following the cursor, and collect every id seen.
+		seen := map[string]int{}
+		cursor := ""
+		for pages := 0; pages < n+2; pages++ {
+			page, err := s.store.ChatMessagesByConversation(ctx, conv.ID, cursor, 2, time.Time{})
+			if err != nil {
+				t.Fatalf("page: %v", err)
+			}
+			if len(page) == 0 {
+				break
+			}
+			for _, m := range page {
+				seen[m.ID]++
+			}
+			cursor = page[len(page)-1].ID
+		}
+
+		if len(seen) != n {
+			t.Errorf("saw %d distinct messages across pages, want %d — the cursor skipped or stopped short", len(seen), n)
+		}
+		for id, count := range seen {
+			if count != 1 {
+				t.Errorf("message %s returned %d times, want exactly once — the cursor duplicated a tie", id, count)
+			}
+		}
+	})
+}
