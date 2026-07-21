@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/httpx"
+	"github.com/rh1tech/pheme/api/internal/ident"
 	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/push"
 )
@@ -87,6 +89,32 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A conversation whose hub is another host is a mirror: this instance is not the
+	// ordering authority for it. Forward the local device's message to the hub, which
+	// appends it, orders it, relays it to the other participant hosts, and returns
+	// the authoritative copy — which our follower has already stored in the mirror.
+	if h.Fed != nil {
+		conv, err := h.Store.ConversationByID(r.Context(), convID)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "could not send message")
+			return
+		}
+		if conv.IsMirror() {
+			echo, err := h.Fed.ForwardMessage(r.Context(), conv.HubDomain, federation.SubmittedMessage{
+				ConversationID: convID,
+				SenderID:       uid,
+				Ciphertext:     req.Ciphertext,
+				ContentType:    contentType,
+			})
+			if err != nil {
+				httpx.Error(w, http.StatusBadGateway, "could not reach the conversation hub")
+				return
+			}
+			httpx.JSON(w, http.StatusCreated, fromRelayed(convID, echo))
+			return
+		}
+	}
+
 	msg, err := h.Store.AppendChatMessage(r.Context(), domain.ChatMessage{
 		ConversationID: convID,
 		SenderID:       uid,
@@ -97,6 +125,15 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not send message")
 		return
+	}
+
+	// On the hub of a federated conversation, relay the just-appended message to
+	// every participant host so their mirrors deliver it to their local devices.
+	if h.Fed != nil {
+		conv, err := h.Store.ConversationByID(r.Context(), convID)
+		if err == nil {
+			h.Fed.RelayAppended(r.Context(), conv, h.HostDomain, []domain.ChatMessage{msg})
+		}
 	}
 
 	// Fan out to the conversation's members over the shared SSE stream, naming them.
@@ -443,6 +480,32 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeLimited(w, r, &req, maxSmallBodyBytes) {
 		return
 	}
+
+	// A qualified id whose domain is not ours names a member on another host. Record
+	// it as a remote member and provision the mirror there, rather than looking it up
+	// in the local user store where it does not exist. This host becomes (or already
+	// is) the hub for the conversation.
+	if h.Fed != nil && h.HostDomain != "" {
+		if id, err := ident.Parse(req.UserID); err == nil && id.Kind == ident.KindUser && !id.IsLocal(h.HostDomain) {
+			if conv.IsMirror() {
+				httpx.Error(w, http.StatusConflict, "add remote members on the conversation's hub")
+				return
+			}
+			if err := h.Fed.AddRemoteMember(r.Context(), conv, id.Local, id.Domain); err != nil {
+				httpx.Error(w, http.StatusBadGateway, "could not add the remote member's host")
+				return
+			}
+			added, err := h.Store.ConversationMembership(r.Context(), convID, id.Local)
+			if err != nil {
+				httpx.Error(w, http.StatusInternalServerError, "could not add member")
+				return
+			}
+			h.recordMembershipChange(r, convID, member.UserID, req.UserID, "added")
+			httpx.JSON(w, http.StatusCreated, added)
+			return
+		}
+	}
+
 	if _, err := h.Store.UserByID(r.Context(), req.UserID); err != nil {
 		httpx.Error(w, http.StatusNotFound, "user not found")
 		return

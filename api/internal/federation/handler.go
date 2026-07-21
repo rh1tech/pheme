@@ -20,12 +20,13 @@ type UserResolver interface {
 // Handler serves the host-to-host API. Every route except the public directory
 // requires a valid nodelist-anchored signature.
 type Handler struct {
-	Origin      string    // this host's own domain
-	Lookup      keyLookup // the nodelist
-	Users       UserResolver
-	Channels    ChannelService    // optional; channel routes mount only when set
-	KeyPackages KeyPackageService // optional; key-package routes mount only when set
-	now         func() time.Time
+	Origin        string    // this host's own domain
+	Lookup        keyLookup // the nodelist
+	Users         UserResolver
+	Channels      ChannelService      // optional; channel routes mount only when set
+	KeyPackages   KeyPackageService   // optional; key-package routes mount only when set
+	Conversations ConversationService // optional; cross-host chat routes mount only when set
+	now           func() time.Time
 }
 
 // NewHandler builds the federation handler.
@@ -42,6 +43,12 @@ func (h *Handler) WithChannels(c ChannelService) *Handler {
 // WithKeyPackages enables the cross-host key-package claim route.
 func (h *Handler) WithKeyPackages(k KeyPackageService) *Handler {
 	h.KeyPackages = k
+	return h
+}
+
+// WithConversations enables the cross-host encrypted-chat routes.
+func (h *Handler) WithConversations(c ConversationService) *Handler {
+	h.Conversations = c
 	return h
 }
 
@@ -66,6 +73,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	}
 	if h.KeyPackages != nil {
 		h.registerKeyPackages(mux)
+	}
+	if h.Conversations != nil {
+		h.registerConversations(mux)
 	}
 }
 
@@ -122,6 +132,11 @@ func (h *Handler) directory(w http.ResponseWriter, _ *http.Request) {
 	}
 	if h.KeyPackages != nil {
 		endpoints["claimKeyPackages"] = "/federation/v1/claim-key-packages"
+	}
+	if h.Conversations != nil {
+		endpoints["conversationRelay"] = "/federation/v1/conversation-relay"
+		endpoints["conversationSubmitMessage"] = "/federation/v1/conversation-submit-message"
+		endpoints["conversationSubmitCommit"] = "/federation/v1/conversation-submit-commit"
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"origin":    h.Origin,

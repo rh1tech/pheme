@@ -73,6 +73,12 @@ type Handler struct {
 	// token's lifetime, past which the token is rejected on expiry anyway.
 	SessionTTL time.Duration
 
+	// Fed carries a message across hosts when a conversation spans a federation:
+	// on the hub it relays every accepted message to the participant hosts; on a
+	// mirror it forwards a local device's post to the hub for ordering. Nil keeps
+	// the single-host behaviour — every conversation is native and nothing leaves.
+	Fed *ConvFederation
+
 	// storm notices a conversation whose group is committing at a rate no honest
 	// membership churn explains — the observable half of the July 2026 reconcile war,
 	// which burned five hundred epochs without a single server-side line saying so.

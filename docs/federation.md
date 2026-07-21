@@ -251,21 +251,40 @@ Each stage ships and is useful before the next one starts.
      a hub can fetch a remote user's key packages (extending F2's signed
      transport) and resolve a remote member — the `chat.go` `UserByID` gate that
      rejects remote users today becomes a nodelist-aware lookup.
-  4. **Hub commit-proxying (F5d).** A follower's member builds a commit locally
-     and posts it to its own host, which forwards it to the conversation's hub
-     over S2S; the hub runs the F4 epoch check, the F5b chain, and the CAS, then
-     fans the accepted commit back to every participant host. This is where F5b's
-     chain gets its verifier and the whole thing becomes real.
+  4. **Hub commit-proxying (F5d).** *Plumbing built.* A follower's member builds
+     a commit locally and posts it to its own host, which forwards it to the
+     conversation's hub over S2S; the hub runs the F4 epoch check and the CAS,
+     then fans the accepted commit back to every participant host. The relay
+     layer is `chat.ConvFederation` (both the inbound `federation.Conversation-
+     Service` and the outbound helper the chat handler calls) with S2S endpoints
+     in `federation/conversations.go`:
+       - hub → follower: `conversation-provision` (stand up a mirror),
+         `conversation-relay` (deliver accepted messages/commits);
+       - follower → hub: `conversation-submit-message`,
+         `conversation-submit-commit` (forward a local device's post).
+     A qualified `mimi://host/u/id` in the add-member endpoint records a remote
+     member and provisions its host's mirror. On a mirror, `postMessage` and
+     `postMLSCommit` forward to the hub instead of appending locally; on the hub
+     they append and relay. The message and commit round-trips (append→relay,
+     forward→order→apply-both-sides, and the epoch-conflict path) are covered by
+     `chat/convfed_e2e_test.go`, wired over real HTTP through two signed
+     federation handlers. Remaining: F5b's signed ordering chain (below) and the
+     live two-server encrypted decrypt test.
 
-  Before starting F5b/F5d, write the hub-migration ADR Decision 5 calls for.
+  Before F5b, write the hub-migration ADR Decision 5 calls for.
+
+  5. **Signed ordering chain (F5b).** Its consumer (F5d) now exists, so the chain
+     can be built against a real verifier: each accepted commit gets
+     `(seq, prevHash, hash, hubSig)` in the same atomic CAS, and a follower's
+     `ForwardCommit`/`DeliverRelayed` verifies the links before applying.
 
   **On F5d's verification blocker:** the delivery service is a Go server with no
-  MLS, so the actual cross-host encrypted round-trip can only be proven by two
-  real clients on two servers — a two-server, two-browser E2E harness that does
-  not exist. F5a and F5c are verifiable in isolation (crate/E2E, two-server Go
-  test) and shipped; F5d's message-relay plumbing is not, because shipping it
-  without an end-to-end decryption test would be shipping unverified live crypto.
-  Building that harness is a prerequisite for F5d, not an afterthought.
+  MLS, so the *plaintext-decrypt* half of a cross-host round-trip can only be
+  proven by two real clients on two servers. The message-ordering half — that the
+  hub relays and orders opaque ciphertext correctly, and a mirror forwards and
+  applies it — is proven in-process by `convfed_e2e_test.go` over two real signed
+  handlers. The remaining two-server, two-browser E2E harness proves only that the
+  bytes those tests move decrypt on the far client.
 - **F6 — Ordering rework.** Hub-assigned sequence numbers replacing wall-clock
   ordering. Receipts stop being timestamp watermarks — `domain.go:506-521` is the
   deepest single-clock assumption in the codebase, and two hosts' clocks skewing

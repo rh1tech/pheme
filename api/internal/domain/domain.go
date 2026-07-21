@@ -518,21 +518,42 @@ type Conversation struct {
 	// who starts it. Empty for groups. Uniquely indexed (partial) in Mongo.
 	DirectKey string    `bson:"directKey,omitempty" json:"-"`
 	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
+
+	// HubDomain names the host that is authoritative for this conversation — the
+	// hub, in MIMI terms, and the single place its MLS commits are ordered.
+	//
+	// Empty means THIS host is the hub: the conversation is native, and its
+	// commits are serialised by the local compare-and-set. A value means this is
+	// a MIRROR of a conversation whose hub is elsewhere; local devices read from
+	// the mirror, and their commits and messages are forwarded to the hub, which
+	// orders them and relays the result back. Every existing conversation is
+	// native and so already correct with no backfill.
+	HubDomain string `bson:"hubDomain,omitempty" json:"hubDomain,omitempty"`
+
 	// The conversation's MLS group, once a member has established one. Inline, so the
 	// compare-and-set that serialises Commits is a single atomic update on this one
 	// document. See domain.MLSGroupState.
 	MLS MLSGroupState `bson:",inline" json:"-"`
 }
 
+// IsMirror reports whether this conversation is a local mirror of one whose hub
+// is another host.
+func (c Conversation) IsMirror() bool { return c.HubDomain != "" }
+
 // ConversationMember is a user's membership in a conversation. Role reuses the
 // Role type: a group creator is 'admin', everyone else 'user'. Direct chats have
 // two 'user' members and no admin.
 type ConversationMember struct {
-	ID             string    `bson:"_id,omitempty" json:"id"`
-	ConversationID string    `bson:"conversationId" json:"conversationId"`
-	UserID         string    `bson:"userId" json:"userId"`
-	Role           Role      `bson:"role" json:"role"`
-	JoinedAt       time.Time `bson:"joinedAt" json:"joinedAt"`
+	ID             string `bson:"_id,omitempty" json:"id"`
+	ConversationID string `bson:"conversationId" json:"conversationId"`
+	UserID         string `bson:"userId" json:"userId"`
+	// Domain is the home host of this member. Empty means a local user; a value
+	// means a member who lives on another host, present so this host knows to
+	// relay to (or expect forwards from) that host. Every existing member is
+	// local and so already correct.
+	Domain   string    `bson:"domain,omitempty" json:"domain,omitempty"`
+	Role     Role      `bson:"role" json:"role"`
+	JoinedAt time.Time `bson:"joinedAt" json:"joinedAt"`
 	// ClearedAt is this member's private "clear history" watermark: messages at or
 	// before it are hidden from THIS member's fetches, on all their devices, while
 	// leaving the shared log — and every other member's view of it — untouched. Zero

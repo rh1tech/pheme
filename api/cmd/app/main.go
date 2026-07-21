@@ -158,7 +158,6 @@ func main() {
 		localFanout := message.NewDispatcher(db, pusher, bus, logger)
 		fedHandler.WithChannels(&message.ChannelFederation{Store: db, Dispatcher: localFanout})
 		fedHandler.WithKeyPackages(keyPackageAdapter{db})
-		fedHandler.Register(mux)
 
 		// The outbound side of joining a remote channel: this host's signing
 		// client plus the nodelist's peer check, handed to the channel handler.
@@ -167,7 +166,22 @@ func main() {
 			os.Exit(1)
 		} else if peers != nil {
 			appHandler.Remote = remoteChannels{nodes: nodes, peers: peers}
+
+			// Cross-host conversations: the hub relays every accepted message and
+			// commit to the participant hosts; a mirror forwards its devices' posts
+			// to the hub. One service is both the inbound handler and the outbound
+			// helper the chat handler calls.
+			convFed := &chat.ConvFederation{
+				Store:      db,
+				Live:       bus,
+				Peers:      peers,
+				HostDomain: cfg.HostDomain,
+				Logger:     logger,
+			}
+			fedHandler.WithConversations(convFed)
+			appHandler.Chat.Fed = convFed
 		}
+		fedHandler.Register(mux)
 		logger.Info("federation enabled", "origin", cfg.HostDomain, "nodelist_serial", nodes.Serial())
 	}
 

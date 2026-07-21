@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/live"
 	"github.com/rh1tech/pheme/api/internal/mlswire"
@@ -345,6 +346,38 @@ func (h *Handler) postMLSCommit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A mirror is not the ordering authority. Forward the commit to the hub, which
+	// runs the same compare-and-set and relays the accepted control messages to the
+	// other participant hosts. ForwardCommit applies the accepted commit to our own
+	// mirror too, so the response reflects the group as the hub ordered it.
+	if h.Fed != nil {
+		conv, err := h.Store.ConversationByID(r.Context(), convID)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "could not commit")
+			return
+		}
+		if conv.IsMirror() {
+			res, err := h.Fed.ForwardCommit(r.Context(), conv.HubDomain, federation.SubmittedCommit{
+				ConversationID: convID,
+				SenderID:       uid,
+				GroupID:        req.GroupID,
+				BaseEpoch:      req.BaseEpoch,
+				Welcome:        req.Welcome,
+				Commit:         req.Commit,
+			})
+			if err != nil {
+				httpx.Error(w, http.StatusBadGateway, "could not reach the conversation hub")
+				return
+			}
+			if res.Status == "conflict" {
+				httpx.JSON(w, http.StatusConflict, domain.MLSGroupState{GroupID: res.GroupID, Epoch: res.Epoch})
+				return
+			}
+			httpx.JSON(w, http.StatusOK, domain.MLSGroupState{GroupID: res.GroupID, Epoch: res.Epoch})
+			return
+		}
+	}
+
 	now := time.Now().UTC()
 	// Stamped with the epoch this Commit produces, so a member who has fallen behind can
 	// ask for exactly the Commits it is missing rather than hunting through the log.
@@ -391,6 +424,14 @@ func (h *Handler) postMLSCommit(w http.ResponseWriter, r *http.Request) {
 	// hear about it.
 	for i := range stored {
 		h.Live.Publish(live.Event{ConversationID: convID, ChatMessage: &stored[i]})
+	}
+
+	// On the hub of a federated conversation, relay the accepted control messages to
+	// every participant host so their mirrors advance to the same epoch.
+	if h.Fed != nil {
+		if conv, err := h.Store.ConversationByID(r.Context(), convID); err == nil {
+			h.Fed.RelayAppended(r.Context(), conv, h.HostDomain, stored)
+		}
 	}
 
 	// The tripwire. A group that is committing this fast is at war with itself — clients
