@@ -183,6 +183,31 @@ func (m *Mongo) AppendChatMessage(ctx context.Context, msg domain.ChatMessage) (
 	if msg.ID == "" {
 		msg.ID = mongoID()
 	}
+	// Assign a per-conversation sequence to a message authored on this host by
+	// atomically bumping the conversation's counter; a message that arrived from
+	// the hub over a relay already carries one and must keep it. $inc against a
+	// missing field starts it at the increment, so the first message gets 1. This
+	// is the one conversation-doc write an append makes — the conversation doc is
+	// already the MLS ordering point, so the sequencer lives beside it.
+	if msg.Seq == 0 {
+		var updated struct {
+			Seq int64 `bson:"msgSeq"`
+		}
+		err := m.db.Collection("conversations").FindOneAndUpdate(
+			ctx,
+			bson.M{"_id": msg.ConversationID},
+			bson.M{"$inc": bson.M{"msgSeq": int64(1)}},
+			options.FindOneAndUpdate().SetReturnDocument(options.After).
+				SetProjection(bson.M{"msgSeq": 1}),
+		).Decode(&updated)
+		if err != nil && !errors.Is(mapErr(err), ErrNotFound) {
+			return domain.ChatMessage{}, err
+		}
+		// A conversation with no doc (only in odd test fixtures) leaves Seq 0, which
+		// readers treat as "legacy, order by createdAt" — never a wrong order, just
+		// no tiebreak.
+		msg.Seq = updated.Seq
+	}
 	_, err := m.db.Collection("chatMessages").InsertOne(ctx, msg)
 	return msg, err
 }
@@ -260,7 +285,10 @@ func (m *Mongo) ChatMessagesByConversation(ctx context.Context, conversationID, 
 	if len(created) > 0 {
 		filter["createdAt"] = created
 	}
-	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	// createdAt is the primary key; seq breaks ties deterministically so two
+	// messages sharing a millisecond never come back in a random, page-dependent
+	// order. Legacy messages have seq 0 and simply tie among themselves as before.
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "seq", Value: -1}})
 	if limit > 0 {
 		opts.SetLimit(int64(limit))
 	}

@@ -648,6 +648,15 @@ type ChatMessage struct {
 	// group lifetimes, and every catch-up — which is every send — fetched and replayed all of them,
 	// because from epoch 0 there was no way to say "only this group's".
 	MLSGroupID string `bson:"mlsGroupId,omitempty" json:"mlsGroupId,omitempty"`
+	// Seq is the per-conversation sequence number the hub assigns on append: a
+	// monotonic counter, 1 for the first message, that gives the conversation a
+	// total order independent of any clock. The hub is the single sequencer — a
+	// message authored here gets the next value; a message that arrives from the
+	// hub over a relay already carries one and keeps it (see the "assign only when
+	// zero" rule in the store). Ordering by Seq is therefore skew-proof across
+	// hosts where CreatedAt, a wall clock, is not. Zero on messages written before
+	// this field existed; readers fall back to CreatedAt for those.
+	Seq int64 `bson:"seq,omitempty" json:"seq,omitempty"`
 	// MLSChainHash is the signed-ordering-chain link for a Commit (see
 	// internal/mlschain): H(prevHash ‖ epoch ‖ groupId ‖ ciphertext), stamped in
 	// the same atomic commit that advanced the group. Empty on everything but a

@@ -182,6 +182,18 @@ func (m *Memory) appendChatMessageLocked(msg domain.ChatMessage) domain.ChatMess
 	if msg.ID == "" {
 		msg.ID = newID()
 	}
+	// Assign a per-conversation sequence only to a message authored here; one that
+	// arrived over a relay already carries the hub's, and reassigning it would fork
+	// the order. The next value is one past the highest this conversation holds.
+	if msg.Seq == 0 {
+		var max int64
+		for _, existing := range m.chatMessages {
+			if existing.ConversationID == msg.ConversationID && existing.Seq > max {
+				max = existing.Seq
+			}
+		}
+		msg.Seq = max + 1
+	}
 	m.chatMessages[msg.ID] = msg
 	return msg
 }
@@ -242,7 +254,12 @@ func (m *Memory) ChatMessagesByConversation(_ context.Context, conversationID, c
 		}
 		out = append(out, msg)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].Seq > out[j].Seq // deterministic tiebreak within a timestamp
+	})
 	if cursor != "" {
 		filtered := out[:0]
 		seen := false

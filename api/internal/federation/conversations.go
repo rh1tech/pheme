@@ -79,6 +79,9 @@ type RelayedMessage struct {
 	MLSEpoch     int64     `json:"mlsEpoch,omitempty"`
 	MLSGroupID   string    `json:"mlsGroupId,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
+	// Seq is the hub's per-conversation sequence number for this message. A mirror
+	// stores it verbatim so its transcript orders identically to the hub's.
+	Seq int64 `json:"seq,omitempty"`
 	// ChainHash and ChainSig carry the signed ordering chain for a Commit (see
 	// internal/mlschain). ChainHash is the hub-computed link; ChainSig is the hub's
 	// signature over it. A mirror recomputes the hash from its own head and checks

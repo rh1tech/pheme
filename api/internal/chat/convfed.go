@@ -120,6 +120,7 @@ func (c *ConvFederation) toRelayed(m domain.ChatMessage, senderDomain string) fe
 		MLSEpoch:     m.MLSEpoch,
 		MLSGroupID:   m.MLSGroupID,
 		CreatedAt:    m.CreatedAt,
+		Seq:          m.Seq,
 		ChainHash:    m.MLSChainHash,
 	}
 	if len(m.MLSChainHash) > 0 && len(c.HostKey) == ed25519.PrivateKeySize {
@@ -377,6 +378,7 @@ func fromRelayed(convID string, rm federation.RelayedMessage) domain.ChatMessage
 		MLSEpoch:       rm.MLSEpoch,
 		MLSGroupID:     rm.MLSGroupID,
 		MLSChainHash:   rm.ChainHash,
+		Seq:            rm.Seq,
 		CreatedAt:      rm.CreatedAt,
 	}
 }

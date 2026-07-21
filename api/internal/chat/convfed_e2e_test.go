@@ -117,6 +117,17 @@ func TestCrossHostConversationRoundTrip(t *testing.T) {
 	if !hasCiphertext(aMsgs, "sealed-reply") {
 		t.Fatal("hub A missing bob's forwarded reply")
 	}
+
+	// Every message the mirror holds carries the hub's sequence number, not one the
+	// mirror invented — same ciphertext, same seq on both hosts.
+	hubSeq := seqOf(aMsgs, "sealed-hello")
+	if hubSeq == 0 {
+		t.Fatal("hub assigned no sequence to alice's message")
+	}
+	mMsgs, _ := bStore.ChatMessagesByConversation(ctx, "conv-1", "", 10, time.Time{})
+	if got := seqOf(mMsgs, "sealed-hello"); got != hubSeq {
+		t.Errorf("mirror seq for alice's message = %d, want the hub's %d", got, hubSeq)
+	}
 	// ...and it must have been relayed back to B's mirror too.
 	bMsgs, _ = bStore.ChatMessagesByConversation(ctx, "conv-1", "", 10, time.Time{})
 	if !hasCiphertext(bMsgs, "sealed-reply") {
@@ -394,4 +405,13 @@ func hasCiphertext(msgs []domain.ChatMessage, want string) bool {
 		}
 	}
 	return false
+}
+
+func seqOf(msgs []domain.ChatMessage, ciphertext string) int64 {
+	for _, m := range msgs {
+		if string(m.Ciphertext) == ciphertext {
+			return m.Seq
+		}
+	}
+	return 0
 }

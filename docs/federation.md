@@ -308,10 +308,25 @@ Each stage ships and is useful before the next one starts.
   one ordered log. The payloads were opaque bytes — the ordering/relay half is now
   proven both in-process and over the network; only the client-side MLS decrypt of
   those bytes remains for the two-browser harness.
-- **F6 — Ordering rework.** Hub-assigned sequence numbers replacing wall-clock
-  ordering. Receipts stop being timestamp watermarks — `domain.go:506-521` is the
-  deepest single-clock assumption in the codebase, and two hosts' clocks skewing
-  would mark people as having read messages they never received.
+- **F6 — Ordering rework.** *Foundation built; receipts + clients staged.*
+    - **Done:** every message now carries `ChatMessage.Seq`, a per-conversation
+      sequence the hub assigns atomically on append (`$inc` on the conversation
+      doc in Mongo; a per-conversation counter in the memory store). The hub is
+      the single sequencer via one rule — assign only when `Seq == 0`, so a
+      message authored on a host gets the next value and one relayed from the hub
+      keeps the hub's (carried on `RelayedMessage.Seq`, stored verbatim on the
+      mirror). The transcript now sorts `createdAt` then `seq`, so messages
+      sharing a millisecond come back in a stable order instead of a random,
+      page-dependent one. Legacy messages have `seq 0` and tie among themselves as
+      before. Additive and clock-agnostic; no client change needed for this part.
+    - **Remaining:** turn receipts from timestamp watermarks into **sequence**
+      watermarks — `domain.go`'s `DeliveredAt`/`ReadAt` are the deepest
+      single-clock assumption in the codebase, and two hosts' clocks skewing would
+      mark people as having read messages they never received. That change is
+      client-visible (both web and mobile report and interpret receipts), so it
+      needs coordinated client work and a migration, and is the one genuinely
+      cross-surface piece left. Pagination cursors moving from `createdAt` to
+      `(createdAt, seq)` rides along with it.
 
 ## What federation does not fix
 
