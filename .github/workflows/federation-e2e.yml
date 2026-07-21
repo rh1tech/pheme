@@ -1,0 +1,50 @@
+name: Federation E2E
+
+# Stands up two full, separately-running Pheme hosts federated over a signed
+# nodelist and real TLS, and drives the cross-host chat flow through the public
+# client API — the proof that F5d (relay/forward/mirror) and F5b (signed ordering
+# chain, verified by the follower) work between real servers, not just in-process.
+#
+# Runs on the kn87r box (the `fed` label), which is powerful enough to hold two
+# whole stacks plus a TLS-terminating fedproxy at once. Everything is inside
+# Docker: no host nginx, no DNS, no Cloudflare, nothing to clean up by hand.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "api/**"
+      - "test/federation-e2e/**"
+      - ".github/workflows/federation-e2e.yml"
+  pull_request:
+    paths:
+      - "api/internal/federation/**"
+      - "api/internal/chat/convfed*"
+      - "api/internal/mlschain/**"
+      - "api/internal/store/**mlschain*"
+      - "test/federation-e2e/**"
+
+# One at a time: the test binds fixed loopback ports and a fixed compose project,
+# so overlapping runs would collide. Queue rather than cancel — a fed run is short.
+concurrency:
+  group: federation-e2e
+  cancel-in-progress: false
+
+jobs:
+  cross-host:
+    runs-on: [self-hosted, linux, fed]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cross-host relay + signed ordering chain
+        run: |
+          chmod +x test/federation-e2e/run.sh
+          IMAGE=pheme-api:fedtest-${{ github.run_id }} \
+          PROJECT=phemefed${{ github.run_id }} \
+            test/federation-e2e/run.sh
+
+      - name: Clean the run's image
+        if: always()
+        run: docker image rm -f pheme-api:fedtest-${{ github.run_id }} || true
