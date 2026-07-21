@@ -219,6 +219,60 @@ func TestCrossHostCommitRoundTrip(t *testing.T) {
 	}
 }
 
+// Cross-host key-package claim: host A, adding a remote member, claims that
+// member's device key packages from their home host B (the F5c consumption).
+func TestCrossHostKeyPackageClaim(t *testing.T) {
+	aKey := hostKey5d(1)
+	bKey := hostKey5d(2)
+	roster := fakeRoster{
+		"a.example": aKey.Public().(ed25519.PublicKey),
+		"b.example": bKey.Public().(ed25519.PublicKey),
+	}
+	aClient := federation.NewClient("a.example", "ak", aKey)
+	var bURL string
+	aClient.PeerURL = func(string) string { return bURL }
+	aFed := &chat.ConvFederation{Store: store.NewMemory(nil), HostDomain: "a.example", Peers: aClient}
+
+	// Host B serves its user bob's key packages over the F5c endpoint.
+	bKPS := fakeKeyPackages{"bob": {"phone": []byte("bob-phone-kp"), "laptop": []byte("bob-laptop-kp")}}
+	bMux := http.NewServeMux()
+	federation.NewHandler("b.example", roster, nil).WithKeyPackages(bKPS).Register(bMux)
+	bSrv := httptest.NewServer(bMux)
+	defer bSrv.Close()
+	bURL = bSrv.URL
+
+	got, err := aFed.ClaimRemoteKeyPackages(context.Background(), "b.example", "bob")
+	if err != nil {
+		t.Fatalf("claim remote: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("claimed %d packages, want 2 (bob's two devices)", len(got))
+	}
+	byDevice := map[string]string{}
+	for _, p := range got {
+		byDevice[p.DeviceID] = string(p.KeyPackage)
+	}
+	if byDevice["phone"] != "bob-phone-kp" || byDevice["laptop"] != "bob-laptop-kp" {
+		t.Errorf("claimed packages = %v, want bob's phone and laptop", byDevice)
+	}
+}
+
+// fakeKeyPackages is a per-user, per-device key-package store for host B's F5c
+// endpoint: userID -> deviceID -> package bytes.
+type fakeKeyPackages map[string]map[string][]byte
+
+func (f fakeKeyPackages) DevicesWithKeyPackages(_ context.Context, userID string) ([]string, error) {
+	var ids []string
+	for id := range f[userID] {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (f fakeKeyPackages) ClaimKeyPackage(_ context.Context, userID, deviceID string) ([]byte, error) {
+	return f[userID][deviceID], nil
+}
+
 // Federated TURN: bob's host fetches alice's host's TURN for a shared call, so
 // both ends can relay through a server each can reach. A host without a stake in
 // the conversation gets nothing.

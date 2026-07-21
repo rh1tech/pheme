@@ -355,10 +355,19 @@ func (h *Handler) claimKeyPackages(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "between 1 and 64 devices are required")
 		return
 	}
-	members, err := h.memberIDs(r.Context(), convID)
+	// Members with their home domains, so a member who lives on another host is
+	// claimed from THERE rather than looked for in a local store that does not have
+	// them. A bare (local) member has an empty domain.
+	memberList, err := h.Store.ConversationMembers(r.Context(), convID)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not load members")
 		return
+	}
+	domainOf := make(map[string]string, len(memberList))
+	member := make(map[string]bool, len(memberList))
+	for _, m := range memberList {
+		member[m.UserID] = true
+		domainOf[m.UserID] = m.Domain
 	}
 
 	type claimed struct {
@@ -367,13 +376,36 @@ func (h *Handler) claimKeyPackages(w http.ResponseWriter, r *http.Request) {
 		KeyPackage []byte `json:"keyPackage"`
 	}
 	out := make([]claimed, 0, len(req.Devices))
+	remoteDone := make(map[string]bool) // a remote user is claimed whole, once
 	for _, d := range req.Devices {
-		if d.UserID == "" || d.DeviceID == "" {
-			httpx.Error(w, http.StatusBadRequest, "each device needs a userId and a deviceId")
+		if d.UserID == "" {
+			httpx.Error(w, http.StatusBadRequest, "each device needs a userId")
 			return
 		}
-		if !members[d.UserID] {
+		if !member[d.UserID] {
 			httpx.Error(w, http.StatusForbidden, "that user is not in this conversation")
+			return
+		}
+		// A member homed on another host: claim ALL their devices from that host in
+		// one round trip (a remote claim is per user — the home host knows the
+		// devices — so the requested deviceId is not needed and may be blank).
+		if dom := domainOf[d.UserID]; dom != "" && dom != h.HostDomain {
+			if h.Fed == nil || remoteDone[d.UserID] {
+				continue
+			}
+			remoteDone[d.UserID] = true
+			packages, err := h.Fed.ClaimRemoteKeyPackages(r.Context(), dom, d.UserID)
+			if err != nil {
+				continue // that host is unreachable; local and other-host claims still stand
+			}
+			for _, p := range packages {
+				out = append(out, claimed{UserID: d.UserID, DeviceID: p.DeviceID, KeyPackage: p.KeyPackage})
+			}
+			continue
+		}
+		// A local member: claim the exact device, as before.
+		if d.DeviceID == "" {
+			httpx.Error(w, http.StatusBadRequest, "a local device needs a deviceId")
 			return
 		}
 		kp, err := h.Store.ClaimKeyPackage(r.Context(), d.UserID, d.DeviceID)

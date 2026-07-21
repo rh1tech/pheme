@@ -34,6 +34,7 @@ type peerConversations interface {
 	RelayCallSignalToPeer(ctx context.Context, peerDomain string, s federation.CallSignalRelay) error
 	RelayCallNudgeToPeer(ctx context.Context, peerDomain string, s federation.CallNudge) error
 	RequestTurnFromPeer(ctx context.Context, peerDomain, conversationID string) (federation.TurnGrant, error)
+	ClaimRemoteKeyPackages(ctx context.Context, homeDomain, userID string) ([]federation.ClaimedKeyPackage, error)
 }
 
 // callMailbox is the append side of the per-call signalling channel — enough for a
@@ -510,6 +511,16 @@ func (c *ConvFederation) nudgeCall(ctx context.Context, convID, callID, fromUID 
 		Recipients:     to,
 		CallSignal:     &live.CallSignal{CallID: callID, Seq: seq, FromUserID: fromUID},
 	})
+}
+
+// ClaimRemoteKeyPackages claims a remote user's device key packages from their
+// home host, so this host — acting as the hub adding them to a group — gets the
+// leaf material it needs. Returns nil when federation is not wired.
+func (c *ConvFederation) ClaimRemoteKeyPackages(ctx context.Context, homeDomain, userID string) ([]federation.ClaimedKeyPackage, error) {
+	if c.Peers == nil {
+		return nil, nil
+	}
+	return c.Peers.ClaimRemoteKeyPackages(ctx, homeDomain, userID)
 }
 
 // TurnCredentials (inbound): a peer asks this host to mint a TURN credential so a
