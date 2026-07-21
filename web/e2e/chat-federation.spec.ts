@@ -184,24 +184,48 @@ test.describe.serial('federation', () => {
       .toBe(false)
   })
 
-  // A sender cannot MLS-decrypt their OWN message, so its plaintext comes from a local
-  // cache keyed by the message id. A relayed cross-host message stored under a different
-  // id than the sender cached would show as unreadable after a reload. It must not.
-  test('a sender still reads their own cross-host message after a reload', async () => {
+  // A sender cannot MLS-decrypt their OWN message; its plaintext comes from a local
+  // cache keyed by the message id. So the id the sender caches under MUST equal the id
+  // the message is stored under — and that is subtle across hosts, because BOTH the hub
+  // (alice, the conversation's creator) and the MIRROR (bob, on the other host) can
+  // send, and the mirror's message makes a round trip to the hub for its id.
+  //
+  // The mirror-sender case is the one that broke: bob's message was forwarded to the
+  // hub, which assigned an id, but the mirror stored its own copy under a FRESH local id
+  // instead of the hub's — so bob's cached plaintext (keyed to the hub's id from the
+  // POST response) never matched the stored message, and bob's own message rendered as
+  // "not decrypted" while alice read it fine. This test sends from BOTH sides and
+  // reloads BOTH, so each must still read its own words.
+  test('both the hub and the mirror sender read their own message after a reload', async () => {
     const conv = await api<{ id: string }>(alice.page, FED_A_URL, '/v1/conversations', {
       kind: 'direct',
       memberIds: ['bobfed@hostb'],
     })
     await openChatAndJoin(alice.page, conv.id)
-    await send(alice.page, 'my own words')
-    await expect(alice.page.getByTestId('chat-message')).toContainText('my own words')
+    await send(alice.page, 'alice speaks') // hub sender
     await openChatAndJoin(bob.page, conv.id)
-    await expect(bob.page.getByTestId('chat-message')).toContainText('my own words', { timeout: 30_000 })
+    await expect(bob.page.getByTestId('chat-message')).toContainText('alice speaks', { timeout: 30_000 })
+    await send(bob.page, 'bob replies') // MIRROR sender — the path that broke
+    await expect(alice.page.getByTestId('chat-message').last()).toContainText('bob replies', {
+      timeout: 30_000,
+    })
 
+    // Reload BOTH and reopen. After a reload a sender can only render its own message
+    // from the plaintext cache, so this is where an id mismatch surfaces.
     await alice.page.reload()
     await openChatAndJoin(alice.page, conv.id)
-    await expect(alice.page.getByTestId('chat-message')).toContainText('my own words', { timeout: 30_000 })
-    expect((await renderedMessages(alice.page)).join('\n')).toContain('my own words')
+    await bob.page.reload()
+    await openChatAndJoin(bob.page, conv.id)
+
+    // Each reads BOTH messages — crucially, its OWN one.
+    await expect
+      .poll(async () => (await renderedMessages(alice.page)).join('\n'), { timeout: 30_000 })
+      .toContain('alice speaks')
+    expect((await renderedMessages(alice.page)).join('\n')).toContain('bob replies')
+    await expect
+      .poll(async () => (await renderedMessages(bob.page)).join('\n'), { timeout: 30_000 })
+      .toContain('bob replies')
+    expect((await renderedMessages(bob.page)).join('\n')).toContain('alice speaks')
   })
 
   // A GROUP with a member on another host: add by handle, exchange both ways, the remote

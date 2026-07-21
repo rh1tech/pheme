@@ -706,6 +706,14 @@ func (c *ConvFederation) isMemberFromHost(ctx context.Context, convID, userID, h
 
 func fromRelayed(convID string, rm federation.RelayedMessage) domain.ChatMessage {
 	return domain.ChatMessage{
+		// The hub's id is the message's ONE identity across the whole network. Keeping
+		// it here is load-bearing: a mirror storing its own forwarded message under a
+		// fresh local id (what an empty ID makes AppendChatMessage do) meant the sender's
+		// POST response and their plaintext cache were keyed to one id while the stored
+		// message had another — so the sender's own message could never be matched back
+		// to its cached plaintext, and a sender cannot MLS-decrypt their own message. It
+		// rendered as "not decrypted" on the sender's side while everyone else read it.
+		ID:             rm.ID,
 		ConversationID: convID,
 		SenderID:       rm.SenderID,
 		Ciphertext:     rm.Ciphertext,
