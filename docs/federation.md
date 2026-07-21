@@ -350,10 +350,14 @@ Each stage ships and is useful before the next one starts.
   asked (`conversation-call-nudge` is the keep-ringing re-ping). The sealed SDP/ICE
   is opaque to every server, exactly as in a single-host call. The answer lock
   stays deliberately host-local: a member's devices all live on that member's home
-  host, which is the set the first-to-answer lock arbitrates. What is NOT solved is
-  a shared TURN relay — each host mints its own credentials, so a pair that needs
-  relaying falls back to each side's own coturn; direct and single-host-TURN paths
-  are unaffected.
+  host, which is the set the first-to-answer lock arbitrates. **TURN is shared
+  across hosts too:** when a client fetches ICE for a cross-host conversation
+  (`/v1/calls/ice-servers?conversationId=…`), its host adds every remote
+  participant host's TURN — each minted by that host from its own secret and
+  fetched over the signed transport (`conversation-turn`, gated on the asker having
+  a member in the conversation). Both peers then hold both hosts' TURN, so ICE
+  finds a relay they share; the secret never leaves its host, only a short-lived
+  credential does.
 
 ## What federation does not fix
 

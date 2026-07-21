@@ -369,7 +369,14 @@ export const api = {
    * call in the most confusing way possible (the browser just reports that no candidate
    * pair worked).
    */
-  iceServers: () => request<{ iceServers: RTCIceServer[] }>('/v1/calls/ice-servers'),
+  // conversationId lets the server add every participant host's TURN for a
+  // cross-host call, so both ends share a relay each can reach. Omitted for a
+  // plain availability probe.
+  iceServers: (conversationId?: string) =>
+    request<{ iceServers: RTCIceServer[] }>(
+      '/v1/calls/ice-servers' +
+        (conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''),
+    ),
 
   /**
    * Relays one sealed signal. `ring` wakes the other person's devices with a push, and only

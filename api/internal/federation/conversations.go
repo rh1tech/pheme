@@ -59,6 +59,20 @@ type ConversationService interface {
 	// DeliverCallNudge re-nudges local members that a still-ringing call has
 	// something to refetch — the cross-host half of the keep-ringing re-ping.
 	DeliverCallNudge(ctx context.Context, fromDomain string, s CallNudge) error
+
+	// TurnCredentials mints this host's TURN credential for a peer whose member
+	// shares the conversation, so a cross-host call can relay through a server both
+	// ends can reach. Returns a zero grant with no error when this host has no TURN.
+	TurnCredentials(ctx context.Context, fromDomain, conversationID string) (TurnGrant, error)
+}
+
+// TurnGrant is one host's TURN relay offered to a peer for a cross-host call: the
+// relay URLs and a short-lived credential the host minted from its own secret. The
+// secret never travels — only a credential that expires on its own.
+type TurnGrant struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username"`
+	Credential string   `json:"credential"`
 }
 
 // CallSignalRelay is one sealed call signal on the wire between hosts. The
@@ -182,6 +196,7 @@ func (h *Handler) registerConversations(mux *http.ServeMux) {
 	mux.Handle("POST /federation/v1/conversation-relay-receipt", h.verified(http.HandlerFunc(h.convRelayReceipt)))
 	mux.Handle("POST /federation/v1/conversation-call-signal", h.verified(http.HandlerFunc(h.convCallSignal)))
 	mux.Handle("POST /federation/v1/conversation-call-nudge", h.verified(http.HandlerFunc(h.convCallNudge)))
+	mux.Handle("POST /federation/v1/conversation-turn", h.verified(http.HandlerFunc(h.convTurn)))
 }
 
 // convProvision (follower): the hub asks us to stand up a mirror for one of our
@@ -306,6 +321,23 @@ func (h *Handler) convCallNudge(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"nudged": true})
 }
 
+// convTurn: a peer asks this host to mint a TURN credential for a shared call.
+func (h *Handler) convTurn(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConversationID string `json:"conversationId"`
+	}
+	if err := json.Unmarshal(verifiedBody(r), &req); err != nil || req.ConversationID == "" {
+		httpx.Error(w, http.StatusBadRequest, "conversationId required")
+		return
+	}
+	grant, err := h.Conversations.TurnCredentials(r.Context(), caller(r).Origin, req.ConversationID)
+	if err != nil {
+		httpx.Error(w, http.StatusForbidden, "no turn for this conversation")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, grant)
+}
+
 // --- client side ---
 
 // ProvisionRemoteMirror tells a peer host to stand up a mirror for one of its users.
@@ -351,4 +383,13 @@ func (c *Client) RelayCallSignalToPeer(ctx context.Context, peerDomain string, s
 // RelayCallNudgeToPeer re-nudges a participant host's members about a ringing call.
 func (c *Client) RelayCallNudgeToPeer(ctx context.Context, peerDomain string, s CallNudge) error {
 	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-call-nudge", s, nil)
+}
+
+// RequestTurnFromPeer asks a participant host for a TURN credential so a cross-host
+// call can relay through it.
+func (c *Client) RequestTurnFromPeer(ctx context.Context, peerDomain, conversationID string) (TurnGrant, error) {
+	var out TurnGrant
+	err := c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-turn",
+		map[string]any{"conversationId": conversationID}, &out)
+	return out, err
 }

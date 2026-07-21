@@ -656,7 +656,7 @@ export class Call {
   private async peerConnection(): Promise<RTCPeerConnection> {
     if (this.pc) return this.pc
 
-    const { iceServers } = await api.iceServers()
+    const { iceServers } = await api.iceServers(this.conversationId)
     const pc = new RTCPeerConnection({ iceServers })
     this.pc = pc
 

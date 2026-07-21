@@ -85,18 +85,14 @@ func (h *Handler) iceServers(w http.ResponseWriter, r *http.Request) {
 	username, credential := turnCredential(h.ICE.Secret, time.Now().Add(h.ICE.TTL))
 
 	servers := make([]iceServer, 0, 2)
-	var stun, turn []string
+	var stun []string
 	for _, raw := range strings.Split(h.ICE.URLs, ",") {
 		url := strings.TrimSpace(raw)
-		if url == "" {
-			continue
-		}
 		if strings.HasPrefix(url, "stun:") {
 			stun = append(stun, url)
-		} else {
-			turn = append(turn, url)
 		}
 	}
+	turn := turnURLsOf(h.ICE.URLs)
 	if len(stun) > 0 {
 		servers = append(servers, iceServer{URLs: stun})
 	}
@@ -104,7 +100,36 @@ func (h *Handler) iceServers(w http.ResponseWriter, r *http.Request) {
 		servers = append(servers, iceServer{URLs: turn, Username: username, Credential: credential})
 	}
 
+	// A call in a cross-host conversation needs a relay both ends can reach. When
+	// the client names its conversation and that conversation spans hosts, add each
+	// remote participant host's TURN — minted by that host from its own secret and
+	// fetched over the signed transport. Both peers then hold both hosts' TURN, so
+	// ICE finds a relay they share. Absent a conversationId, or for a local-only
+	// conversation, this is a no-op and the response is exactly as before.
+	if convID := strings.TrimSpace(r.URL.Query().Get("conversationId")); convID != "" && h.Fed != nil {
+		for _, grant := range h.Fed.RemoteTurn(r.Context(), convID) {
+			servers = append(servers, iceServer{
+				URLs: grant.URLs, Username: grant.Username, Credential: grant.Credential,
+			})
+		}
+	}
+
 	httpx.JSON(w, http.StatusOK, map[string]any{"iceServers": servers})
+}
+
+// turnURLsOf returns the turn:/turns: URLs from a comma-separated ICE URL list.
+func turnURLsOf(list string) []string {
+	var turn []string
+	for _, raw := range strings.Split(list, ",") {
+		url := strings.TrimSpace(raw)
+		if url == "" {
+			continue
+		}
+		if !strings.HasPrefix(url, "stun:") {
+			turn = append(turn, url)
+		}
+	}
+	return turn
 }
 
 // turnCredential mints a coturn `use-auth-secret` credential valid until `expiry`.

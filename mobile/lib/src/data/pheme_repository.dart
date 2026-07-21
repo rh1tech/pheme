@@ -848,9 +848,14 @@ class PhemeRepository {
   ///
   /// Throws [CallingUnavailableException] when the server has no TURN configured — which is how the
   /// UI knows not to offer a call button at all.
-  Future<List<IceServer>> iceServers() async {
+  /// [conversationId], when given, lets the server add every participant host's
+  /// TURN for a cross-host call so both ends share a relay each can reach.
+  Future<List<IceServer>> iceServers({String? conversationId}) async {
     try {
-      final d = await _get('/v1/calls/ice-servers');
+      final path = conversationId == null
+          ? '/v1/calls/ice-servers'
+          : '/v1/calls/ice-servers?conversationId=${Uri.encodeQueryComponent(conversationId)}';
+      final d = await _get(path);
       return ((d['iceServers'] as List?) ?? const [])
           .map((e) => IceServer.fromJson((e as Map).cast<String, dynamic>()))
           .toList();

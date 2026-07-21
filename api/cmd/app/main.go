@@ -189,7 +189,13 @@ func main() {
 				// handler serves; the handler itself is the ringer.
 				Mailbox: b.CallMailbox(),
 				Ringer:  appHandler.Chat,
-				Logger:  logger,
+				// So a peer can relay a cross-host call through this host's TURN.
+				ICE: chat.ICEConfig{
+					URLs:   cfg.TURNURLs,
+					Secret: cfg.TURNSecret,
+					TTL:    cfg.TURNTTL,
+				},
+				Logger: logger,
 			}
 			fedHandler.WithConversations(convFed)
 			appHandler.Chat.Fed = convFed

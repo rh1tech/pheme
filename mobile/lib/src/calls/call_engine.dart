@@ -651,7 +651,7 @@ class CallEngine {
     final existing = _pc;
     if (existing != null) return existing;
 
-    final servers = await _repo.iceServers();
+    final servers = await _repo.iceServers(conversationId: conversationId);
     final pc = await createPeerConnection({
       'iceServers': servers.map((s) => s.toJson()).toList(),
     });

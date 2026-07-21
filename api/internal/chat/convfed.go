@@ -33,6 +33,7 @@ type peerConversations interface {
 	RelayReceiptToPeer(ctx context.Context, peerDomain string, s federation.ReceiptUpdate) error
 	RelayCallSignalToPeer(ctx context.Context, peerDomain string, s federation.CallSignalRelay) error
 	RelayCallNudgeToPeer(ctx context.Context, peerDomain string, s federation.CallNudge) error
+	RequestTurnFromPeer(ctx context.Context, peerDomain, conversationID string) (federation.TurnGrant, error)
 }
 
 // callMailbox is the append side of the per-call signalling channel — enough for a
@@ -74,7 +75,10 @@ type ConvFederation struct {
 	// (a deployment with no calling configured).
 	Mailbox callMailbox
 	Ringer  callRinger
-	Logger  *slog.Logger
+	// ICE is this host's TURN config, used to mint a credential a peer's member can
+	// use to relay a cross-host call through this host. Zero value = no TURN offered.
+	ICE    ICEConfig
+	Logger *slog.Logger
 }
 
 func (c *ConvFederation) log() *slog.Logger {
@@ -506,6 +510,55 @@ func (c *ConvFederation) nudgeCall(ctx context.Context, convID, callID, fromUID 
 		Recipients:     to,
 		CallSignal:     &live.CallSignal{CallID: callID, Seq: seq, FromUserID: fromUID},
 	})
+}
+
+// TurnCredentials (inbound): a peer asks this host to mint a TURN credential so a
+// member of theirs can relay a cross-host call through our TURN. Only for a
+// conversation that actually has a member from the asking host — otherwise a peer
+// could farm credentials off us for calls it has no part in.
+func (c *ConvFederation) TurnCredentials(ctx context.Context, fromDomain, conversationID string) (federation.TurnGrant, error) {
+	members, err := c.Store.ConversationMembers(ctx, conversationID)
+	if err != nil {
+		return federation.TurnGrant{}, errNotMember
+	}
+	stake := false
+	for _, m := range members {
+		if m.Domain == fromDomain {
+			stake = true
+			break
+		}
+	}
+	if !stake {
+		return federation.TurnGrant{}, errNotMember
+	}
+	urls := turnURLsOf(c.ICE.URLs)
+	if len(urls) == 0 {
+		return federation.TurnGrant{}, nil // this host offers no TURN; not an error
+	}
+	username, credential := turnCredential(c.ICE.Secret, time.Now().Add(c.ICE.TTL))
+	return federation.TurnGrant{URLs: urls, Username: username, Credential: credential}, nil
+}
+
+// RemoteTurn (outbound): fetch a participant host's TURN so both ends of a
+// cross-host call share a relay each can reach. Best-effort — a host that is down
+// or has no TURN simply contributes nothing, and the call falls back to STUN and
+// direct paths.
+func (c *ConvFederation) RemoteTurn(ctx context.Context, conversationID string) []federation.TurnGrant {
+	if c.Peers == nil {
+		return nil
+	}
+	var grants []federation.TurnGrant
+	for _, host := range c.participantHosts(ctx, conversationID) {
+		grant, err := c.Peers.RequestTurnFromPeer(ctx, host, conversationID)
+		if err != nil {
+			c.log().Warn("remote turn fetch failed", "conversation", conversationID, "peer", host, "error", err)
+			continue
+		}
+		if len(grant.URLs) > 0 {
+			grants = append(grants, grant)
+		}
+	}
+	return grants
 }
 
 // ReportReceipt is the outbound hook the chat handler calls after it has advanced a

@@ -219,6 +219,69 @@ func TestCrossHostCommitRoundTrip(t *testing.T) {
 	}
 }
 
+// Federated TURN: bob's host fetches alice's host's TURN for a shared call, so
+// both ends can relay through a server each can reach. A host without a stake in
+// the conversation gets nothing.
+func TestCrossHostTurnCredentials(t *testing.T) {
+	aKey := hostKey5d(1)
+	bKey := hostKey5d(2)
+	roster := fakeRoster{
+		"a.example": aKey.Public().(ed25519.PublicKey),
+		"b.example": bKey.Public().(ed25519.PublicKey),
+	}
+	aStore := store.NewMemory(nil)
+	bStore := store.NewMemory(nil)
+
+	var aURL, bURL string
+	aClient := federation.NewClient("a.example", "ak", aKey)
+	aClient.PeerURL = func(d string) string { return map[string]string{"b.example": bURL}[d] }
+	bClient := federation.NewClient("b.example", "bk", bKey)
+	bClient.PeerURL = func(d string) string { return map[string]string{"a.example": aURL}[d] }
+
+	// Host A offers TURN; host B does not need to for this test.
+	aFed := &chat.ConvFederation{Store: aStore, Live: live.NewMemoryBus(), Peers: aClient, HostDomain: "a.example",
+		ICE: chat.ICEConfig{URLs: "stun:stun.a:3478,turn:turn.a:3478?transport=udp", Secret: "a-secret", TTL: time.Hour}}
+	bFed := &chat.ConvFederation{Store: bStore, Live: live.NewMemoryBus(), Peers: bClient, HostDomain: "b.example"}
+
+	aMux := http.NewServeMux()
+	federation.NewHandler("a.example", roster, nil).WithConversations(aFed).Register(aMux)
+	aSrv := httptest.NewServer(aMux)
+	defer aSrv.Close()
+	aURL = aSrv.URL
+	bMux := http.NewServeMux()
+	federation.NewHandler("b.example", roster, nil).WithConversations(bFed).Register(bMux)
+	bSrv := httptest.NewServer(bMux)
+	defer bSrv.Close()
+	bURL = bSrv.URL
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	conv, _ := aStore.CreateConversation(ctx, domain.Conversation{
+		ID: "conv-turn", Kind: domain.ConversationGroup, CreatedAt: now,
+	}, []domain.ConversationMember{{UserID: "alice", Role: domain.RoleAdmin, JoinedAt: now}})
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+		t.Fatal(err)
+	}
+
+	// bob's host fetches A's TURN for the shared conversation.
+	grants := bFed.RemoteTurn(ctx, "conv-turn")
+	if len(grants) != 1 {
+		t.Fatalf("got %d turn grants, want 1 from host A", len(grants))
+	}
+	g := grants[0]
+	if len(g.URLs) != 1 || g.URLs[0] != "turn:turn.a:3478?transport=udp" {
+		t.Errorf("turn urls = %v, want A's turn url only (stun excluded)", g.URLs)
+	}
+	if g.Username == "" || g.Credential == "" {
+		t.Errorf("grant missing credential: %+v", g)
+	}
+
+	// A host with no member in the conversation is refused.
+	if _, err := aFed.TurnCredentials(ctx, "c.example", "conv-turn"); err == nil {
+		t.Error("host A minted TURN for a host with no member in the conversation")
+	}
+}
+
 // Federated calls: a signal alice places on host A reaches bob's host B — it lands
 // in B's own call mailbox (so bob's device fetches it in order) and rings bob.
 func TestCrossHostCallSignalReachesCallee(t *testing.T) {
