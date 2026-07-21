@@ -1,6 +1,9 @@
 name: Deploy
 
-# Push tag vX.Y.Z -> build images, deploy PROD. That is the only trigger.
+# Push tag vX.Y.Z -> build images once, deploy PROD to BOTH federated hosts. That
+# is the only trigger. The first host (deploy/smoke) uses DEPLOY_* / PROD_API_URL;
+# the second (deploy-2/smoke-2) uses the …_2 variants, so the two boxes are
+# configured independently but always run the identical release.
 #
 # Pushing main used to deploy a DEV environment, and a tagged release pushes main AND the tag
 # together — so every release ran this workflow TWICE, and the concurrency group below made the
@@ -247,4 +250,101 @@ jobs:
             || fail "unprefixed login answered $code, expected 404 — the API is reachable without the prefix"
           echo "  api invisible without the prefix"
 
+          echo "SMOKE PASSED"
+
+  # --- Second host -------------------------------------------------------------
+  #
+  # The same release, deployed to the second federated server in parallel with the
+  # first. It uses its own set of secrets (…_2) so the two boxes are configured
+  # independently; both pull the identical images the build job pushed. Kept as a
+  # separate job rather than a matrix so the proven first-host path is untouched.
+  deploy-2:
+    name: Deploy prod (host 2)
+    needs: build
+    runs-on: [self-hosted, linux, deploy]
+    environment: prod
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY_2 }}" > ~/.ssh/id_deploy2
+          chmod 600 ~/.ssh/id_deploy2
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST_2 }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Sync deploy files
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_2 }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER_2 }}
+        run: |
+          scp -i ~/.ssh/id_deploy2 deploy/prod/docker-compose.yml \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/pheme/docker-compose.yml"
+          scp -i ~/.ssh/id_deploy2 deploy/prod/turnserver.conf \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/pheme/turnserver.conf"
+          scp -i ~/.ssh/id_deploy2 deploy/deploy.sh \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/pheme/deploy.sh"
+          ssh -i ~/.ssh/id_deploy2 "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "chmod +x /opt/pheme/deploy.sh"
+
+      - name: Log server in to GHCR
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_2 }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER_2 }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "${GHCR_TOKEN}" | ssh -i ~/.ssh/id_deploy2 "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_2 }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER_2 }}
+          ENV_NAME: prod
+          API_IMAGE: ${{ needs.build.outputs.api_image }}
+          WEB_IMAGE: ${{ needs.build.outputs.web_image }}
+        run: |
+          ssh -i ~/.ssh/id_deploy2 "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "API_IMAGE='${API_IMAGE}' WEB_IMAGE='${WEB_IMAGE}' /opt/pheme/deploy.sh '${ENV_NAME}'"
+
+  smoke-2:
+    name: Smoke test prod (host 2)
+    needs: [build, deploy-2]
+    runs-on: [self-hosted, linux, deploy]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Smoke
+        env:
+          WEB_URL: ${{ vars.PROD_WEB_URL_2 || 'https://test.example.com' }}
+          API_URL: ${{ secrets.PROD_API_URL_2 }}
+          EXPECTED_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          fail() { echo "SMOKE FAILED: $*" >&2; exit 1; }
+          [ -n "$API_URL" ] || fail "PROD_API_URL_2 secret is not set (it must include the path prefix)"
+          for i in $(seq 1 30); do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' "$API_URL/healthz" 2>/dev/null || echo 000)
+            [ "$code" = "200" ] && break
+            [ "$i" = "30" ] && fail "API never became healthy: last status $code"
+            sleep 2
+          done
+          echo "  api healthy"
+          served=$(curl -fsS "$WEB_URL/version.json" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+          [ -n "$served" ] || fail "no version served at $WEB_URL/version.json"
+          [ "$served" = "$EXPECTED_VERSION" ] || fail "prod is serving $served, but this deploy was $EXPECTED_VERSION"
+          echo "  serving $served"
+          code=$(curl -fsS -o /dev/null -w '%{http_code}' "$WEB_URL/")
+          [ "$code" = "200" ] || fail "web root returned $code"
+          echo "  web root 200"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_URL/v1/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke-check@invalid.pheme.test","password":"not-a-real-password"}')
+          [ "$code" = "401" ] || fail "login with bad credentials returned $code, expected 401"
+          echo "  auth path alive (401 on bad credentials)"
+          origin=$(printf '%s' "$API_URL" | sed -E 's#^(https?://[^/]+).*#\1#')
+          for probe in /healthz /v1/meta /v1/stream; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$origin$probe")
+            [ "$code" = "404" ] || fail "$probe answered $code without the path prefix, expected 404 from the decoy"
+          done
+          echo "  api invisible without the prefix"
           echo "SMOKE PASSED"

@@ -23,6 +23,11 @@ PROJECT="pheme-$ENV_NAME"
 [ -f "$COMPOSE" ]  || { echo "error: missing $COMPOSE" >&2; exit 1; }
 [ -f "$ENV_FILE" ] || { echo "error: missing $ENV_FILE" >&2; exit 1; }
 
+# The app mounts a nodelist file; a standalone (non-federated) host has none, so the
+# compose default points at this placeholder, which the app never reads unless
+# PHEME_NODELIST_PATH is also set. Create it if it does not exist yet.
+[ -f "$ROOT/no-nodelist.json" ] || echo '{}' > "$ROOT/no-nodelist.json"
+
 if [ -n "${API_IMAGE:-}" ]; then
   sed -i "s|^API_IMAGE=.*|API_IMAGE=${API_IMAGE}|" "$ENV_FILE"
 fi

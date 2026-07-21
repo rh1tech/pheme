@@ -125,6 +125,10 @@ services:
       # The same Firebase service-account key the dispatcher mounts. See the note there for the
       # ownership the distroless non-root user (uid 65532) needs.
       - ${PHEME_FCM_CREDENTIALS_HOST:-/opt/pheme/fcm-service-account.json}:/run/secrets/fcm-service-account.json:ro
+      # The signed nodelist, for a host that has joined a federated network. A
+      # standalone host leaves PHEME_NODELIST_FILE unset and this mounts a harmless
+      # empty placeholder that the app never reads (PHEME_NODELIST_PATH is unset too).
+      - ${PHEME_NODELIST_FILE:-/opt/pheme/no-nodelist.json}:/nodelist.json:ro
 
   ingest:
     image: ${API_IMAGE}
