@@ -44,6 +44,7 @@ type peerConversations interface {
 	RequestTurnFromPeer(ctx context.Context, peerDomain, conversationID string) (federation.TurnGrant, error)
 	ClaimRemoteKeyPackages(ctx context.Context, homeDomain, userID string) ([]federation.ClaimedKeyPackage, error)
 	ResolveRemoteUser(ctx context.Context, homeDomain, username string) (federation.RemoteUser, error)
+	DeleteConversationOnPeer(ctx context.Context, peerDomain, conversationID string) error
 }
 
 // callMailbox is the append side of the per-call signalling channel — enough for a
@@ -184,6 +185,7 @@ func (c *ConvFederation) ProvisionMirror(ctx context.Context, hubDomain string, 
 		ID:        spec.ConversationID,
 		Kind:      domain.ConversationKind(spec.Kind),
 		Title:     spec.Title,
+		DirectKey: spec.DirectKey,
 		HubDomain: hubDomain,
 		CreatedAt: now,
 	}
@@ -204,6 +206,71 @@ func (c *ConvFederation) ProvisionMirror(ctx context.Context, hubDomain string, 
 	}
 	_, err := c.Store.CreateConversation(ctx, conv, members)
 	return err
+}
+
+// DeleteMirror deletes this host's copy of a conversation because fromDomain — a
+// peer that shares it — deleted theirs. It verifies fromDomain is actually part of
+// the conversation (its hub, or the home of one of its members) before deleting,
+// so a signed peer cannot delete a conversation it has nothing to do with.
+func (c *ConvFederation) DeleteMirror(ctx context.Context, fromDomain, conversationID string) error {
+	conv, err := c.Store.ConversationByID(ctx, conversationID)
+	if err != nil {
+		return nil // already gone; nothing to do
+	}
+	members, err := c.Store.ConversationMembers(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+	if !peerInConversation(conv, members, fromDomain) {
+		return nil // not this caller's conversation — ignore
+	}
+	recipients := make([]string, 0, len(members))
+	for _, m := range members {
+		recipients = append(recipients, m.UserID)
+	}
+	if err := c.Store.DeleteConversation(ctx, conversationID); err != nil {
+		return err
+	}
+	c.Live.Publish(live.Event{ConversationID: conversationID, ConversationDeleted: true, Recipients: recipients})
+	return nil
+}
+
+// PropagateDelete tells every OTHER host in a conversation to delete their copy,
+// after this host deleted its own. Best effort: a peer that is unreachable keeps a
+// stale mirror, a nuisance rather than a correctness problem — the local delete has
+// already happened.
+func (c *ConvFederation) PropagateDelete(ctx context.Context, conv domain.Conversation, members []domain.ConversationMember) {
+	if c.Peers == nil {
+		return
+	}
+	peers := make(map[string]struct{})
+	if conv.IsMirror() && conv.HubDomain != "" && conv.HubDomain != c.HostDomain {
+		peers[conv.HubDomain] = struct{}{}
+	}
+	for _, m := range members {
+		if m.Domain != "" && m.Domain != c.HostDomain {
+			peers[m.Domain] = struct{}{}
+		}
+	}
+	for d := range peers {
+		if err := c.Peers.DeleteConversationOnPeer(ctx, d, conv.ID); err != nil {
+			c.log().Warn("federation: propagate delete", "peer", d, "conversation", conv.ID, "error", err)
+		}
+	}
+}
+
+// peerInConversation reports whether peerDomain is the hub of conv or the home of
+// one of its members — the hosts entitled to act on it.
+func peerInConversation(conv domain.Conversation, members []domain.ConversationMember, peerDomain string) bool {
+	if conv.HubDomain == peerDomain {
+		return true
+	}
+	for _, m := range members {
+		if m.Domain == peerDomain {
+			return true
+		}
+	}
+	return false
 }
 
 // DeliverRelayed appends relayed messages to the mirror's log and publishes them
@@ -793,6 +860,7 @@ func (c *ConvFederation) ProvisionMirrorOn(ctx context.Context, conv domain.Conv
 		ConversationID: conv.ID,
 		Kind:           string(conv.Kind),
 		Title:          conv.Title,
+		DirectKey:      conv.DirectKey,
 		LocalUserID:    mirrorLocalUserID,
 		RemoteMembers:  c.remoteMembersExcept(ctx, members, mirrorLocalUserID),
 	}

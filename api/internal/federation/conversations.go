@@ -64,6 +64,11 @@ type ConversationService interface {
 	// shares the conversation, so a cross-host call can relay through a server both
 	// ends can reach. Returns a zero grant with no error when this host has no TURN.
 	TurnCredentials(ctx context.Context, fromDomain, conversationID string) (TurnGrant, error)
+
+	// DeleteMirror deletes this host's copy of a conversation because a peer that
+	// shares it deleted theirs. fromDomain is the proven caller; the implementation
+	// verifies that host is actually part of the conversation before deleting.
+	DeleteMirror(ctx context.Context, fromDomain, conversationID string) error
 }
 
 // TurnGrant is one host's TURN relay offered to a peer for a cross-host call: the
@@ -107,12 +112,17 @@ type ReceiptUpdate struct {
 
 // MirrorSpec describes the conversation a follower should stand up.
 type MirrorSpec struct {
-	ConversationID string         `json:"conversationId"`
-	Kind           string         `json:"kind"`
-	Title          string         `json:"title,omitempty"`
-	LocalUserID    string         `json:"localUserId"` // the member who lives on the receiving host
-	RemoteMembers  []RemoteMember `json:"remoteMembers"`
-	GroupState     *MirrorGroupSt `json:"groupState,omitempty"`
+	ConversationID string `json:"conversationId"`
+	Kind           string `json:"kind"`
+	Title          string `json:"title,omitempty"`
+	// DirectKey is the pair-dedup key for a direct chat. It is derived from the two
+	// members' domain-qualified identities, so BOTH hosts compute the same value —
+	// carrying it here is what lets the mirror side recognise an existing chat and
+	// refuse to create a second when its user starts one back the other way.
+	DirectKey     string         `json:"directKey,omitempty"`
+	LocalUserID   string         `json:"localUserId"` // the member who lives on the receiving host
+	RemoteMembers []RemoteMember `json:"remoteMembers"`
+	GroupState    *MirrorGroupSt `json:"groupState,omitempty"`
 }
 
 // RemoteMember is one member who lives on another host.
@@ -202,6 +212,24 @@ func (h *Handler) registerConversations(mux *http.ServeMux) {
 	mux.Handle("POST /federation/v1/conversation-call-signal", h.verified(http.HandlerFunc(h.convCallSignal)))
 	mux.Handle("POST /federation/v1/conversation-call-nudge", h.verified(http.HandlerFunc(h.convCallNudge)))
 	mux.Handle("POST /federation/v1/conversation-turn", h.verified(http.HandlerFunc(h.convTurn)))
+	mux.Handle("POST /federation/v1/conversation-delete", h.verified(http.HandlerFunc(h.convDelete)))
+}
+
+// convDelete: a peer that shares a conversation has deleted it and asks us to
+// delete our copy too, so a deletion is not one-sided.
+func (h *Handler) convDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConversationID string `json:"conversationId"`
+	}
+	if err := json.Unmarshal(verifiedBody(r), &req); err != nil || req.ConversationID == "" {
+		httpx.Error(w, http.StatusBadRequest, "conversationId required")
+		return
+	}
+	if err := h.Conversations.DeleteMirror(r.Context(), caller(r).Origin, req.ConversationID); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not delete mirror")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 // convProvision (follower): the hub asks us to stand up a mirror for one of our
@@ -348,6 +376,13 @@ func (h *Handler) convTurn(w http.ResponseWriter, r *http.Request) {
 // ProvisionRemoteMirror tells a peer host to stand up a mirror for one of its users.
 func (c *Client) ProvisionRemoteMirror(ctx context.Context, peerDomain string, spec MirrorSpec) error {
 	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-provision", spec, nil)
+}
+
+// DeleteConversationOnPeer asks peerDomain to delete its copy of a conversation
+// this host has just deleted, so the deletion reaches both sides.
+func (c *Client) DeleteConversationOnPeer(ctx context.Context, peerDomain, conversationID string) error {
+	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-delete",
+		map[string]string{"conversationId": conversationID}, nil)
 }
 
 // RelayToPeer relays accepted messages to a participant host's mirror.

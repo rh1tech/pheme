@@ -810,6 +810,13 @@ func (h *Handler) deleteConversation(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not delete conversation")
 		return
 	}
+	// A federated conversation lives on more than one host; deleting it here must
+	// delete the mirror(s) too, or the other side keeps a chat whose hub is gone.
+	// Best effort and after the local delete — the local removal must not wait on a
+	// slow peer.
+	if h.Fed != nil {
+		h.Fed.PropagateDelete(r.Context(), conv, members)
+	}
 	h.Live.Publish(live.Event{
 		ConversationID:      convID,
 		ConversationDeleted: true,
