@@ -13,7 +13,7 @@ import {
 import { IconSearch, IconWorld } from '@tabler/icons-react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { api, imageUrl } from '../../lib/api'
+import { api, imageUrl, ApiError } from '../../lib/api'
 import { notifyError } from '../../lib/notify'
 import { userLabel } from '../../lib/conversation'
 import { remoteHandle } from '../../lib/handles'
@@ -36,22 +36,25 @@ function UserSearch({ onPick, exclude, onPickHandle }: UserSearchProps) {
   const [results, setResults] = useState<PublicUser[]>([])
   const [searching, setSearching] = useState(false)
 
+  // Debounce on the QUERY alone. `exclude` is a fresh Set on every parent render,
+  // so listing it as a dep re-fired this effect every render — the search flashing.
+  // Exclusion is a pure filter applied at render instead.
   useEffect(() => {
     const q = query.trim()
     if (q.length < 2) return // too short: the render hides stale results
-    const handle = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       setSearching(true)
       api
         .searchUsers(q)
-        .then((users) => setResults(users.filter((u) => !exclude.has(u.id))))
+        .then(setResults)
         .catch(() => setResults([]))
         .finally(() => setSearching(false))
     }, 250)
-    return () => window.clearTimeout(handle)
-  }, [query, exclude])
+    return () => window.clearTimeout(timer)
+  }, [query])
 
   const tooShort = query.trim().length < 2
-  const shownResults = tooShort ? [] : results
+  const shownResults = (tooShort ? [] : results).filter((u) => !exclude.has(u.id))
   const handle = onPickHandle ? remoteHandle(query) : null
 
   return (
@@ -179,7 +182,14 @@ export function NewChatModals({ directOpen, groupOpen, onClose, onChanged }: New
       reset()
       navigate(`/chats/${conv.id}`)
     } catch (e) {
-      notifyError(t('chat.startFailed'), e)
+      // A 404 here is the far host saying "no user by that username" — most often
+      // because they simply have not set one. Say so, rather than the generic
+      // failure, so the fix is obvious.
+      if (e instanceof ApiError && e.status === 404) {
+        notifyError(t('chat.remoteUserNotFound'))
+      } else {
+        notifyError(t('chat.startFailed'), e)
+      }
     } finally {
       setCreating(false)
     }

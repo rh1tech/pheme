@@ -132,6 +132,7 @@ const ru: Resources = {
     saved: 'Профиль сохранён',
     saveFailed: 'Не удалось сохранить профиль',
     loadFailed: 'Не удалось загрузить профиль',
+    sessionExpired: 'Сессия больше не действительна — войдите снова',
   },
   mode: {
     approval: 'С подтверждением',
@@ -328,6 +329,7 @@ const ru: Resources = {
     searchPeople: 'Поиск людей по имени или @username',
     noPeople: 'Никого не найдено',
     startRemote: 'Начать чат с {{handle}}',
+    remoteUserNotFound: 'На том сервере нет пользователя с таким именем — возможно, ему нужно задать имя пользователя',
     startFailed: 'Не удалось начать чат',
     notJoined: 'Настраиваем шифрование — попробуйте ещё раз через мгновение',
     peerNotReady:

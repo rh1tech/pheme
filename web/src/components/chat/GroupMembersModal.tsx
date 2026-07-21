@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ActionIcon, Avatar, Badge, Group, Loader, Menu, Stack, Text, TextInput, UnstyledButton } from '@mantine/core'
 import { IconDots, IconSearch, IconUserPlus, IconWorld } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
-import { api, imageUrl } from '../../lib/api'
+import { api, imageUrl, ApiError } from '../../lib/api'
 import { addGroupMember, removeGroupMember, PeerKeysMissingError } from '../../lib/mls'
 import { notifyError, notifySuccess } from '../../lib/notify'
 import { userLabel } from '../../lib/conversation'
@@ -47,6 +47,9 @@ export function GroupMembersModal({ conversation, opened, onClose, onChanged }: 
       notifySuccess(t(successKey))
     } catch (e) {
       if (e instanceof PeerKeysMissingError) notifyError(t('chat.peerNotReady'), null)
+      // A 404 adding a member is the (possibly remote) host saying it has no user by
+      // that username — usually because none is set. Name the cause.
+      else if (e instanceof ApiError && e.status === 404) notifyError(t('chat.remoteUserNotFound'), null)
       else notifyError(t('group.actionFailed'), e)
     } finally {
       setBusy(null)
@@ -186,21 +189,24 @@ function AddMemberSearch({ exclude, busy, onPick, onAddHandle }: AddMemberSearch
   const trimmed = query.trim()
   const handle = remoteHandle(query)
 
+  // Debounce on the QUERY alone. `exclude` is a fresh Set on every parent render,
+  // so listing it here re-fired this effect on every keystroke's every render —
+  // the flashing. Exclusion is a pure filter applied at render instead.
   useEffect(() => {
     const q = query.trim()
     if (q.length < 2) return // too short: the render hides stale results
-    const handle = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       setSearching(true)
       api
         .searchUsers(q)
-        .then((users) => setResults(users.filter((u) => !exclude.has(u.id))))
+        .then(setResults)
         .catch(() => setResults([]))
         .finally(() => setSearching(false))
     }, 250)
-    return () => window.clearTimeout(handle)
-  }, [query, exclude])
+    return () => window.clearTimeout(timer)
+  }, [query])
 
-  const shown = trimmed.length < 2 ? [] : results
+  const shown = (trimmed.length < 2 ? [] : results).filter((u) => !exclude.has(u.id))
 
   return (
     <Stack gap="xs">

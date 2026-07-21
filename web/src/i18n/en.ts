@@ -130,6 +130,7 @@ const en = {
     saved: 'Profile saved',
     saveFailed: 'Could not save profile',
     loadFailed: 'Could not load your profile',
+    sessionExpired: 'Your session is no longer valid — please sign in again',
   },
   mode: {
     approval: 'Approval',
@@ -326,6 +327,7 @@ const en = {
     searchPeople: 'Search people by name or @username',
     noPeople: 'No one found',
     startRemote: 'Start a chat with {{handle}}',
+    remoteUserNotFound: 'No user with that username on that server — they may need to set a username there',
     startFailed: 'Could not start the chat',
     notJoined: 'Setting up encryption — try again in a moment',
     peerNotReady:

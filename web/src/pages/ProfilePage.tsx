@@ -18,12 +18,14 @@ import { useTranslation } from 'react-i18next'
 import { api, imageUrl } from '../lib/api'
 import { notifyError, notifySuccess } from '../lib/notify'
 import { ApiError } from '../lib/api'
+import { useAuth } from '../auth/context'
 import { APP_VERSION, BUILD_ID } from '../lib/version'
 import type { NotificationPrivacy, User } from '../lib/types'
 import { CardListSkeleton } from '../components/Skeletons'
 
 export function ProfilePage() {
   const { t } = useTranslation()
+  const { logout } = useAuth()
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [username, setUsername] = useState('')
@@ -54,7 +56,19 @@ export function ProfilePage() {
     api
       .getMe()
       .then((u) => active && fill(u))
-      .catch((e) => active && notifyError(t('profile.loadFailed'), e))
+      .catch((e) => {
+        if (!active) return
+        // A 404 on your OWN account means the session outlived the account it names
+        // (e.g. it was signed in before the server's store was replaced). Refresh
+        // cannot fix that — the token is validly signed, the user is just gone — so
+        // sign out cleanly rather than stranding a "not found" on the profile page.
+        if (e instanceof ApiError && e.status === 404) {
+          notifyError(t('profile.sessionExpired'))
+          logout()
+          return
+        }
+        notifyError(t('profile.loadFailed'), e)
+      })
       .finally(() => active && setLoading(false))
     return () => {
       active = false
