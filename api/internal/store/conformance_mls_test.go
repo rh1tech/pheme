@@ -470,16 +470,19 @@ func TestConformance_ReceiptsRoundTrip(t *testing.T) {
 		owner := mustUser(t, s.store, "receipts@pheme.test")
 		conv := mustConversation(t, s.store, owner.ID)
 
-		now := time.Now().UTC().Truncate(time.Millisecond)
-		got, err := s.store.SetConversationReceipt(ctx, conv.ID, owner.ID, now, now)
+		got, err := s.store.SetConversationReceipt(ctx, conv.ID, owner.ID, 12, 12)
 		if err != nil {
 			t.Fatalf("set: %v", err)
 		}
 		if got.UserID != owner.ID {
 			t.Errorf("receipt = %+v, want it attributed to the reader", got)
 		}
-		if !got.ReadAt.Equal(now) && got.ReadAt.Sub(now).Abs() > time.Millisecond {
-			t.Errorf("readAt = %v, want %v", got.ReadAt, now)
+		if got.ReadSeq != 12 {
+			t.Errorf("readSeq = %d, want 12", got.ReadSeq)
+		}
+		// A lower report must not drag the watermark back.
+		if got, _ := s.store.SetConversationReceipt(ctx, conv.ID, owner.ID, 0, 5); got.ReadSeq != 12 {
+			t.Errorf("readSeq = %d after a lower report, want it held at 12", got.ReadSeq)
 		}
 	})
 }

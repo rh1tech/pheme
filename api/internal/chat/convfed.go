@@ -28,6 +28,8 @@ type peerConversations interface {
 	RelayToPeer(ctx context.Context, peerDomain, conversationID string, msgs []federation.RelayedMessage) error
 	SubmitMessageToHub(ctx context.Context, hubDomain string, s federation.SubmittedMessage) (federation.RelayedMessage, error)
 	SubmitCommitToHub(ctx context.Context, hubDomain string, s federation.SubmittedCommit) (federation.CommitResult, error)
+	SubmitReceiptToHub(ctx context.Context, hubDomain string, s federation.ReceiptUpdate) error
+	RelayReceiptToPeer(ctx context.Context, peerDomain string, s federation.ReceiptUpdate) error
 }
 
 // ConvFederation carries an encrypted conversation across hosts. It is both the
@@ -335,6 +337,82 @@ func (c *ConvFederation) verifyHubSig(hubDomain string, hash, sig []byte) bool {
 		return false
 	}
 	return mlschain.Verify(key, hash, sig)
+}
+
+// SubmitReceipt runs on the hub: a follower forwards one of its members' receipt
+// watermarks. Advance them and relay to every other participant host, so a sender
+// on any host sees the ticks move.
+func (c *ConvFederation) SubmitReceipt(ctx context.Context, fromDomain string, s federation.ReceiptUpdate) error {
+	conv, err := c.Store.ConversationByID(ctx, s.ConversationID)
+	if err != nil || conv.IsMirror() {
+		return errNotHub
+	}
+	if !c.isMemberFromHost(ctx, s.ConversationID, s.UserID, fromDomain) {
+		return errNotMember
+	}
+	if err := c.applyReceipt(ctx, s); err != nil {
+		return err
+	}
+	c.relayReceipt(ctx, conv, fromDomain, s)
+	return nil
+}
+
+// DeliverReceipt runs on a follower: the hub relays a member's advanced watermarks;
+// apply them to the mirror so a sender on this host sees them.
+func (c *ConvFederation) DeliverReceipt(ctx context.Context, hubDomain string, s federation.ReceiptUpdate) error {
+	conv, err := c.Store.ConversationByID(ctx, s.ConversationID)
+	if err != nil || conv.HubDomain != hubDomain {
+		return errNoMirror
+	}
+	return c.applyReceipt(ctx, s)
+}
+
+// applyReceipt advances a member's watermarks and publishes the change locally, so
+// a sender watching this host sees the ticks move now. $max in the store keeps it
+// forward-only and idempotent, so a relayed duplicate is harmless.
+func (c *ConvFederation) applyReceipt(ctx context.Context, s federation.ReceiptUpdate) error {
+	receipt, err := c.Store.SetConversationReceipt(ctx, s.ConversationID, s.UserID, s.DeliveredSeq, s.ReadSeq)
+	if err != nil {
+		return err
+	}
+	if c.Live != nil {
+		r := receipt
+		c.Live.Publish(live.Event{ConversationID: s.ConversationID, Receipt: &r})
+	}
+	return nil
+}
+
+// relayReceipt (hub) relays a member's watermarks to every participant host but one.
+func (c *ConvFederation) relayReceipt(ctx context.Context, conv domain.Conversation, except string, s federation.ReceiptUpdate) {
+	if c.Peers == nil {
+		return
+	}
+	for _, host := range c.participantHosts(ctx, conv.ID) {
+		if host == except {
+			continue
+		}
+		if err := c.Peers.RelayReceiptToPeer(ctx, host, s); err != nil {
+			c.log().Warn("receipt relay failed", "conversation", conv.ID, "peer", host, "error", err)
+		}
+	}
+}
+
+// ReportReceipt is the outbound hook the chat handler calls after it has advanced a
+// local member's watermarks. On the hub it relays them to every participant host;
+// on a mirror it forwards them to the hub, which relays them onward. Best-effort:
+// the receipt is already recorded and shown locally, and a peer that is down can
+// catch the watermark up from the member list on its next fetch.
+func (c *ConvFederation) ReportReceipt(ctx context.Context, conv domain.Conversation, s federation.ReceiptUpdate) {
+	if c.Peers == nil {
+		return
+	}
+	if conv.IsMirror() {
+		if err := c.Peers.SubmitReceiptToHub(ctx, conv.HubDomain, s); err != nil {
+			c.log().Warn("receipt forward to hub failed", "conversation", conv.ID, "hub", conv.HubDomain, "error", err)
+		}
+		return
+	}
+	c.relayReceipt(ctx, conv, "", s) // hub: relay to all participant hosts
 }
 
 // relayExcept relays to every participant host but one (the submitter).

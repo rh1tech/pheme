@@ -8,23 +8,23 @@ import 'package:pheme_mobile/src/models/models.dart'
     show ChannelRole, PublicUser;
 
 const me = 'me';
-const early = '2026-07-16T10:00:00Z';
-const mid = '2026-07-16T11:00:00Z';
-const late = '2026-07-16T12:00:00Z';
+const early = 1;
+const mid = 2;
+const late = 3;
 
 ConversationMember member(
   String userId, {
-  String delivered = '',
-  String read = '',
+  int delivered = 0,
+  int read = 0,
 }) => ConversationMember(
   id: 'm-$userId',
   conversationId: 'c1',
   userId: userId,
   role: ChannelRole.user,
-  joinedAt: early,
+  joinedAt: '2026-07-16T10:00:00Z',
   user: PublicUser(id: userId, displayName: userId),
-  deliveredAt: delivered,
-  readAt: read,
+  deliveredSeq: delivered,
+  readSeq: read,
 );
 
 void main() {
@@ -107,12 +107,12 @@ void main() {
         members,
         const ConversationReceipt(
           userId: 'bob',
-          deliveredAt: late,
-          readAt: mid,
+          deliveredSeq: late,
+          readSeq: mid,
         ),
       );
-      expect(next[1].deliveredAt, late);
-      expect(next[1].readAt, mid);
+      expect(next[1].deliveredSeq, late);
+      expect(next[1].readSeq, mid);
     });
 
     test('never moves a member backwards', () {
@@ -121,12 +121,12 @@ void main() {
         members,
         const ConversationReceipt(
           userId: 'bob',
-          deliveredAt: early,
-          readAt: early,
+          deliveredSeq: early,
+          readSeq: early,
         ),
       );
-      expect(next[1].deliveredAt, late);
-      expect(next[1].readAt, late);
+      expect(next[1].deliveredSeq, late);
+      expect(next[1].readSeq, late);
     });
 
     test('leaves everyone else untouched', () {
@@ -137,10 +137,10 @@ void main() {
       ];
       final next = applyReceipt(
         members,
-        const ConversationReceipt(userId: 'bob', readAt: late),
+        const ConversationReceipt(userId: 'bob', readSeq: late),
       );
-      expect(next[2].deliveredAt, early);
-      expect(next[2].readAt, '');
+      expect(next[2].deliveredSeq, early);
+      expect(next[2].readSeq, 0);
     });
   });
 }

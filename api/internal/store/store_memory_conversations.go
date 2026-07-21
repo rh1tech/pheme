@@ -122,9 +122,27 @@ func (m *Memory) AddConversationMember(_ context.Context, mem domain.Conversatio
 	if mem.ID == "" {
 		mem.ID = newID()
 	}
+	// A member joining a conversation with history starts caught up to its current
+	// sequence, so the messages sent before them (which MLS gives them no way to
+	// read) do not hold back the ticks. A founding member joins at 0.
+	if mem.JoinSeq == 0 {
+		mem.JoinSeq = m.maxMessageSeqLocked(mem.ConversationID)
+	}
 	mem = withReceiptFloor(mem)
 	m.convMembers[mem.ID] = mem
 	return mem, nil
+}
+
+// maxMessageSeqLocked is the highest message sequence in a conversation, i.e. its
+// current position. Caller holds the lock.
+func (m *Memory) maxMessageSeqLocked(conversationID string) int64 {
+	var max int64
+	for _, msg := range m.chatMessages {
+		if msg.ConversationID == conversationID && msg.Seq > max {
+			max = msg.Seq
+		}
+	}
+	return max
 }
 
 func (m *Memory) RemoveConversationMember(_ context.Context, conversationID, userID string) error {
@@ -211,7 +229,7 @@ func (m *Memory) ClearConversationHistory(_ context.Context, conversationID, use
 	return ErrNotFound
 }
 
-func (m *Memory) SetConversationReceipt(_ context.Context, conversationID, userID string, delivered, read time.Time) (domain.ConversationReceipt, error) {
+func (m *Memory) SetConversationReceipt(_ context.Context, conversationID, userID string, deliveredSeq, readSeq int64) (domain.ConversationReceipt, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, mem := range m.convMembers {
@@ -219,17 +237,17 @@ func (m *Memory) SetConversationReceipt(_ context.Context, conversationID, userI
 			continue
 		}
 		// Forward only: an out-of-order report must not un-read what was read.
-		if delivered.After(mem.DeliveredAt) {
-			mem.DeliveredAt = delivered
+		if deliveredSeq > mem.DeliveredSeq {
+			mem.DeliveredSeq = deliveredSeq
 		}
-		if read.After(mem.ReadAt) {
-			mem.ReadAt = read
+		if readSeq > mem.ReadSeq {
+			mem.ReadSeq = readSeq
 		}
 		m.convMembers[id] = mem
 		return domain.ConversationReceipt{
-			UserID:      userID,
-			DeliveredAt: mem.DeliveredAt,
-			ReadAt:      mem.ReadAt,
+			UserID:       userID,
+			DeliveredSeq: mem.DeliveredSeq,
+			ReadSeq:      mem.ReadSeq,
 		}, nil
 	}
 	return domain.ConversationReceipt{}, ErrNotFound

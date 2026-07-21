@@ -685,11 +685,11 @@ export const api = {
   /**
    * Reports how far this user has got in a conversation, so the sender's ticks can fill in.
    *
-   * Watermarks, not message ids — "I have read up to this instant". Both only ever move forward
-   * server-side, so a duplicate or out-of-order report is harmless, and `quiet` keeps it off the
-   * progress bar: nobody asked for it.
+   * Watermarks over message `seq`, not message ids — "I have received/read up to this sequence".
+   * Both only ever move forward server-side, so a duplicate or out-of-order report is harmless, and
+   * `quiet` keeps it off the progress bar: nobody asked for it.
    */
-  reportReceipt: (conversationId: string, at: { delivered?: string; read?: string }) =>
+  reportReceipt: (conversationId: string, at: { deliveredSeq?: number; readSeq?: number }) =>
     request<void>(`/v1/conversations/${conversationId}/receipts`, {
       method: 'POST',
       body: at,

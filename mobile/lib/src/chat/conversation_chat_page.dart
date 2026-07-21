@@ -790,7 +790,7 @@ class _Message extends ConsumerWidget {
       isOwn: isOwn,
       // Only our own: a tick on someone else's would tell them what they already know.
       receipt: isOwn
-          ? messageReceipt(message.createdAt, feed.members, myUserId)
+          ? messageReceipt(message.seq, feed.members, myUserId)
           : null,
       senderName: senderName,
       startsRun: startsRun,

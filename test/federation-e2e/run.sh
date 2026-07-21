@@ -210,4 +210,15 @@ fol_epoch=$(curl -s "$FOL/v1/conversations/$CID/mls" -H "authorization: Bearer $
 # verified the hub's signature — a mismatch or forged sig leaves it at 0.
 [ "$fol_epoch" = "1" ] || fail "follower epoch=$fol_epoch, want 1 (signed ordering chain did not verify)"
 
-log "PASS — cross-host relay (F5d) and signed ordering chain (F5b) verified on two live hosts"
+log "bob reads on the mirror -> receipt forwarded to the hub (F6 sequence watermark)"
+# bob reports he has read up to sequence 2. On his host he is a local member; the
+# receipt must travel to the hub so alice, there, sees his tick move.
+rcode=$(curl -s -o /dev/null -w '%{http_code}' "$FOL/v1/conversations/$CID/receipts" -H "authorization: Bearer $BTOK" \
+  -H 'content-type: application/json' -d '{"readSeq":2}')
+[ "$rcode" = "200" ] || fail "receipt report returned $rcode"
+sleep 1
+bob_read_at_hub=$(curl -s "$HUB/v1/conversations/$CID" -H "authorization: Bearer $ATOK" \
+  | jq -r --arg b "$BID" '(.members // [])[] | select(.userId==$b) | .readSeq // 0')
+[ "$bob_read_at_hub" = "2" ] || fail "bob's readSeq at the hub = $bob_read_at_hub, want 2 (receipt did not cross hosts)"
+
+log "PASS — cross-host relay (F5d), signed ordering chain (F5b), and sequence receipts (F6) verified on two live hosts"

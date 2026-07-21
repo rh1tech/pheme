@@ -72,25 +72,31 @@ class LastSeenController extends AsyncNotifier<Map<String, String>> {
   @override
   Future<Map<String, String>> build() => ref.watch(lastSeenStoreProvider).all();
 
-  /// The furthest point already reported to the server, so a receipt goes once per advance rather
+  /// The furthest seq already reported to the server, so a receipt goes once per advance rather
   /// than every time the feed touches the bottom.
-  final _reported = <String, String>{};
+  final _reportedSeq = <String, int>{};
 
-  Future<void> markRead(String conversationId, String at) async {
+  /// [at] is the timestamp of the newest message displayed — kept locally to drive the unread dot,
+  /// which never leaves the device. [seq] is that message's sequence, reported to the server so the
+  /// sender's ticks fill in.
+  Future<void> markRead(String conversationId, String at, int seq) async {
     await ref.read(lastSeenStoreProvider).markRead(conversationId, at);
     state = AsyncData({...?state.value, conversationId: at});
 
-    // This device has displayed up to here, which is what two ticks mean. Only ever forwards, and
-    // only when it actually moves.
-    if (at.compareTo(_reported[conversationId] ?? '') <= 0) return;
-    _reported[conversationId] = at;
+    // Tell the sender their newest read message has been read. Only ever forwards, and only when it
+    // actually moves. Messages predating sequencing carry seq 0, which has no watermark to move and
+    // the server rejects.
+    if (seq == 0) return;
+    if (seq <= (_reportedSeq[conversationId] ?? 0)) return;
+    _reportedSeq[conversationId] = seq;
     unawaited(
-      ref.read(repositoryProvider).reportReceipt(conversationId, read: at).catchError((
-        Object _,
-      ) {
-        // A receipt is a courtesy: a lost one costs a tick until the next advance, never a
-        // message. Not rolled back — retrying every failure would hammer a struggling server.
-      }),
+      ref
+          .read(repositoryProvider)
+          .reportReceipt(conversationId, readSeq: seq)
+          .catchError((Object _) {
+            // A receipt is a courtesy: a lost one costs a tick until the next advance, never a
+            // message. Not rolled back — retrying every failure would hammer a struggling server.
+          }),
     );
   }
 }

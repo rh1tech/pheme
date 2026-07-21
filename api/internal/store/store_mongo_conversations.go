@@ -130,6 +130,19 @@ func (m *Mongo) AddConversationMember(ctx context.Context, mem domain.Conversati
 	if mem.ID == "" {
 		mem.ID = mongoID()
 	}
+	// A member joining a conversation with history starts caught up to its current
+	// sequence, so messages sent before them do not hold back the ticks. Read the
+	// conversation's counter; a founding member (or a conversation with no messages)
+	// joins at 0.
+	if mem.JoinSeq == 0 {
+		var conv struct {
+			MsgSeq int64 `bson:"msgSeq"`
+		}
+		if err := m.db.Collection("conversations").FindOne(ctx, bson.M{"_id": mem.ConversationID},
+			options.FindOne().SetProjection(bson.M{"msgSeq": 1})).Decode(&conv); err == nil {
+			mem.JoinSeq = conv.MsgSeq
+		}
+	}
 	mem = withReceiptFloor(mem)
 	if _, err := m.db.Collection("conversationMembers").InsertOne(ctx, mem); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
@@ -226,17 +239,17 @@ func (m *Mongo) ClearConversationHistory(ctx context.Context, conversationID, us
 	return nil
 }
 
-func (m *Mongo) SetConversationReceipt(ctx context.Context, conversationID, userID string, delivered, read time.Time) (domain.ConversationReceipt, error) {
+func (m *Mongo) SetConversationReceipt(ctx context.Context, conversationID, userID string, deliveredSeq, readSeq int64) (domain.ConversationReceipt, error) {
 	// $max, not $set: a watermark only ever moves forward. Receipts arrive out of order —
 	// two devices, a retry, a catch-up after being offline — and $max makes the write
 	// idempotent and order-independent, so an older report cannot un-read what was read.
 	// (In Mongo, $max against a missing field simply sets it.)
 	advance := bson.M{}
-	if !delivered.IsZero() {
-		advance["deliveredAt"] = delivered
+	if deliveredSeq > 0 {
+		advance["deliveredSeq"] = deliveredSeq
 	}
-	if !read.IsZero() {
-		advance["readAt"] = read
+	if readSeq > 0 {
+		advance["readSeq"] = readSeq
 	}
 	filter := bson.M{"conversationId": conversationID, "userId": userID}
 	if len(advance) > 0 {
@@ -255,9 +268,9 @@ func (m *Mongo) SetConversationReceipt(ctx context.Context, conversationID, user
 		return domain.ConversationReceipt{}, mapErr(err)
 	}
 	return domain.ConversationReceipt{
-		UserID:      userID,
-		DeliveredAt: mem.DeliveredAt,
-		ReadAt:      mem.ReadAt,
+		UserID:       userID,
+		DeliveredSeq: mem.DeliveredSeq,
+		ReadSeq:      mem.ReadSeq,
 	}, nil
 }
 

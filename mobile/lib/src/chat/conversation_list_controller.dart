@@ -127,20 +127,21 @@ class ConversationListController extends AsyncNotifier<List<Conversation>> {
     state = AsyncData(updated);
   }
 
-  /// The furthest point already reported per conversation, so a receipt goes once per advance.
-  final _reportedDelivered = <String, String>{};
+  /// The furthest seq already reported per conversation, so a receipt goes once per advance.
+  final _reportedDelivered = <String, int>{};
 
   void _reportDelivered(String conversationId, ChatMessage message) {
     if (message.senderId == ref.read(myUserIdProvider)) return;
-    if (message.createdAt.compareTo(_reportedDelivered[conversationId] ?? '') <=
-        0) {
-      return;
-    }
-    _reportedDelivered[conversationId] = message.createdAt;
+    // Messages predating sequencing carry seq 0; there is no watermark to move for them, and the
+    // server rejects a report of 0.
+    final seq = message.seq;
+    if (seq == 0) return;
+    if (seq <= (_reportedDelivered[conversationId] ?? 0)) return;
+    _reportedDelivered[conversationId] = seq;
     unawaited(
       ref
           .read(repositoryProvider)
-          .reportReceipt(conversationId, delivered: message.createdAt)
+          .reportReceipt(conversationId, deliveredSeq: seq)
           .catchError((Object _) {
             // A receipt is a courtesy: a lost one costs a tick until the next advance, never a
             // message.

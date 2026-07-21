@@ -567,30 +567,41 @@ type ConversationMember struct {
 	// conversation for everyone; a watermark clears only the caller's own history.
 	ClearedAt time.Time `bson:"clearedAt,omitempty" json:"clearedAt,omitempty"`
 
-	// DeliveredAt and ReadAt are this member's receipt watermarks: they have RECEIVED
-	// every message up to DeliveredAt, and READ every message up to ReadAt. Both only
-	// ever move forward.
+	// DeliveredSeq and ReadSeq are this member's receipt watermarks: they have
+	// RECEIVED every message up to sequence DeliveredSeq, and READ every message up
+	// to ReadSeq. Both only ever move forward.
 	//
-	// Watermarks rather than a row per message per member: messages are ordered by
-	// createdAt, so "read up to T" already says everything about every message at or
-	// before T. A sender's ticks are then a comparison — their message is delivered when
-	// every OTHER member's DeliveredAt has reached it, and read when every other member's
-	// ReadAt has. That is the "everyone has read it" rule, and it costs one number per
-	// member instead of a table the size of the conversation times its membership.
+	// Sequence, not timestamp: a message's order is ChatMessage.Seq, assigned by the
+	// hub, so "read up to N" says everything about every message at or before N with
+	// no clock in the comparison. That is the fix for federation — two hosts' clocks
+	// skewing could once mark a member as having read messages they never received,
+	// because a receipt was a wall-clock time compared against a wall-clock message
+	// time. A sequence has no such hazard.
 	//
-	// They start at JoinedAt, which is what keeps a new group member from holding back the
-	// ticks on everything said before they arrived — messages they cannot decrypt anyway,
-	// MLS giving a member no access to what came before them.
-	DeliveredAt time.Time `bson:"deliveredAt,omitempty" json:"deliveredAt,omitempty"`
-	ReadAt      time.Time `bson:"readAt,omitempty" json:"readAt,omitempty"`
+	// Watermarks rather than a row per message per member: one number per member
+	// instead of a table the size of the conversation times its membership. A
+	// sender's ticks are then a comparison — delivered when every OTHER member's
+	// DeliveredSeq has reached the message, read when every other member's ReadSeq
+	// has. Zero means "nothing reported yet", which holds back a sender's ticks
+	// until the member is heard from — the same as a member who joined and has said
+	// nothing.
+	DeliveredSeq int64 `bson:"deliveredSeq,omitempty" json:"deliveredSeq,omitempty"`
+	ReadSeq      int64 `bson:"readSeq,omitempty" json:"readSeq,omitempty"`
+	// JoinSeq is the conversation's message sequence at the moment this member joined
+	// — the floor their watermarks start at. It keeps a member who joins a group with
+	// history from holding back the ticks on everything said before they arrived:
+	// those are messages MLS gives them no way to read, so a sender must not wait on
+	// them. Zero for a founding member (nothing was said yet) and for members from
+	// before this field existed, which floors them at the start, exactly as before.
+	JoinSeq int64 `bson:"joinSeq,omitempty" json:"joinSeq,omitempty"`
 }
 
 // ConversationReceipt is one member's receipt watermarks moving, carried on the live
 // stream so a sender's ticks change under their eyes rather than on the next fetch.
 type ConversationReceipt struct {
-	UserID      string    `json:"userId"`
-	DeliveredAt time.Time `json:"deliveredAt,omitempty"`
-	ReadAt      time.Time `json:"readAt,omitempty"`
+	UserID       string `json:"userId"`
+	DeliveredSeq int64  `json:"deliveredSeq,omitempty"`
+	ReadSeq      int64  `json:"readSeq,omitempty"`
 }
 
 // ChatMessage is one message in a conversation. Unlike the broadcast Message, it

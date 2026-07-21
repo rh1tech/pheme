@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/rh1tech/pheme/api/internal/domain"
 )
@@ -53,26 +52,22 @@ func TestReceiptsOnlyEverMoveForward(t *testing.T) {
 	conv := createDirect(t, f, aliceTok, bob)
 	bobID := memberID(t, f, conv.ID, "bob@b.com")
 
-	later := time.Now().UTC()
-	earlier := later.Add(-1 * time.Hour)
-
-	if rec := report(t, f, conv.ID, bobTok, map[string]any{"read": later}); rec.Code != http.StatusOK {
+	if rec := report(t, f, conv.ID, bobTok, map[string]any{"readSeq": 5}); rec.Code != http.StatusOK {
 		t.Fatalf("report read: status %d, body %s", rec.Code, rec.Body)
 	}
 	// An older report lands afterwards — it must not drag the watermark back.
-	if rec := report(t, f, conv.ID, bobTok, map[string]any{"read": earlier}); rec.Code != http.StatusOK {
+	if rec := report(t, f, conv.ID, bobTok, map[string]any{"readSeq": 3}); rec.Code != http.StatusOK {
 		t.Fatalf("late report: status %d, body %s", rec.Code, rec.Body)
 	}
 
 	mem := memberOf(t, f, conv.ID, aliceTok, bobID)
-	if !mem.ReadAt.Equal(later) {
-		t.Errorf("readAt = %v, want it to have stayed at %v — an out-of-order report moved it back",
-			mem.ReadAt, later)
+	if mem.ReadSeq != 5 {
+		t.Errorf("readSeq = %d, want it to have stayed at 5 — an out-of-order report moved it back", mem.ReadSeq)
 	}
 }
 
-// You cannot read what never arrived. A client reporting only `read` must not leave a message
-// double-ticked but not single-ticked.
+// You cannot read what never arrived. A client reporting only `readSeq` must not leave a
+// message double-ticked but not single-ticked.
 func TestReadCarriesDeliveredWithIt(t *testing.T) {
 	f := newFixture(t)
 	_, aliceTok := f.user(t, "alice@b.com")
@@ -80,18 +75,16 @@ func TestReadCarriesDeliveredWithIt(t *testing.T) {
 	conv := createDirect(t, f, aliceTok, bob)
 	bobID := memberID(t, f, conv.ID, "bob@b.com")
 
-	at := time.Now().UTC()
-	if rec := report(t, f, conv.ID, bobTok, map[string]any{"read": at}); rec.Code != http.StatusOK {
+	if rec := report(t, f, conv.ID, bobTok, map[string]any{"readSeq": 7}); rec.Code != http.StatusOK {
 		t.Fatalf("report read: status %d, body %s", rec.Code, rec.Body)
 	}
 
 	mem := memberOf(t, f, conv.ID, aliceTok, bobID)
-	if !mem.ReadAt.Equal(at) {
-		t.Errorf("readAt = %v, want %v", mem.ReadAt, at)
+	if mem.ReadSeq != 7 {
+		t.Errorf("readSeq = %d, want 7", mem.ReadSeq)
 	}
-	if mem.DeliveredAt.Before(at) {
-		t.Errorf("deliveredAt = %v, want at least %v: a read message is necessarily delivered",
-			mem.DeliveredAt, at)
+	if mem.DeliveredSeq < 7 {
+		t.Errorf("deliveredSeq = %d, want at least 7: a read message is necessarily delivered", mem.DeliveredSeq)
 	}
 }
 
@@ -104,17 +97,17 @@ func TestDeliveredDoesNotImplyRead(t *testing.T) {
 	conv := createDirect(t, f, aliceTok, bob)
 	bobID := memberID(t, f, conv.ID, "bob@b.com")
 
-	at := time.Now().UTC()
-	if rec := report(t, f, conv.ID, bobTok, map[string]any{"delivered": at}); rec.Code != http.StatusOK {
+	if rec := report(t, f, conv.ID, bobTok, map[string]any{"deliveredSeq": 4}); rec.Code != http.StatusOK {
 		t.Fatalf("report delivered: status %d, body %s", rec.Code, rec.Body)
 	}
 
 	mem := memberOf(t, f, conv.ID, aliceTok, bobID)
-	if !mem.DeliveredAt.Equal(at) {
-		t.Errorf("deliveredAt = %v, want %v", mem.DeliveredAt, at)
+	if mem.DeliveredSeq != 4 {
+		t.Errorf("deliveredSeq = %d, want 4", mem.DeliveredSeq)
 	}
-	if mem.ReadAt.After(mem.JoinedAt) {
-		t.Errorf("readAt = %v, want it left at the join floor: delivered is not read", mem.ReadAt)
+	// A direct chat with no prior messages floors at 0, so read must still be 0.
+	if mem.ReadSeq != mem.JoinSeq {
+		t.Errorf("readSeq = %d, want it left at the join floor %d: delivered is not read", mem.ReadSeq, mem.JoinSeq)
 	}
 }
 
@@ -126,7 +119,7 @@ func TestNonMemberCannotReportReceipt(t *testing.T) {
 	_, malloryTok := f.user(t, "mallory@b.com")
 	conv := createDirect(t, f, aliceTok, bob)
 
-	rec := report(t, f, conv.ID, malloryTok, map[string]any{"read": time.Now().UTC()})
+	rec := report(t, f, conv.ID, malloryTok, map[string]any{"readSeq": 2})
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("report as non-member = %d, want 404", rec.Code)
 	}
@@ -143,9 +136,9 @@ func TestReceiptRequiresSomething(t *testing.T) {
 	}
 }
 
-// A member starts caught up as of the moment they joined. Otherwise someone joining a group
-// today would hold the ticks back on everything said before they arrived — messages MLS gives
-// them no way to read, so the wait could never end.
+// A member starts caught up as of the sequence the conversation had reached when they joined.
+// Otherwise someone joining a group today would hold the ticks back on everything said before
+// they arrived — messages MLS gives them no way to read, so the wait could never end.
 func TestNewMemberStartsCaughtUpAtJoin(t *testing.T) {
 	f := newFixture(t)
 	_, aliceTok := f.user(t, "alice@b.com")
@@ -162,12 +155,12 @@ func TestNewMemberStartsCaughtUpAtJoin(t *testing.T) {
 	}
 
 	mem := memberOf(t, f, groupID, aliceTok, carol)
-	if mem.JoinedAt.IsZero() {
-		t.Fatal("member has no joinedAt")
+	if mem.JoinSeq == 0 {
+		t.Fatal("new member has JoinSeq 0, but a message was sent before they joined")
 	}
-	if !mem.DeliveredAt.Equal(mem.JoinedAt) || !mem.ReadAt.Equal(mem.JoinedAt) {
-		t.Errorf("new member watermarks = delivered %v / read %v, want both at joinedAt %v — "+
+	if mem.DeliveredSeq != mem.JoinSeq || mem.ReadSeq != mem.JoinSeq {
+		t.Errorf("new member watermarks = delivered %d / read %d, want both at joinSeq %d — "+
 			"otherwise they hold back the ticks on everything said before they arrived",
-			mem.DeliveredAt, mem.ReadAt, mem.JoinedAt)
+			mem.DeliveredSeq, mem.ReadSeq, mem.JoinSeq)
 	}
 }

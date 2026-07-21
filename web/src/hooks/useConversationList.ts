@@ -24,7 +24,7 @@ export interface ConversationListApi {
   conversations: ChatConversation[]
   loading: boolean
   refresh: () => Promise<void>
-  markRead: (conversationId: string, iso: string) => void
+  markRead: (conversationId: string, iso: string, seq?: number) => void
 }
 
 // The list cannot decrypt: MLS deletes each message key after a single use, and
@@ -113,9 +113,13 @@ export function useConversationList(): ConversationListApi {
     // a sender does not deliver to themselves, and the tick already ignores their own watermark.
     const conversationId = e.conversationId
     if (msg.senderId === userId) return
-    if ((reportedDelivered.current[conversationId] ?? '') >= msg.createdAt) return
-    reportedDelivered.current[conversationId] = msg.createdAt
-    void api.reportReceipt(conversationId, { delivered: msg.createdAt }).catch(() => {
+    // Messages predating sequencing carry seq 0/undefined; there is no watermark to move for them,
+    // and the server rejects a report of 0.
+    const seq = msg.seq ?? 0
+    if (seq === 0) return
+    if ((reportedDelivered.current[conversationId] ?? 0) >= seq) return
+    reportedDelivered.current[conversationId] = seq
+    void api.reportReceipt(conversationId, { deliveredSeq: seq }).catch(() => {
       // See markRead: a lost receipt costs a tick, never a message.
     })
   })
@@ -139,18 +143,21 @@ export function useConversationList(): ConversationListApi {
   // The furthest point already reported to the server, per conversation, so a receipt goes once per
   // advance rather than on every scroll to the bottom. Refs, not state: nothing renders from them,
   // and they must be readable inside callbacks without going stale.
-  const reportedRead = useRef<Record<string, string>>({})
-  const reportedDelivered = useRef<Record<string, string>>({})
+  const reportedRead = useRef<Record<string, number>>({})
+  const reportedDelivered = useRef<Record<string, number>>({})
 
-  const markRead = useCallback((conversationId: string, iso: string) => {
+  const markRead = useCallback((conversationId: string, iso: string, seq?: number) => {
     markSeen(conversationId, iso)
     setSeen((prev) => ((prev[conversationId] ?? '') >= iso ? prev : { ...prev, [conversationId]: iso }))
 
-    // Tell the sender their message has been read. Only ever forwards, and only when it actually
-    // moves — this is called every time the feed touches the bottom.
-    if ((reportedRead.current[conversationId] ?? '') >= iso) return
-    reportedRead.current[conversationId] = iso
-    void api.reportReceipt(conversationId, { read: iso }).catch(() => {
+    // Tell the sender their newest read message has been read. Only ever forwards, and only when it
+    // actually moves — this is called every time the feed touches the bottom. Messages predating
+    // sequencing carry seq 0/undefined, which has no watermark to move and the server rejects.
+    const readSeq = seq ?? 0
+    if (readSeq === 0) return
+    if ((reportedRead.current[conversationId] ?? 0) >= readSeq) return
+    reportedRead.current[conversationId] = readSeq
+    void api.reportReceipt(conversationId, { readSeq }).catch(() => {
       // A receipt is a courtesy: a lost one costs a tick until the next advance, never a message.
       // Left un-rolled-back on purpose — retrying every failure would hammer a server that is
       // already struggling.

@@ -620,10 +620,13 @@ func (h *Handler) setMemberRole(w http.ResponseWriter, r *http.Request) {
 }
 
 type receiptRequest struct {
-	// Watermarks, not message ids: the client says how far it has got, and an omitted
-	// (zero) field leaves that watermark where it is.
-	Delivered time.Time `json:"delivered"`
-	Read      time.Time `json:"read"`
+	// Sequence watermarks: the client says how far it has got by the sequence number
+	// of the newest message it has received (delivered) and read. An omitted (zero)
+	// field leaves that watermark where it is. Sequence, not timestamp, so the
+	// watermark means the same thing on every host regardless of clock — see
+	// domain.ConversationMember.
+	DeliveredSeq int64 `json:"deliveredSeq"`
+	ReadSeq      int64 `json:"readSeq"`
 }
 
 // reportReceipt advances the caller's delivered/read watermarks in a conversation.
@@ -645,22 +648,34 @@ func (h *Handler) reportReceipt(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeLimited(w, r, &req, maxSmallBodyBytes) {
 		return
 	}
-	if req.Delivered.IsZero() && req.Read.IsZero() {
-		httpx.Error(w, http.StatusBadRequest, "delivered or read is required")
+	if req.DeliveredSeq <= 0 && req.ReadSeq <= 0 {
+		httpx.Error(w, http.StatusBadRequest, "deliveredSeq or readSeq is required")
 		return
 	}
-	delivered := req.Delivered
-	if req.Read.After(delivered) {
-		delivered = req.Read
+	delivered := req.DeliveredSeq
+	if req.ReadSeq > delivered {
+		delivered = req.ReadSeq
 	}
 
-	receipt, err := h.Store.SetConversationReceipt(r.Context(), convID, uid, delivered, req.Read)
+	receipt, err := h.Store.SetConversationReceipt(r.Context(), convID, uid, delivered, req.ReadSeq)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not record receipt")
 		return
 	}
 	// Tell the conversation, so the sender's ticks move now rather than on their next fetch.
 	h.Live.Publish(live.Event{ConversationID: convID, Receipt: &receipt})
+
+	// Carry the watermark across hosts: on the hub, relay it to every participant
+	// host; on a mirror, forward it to the hub. This is what lets a sender on one
+	// host see a reader on another host's ticks move.
+	if h.Fed != nil {
+		if conv, cerr := h.Store.ConversationByID(r.Context(), convID); cerr == nil {
+			h.Fed.ReportReceipt(r.Context(), conv, federation.ReceiptUpdate{
+				ConversationID: convID, UserID: uid,
+				DeliveredSeq: receipt.DeliveredSeq, ReadSeq: receipt.ReadSeq,
+			})
+		}
+	}
 	httpx.JSON(w, http.StatusOK, receipt)
 }
 

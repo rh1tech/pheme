@@ -319,14 +319,19 @@ Each stage ships and is useful before the next one starts.
       sharing a millisecond come back in a stable order instead of a random,
       page-dependent one. Legacy messages have `seq 0` and tie among themselves as
       before. Additive and clock-agnostic; no client change needed for this part.
-    - **Remaining:** turn receipts from timestamp watermarks into **sequence**
-      watermarks — `domain.go`'s `DeliveredAt`/`ReadAt` are the deepest
-      single-clock assumption in the codebase, and two hosts' clocks skewing would
-      mark people as having read messages they never received. That change is
-      client-visible (both web and mobile report and interpret receipts), so it
-      needs coordinated client work and a migration, and is the one genuinely
-      cross-surface piece left. Pagination cursors moving from `createdAt` to
-      `(createdAt, seq)` rides along with it.
+    - **Done:** receipts are now **sequence** watermarks, not timestamps.
+      `ConversationMember.DeliveredSeq`/`ReadSeq` (and `JoinSeq`, the floor a
+      member starts at) replace `DeliveredAt`/`ReadAt`; a client reports the `seq`
+      of the newest message it received/read, and a sender's ticks are a sequence
+      comparison with no clock in it — the fix for the cross-host skew hazard.
+      Clean break across server, web (`receipts.ts`) and mobile (`receipts.dart`).
+      Receipts also cross hosts now: a follower forwards a member's watermark to
+      the hub (`conversation-submit-receipt`), which relays it to every participant
+      host (`conversation-relay-receipt`), so a sender on one host sees a reader on
+      another move their ticks — proven live in the federation E2E.
+    - **Remaining:** pagination cursors still key on `createdAt` (with `seq` as a
+      tiebreak in the sort); moving the cursor itself to `(createdAt, seq)` is a
+      smaller follow-up that removes the last tie ambiguity at page boundaries.
 
 ## What federation does not fix
 

@@ -39,6 +39,25 @@ type ConversationService interface {
 	// relays the accepted control messages out. The result says whether it was
 	// accepted or lost the epoch race.
 	SubmitCommit(ctx context.Context, fromDomain string, s SubmittedCommit) (CommitResult, error)
+
+	// SubmitReceipt runs on the HUB. A follower forwards one of its members' receipt
+	// watermarks moving; the hub advances that member's watermarks and relays the
+	// change to every participant host, so a sender anywhere sees the ticks move.
+	SubmitReceipt(ctx context.Context, fromDomain string, s ReceiptUpdate) error
+
+	// DeliverReceipt runs on a FOLLOWER. A member's watermarks that the hub accepted
+	// arrive here and advance the local copy, so a sender on this host sees them.
+	DeliverReceipt(ctx context.Context, hubDomain string, s ReceiptUpdate) error
+}
+
+// ReceiptUpdate is one member's receipt watermarks moving, on the wire between
+// hosts. The watermarks are sequence numbers, so they mean the same thing on
+// every host without a shared clock.
+type ReceiptUpdate struct {
+	ConversationID string `json:"conversationId"`
+	UserID         string `json:"userId"`
+	DeliveredSeq   int64  `json:"deliveredSeq,omitempty"`
+	ReadSeq        int64  `json:"readSeq,omitempty"`
 }
 
 // MirrorSpec describes the conversation a follower should stand up.
@@ -128,6 +147,8 @@ func (h *Handler) registerConversations(mux *http.ServeMux) {
 	mux.Handle("POST /federation/v1/conversation-relay", h.verified(http.HandlerFunc(h.convRelay)))
 	mux.Handle("POST /federation/v1/conversation-submit-message", h.verified(http.HandlerFunc(h.convSubmitMessage)))
 	mux.Handle("POST /federation/v1/conversation-submit-commit", h.verified(http.HandlerFunc(h.convSubmitCommit)))
+	mux.Handle("POST /federation/v1/conversation-submit-receipt", h.verified(http.HandlerFunc(h.convSubmitReceipt)))
+	mux.Handle("POST /federation/v1/conversation-relay-receipt", h.verified(http.HandlerFunc(h.convRelayReceipt)))
 }
 
 // convProvision (follower): the hub asks us to stand up a mirror for one of our
@@ -196,6 +217,34 @@ func (h *Handler) convSubmitCommit(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, res)
 }
 
+// convSubmitReceipt (hub): a follower forwards a member's receipt; apply and relay.
+func (h *Handler) convSubmitReceipt(w http.ResponseWriter, r *http.Request) {
+	var s ReceiptUpdate
+	if err := json.Unmarshal(verifiedBody(r), &s); err != nil || s.ConversationID == "" || s.UserID == "" {
+		httpx.Error(w, http.StatusBadRequest, "malformed receipt")
+		return
+	}
+	if err := h.Conversations.SubmitReceipt(r.Context(), caller(r).Origin, s); err != nil {
+		httpx.Error(w, http.StatusForbidden, "could not accept receipt")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"accepted": true})
+}
+
+// convRelayReceipt (follower): the hub relays a member's receipt; advance our copy.
+func (h *Handler) convRelayReceipt(w http.ResponseWriter, r *http.Request) {
+	var s ReceiptUpdate
+	if err := json.Unmarshal(verifiedBody(r), &s); err != nil || s.ConversationID == "" || s.UserID == "" {
+		httpx.Error(w, http.StatusBadRequest, "malformed receipt")
+		return
+	}
+	if err := h.Conversations.DeliverReceipt(r.Context(), caller(r).Origin, s); err != nil {
+		httpx.Error(w, http.StatusNotFound, "no such mirror")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"delivered": true})
+}
+
 // --- client side ---
 
 // ProvisionRemoteMirror tells a peer host to stand up a mirror for one of its users.
@@ -221,4 +270,14 @@ func (c *Client) SubmitCommitToHub(ctx context.Context, hubDomain string, s Subm
 	var out CommitResult
 	err := c.PostJSON(ctx, c.PeerURL(hubDomain)+"/federation/v1/conversation-submit-commit", s, &out)
 	return out, err
+}
+
+// SubmitReceiptToHub forwards a local member's receipt watermarks to the hub.
+func (c *Client) SubmitReceiptToHub(ctx context.Context, hubDomain string, s ReceiptUpdate) error {
+	return c.PostJSON(ctx, c.PeerURL(hubDomain)+"/federation/v1/conversation-submit-receipt", s, nil)
+}
+
+// RelayReceiptToPeer relays a member's advanced watermarks to a participant host.
+func (c *Client) RelayReceiptToPeer(ctx context.Context, peerDomain string, s ReceiptUpdate) error {
+	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-relay-receipt", s, nil)
 }

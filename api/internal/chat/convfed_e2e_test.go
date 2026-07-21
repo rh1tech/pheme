@@ -218,6 +218,72 @@ func TestCrossHostCommitRoundTrip(t *testing.T) {
 	}
 }
 
+// F6: a receipt reported on the follower reaches the hub, so a sender there sees
+// the reader's ticks move. The watermark is a sequence number, so no clock skew
+// between the two hosts can misplace it.
+func TestCrossHostReceiptReachesHub(t *testing.T) {
+	aKey := hostKey5d(1)
+	bKey := hostKey5d(2)
+	roster := fakeRoster{
+		"a.example": aKey.Public().(ed25519.PublicKey),
+		"b.example": bKey.Public().(ed25519.PublicKey),
+	}
+	aStore := store.NewMemory(nil)
+	bStore := store.NewMemory(nil)
+
+	var aURL, bURL string
+	aClient := federation.NewClient("a.example", "ak", aKey)
+	aClient.PeerURL = func(d string) string { return map[string]string{"b.example": bURL}[d] }
+	bClient := federation.NewClient("b.example", "bk", bKey)
+	bClient.PeerURL = func(d string) string { return map[string]string{"a.example": aURL}[d] }
+
+	aFed := &chat.ConvFederation{Store: aStore, Live: live.NewMemoryBus(), Peers: aClient, HostDomain: "a.example"}
+	bFed := &chat.ConvFederation{Store: bStore, Live: live.NewMemoryBus(), Peers: bClient, HostDomain: "b.example"}
+
+	aMux := http.NewServeMux()
+	federation.NewHandler("a.example", roster, nil).WithConversations(aFed).Register(aMux)
+	aSrv := httptest.NewServer(aMux)
+	defer aSrv.Close()
+	aURL = aSrv.URL
+	bMux := http.NewServeMux()
+	federation.NewHandler("b.example", roster, nil).WithConversations(bFed).Register(bMux)
+	bSrv := httptest.NewServer(bMux)
+	defer bSrv.Close()
+	bURL = bSrv.URL
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	conv, _ := aStore.CreateConversation(ctx, domain.Conversation{
+		ID: "conv-r", Kind: domain.ConversationGroup, CreatedAt: now,
+	}, []domain.ConversationMember{{UserID: "alice", Role: domain.RoleAdmin, JoinedAt: now}})
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+		t.Fatal(err)
+	}
+
+	// bob, on his own host (the mirror), reports he has read up to sequence 5.
+	mirror, _ := bStore.ConversationByID(ctx, "conv-r")
+	bFed.ReportReceipt(ctx, mirror, federation.ReceiptUpdate{
+		ConversationID: "conv-r", UserID: "bob", DeliveredSeq: 5, ReadSeq: 5,
+	})
+
+	// On the hub, bob's watermark must have advanced — alice's ticks can move.
+	m, err := aStore.ConversationMembership(ctx, "conv-r", "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.ReadSeq != 5 || m.DeliveredSeq != 5 {
+		t.Errorf("bob on the hub = delivered %d / read %d, want 5/5 — the receipt did not cross hosts", m.DeliveredSeq, m.ReadSeq)
+	}
+
+	// A host cannot move a receipt for a member it does not home.
+	err = aFed.SubmitReceipt(ctx, "c.example", federation.ReceiptUpdate{
+		ConversationID: "conv-r", UserID: "bob", ReadSeq: 99,
+	})
+	if err == nil {
+		t.Error("a host forwarded a receipt for a member it does not home")
+	}
+}
+
 // F5b: with host keys configured, the hub signs each commit's ordering link and
 // the follower verifies both the link and the signature. After a round trip the
 // mirror's chain head is byte-for-byte the hub's — proof the two computed the

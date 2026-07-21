@@ -1,60 +1,62 @@
 // What the ticks on your own message mean, worked out from the other members' watermarks.
 //
-// The server tracks how far each member has got — received up to deliveredAt, read up to readAt —
-// rather than a state per message per member. Messages are ordered by createdAt, so "read up to T"
-// already says everything about every message at or before T, and a message's ticks are then a
-// comparison: delivered once EVERY other member has received it, read once every other member has
-// read it. That is the "everyone has read it" rule, and in a 1:1 chat "everyone" is just them.
+// The server tracks how far each member has got — received up to deliveredSeq, read up to readSeq —
+// rather than a state per message per member. Messages are ordered by their per-conversation `seq`,
+// so "read up to N" already says everything about every message at or before N, and a message's
+// ticks are then a comparison: delivered once EVERY other member has received it, read once every
+// other member has read it. That is the "everyone has read it" rule, and in a 1:1 chat "everyone"
+// is just them.
 //
-// Mirrors web/src/lib/receipts.ts. Timestamps are ISO-8601 and so compare as strings.
+// Mirrors web/src/lib/receipts.ts. Watermarks are ints; 0 means "never reported".
 
 import '../models/chat_models.dart';
 
 /// Nothing yet, one tick (everyone received it), or two (everyone read it).
 enum Receipt { sent, delivered, read }
 
-/// The point every member OTHER than [userId] has reached — the oldest of their watermarks, because
-/// a message is only through once the slowest of them has it. Empty when one of them has never
-/// reported, or when there is nobody else at all.
-String _slowest(
+/// The point every member OTHER than [userId] has reached — the lowest of their watermarks, because
+/// a message is only through once the slowest of them has it.
+///
+/// 0 when there is nobody else (everyone left): there is no one to deliver to, so nothing can be
+/// claimed. Also 0 the moment any one member has never reported (watermark 0): nothing is through
+/// until the slowest catches up.
+int _slowest(
   List<ConversationMember> members,
   String userId,
-  String Function(ConversationMember) pick,
+  int Function(ConversationMember) pick,
 ) {
-  var oldest = '';
+  var lowest = 0;
+  var seen = false;
   for (final member in members) {
     if (member.userId == userId) continue; // never wait on yourself
-    final at = pick(member);
+    final seq = pick(member);
     // One member has never reported: nothing is through.
-    if (at.isEmpty) {
-      return '';
+    if (seq == 0) return 0;
+    if (!seen || seq < lowest) {
+      lowest = seq;
+      seen = true;
     }
-    if (oldest.isEmpty || at.compareTo(oldest) < 0) oldest = at;
   }
-  return oldest;
+  return lowest;
 }
 
-/// The ticks for one of YOUR messages.
+/// The ticks for one of YOUR messages, comparing its [seq] against the other members' watermarks.
 ///
 /// Only ever called for your own: a tick on someone else's would be telling them what they already
 /// know.
 Receipt messageReceipt(
-  String createdAt,
+  int seq,
   List<ConversationMember> members,
   String userId,
 ) {
   final others = members.where((m) => m.userId != userId);
   if (others.isEmpty) return Receipt.sent;
 
-  final readUpTo = _slowest(members, userId, (m) => m.readAt);
-  if (readUpTo.isNotEmpty && createdAt.compareTo(readUpTo) <= 0) {
-    return Receipt.read;
-  }
+  final readUpTo = _slowest(members, userId, (m) => m.readSeq);
+  if (readUpTo != 0 && seq <= readUpTo) return Receipt.read;
 
-  final deliveredUpTo = _slowest(members, userId, (m) => m.deliveredAt);
-  if (deliveredUpTo.isNotEmpty && createdAt.compareTo(deliveredUpTo) <= 0) {
-    return Receipt.delivered;
-  }
+  final deliveredUpTo = _slowest(members, userId, (m) => m.deliveredSeq);
+  if (deliveredUpTo != 0 && seq <= deliveredUpTo) return Receipt.delivered;
 
   return Receipt.sent;
 }
@@ -71,15 +73,11 @@ List<ConversationMember> applyReceipt(
       .map((m) {
         if (m.userId != receipt.userId) return m;
         return m.copyWith(
-          deliveredAt: _later(m.deliveredAt, receipt.deliveredAt),
-          readAt: _later(m.readAt, receipt.readAt),
+          deliveredSeq: _higher(m.deliveredSeq, receipt.deliveredSeq),
+          readSeq: _higher(m.readSeq, receipt.readSeq),
         );
       })
       .toList(growable: false);
 }
 
-String _later(String a, String b) {
-  if (a.isEmpty) return b;
-  if (b.isEmpty) return a;
-  return b.compareTo(a) > 0 ? b : a;
-}
+int _higher(int a, int b) => b > a ? b : a;

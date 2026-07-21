@@ -72,8 +72,9 @@ class ConversationMember {
     required this.role,
     required this.joinedAt,
     required this.user,
-    this.deliveredAt = '',
-    this.readAt = '',
+    this.deliveredSeq = 0,
+    this.readSeq = 0,
+    this.joinSeq = 0,
   });
 
   final String id;
@@ -83,18 +84,23 @@ class ConversationMember {
   final String joinedAt;
   final PublicUser user;
 
-  /// How far this member has got: they have RECEIVED every message up to [deliveredAt] and READ
-  /// every message up to [readAt]. Watermarks, not per-message state — messages are ordered by
-  /// createdAt, so "read up to T" already covers every message at or before T, and the ticks on
-  /// your own message are a comparison against the other members' (see messageReceipt).
+  /// How far this member has got: they have RECEIVED every message up to [deliveredSeq] and READ
+  /// every message up to [readSeq]. Watermarks, not per-message state — messages are ordered by
+  /// their per-conversation `seq`, so "read up to N" already covers every message at or before N,
+  /// and the ticks on your own message are a comparison against the other members' (see
+  /// messageReceipt).
   ///
-  /// Empty for a member who has not reported since joining.
-  final String deliveredAt;
-  final String readAt;
+  /// 0 for a member who has not reported since joining.
+  final int deliveredSeq;
+  final int readSeq;
+
+  /// The conversation sequence when this member joined — the floor their watermarks start at. 0 for
+  /// a member present from the start.
+  final int joinSeq;
 
   bool get isAdmin => role == ChannelRole.admin;
 
-  ConversationMember copyWith({String? deliveredAt, String? readAt}) =>
+  ConversationMember copyWith({int? deliveredSeq, int? readSeq}) =>
       ConversationMember(
         id: id,
         conversationId: conversationId,
@@ -102,8 +108,9 @@ class ConversationMember {
         role: role,
         joinedAt: joinedAt,
         user: user,
-        deliveredAt: deliveredAt ?? this.deliveredAt,
-        readAt: readAt ?? this.readAt,
+        deliveredSeq: deliveredSeq ?? this.deliveredSeq,
+        readSeq: readSeq ?? this.readSeq,
+        joinSeq: joinSeq,
       );
 
   factory ConversationMember.fromJson(Map<String, dynamic> j) =>
@@ -116,8 +123,9 @@ class ConversationMember {
         user: PublicUser.fromJson(
           ((j['user'] as Map?) ?? const {}).cast<String, dynamic>(),
         ),
-        deliveredAt: j['deliveredAt'] as String? ?? '',
-        readAt: j['readAt'] as String? ?? '',
+        deliveredSeq: (j['deliveredSeq'] as num?)?.toInt() ?? 0,
+        readSeq: (j['readSeq'] as num?)?.toInt() ?? 0,
+        joinSeq: (j['joinSeq'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -126,19 +134,19 @@ class ConversationMember {
 class ConversationReceipt {
   const ConversationReceipt({
     required this.userId,
-    this.deliveredAt = '',
-    this.readAt = '',
+    this.deliveredSeq = 0,
+    this.readSeq = 0,
   });
 
   final String userId;
-  final String deliveredAt;
-  final String readAt;
+  final int deliveredSeq;
+  final int readSeq;
 
   factory ConversationReceipt.fromJson(Map<String, dynamic> j) =>
       ConversationReceipt(
         userId: j['userId'] as String? ?? '',
-        deliveredAt: j['deliveredAt'] as String? ?? '',
-        readAt: j['readAt'] as String? ?? '',
+        deliveredSeq: (j['deliveredSeq'] as num?)?.toInt() ?? 0,
+        readSeq: (j['readSeq'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -255,6 +263,7 @@ class ChatMessage {
     required this.ciphertext,
     required this.contentType,
     required this.createdAt,
+    this.seq = 0,
     this.mlsEpoch,
   });
 
@@ -264,6 +273,11 @@ class ChatMessage {
   final Uint8List ciphertext;
   final String contentType;
   final String createdAt;
+
+  /// This message's per-conversation sequence, assigned by the hub. Monotonic, and the order the
+  /// receipt watermarks are compared against (see messageReceipt). 0 for messages predating
+  /// sequencing — they have no watermark to move.
+  final int seq;
 
   /// Set only on a Welcome or a Commit: the epoch it takes the group to.
   final int? mlsEpoch;
@@ -288,6 +302,7 @@ class ChatMessage {
     ciphertext: _bytes(j['ciphertext']),
     contentType: j['contentType'] as String? ?? '',
     createdAt: j['createdAt'] as String? ?? '',
+    seq: (j['seq'] as num?)?.toInt() ?? 0,
     mlsEpoch: (j['mlsEpoch'] as num?)?.toInt(),
   );
 
@@ -301,6 +316,7 @@ class ChatMessage {
     'ciphertext': base64Encode(ciphertext),
     'contentType': contentType,
     'createdAt': createdAt,
+    if (seq != 0) 'seq': seq,
     if (mlsEpoch != null) 'mlsEpoch': mlsEpoch,
   };
 }

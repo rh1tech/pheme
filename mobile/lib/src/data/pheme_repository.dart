@@ -450,12 +450,13 @@ class PhemeRepository {
 
   /// Reports how far this user has got in a conversation, so the sender's ticks can fill in.
   ///
-  /// Watermarks, not message ids — "I have read up to this instant". Both only ever move forward
-  /// server-side, so a duplicate or out-of-order report is harmless.
-  Future<void> reportReceipt(String id, {String? delivered, String? read}) =>
+  /// Watermarks by sequence, not message ids — "I have read up to this seq". Both only ever move
+  /// forward server-side, so a duplicate or out-of-order report is harmless. The server requires at
+  /// least one to be > 0.
+  Future<void> reportReceipt(String id, {int? deliveredSeq, int? readSeq}) =>
       _post('/v1/conversations/$id/receipts', {
-        'delivered': ?delivered,
-        'read': ?read,
+        'deliveredSeq': ?deliveredSeq,
+        'readSeq': ?readSeq,
       });
 
   /// One page of history, newest-first, walking backwards. [cursor] is the previous page's

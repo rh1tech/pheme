@@ -336,7 +336,7 @@ export function ConversationChatRoute() {
 
   const markNewestRead = useCallback(() => {
     const newest = messages[messages.length - 1]
-    if (newest) conversations.markRead(id, newest.createdAt)
+    if (newest) conversations.markRead(id, newest.createdAt, newest.seq)
   }, [messages, id, conversations])
 
   const { scrollerRef, contentRef, atBottom, scrollToBottom } = useChatScroll(
@@ -704,7 +704,7 @@ export function ConversationChatRoute() {
         // re-flash the cleared transcript on every future open.
         if (fetched.length === 0) void forgetEnvelope(id)
         const newest = page.messages[0]
-        if (newest) conversations.markRead(id, newest.createdAt)
+        if (newest) conversations.markRead(id, newest.createdAt, newest.seq)
       } catch (e) {
         if (active) notifyError(t('dashboard.loadFailed'), e)
       } finally {
@@ -820,7 +820,7 @@ export function ConversationChatRoute() {
 
     setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
     if (atBottomRef.current) {
-      conversations.markRead(id, msg.createdAt)
+      conversations.markRead(id, msg.createdAt, msg.seq)
     } else {
       setUnseen((n) => n + 1)
     }
@@ -1345,7 +1345,7 @@ export function ConversationChatRoute() {
                           {/* Ticks on our own messages only — see MessageTicks. */}
                           {own && (
                             <MessageTicks
-                              receipt={messageReceipt(m.createdAt, header?.members ?? [], userId ?? '')}
+                              receipt={messageReceipt(m.seq ?? 0, header?.members ?? [], userId ?? '')}
                             />
                           )}
                         </div>

@@ -35,7 +35,7 @@ class MessageFeedState {
   /// answer, not a failure — MLS gives a device no access to what was said before it joined.
   final Map<String, ChatContent?> contents;
 
-  /// The conversation's members, carrying how far each has got (deliveredAt/readAt). Held here, not
+  /// The conversation's members, carrying how far each has got (deliveredSeq/readSeq). Held here, not
   /// read off the page's Conversation, because the ticks have to move as receipts arrive — and that
   /// Conversation came from a FutureProvider that nothing re-fetches. Seeded by the settle below.
   final List<ConversationMember> members;
@@ -518,7 +518,7 @@ class MessageFeedController extends Notifier<MessageFeedState> {
 
   Future<void> _markRead(ChatMessage message) => ref
       .read(lastSeenProvider.notifier)
-      .markRead(_conversationId, message.createdAt);
+      .markRead(_conversationId, message.createdAt, message.seq);
 
   /// Reconciles the cached transcript with the server's newest page. Within the page's
   /// time window the server is authoritative — a cached message the page does not

@@ -73,15 +73,21 @@ export interface ConversationMember {
   // Hydrated public profile of the member, for labelling and avatars.
   user: PublicUser
   /**
-   * How far this member has got: they have RECEIVED every message up to deliveredAt and READ
-   * every message up to readAt. Watermarks, not per-message state — messages are ordered by
-   * createdAt, so "read up to T" already covers every message at or before T, and the ticks on
-   * your own message are a comparison against the other members' (see messageReceipt).
+   * How far this member has got: they have RECEIVED every message up to deliveredSeq and READ
+   * every message up to readSeq. Watermarks, not per-message state — messages are ordered by
+   * their per-conversation `seq`, so "read up to N" already covers every message at or before N,
+   * and the ticks on your own message are a comparison against the other members' (see
+   * messageReceipt).
    *
-   * Absent on a member who has not reported since joining.
+   * Absent or 0 on a member who has not reported since joining.
    */
-  deliveredAt?: string
-  readAt?: string
+  deliveredSeq?: number
+  readSeq?: number
+  /**
+   * The conversation `seq` when this member joined — the floor their watermarks start at. Absent
+   * or 0 means they have been here from the start.
+   */
+  joinSeq?: number
 }
 
 // A chat message as it comes off the wire. `ciphertext` is base64 of opaque
@@ -94,6 +100,12 @@ export interface ChatMessage {
   ciphertext: string
   contentType: string
   createdAt: string
+  /**
+   * The per-conversation monotonic sequence the hub assigned this message. It is how messages
+   * are ordered for read receipts (see ConversationMember). Older messages predating sequencing
+   * carry 0 / undefined.
+   */
+  seq?: number
   /**
    * The MLS epoch a control message (Welcome, Commit) produced. Absent on ordinary
    * messages. It is what lets a device that has fallen behind ask for exactly the
@@ -303,8 +315,8 @@ export interface LiveEvent {
    */
   receipt?: {
     userId: string
-    deliveredAt?: string
-    readAt?: string
+    deliveredSeq?: number
+    readSeq?: number
   }
   /**
    * A voice call has a new signal — a NUDGE, not the signal itself.
