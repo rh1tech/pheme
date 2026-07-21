@@ -12,20 +12,17 @@ const early = 1;
 const mid = 2;
 const late = 3;
 
-ConversationMember member(
-  String userId, {
-  int delivered = 0,
-  int read = 0,
-}) => ConversationMember(
-  id: 'm-$userId',
-  conversationId: 'c1',
-  userId: userId,
-  role: ChannelRole.user,
-  joinedAt: '2026-07-16T10:00:00Z',
-  user: PublicUser(id: userId, displayName: userId),
-  deliveredSeq: delivered,
-  readSeq: read,
-);
+ConversationMember member(String userId, {int delivered = 0, int read = 0}) =>
+    ConversationMember(
+      id: 'm-$userId',
+      conversationId: 'c1',
+      userId: userId,
+      role: ChannelRole.user,
+      joinedAt: '2026-07-16T10:00:00Z',
+      user: PublicUser(id: userId, displayName: userId),
+      deliveredSeq: delivered,
+      readSeq: read,
+    );
 
 void main() {
   group('messageReceipt', () {
