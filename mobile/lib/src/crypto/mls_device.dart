@@ -137,6 +137,48 @@ String userOf(String identity) => _parseIdentity(identity)?.user ?? '';
 /// The device half of a leaf identity, or '' if it does not parse.
 String deviceOf(String identity) => _parseIdentity(identity)?.device ?? '';
 
+/// The domain a leaf identity is under, or '' if it does not parse.
+String domainOf(String identity) => _parseIdentity(identity)?.domain ?? '';
+
+/// Members who live on another host and have no leaf in the group yet.
+///
+/// A remote member's devices are not in the LOCAL key-package directory (that is
+/// what `_missingDevices` works from), so they are found here instead: from the
+/// membership list, by home domain. Each is returned with a BLANK device id — a
+/// remote claim is per user, and the member's home host enumerates the devices —
+/// and the server routes it there. A member with any leaf is skipped, so a settled
+/// group does not re-claim and burn their packages every reconcile.
+///
+/// Empty whenever no member carries a domain — every single-host deployment — so
+/// this adds nothing to the local path.
+List<({String userId, String domain})> remoteMemberRefs(
+  Iterable<({String userId, String domain})> members,
+  Iterable<String> leaves,
+  String selfUserId,
+) {
+  final present = leaves.map((l) => '${domainOf(l)}/${userOf(l)}').toSet();
+  final out = <({String userId, String domain})>[];
+  for (final m in members) {
+    // A local member (no domain) is handled by the directory path; skip ourselves;
+    // skip a member already in the group.
+    if (m.domain.isEmpty || m.userId == selfUserId) continue;
+    if (present.contains('${m.domain}/${m.userId}')) continue;
+    out.add(m);
+  }
+  return out;
+}
+
+/// A userId -> home-domain map for a conversation's remote members.
+Map<String, String> domainsByUser(
+  Iterable<({String userId, String domain})> members,
+) {
+  final out = <String, String>{};
+  for (final m in members) {
+    if (m.domain.isNotEmpty) out[m.userId] = m.domain;
+  }
+  return out;
+}
+
 /// The qualified user key `mimi://<domain>/u/<user>` — the form the crate's
 /// `user_of` returns, and so the form a removal target must take to match a
 /// member's credential. Defaults to this client's home domain.

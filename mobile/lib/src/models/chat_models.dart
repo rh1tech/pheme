@@ -75,6 +75,7 @@ class ConversationMember {
     this.deliveredSeq = 0,
     this.readSeq = 0,
     this.joinSeq = 0,
+    this.domain = '',
   });
 
   final String id;
@@ -83,6 +84,13 @@ class ConversationMember {
   final ChannelRole role;
   final String joinedAt;
   final PublicUser user;
+
+  /// The home host of a member who lives on another instance, e.g. `b.example`.
+  /// Empty for a local member. It qualifies the member's MLS credential
+  /// (`mimi://<domain>/d/<user>/<device>`), so the group can tell a member on one
+  /// host from a same-named member on another and claim their keys from the right
+  /// place.
+  final String domain;
 
   /// How far this member has got: they have RECEIVED every message up to [deliveredSeq] and READ
   /// every message up to [readSeq]. Watermarks, not per-message state — messages are ordered by
@@ -111,6 +119,7 @@ class ConversationMember {
         deliveredSeq: deliveredSeq ?? this.deliveredSeq,
         readSeq: readSeq ?? this.readSeq,
         joinSeq: joinSeq,
+        domain: domain,
       );
 
   factory ConversationMember.fromJson(Map<String, dynamic> j) =>
@@ -126,6 +135,7 @@ class ConversationMember {
         deliveredSeq: (j['deliveredSeq'] as num?)?.toInt() ?? 0,
         readSeq: (j['readSeq'] as num?)?.toInt() ?? 0,
         joinSeq: (j['joinSeq'] as num?)?.toInt() ?? 0,
+        domain: j['domain'] as String? ?? '',
       );
 }
 

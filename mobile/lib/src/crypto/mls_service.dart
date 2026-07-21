@@ -534,7 +534,18 @@ class MlsService {
     String myUserId,
   ) async {
     final published = (await _repo.mlsDevices(conversation.id)).published;
-    final targets = _missingDevices(session, published, const []);
+    final localTargets = _missingDevices(session, published, const []);
+    // Members on other hosts are not in the local directory; claim them from their
+    // home host (the server routes it). Empty in a single-host deployment.
+    final members = await _repo.listConversationMembers(conversation.id);
+    final targets = [
+      ...localTargets,
+      ...remoteMemberRefs(
+        members.map((m) => (userId: m.userId, domain: m.domain)),
+        const [],
+        myUserId,
+      ).map((r) => MLSDeviceRef(userId: r.userId, deviceId: '')),
+    ];
 
     // Nobody else is reachable. For a direct chat that is the whole conversation, and the user needs
     // to be told plainly rather than watching a message fail to send.
@@ -658,9 +669,22 @@ class MlsService {
       }
 
       final missing = _missingDevices(session, published, leaves);
-      if (missing.isEmpty) return;
+      // Remote members are not in the local directory; add those without a leaf yet by
+      // claiming from their home host. domainByUser lets an added leaf be matched under
+      // the member's OWN domain, not ours. Both are empty single-host.
+      final memberDomains = members.map(
+        (m) => (userId: m.userId, domain: m.domain),
+      );
+      final domainByUser = domainsByUser(memberDomains);
+      final remote = remoteMemberRefs(
+        memberDomains,
+        leaves,
+        session.userId,
+      ).map((r) => MLSDeviceRef(userId: r.userId, deviceId: ''));
+      final toAdd = [...missing, ...remote];
+      if (toAdd.isEmpty) return;
 
-      final claimed = await _claimFor(conversationId, missing);
+      final claimed = await _claimFor(conversationId, toAdd);
       if (claimed.isEmpty) return; // they published nothing after all
 
       final outcome = await session.commitAdd(
@@ -673,14 +697,15 @@ class MlsService {
         // to whatever credential is inside the bytes, and a stale directory entry can carry
         // somebody's long-dead legacy identity. A device that is still not a leaf after its
         // own accepted Add can never be added by this route — remember that, or the next
-        // reconcile claims the same package and commits the same no-op forever.
+        // reconcile claims the same package and commits the same no-op forever. A remote
+        // member's leaf answers to its own home domain, so match under that.
         final now = (await session.memberIdentities(groupId)).toSet();
-        final duds = claimed
-            .where((c) => !now.contains(deviceIdentity(c.userId, c.deviceId)))
-            .toList();
+        String idOf(MLSClaimedKeyPackage c) =>
+            deviceIdentity(c.userId, c.deviceId, domainByUser[c.userId]);
+        final duds = claimed.where((c) => !now.contains(idOf(c))).toList();
         if (duds.isEmpty) return;
         for (final dud in duds) {
-          _zombieDevices.add(deviceIdentity(dud.userId, dud.deviceId));
+          _zombieDevices.add(idOf(dud));
           // Our own dead device's packages we can actually purge — only the owner may —
           // which stops every OTHER member's reconcile walking into the same trap.
           if (dud.userId == session.userId) {
