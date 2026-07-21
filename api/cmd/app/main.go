@@ -156,7 +156,7 @@ func main() {
 		// It reuses a dispatcher purely for its local fan-out — this one never
 		// consumes the broker, it only runs DeliverLocally.
 		localFanout := message.NewDispatcher(db, pusher, bus, logger)
-		fedHandler.WithChannels(&message.ChannelFederation{Store: db, Dispatcher: localFanout})
+		fedHandler.WithChannels(&message.ChannelFederation{Store: db, Dispatcher: localFanout, Blobs: blobs})
 		fedHandler.WithKeyPackages(keyPackageAdapter{db})
 
 		// The outbound side of joining a remote channel: this host's signing

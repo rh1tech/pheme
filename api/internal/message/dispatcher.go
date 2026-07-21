@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/broker"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/federation"
@@ -31,6 +32,10 @@ type Dispatcher struct {
 	// Peers is optional: when nil, the dispatcher does no cross-host fan-out and
 	// behaves exactly as a non-federated deployment.
 	Peers peerDeliverer
+	// Blobs lets the fan-out carry a channel message's images to peer hosts by
+	// value. Nil (or a load failure) simply delivers the text — a federated post
+	// still arrives, without its pictures — rather than failing the delivery.
+	Blobs blob.Store
 }
 
 // NewDispatcher constructs a Dispatcher.
@@ -130,6 +135,7 @@ func (d *Dispatcher) fanOutToPeers(ctx context.Context, msg domain.Message) {
 		ChannelPublicID: ch.PublicID,
 		Title:           msg.Title,
 		Body:            msg.Body,
+		Images:          d.remoteImages(ctx, msg),
 		CreatedAt:       msg.CreatedAt,
 	}
 	for _, host := range hosts {
@@ -139,6 +145,28 @@ func (d *Dispatcher) fanOutToPeers(ctx context.Context, msg domain.Message) {
 			d.Logger.Warn("federated delivery failed", "channel", ch.PublicID, "peer", host, "error", err)
 		}
 	}
+}
+
+// remoteImages loads a message's processed image bytes for inline delivery to
+// peers. Best-effort: without a blob store, or if an image cannot be read, that
+// image is simply left out — a post arrives without a picture rather than not at
+// all.
+func (d *Dispatcher) remoteImages(ctx context.Context, msg domain.Message) []federation.RemoteImage {
+	if d.Blobs == nil || len(msg.Images) == 0 {
+		return nil
+	}
+	out := make([]federation.RemoteImage, 0, len(msg.Images))
+	for _, img := range msg.Images {
+		data, contentType, err := d.Blobs.Get(ctx, img.ID)
+		if err != nil {
+			d.Logger.Warn("federated image skipped", "channel", msg.ChannelID, "image", img.ID, "error", err)
+			continue
+		}
+		out = append(out, federation.RemoteImage{
+			Width: img.Width, Height: img.Height, ContentType: contentType, Data: data,
+		})
+	}
+	return out
 }
 
 // pruneDeadAddresses removes push addresses the provider has declared permanently dead.

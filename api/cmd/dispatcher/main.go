@@ -53,6 +53,13 @@ func main() {
 		os.Exit(1)
 	} else if peers != nil {
 		dispatcher.Peers = peers
+		// So a federated post carries its images to peer hosts, not just its text.
+		if blobs, berr := b.Blob(ctx); berr != nil {
+			logger.Error("blob init", "error", berr)
+			os.Exit(1)
+		} else {
+			dispatcher.Blobs = blobs
+		}
 		logger.Info("federated channel fan-out enabled", "origin", cfg.HostDomain)
 	}
 

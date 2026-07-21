@@ -32,10 +32,23 @@ type ChannelService interface {
 // blob store and would need a qualified URL or a proxy, which title-and-body
 // delivery does not (see docs/federation.md).
 type RemoteMessage struct {
-	ChannelPublicID string    `json:"channelPublicId"`
-	Title           string    `json:"title"`
-	Body            string    `json:"body"`
-	CreatedAt       time.Time `json:"createdAt"`
+	ChannelPublicID string        `json:"channelPublicId"`
+	Title           string        `json:"title"`
+	Body            string        `json:"body"`
+	Images          []RemoteImage `json:"images,omitempty"`
+	CreatedAt       time.Time     `json:"createdAt"`
+}
+
+// RemoteImage is a channel message's processed image, carried inline so the
+// subscriber can re-host it. The origin serves images under its unlisted path
+// prefix — which a peer does not know — so the bytes travel the S2S transport
+// rather than a URL a peer could fetch. They are already resized and recompressed
+// (a few hundred KB), not the original upload.
+type RemoteImage struct {
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	ContentType string `json:"contentType"`
+	Data        []byte `json:"data"`
 }
 
 // registerChannels adds the channel S2S routes. Called from Register when a

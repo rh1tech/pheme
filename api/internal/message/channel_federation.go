@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/domain"
 	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/store"
@@ -18,6 +19,10 @@ import (
 type ChannelFederation struct {
 	Store      store.Store
 	Dispatcher *Dispatcher
+	// Blobs re-hosts a delivered message's images on this host, so its local
+	// subscribers load them from here — the origin serves them under a path prefix
+	// this host does not know. Nil drops images (the text still arrives).
+	Blobs blob.Store
 }
 
 var (
@@ -71,6 +76,7 @@ func (c *ChannelFederation) DeliverRemoteMessage(ctx context.Context, originDoma
 		ChannelID: ch.ID,
 		Title:     m.Title,
 		Body:      m.Body,
+		Images:    c.rehostImages(ctx, m.Images),
 		CreatedAt: created,
 	})
 	if err != nil {
@@ -80,4 +86,26 @@ func (c *ChannelFederation) DeliverRemoteMessage(ctx context.Context, originDoma
 	// cannot loop.
 	c.Dispatcher.DeliverLocally(ctx, msg)
 	return nil
+}
+
+// rehostImages stores a delivered message's inline images in this host's own blob
+// store and returns the local image references. Best-effort: without a blob store,
+// or if one cannot be stored, that image is dropped and the message keeps the
+// rest — the same tolerance the origin applies when it cannot read one.
+func (c *ChannelFederation) rehostImages(ctx context.Context, images []federation.RemoteImage) []domain.MessageImage {
+	if c.Blobs == nil || len(images) == 0 {
+		return nil
+	}
+	out := make([]domain.MessageImage, 0, len(images))
+	for _, img := range images {
+		if len(img.Data) == 0 {
+			continue
+		}
+		id, err := c.Blobs.Put(ctx, img.Data, img.ContentType)
+		if err != nil {
+			continue
+		}
+		out = append(out, domain.MessageImage{ID: id, Width: img.Width, Height: img.Height})
+	}
+	return out
 }

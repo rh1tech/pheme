@@ -209,9 +209,18 @@ Each stage ships and is useful before the next one starts.
 - **F2 — S2S transport.** mTLS + signed requests, `.well-known` directory,
   starting with liveness and user-existence lookup. Proves the trust model
   without touching messaging.
-- **F3 — Federated channels first.** Broadcast has no group state, no epoch, no
-  ordering authority. It delivers visible cross-host value early and exercises
-  F1/F2 in production before the hard part.
+- **F3 — Federated channels first.** *Shipped, incl. images.* Broadcast has no
+  group state, no epoch, no ordering authority. A user on one host subscribes to
+  an open channel on another (`channel-subscribe`); the origin records the peer
+  HOST and fans each new post out to it (`channel-delivery`), where a mirror
+  persists it and delivers to local subscribers. Posts now carry their images:
+  the origin serves them under its unlisted path prefix, which a peer cannot
+  fetch, so the processed bytes travel inline on the S2S transport and the
+  subscriber re-hosts them in its own blob store (best-effort — the text still
+  arrives if an image cannot be carried). Still open: **approval-mode** channels
+  do not federate — the approval queue would need to model a remote host or user,
+  which title/body/image broadcast does not yet; and comments on a mirrored post
+  are not federated (a mirror is read-only broadcast).
 - **F4 — Server-inspectable handshakes.** *Shipped (epoch).* Handshake Commits
   are now `PublicMessage` (`wire_format_policy` in the pheme-mls crate, MIXED so
   the rollout needs no flag day). A ~200-line dependency-free Go decoder
