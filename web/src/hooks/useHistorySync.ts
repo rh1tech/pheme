@@ -54,9 +54,11 @@ export function useHistorySync(userId: string | null): void {
     const conversationId = e.conversationId
 
     if (msg.contentType === MLS_HISTORY_OFFER) {
-      // Record that this requester has an offer, so an in-flight election cancels. The body is
-      // opaque here (the receiver parses it); a stable per-message key is enough to dedupe.
-      offered.current.add(`${conversationId}:${msg.id}`)
+      // Record that this REQUESTER has an offer, so an in-flight election for the same requester
+      // cancels. Keyed by who the offer is addressed to, not by message id: keying it per message
+      // meant any offer in the conversation stood every candidate down, so the next device to ask
+      // was met with silence for the rest of the session.
+      offered.current.add(`${conversationId}:${controlField(msg.ciphertext, 'to')}`)
       // Try to receive it — receiveHistoryOffer ignores offers not addressed to this device.
       void receiveHistoryOffer(conversationId, userId, msg.ciphertext).then((imported) => {
         // A fresh cache write does not re-render an open conversation on its own; nudge it so the
@@ -71,39 +73,75 @@ export function useHistorySync(userId: string | null): void {
     }
 
     if (msg.contentType !== MLS_HISTORY_REQUEST) return
-    // Our own request (this device asking) — nothing to answer.
     const key = `${conversationId}:${msg.id}`
     if (answering.current.has(key)) return
 
     void (async () => {
       const identity = await myIdentity(userId).catch(() => '')
-      if (msg.senderId === userId) return // our own user's request — a co-member of another user answers
+      const requester = requesterIdentityOf(msg.ciphertext)
       const members = await groupMemberIdentities(conversationId, userId).catch(() => [])
-      if (members.length === 0 || !identity) return // we do not hold the group; cannot help
+      if (!shouldAnswer(requester, identity, members.length > 0)) return
 
       // Rank among the current members determines our election delay. Lower identity → sooner.
       const rank = [...members].sort().indexOf(identity)
       const delay = ELECTION_STEP_MS * (rank < 0 ? members.length : rank)
       const timer = setTimeout(() => {
         answering.current.delete(key)
-        // Someone already answered this requester — stand down.
-        for (const seen of offered.current) if (seen.startsWith(`${conversationId}:`)) return
-        void offerHistory(conversationId, userId, requesterIdentityOf(msg.ciphertext))
+        // Someone already answered THIS requester — stand down. An offer made to somebody else
+        // says nothing about whether this one still needs help.
+        if (offered.current.has(`${conversationId}:${requester}`)) return
+        void offerHistory(conversationId, userId, requester)
       }, delay)
       answering.current.set(key, timer)
     })()
   })
 }
 
-/** Pulls the requester's identity out of a history-request control body. Empty on a malformed one. */
-function requesterIdentityOf(ciphertextBase64: string): string {
+/**
+ * Whether THIS device should stand as a candidate to answer a history request.
+ *
+ * Answering is decided by DEVICE, not by user — deliberately, and this is the whole point of the
+ * function. A history request usually carries our OWN user id, because the device asking is our
+ * other one, and the device most likely to be online when somebody signs in on a new phone is that
+ * same person's existing device. Standing down on "our own user" left a 1:1 conversation with
+ * exactly one permitted responder — the other participant — who may be on another host entirely
+ * and offline; the new device then held the group and none of its history, indefinitely, showing
+ * every message as undecryptable. That is the same mistake that was fixed in useDeviceAdmission.
+ *
+ * Only the request from THIS device is ours to ignore. Answering is otherwise safe even when we
+ * turn out to have nothing useful: offerHistory no-ops on a device that does not hold the group,
+ * holds no transcript, or is the requester itself.
+ */
+export function shouldAnswer(
+  requester: string,
+  myIdentity: string,
+  holdsGroup: boolean,
+): boolean {
+  if (!requester || !myIdentity) return false // malformed request, or we have no identity yet
+  if (requester === myIdentity) return false // our own device asking; nothing to hand ourselves
+  return holdsGroup // without the group we cannot derive the seal, so we cannot help
+}
+
+/**
+ * Reads one string field out of a history control body (base64 JSON). Empty on a malformed one,
+ * which every caller treats as "not addressed to anyone we can act on".
+ *
+ * A request names its sender in `id`; an offer names its addressee in `to`.
+ */
+export function controlField(ciphertextBase64: string, field: 'id' | 'to'): string {
   try {
     const json = atob(ciphertextBase64)
     const bytes = new Uint8Array(json.length)
     for (let i = 0; i < json.length; i++) bytes[i] = json.charCodeAt(i)
-    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as { id?: string }
-    return parsed.id ?? ''
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
+    const value = parsed[field]
+    return typeof value === 'string' ? value : ''
   } catch {
     return ''
   }
+}
+
+/** Pulls the requester's identity out of a history-request control body. */
+function requesterIdentityOf(ciphertextBase64: string): string {
+  return controlField(ciphertextBase64, 'id')
 }

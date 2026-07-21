@@ -79,6 +79,69 @@ test('a new device receives pre-join history from an online co-member', async ({
 })
 
 /**
+ * THE SAME PERSON'S OTHER DEVICE ANSWERS — with the other participant gone.
+ *
+ * The test above leaves Alice online, so the newcomer could be served by the OTHER user. That hid a
+ * real bug for a whole release: the responder stood down on any request carrying its own user id,
+ * reasoning that "a co-member of another user answers". In a 1:1 chat that leaves exactly one
+ * permitted responder — the other party — and if they are offline, or simply on another host in a
+ * federated conversation, NOBODY answers. The new device then held the group and none of its past
+ * and showed every message, both people's, as undecryptable. Indefinitely.
+ *
+ * So: Alice is closed before the new device ever appears. The only device left holding the history
+ * belongs to Bob himself. It must be the one that hands it over — that is the commonest case there
+ * is ("I added my laptop"), not an edge case.
+ */
+test("a new device gets its history from the same person's other device, nobody else online", async ({
+  browser,
+}) => {
+  const aliceEmail = uniqueEmail('alice-selfhist')
+  const bobEmail = uniqueEmail('bob-selfhist')
+
+  const setup = await browser.newContext()
+  const admin = await setup.newPage()
+  await loginAsAdmin(admin)
+  await createUserViaAdmin(admin, aliceEmail, PASSWORD)
+  await createUserViaAdmin(admin, bobEmail, PASSWORD)
+  await setup.close()
+
+  const alice = await signInOnNewDevice(browser, aliceEmail, PASSWORD)
+  const bobA = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+
+  const conv = await startDirectChat(alice.page, bobA.userId)
+  await openChatAndJoin(alice.page, conv)
+  await send(alice.page, 'said before the laptop existed')
+  await openChatAndJoin(bobA.page, conv)
+  await expect(bobA.page.getByTestId('chat-message').last()).toContainText(
+    'said before the laptop existed',
+    { timeout: 25_000 },
+  )
+  await send(bobA.page, 'and answered before it existed')
+  await expect(alice.page.getByTestId('chat-message').last()).toContainText(
+    'and answered before it existed',
+    { timeout: 25_000 },
+  )
+
+  // THE OTHER PARTICIPANT LEAVES. Only Bob's own first device still holds this conversation's past.
+  await alice.context.close()
+
+  // Bob signs in on a new device, fresh — no recovery code, no backup restored.
+  const bobB = await signInOnNewDevice(browser, bobEmail, PASSWORD)
+  await openChatAndJoin(bobB.page, conv)
+
+  // Bob's OWN other device must serve him. Neither message is MLS-decryptable by bobB, which joined
+  // after both were sealed, so their presence can only mean the handoff happened.
+  await expect(
+    bobB.page.getByTestId('chat-message').filter({ hasText: 'said before the laptop existed' }),
+  ).toHaveCount(1, { timeout: 40_000 })
+  await expect(
+    bobB.page.getByTestId('chat-message').filter({ hasText: 'and answered before it existed' }),
+  ).toHaveCount(1, { timeout: 40_000 })
+
+  await Promise.all([bobA.context.close(), bobB.context.close()])
+})
+
+/**
  * When NO co-member is online, the new device simply shows new messages only (no error) — the case
  * Phase 3's recovery-code backup covers instead. New messages must always work regardless.
  */
