@@ -1,30 +1,34 @@
-import { expect, test, type Browser } from '@playwright/test'
+import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { login } from './helpers'
 import { openChatAndJoin, renderedMessages, send } from './chat-helpers'
-import { FED_A_URL, FED_B_URL } from './constants'
+import { FED_A_URL, FED_B_URL, FED_B_DOMAIN } from './constants'
 
-// The whole point of federation, proven end to end with real crypto: alice on
-// host A and bob on host B — two SEPARATE, independently-deployed Pheme instances
-// — exchange an MLS-encrypted message and each reads the other's plaintext. The
-// two Go hosts (started by playwright.config) share a signed nodelist and reach
-// each other over loopback; nothing here is mocked. The servers move opaque
-// ciphertext; only the browsers can read it.
+// Federation, proven end to end with real crypto: alice on host A and bob on host B
+// — two SEPARATE Pheme instances — exchange MLS-encrypted messages and each reads the
+// other's plaintext. The two Go hosts (started by playwright.config) share a signed
+// nodelist and reach each other over loopback; nothing is mocked. The servers move
+// opaque ciphertext; only the browsers can read it.
 //
-// This is what the in-process Go tests and the two-host CI pipeline cannot show:
-// that the bytes they relay actually DECRYPT on a client on the far host.
+// One device per user for the whole file (beforeAll), not one per test. A fresh device
+// each test would leave the previous device's KeyPackages published but dead — zombies
+// a later group can claim, which is a test-harness artifact, not a product bug. A single
+// long-lived device per user is also what a real person is.
 
 test.skip(({ browserName }) => browserName !== 'chromium', 'crypto round-trip: chromium only')
 
 const PASSWORD = 'Admin12345' // the seeded admin password on both fed hosts
 
-// A browser context pinned to one federation host: the app reads its API base
-// from window.__PHEME_CONFIG, so an init script points this whole context at the
-// given host before any app code runs.
-async function signInOnHost(browser: Browser, apiBase: string, email: string) {
+interface Host {
+  context: BrowserContext
+  page: Page
+  userId: string
+}
+
+// A browser context pinned to one federation host: the app reads its API base from
+// window.__PHEME_CONFIG, so an init script points this whole context at the given host
+// before any app code runs.
+async function signInOnHost(browser: Browser, apiBase: string, email: string): Promise<Host> {
   const context = await browser.newContext()
-  // The app reads its API base from /config.js (a page script that runs after any
-  // init script and would overwrite it), so pin this whole context to its host by
-  // serving that file itself.
   await context.route('**/config.js', (route) =>
     route.fulfill({
       contentType: 'application/javascript',
@@ -60,16 +64,10 @@ async function signInOnHost(browser: Browser, apiBase: string, email: string) {
   return { context, page, userId }
 }
 
-// A signed-in page's fetch against its own host, carrying its bearer token. The
-// method defaults to POST when a body is given and GET otherwise; pass one
-// explicitly for PATCH/DELETE.
-function api<T>(
-  page: import('@playwright/test').Page,
-  base: string,
-  path: string,
-  body?: unknown,
-  methodOverride?: string,
-) {
+// A signed-in page's fetch against its own host, carrying its bearer token. The method
+// defaults to POST when a body is given and GET otherwise; pass one explicitly for
+// PATCH/DELETE.
+function api<T>(page: Page, base: string, path: string, body?: unknown, methodOverride?: string) {
   return page.evaluate(
     async ([b, p, method, payload]) => {
       const res = await fetch(`${b}${p}`, {
@@ -81,63 +79,193 @@ function api<T>(
         body: payload ? (payload as string) : undefined,
       })
       if (!res.ok) throw new Error(`${p} -> ${res.status}`)
-      return (await res.json()) as unknown
+      const text = await res.text() // 204 (delete) has none; JSON.parse('') throws
+      return (text ? JSON.parse(text) : null) as unknown
     },
     [base, path, methodOverride ?? (body ? 'POST' : 'GET'), body ? JSON.stringify(body) : ''] as const,
   ) as Promise<T>
 }
 
-test('alice on host A and bob on host B exchange an encrypted message', async ({ browser }) => {
-  const alice = await signInOnHost(browser, FED_A_URL, 'alice@a.test')
-  const bob = await signInOnHost(browser, FED_B_URL, 'bob@b.test')
+interface ConvList {
+  conversations: Array<{ id: string }>
+}
+interface Roster {
+  members: Array<{ userId: string; user: { displayName?: string } }>
+}
 
-  // Bob picks a username and a display name on his own host, so alice can address
-  // him as a human handle and should see his real name, not a bare id.
-  await api(bob.page, FED_B_URL, '/v1/me', { username: 'bobfed', displayName: 'Bobby' }, 'PATCH')
+test.describe.serial('federation', () => {
+  let alice: Host
+  let bob: Host
 
-  // Alice (on A) starts a DIRECT chat with bob, who lives on B, addressing him by
-  // his handle via B's nodelist ALIAS — `bobfed@hostb`, not the full domain. Her
-  // host maps the alias to b.test, resolves the username there over S2S, creates the
-  // direct conversation, and provisions the mirror on B. A cross-host 1:1 is a
-  // direct chat, not a group.
-  const conv = await api<{ id: string; kind: string }>(alice.page, FED_A_URL, '/v1/conversations', {
-    kind: 'direct',
-    memberIds: ['bobfed@hostb'],
-  })
-  expect(conv.kind).toBe('direct')
-
-  // Bob's real id and — crucially — his display name crossed the boundary: alice's
-  // host has no user row for bob, so a bare id would render as "User". The name
-  // rides on the membership.
-  const roster = await api<{ members: Array<{ userId: string; user: { displayName?: string } }> }>(
-    alice.page,
-    FED_A_URL,
-    `/v1/conversations/${conv.id}/members`,
-  )
-  const bobMember = roster.members.find((m) => m.userId === bob.userId)
-  expect(bobMember?.user.displayName).toBe('Bobby')
-
-  // Alice opens the chat: her client establishes the MLS group, claims bob's key
-  // package from host B (the server routes the claim), and sends.
-  await openChatAndJoin(alice.page, conv.id)
-  await send(alice.page, 'the eagle lands at dawn')
-  await expect(alice.page.getByTestId('chat-message')).toContainText('the eagle lands at dawn')
-
-  // Bob opens the mirror on host B, joins from the relayed Welcome, and DECRYPTS.
-  await openChatAndJoin(bob.page, conv.id)
-  await expect(bob.page.getByTestId('chat-message')).toContainText('the eagle lands at dawn', {
-    timeout: 30_000,
+  test.beforeAll(async ({ browser }) => {
+    alice = await signInOnHost(browser, FED_A_URL, 'alice@a.test')
+    bob = await signInOnHost(browser, FED_B_URL, 'bob@b.test')
+    // Usernames + display names, so each can address the other by handle and see a
+    // real name rather than a bare id.
+    await api(alice.page, FED_A_URL, '/v1/me', { username: 'alicefed', displayName: 'Alice A' }, 'PATCH')
+    await api(bob.page, FED_B_URL, '/v1/me', { username: 'bobfed', displayName: 'Bobby' }, 'PATCH')
   })
 
-  // And he can reply — which requires he actually joined the group, not just rendered a cache.
-  await send(bob.page, 'acknowledged')
-  await expect(alice.page.getByTestId('chat-message').last()).toContainText('acknowledged', {
-    timeout: 30_000,
+  test.afterAll(async () => {
+    await Promise.all([alice?.context.close(), bob?.context.close()])
   })
 
-  // Neither side is looking at a sealed placeholder — both plaintexts are rendered.
-  expect((await renderedMessages(alice.page)).join('\n')).toContain('the eagle lands at dawn')
-  expect((await renderedMessages(alice.page)).join('\n')).toContain('acknowledged')
+  // Every test starts from an empty conversation list on both hosts, so one test's
+  // chats never leak into the next (a stale direct chat would dedup a later create).
+  test.afterEach(async () => {
+    for (const h of [
+      { d: alice, url: FED_A_URL },
+      { d: bob, url: FED_B_URL },
+    ]) {
+      const list = await api<ConvList>(h.d.page, h.url, '/v1/conversations').catch(() => ({ conversations: [] }))
+      for (const c of list.conversations) {
+        await api(h.d.page, h.url, `/v1/conversations/${c.id}`, undefined, 'DELETE').catch(() => {})
+      }
+    }
+  })
 
-  await Promise.all([alice.context.close(), bob.context.close()])
+  test('direct chat: names cross, both sides decrypt', async () => {
+    const conv = await api<{ id: string; kind: string }>(alice.page, FED_A_URL, '/v1/conversations', {
+      kind: 'direct',
+      memberIds: ['bobfed@hostb'],
+    })
+    expect(conv.kind).toBe('direct')
+
+    // Bob's display name rode across the boundary — alice's host has no user row for him.
+    const roster = await api<Roster>(alice.page, FED_A_URL, `/v1/conversations/${conv.id}/members`)
+    expect(roster.members.find((m) => m.userId === bob.userId)?.user.displayName).toBe('Bobby')
+
+    await openChatAndJoin(alice.page, conv.id)
+    await send(alice.page, 'the eagle lands at dawn')
+    await expect(alice.page.getByTestId('chat-message')).toContainText('the eagle lands at dawn')
+
+    await openChatAndJoin(bob.page, conv.id)
+    await expect(bob.page.getByTestId('chat-message')).toContainText('the eagle lands at dawn', {
+      timeout: 30_000,
+    })
+    await send(bob.page, 'acknowledged')
+    await expect(alice.page.getByTestId('chat-message').last()).toContainText('acknowledged', {
+      timeout: 30_000,
+    })
+    expect((await renderedMessages(alice.page)).join('\n')).toContain('acknowledged')
+  })
+
+  // One conversation per pair no matter who starts it, and delete reaches both — the
+  // bug that split a chat into two MLS groups and made messages look undecryptable.
+  test('direct chat dedups both ways and deletes on both sides', async () => {
+    const c1 = await api<{ id: string }>(alice.page, FED_A_URL, '/v1/conversations', {
+      kind: 'direct',
+      memberIds: ['bobfed@hostb'],
+    })
+    const c2 = await api<{ id: string }>(alice.page, FED_A_URL, '/v1/conversations', {
+      kind: 'direct',
+      memberIds: ['bobfed@hostb'],
+    })
+    expect(c2.id).toBe(c1.id)
+    // Bob starting it back the OTHER way lands on the same one — the mirror carries the
+    // dedup key, which is what stops each host making its own.
+    const c3 = await api<{ id: string }>(bob.page, FED_B_URL, '/v1/conversations', {
+      kind: 'direct',
+      memberIds: ['alicefed@hosta'],
+    })
+    expect(c3.id).toBe(c1.id)
+    const bobList = await api<ConvList>(bob.page, FED_B_URL, '/v1/conversations')
+    expect(bobList.conversations.filter((c) => c.id === c1.id)).toHaveLength(1)
+
+    await api(alice.page, FED_A_URL, `/v1/conversations/${c1.id}`, undefined, 'DELETE')
+    await expect
+      .poll(
+        async () => {
+          const list = await api<ConvList>(bob.page, FED_B_URL, '/v1/conversations')
+          return list.conversations.some((c) => c.id === c1.id)
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(false)
+  })
+
+  // A sender cannot MLS-decrypt their OWN message, so its plaintext comes from a local
+  // cache keyed by the message id. A relayed cross-host message stored under a different
+  // id than the sender cached would show as unreadable after a reload. It must not.
+  test('a sender still reads their own cross-host message after a reload', async () => {
+    const conv = await api<{ id: string }>(alice.page, FED_A_URL, '/v1/conversations', {
+      kind: 'direct',
+      memberIds: ['bobfed@hostb'],
+    })
+    await openChatAndJoin(alice.page, conv.id)
+    await send(alice.page, 'my own words')
+    await expect(alice.page.getByTestId('chat-message')).toContainText('my own words')
+    await openChatAndJoin(bob.page, conv.id)
+    await expect(bob.page.getByTestId('chat-message')).toContainText('my own words', { timeout: 30_000 })
+
+    await alice.page.reload()
+    await openChatAndJoin(alice.page, conv.id)
+    await expect(alice.page.getByTestId('chat-message')).toContainText('my own words', { timeout: 30_000 })
+    expect((await renderedMessages(alice.page)).join('\n')).toContain('my own words')
+  })
+
+  // A GROUP with a member on another host: add by handle, exchange both ways, the remote
+  // member's name shows, and leaving drops it from the leaver's list.
+  test('group: add a remote member, exchange, and leave', async () => {
+    const conv = await api<{ id: string; kind: string }>(alice.page, FED_A_URL, '/v1/conversations', {
+      kind: 'group',
+      title: 'Cross Crew',
+      memberIds: [],
+    })
+    expect(conv.kind).toBe('group')
+    await api(alice.page, FED_A_URL, `/v1/conversations/${conv.id}/members`, { userId: 'bobfed@hostb' })
+
+    const roster = await api<Roster>(alice.page, FED_A_URL, `/v1/conversations/${conv.id}/members`)
+    expect(roster.members.find((m) => m.userId === bob.userId)?.user.displayName).toBe('Bobby')
+
+    await openChatAndJoin(alice.page, conv.id)
+    await send(alice.page, 'crew assemble')
+    await openChatAndJoin(bob.page, conv.id)
+    await expect(bob.page.getByTestId('chat-message')).toContainText('crew assemble', { timeout: 30_000 })
+    await send(bob.page, 'present')
+    await expect(alice.page.getByTestId('chat-message').last()).toContainText('present', { timeout: 30_000 })
+
+    // Bob leaves; it drops from HIS list at once.
+    await api(bob.page, FED_B_URL, `/v1/conversations/${conv.id}/members/${bob.userId}`, undefined, 'DELETE')
+    const bobList = await api<ConvList>(bob.page, FED_B_URL, '/v1/conversations')
+    expect(bobList.conversations.some((c) => c.id === conv.id)).toBe(false)
+  })
+
+  // Channels federate too: subscribing to a channel on another host over S2S creates a
+  // local MIRROR of it. The subscribe (and mirror creation) is app-driven and proven
+  // here; the broadcast FAN-OUT to remote subscribers runs in the dispatcher, which
+  // this app-only harness does not run — that half is covered by the in-Docker
+  // federation-e2e (test/federation-e2e), which stands up full stacks.
+  test('channel: subscribing to a remote channel creates a mirror', async () => {
+    // Open mode: only open channels federate (an approval queue cannot yet model a
+    // remote subscriber). The create default is approval, so ask for open explicitly.
+    const ch = await api<{ id: string; publicId: string }>(bob.page, FED_B_URL, '/v1/channels', {
+      name: 'Fed News',
+      subscriptionMode: 'open',
+    })
+    expect(ch.publicId).toBeTruthy()
+
+    // Subscribe from host A by `publicId@domain` (channels resolve the full domain, not
+    // the alias). This S2S-subscribes on B and stands up A's local mirror.
+    const joined = await api<{ channel: { id: string; name: string; originPublicId?: string; originDomain?: string } }>(
+      alice.page,
+      FED_A_URL,
+      '/v1/channels/join-remote',
+      { ref: `${ch.publicId}@${FED_B_DOMAIN}` },
+    )
+    expect(joined.channel.originPublicId).toBe(ch.publicId)
+    expect(joined.channel.originDomain).toBe(FED_B_DOMAIN)
+    expect(joined.channel.name).toBe('Fed News')
+
+    // And it is discoverable as one of alice's channels (the subscriber owns their mirror).
+    const owned = await api<{ channels: Array<{ id: string; originPublicId?: string }> }>(
+      alice.page,
+      FED_A_URL,
+      '/v1/channels',
+    )
+    expect(owned.channels.some((c) => c.originPublicId === ch.publicId)).toBe(true)
+
+    await api(bob.page, FED_B_URL, `/v1/channels/${ch.id}`, undefined, 'DELETE').catch(() => {})
+    await api(alice.page, FED_A_URL, `/v1/channels/${joined.channel.id}`, undefined, 'DELETE').catch(() => {})
+  })
 })
