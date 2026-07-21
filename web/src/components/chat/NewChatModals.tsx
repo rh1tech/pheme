@@ -39,22 +39,38 @@ function UserSearch({ onPick, exclude, onPickHandle }: UserSearchProps) {
   // Debounce on the QUERY alone. `exclude` is a fresh Set on every parent render,
   // so listing it as a dep re-fired this effect every render — the search flashing.
   // Exclusion is a pure filter applied at render instead.
+  // Whether the last COMPLETED search found nobody. Held as its own state, not
+  // derived from `searching`, so "No one found" stays put while the next keystroke's
+  // search is in flight instead of blinking off and back on. Only a search that
+  // returns people clears it.
+  const [emptyResult, setEmptyResult] = useState(false)
+
   useEffect(() => {
     const q = query.trim()
-    if (q.length < 2) return // too short: the render hides stale results
+    // Too short, or a handle: no server query. A `user@host` handle is resolved on
+    // demand when the user picks "start a chat with…", never by searching the local
+    // directory — so an '@' stops us hitting the server at all.
+    if (q.length < 2 || q.includes('@')) return
     const timer = window.setTimeout(() => {
       setSearching(true)
       api
         .searchUsers(q)
-        .then(setResults)
-        .catch(() => setResults([]))
+        .then((users) => {
+          setResults(users)
+          setEmptyResult(users.length === 0)
+        })
+        .catch(() => {
+          setResults([])
+          setEmptyResult(false)
+        })
         .finally(() => setSearching(false))
     }, 250)
     return () => window.clearTimeout(timer)
   }, [query])
 
-  const tooShort = query.trim().length < 2
-  const shownResults = (tooShort ? [] : results).filter((u) => !exclude.has(u.id))
+  const trimmed = query.trim()
+  const hasAt = trimmed.includes('@')
+  const shownResults = (trimmed.length < 2 || hasAt ? [] : results).filter((u) => !exclude.has(u.id))
   const handle = onPickHandle ? remoteHandle(query) : null
 
   return (
@@ -110,7 +126,7 @@ function UserSearch({ onPick, exclude, onPickHandle }: UserSearchProps) {
             </Group>
           </UnstyledButton>
         ))}
-        {query.trim().length >= 2 && !searching && results.length === 0 && !handle && (
+        {trimmed.length >= 2 && !hasAt && emptyResult && (
           <Text c="dimmed" size="sm" ta="center" py="sm">
             {t('chat.noPeople')}
           </Text>

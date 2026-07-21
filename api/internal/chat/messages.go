@@ -652,6 +652,15 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 		action = "left"
 	}
 	h.recordMembershipChange(r, convID, member.UserID, target, action)
+	// The removed member is no longer on the roster, so the membership note above will
+	// not reach them. Tell THEIR devices, by name, to drop the conversation from the
+	// list at once — otherwise it lingers until a reload. Recipients scopes it to them:
+	// everyone still in the group keeps the conversation and just sees the note.
+	h.Live.Publish(live.Event{
+		ConversationID:      convID,
+		ConversationDeleted: true,
+		Recipients:          []string{target},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -194,7 +194,9 @@ function AddMemberSearch({ exclude, busy, onPick, onAddHandle }: AddMemberSearch
   // the flashing. Exclusion is a pure filter applied at render instead.
   useEffect(() => {
     const q = query.trim()
-    if (q.length < 2) return // too short: the render hides stale results
+    // Too short, or a handle: no server query — a `user@host` handle is resolved on
+    // demand when the user picks "add … from another server", not by local search.
+    if (q.length < 2 || q.includes('@')) return
     const timer = window.setTimeout(() => {
       setSearching(true)
       api
@@ -206,7 +208,9 @@ function AddMemberSearch({ exclude, busy, onPick, onAddHandle }: AddMemberSearch
     return () => window.clearTimeout(timer)
   }, [query])
 
-  const shown = (trimmed.length < 2 ? [] : results).filter((u) => !exclude.has(u.id))
+  const shown = (trimmed.length < 2 || trimmed.includes('@') ? [] : results).filter(
+    (u) => !exclude.has(u.id),
+  )
 
   return (
     <Stack gap="xs">

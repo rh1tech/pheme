@@ -75,6 +75,15 @@ export function useConversationList(): ConversationListApi {
     setConversations(await api.listConversations())
   }, [])
 
+  // The ids currently in the list, for the live handler to test membership without
+  // a stale closure over `conversations`. A message for an id NOT here is the first
+  // sign of a conversation created for us elsewhere — a cross-host mirror, or being
+  // added to a group — and is what triggers a refresh to pull it in.
+  const idsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    idsRef.current = new Set(conversations.map((c) => c.id))
+  }, [conversations])
+
   useEffect(() => {
     let active = true
     api
@@ -97,6 +106,13 @@ export function useConversationList(): ConversationListApi {
     }
     if (!e.conversationId || !e.chatMessage) return
     const msg = e.chatMessage
+    // A message for a conversation we do not have yet — one just created for us on
+    // another host (a mirror), or one we were just added to. Pull the list so it
+    // appears now instead of on the next reload.
+    if (!idsRef.current.has(e.conversationId)) {
+      void refresh()
+      return
+    }
     // MLS protocol traffic (a device announcing itself, a Welcome, a Commit) is not
     // something a human said. Opening a chat generates it — announceDevice re-fires on
     // every open until this device is admitted — so letting it patch lastMessage would
