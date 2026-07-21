@@ -1,5 +1,21 @@
 import { defineConfig, devices } from '@playwright/test'
-import { ADMIN_EMAIL, ADMIN_PASSWORD, API_PORT, API_URL, WEB_PORT, WEB_URL } from './e2e/constants'
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  API_PORT,
+  API_URL,
+  FED_A_DOMAIN,
+  FED_A_HOST_KEY,
+  FED_A_PORT,
+  FED_A_URL,
+  FED_B_DOMAIN,
+  FED_B_HOST_KEY,
+  FED_B_PORT,
+  FED_B_URL,
+  FED_COORD_KEY,
+  WEB_PORT,
+  WEB_URL,
+} from './e2e/constants'
 
 const isCI = !!process.env.CI
 
@@ -104,6 +120,52 @@ export default defineConfig({
         // there costs ten seconds per call while the ICE agent waits for it to time out, and
         // naming a real public one would make the suite depend on the internet.
         PHEME_TURN_URLS: 'direct',
+      },
+    },
+    // Two federated App API hosts for the cross-host E2EE spec. Each is a full
+    // in-memory app that trusts the committed nodelist fixture and reaches the
+    // other over loopback via PHEME_PEER_URLS. Only the cross-host spec drives
+    // them (through per-context apiBase overrides); every other spec ignores them.
+    {
+      command: 'go run ./cmd/app',
+      cwd: '../api',
+      url: `${FED_A_URL}/healthz`,
+      reuseExistingServer: !isCI,
+      timeout: 120_000,
+      env: {
+        PHEME_APP_ADDR: `:${FED_A_PORT}`,
+        PHEME_CORS_ORIGINS: WEB_URL,
+        PHEME_JWT_SECRET: 'e2e-fed-a-secret',
+        PHEME_MAIL_DRIVER: 'log',
+        PHEME_SEED_ADMIN_EMAIL: `alice@${FED_A_DOMAIN}`,
+        PHEME_SEED_ADMIN_PASSWORD: ADMIN_PASSWORD,
+        PHEME_TURN_URLS: 'direct',
+        PHEME_HOST_DOMAIN: FED_A_DOMAIN,
+        PHEME_HOST_KEY: FED_A_HOST_KEY,
+        PHEME_NODELIST_COORD_KEY: FED_COORD_KEY,
+        PHEME_NODELIST_PATH: '../web/e2e/fixtures/nodelist.json',
+        PHEME_PEER_URLS: `${FED_B_DOMAIN}=${FED_B_URL}`,
+      },
+    },
+    {
+      command: 'go run ./cmd/app',
+      cwd: '../api',
+      url: `${FED_B_URL}/healthz`,
+      reuseExistingServer: !isCI,
+      timeout: 120_000,
+      env: {
+        PHEME_APP_ADDR: `:${FED_B_PORT}`,
+        PHEME_CORS_ORIGINS: WEB_URL,
+        PHEME_JWT_SECRET: 'e2e-fed-b-secret',
+        PHEME_MAIL_DRIVER: 'log',
+        PHEME_SEED_ADMIN_EMAIL: `bob@${FED_B_DOMAIN}`,
+        PHEME_SEED_ADMIN_PASSWORD: ADMIN_PASSWORD,
+        PHEME_TURN_URLS: 'direct',
+        PHEME_HOST_DOMAIN: FED_B_DOMAIN,
+        PHEME_HOST_KEY: FED_B_HOST_KEY,
+        PHEME_NODELIST_COORD_KEY: FED_COORD_KEY,
+        PHEME_NODELIST_PATH: '../web/e2e/fixtures/nodelist.json',
+        PHEME_PEER_URLS: `${FED_A_DOMAIN}=${FED_A_URL}`,
       },
     },
     {

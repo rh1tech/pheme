@@ -19,3 +19,19 @@ export const API_URL = `http://localhost:${API_PORT}`
 
 export const ADMIN_EMAIL = 'admin@pheme.test'
 export const ADMIN_PASSWORD = 'Admin12345'
+
+// Two FEDERATED App API hosts for the cross-host E2EE spec — host A (a.test) and
+// host B (b.test), each a full in-memory app with a seeded admin, sharing the
+// signed nodelist fixture in e2e/fixtures and reaching each other over loopback
+// via PHEME_PEER_URLS. Their ports sit above the single-host stack's, offset-aware.
+export const FED_A_PORT = 8110 + _offset
+export const FED_B_PORT = 8112 + _offset
+export const FED_A_URL = `http://localhost:${FED_A_PORT}`
+export const FED_B_URL = `http://localhost:${FED_B_PORT}`
+export const FED_A_DOMAIN = 'a.test'
+export const FED_B_DOMAIN = 'b.test'
+// Test host keys (base64url seeds) matching the committed nodelist fixture. Test
+// material, not secret — the same fixed-seed pattern the Go federation tests use.
+export const FED_A_HOST_KEY = '2hvdqi3oQrIXu9KIb9i7oqjKfTnuQfN5mObmbQWsMnQ'
+export const FED_B_HOST_KEY = 'o7-R1YMGuaLaCqDMXCU4rovUxphwofE0ANlqq9za5Ic'
+export const FED_COORD_KEY = 'YTSBtW9CZ-Xw7SOE3UVFJJtHmKxb6hn0whiUpDevzlI'
