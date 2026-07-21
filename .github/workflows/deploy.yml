@@ -261,51 +261,31 @@ jobs:
   deploy-2:
     name: Deploy prod (host 2)
     needs: build
-    runs-on: [self-hosted, linux, deploy]
+    # Runs ON the second host (its own runner), deploying to localhost. The first
+    # host's deploy runner cannot SSH out to this box (egress to :22 is blocked), and
+    # a local deploy needs no SSH, no key, and no inbound access at all.
+    runs-on: [self-hosted, linux, deploy-local]
     environment: prod
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY_2 }}" > ~/.ssh/id_deploy2
-          chmod 600 ~/.ssh/id_deploy2
-          ssh-keyscan -H "${{ secrets.DEPLOY_HOST_2 }}" >> ~/.ssh/known_hosts 2>/dev/null
-
       - name: Sync deploy files
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_2 }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER_2 }}
         run: |
-          scp -i ~/.ssh/id_deploy2 deploy/prod/docker-compose.yml \
-            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/pheme/docker-compose.yml"
-          scp -i ~/.ssh/id_deploy2 deploy/prod/turnserver.conf \
-            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/pheme/turnserver.conf"
-          scp -i ~/.ssh/id_deploy2 deploy/deploy.sh \
-            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/pheme/deploy.sh"
-          ssh -i ~/.ssh/id_deploy2 "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "chmod +x /opt/pheme/deploy.sh"
+          cp deploy/prod/docker-compose.yml /opt/pheme/docker-compose.yml
+          cp deploy/prod/turnserver.conf   /opt/pheme/turnserver.conf
+          cp deploy/deploy.sh              /opt/pheme/deploy.sh
+          chmod +x /opt/pheme/deploy.sh
 
-      - name: Log server in to GHCR
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_2 }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER_2 }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to GHCR
         run: |
-          echo "${GHCR_TOKEN}" | ssh -i ~/.ssh/id_deploy2 "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Deploy
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_2 }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER_2 }}
-          ENV_NAME: prod
           API_IMAGE: ${{ needs.build.outputs.api_image }}
           WEB_IMAGE: ${{ needs.build.outputs.web_image }}
         run: |
-          ssh -i ~/.ssh/id_deploy2 "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "API_IMAGE='${API_IMAGE}' WEB_IMAGE='${WEB_IMAGE}' /opt/pheme/deploy.sh '${ENV_NAME}'"
+          API_IMAGE="$API_IMAGE" WEB_IMAGE="$WEB_IMAGE" /opt/pheme/deploy.sh prod
 
   smoke-2:
     name: Smoke test prod (host 2)
