@@ -191,6 +191,10 @@ func TestSigningRejectsAMalformedNode(t *testing.T) {
 		"bad domain":            func(l *List) { l.Nodes[0].Domain = "not a domain" },
 		"short key":             func(l *List) { l.Nodes[0].PublicKey = []byte{1, 2, 3} },
 		"expires before issued": func(l *List) { l.Expires = l.Issued.Add(-time.Hour) },
+		"bad alias (dot)":       func(l *List) { l.Nodes[0].Alias = "pheme.1" },
+		"bad alias (space)":     func(l *List) { l.Nodes[0].Alias = "phe me" },
+		"duplicate alias":       func(l *List) { l.Nodes[0].Alias = "p1"; l.Nodes[1].Alias = "p1" },
+		"alias equals a domain": func(l *List) { l.Nodes[0].Alias = "b.example" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			l := sampleList()
@@ -199,5 +203,36 @@ func TestSigningRejectsAMalformedNode(t *testing.T) {
 				t.Fatalf("%s was signed", name)
 			}
 		})
+	}
+}
+
+func TestAliasesRoundTripAndResolve(t *testing.T) {
+	l := sampleList()
+	l.Nodes[0].Alias = "pheme1"
+	l.Nodes[1].Alias = "pheme2"
+
+	// Signs (so validate passes) and survives a verify round-trip with aliases intact.
+	doc, err := Sign(l, coordKey(t, 9))
+	if err != nil {
+		t.Fatalf("signing a list with aliases: %v", err)
+	}
+	got, err := Verify(doc, coordKey(t, 9).Public().(ed25519.PublicKey))
+	if err != nil {
+		t.Fatalf("verifying: %v", err)
+	}
+
+	if d, ok := got.DomainForAlias("PHEME1"); !ok || d != "a.example" {
+		t.Errorf("DomainForAlias(pheme1) = %q,%v; want a.example,true", d, ok)
+	}
+	if a, ok := got.AliasForDomain("a.example"); !ok || a != "pheme1" {
+		t.Errorf("AliasForDomain(a.example) = %q,%v; want pheme1,true", a, ok)
+	}
+	if _, ok := got.DomainForAlias("nope"); ok {
+		t.Error("an unknown alias resolved")
+	}
+	// A host without an alias reports none.
+	l2 := sampleList()
+	if _, ok := l2.AliasForDomain("a.example"); ok {
+		t.Error("a host with no alias reported one")
 	}
 }

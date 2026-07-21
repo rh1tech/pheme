@@ -184,6 +184,7 @@ func main() {
 				HostDomain: cfg.HostDomain,
 				HostKey:    hostSigningKey,
 				Keys:       nodes,
+				Aliases:    nodes,
 				// Cross-host calling lands a relayed signal in this host's own call
 				// mailbox and rings its devices. The mailbox is the same one the chat
 				// handler serves; the handler itself is the ringer.

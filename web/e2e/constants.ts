@@ -34,4 +34,4 @@ export const FED_B_DOMAIN = 'b.test'
 // material, not secret — the same fixed-seed pattern the Go federation tests use.
 export const FED_A_HOST_KEY = '2hvdqi3oQrIXu9KIb9i7oqjKfTnuQfN5mObmbQWsMnQ'
 export const FED_B_HOST_KEY = 'o7-R1YMGuaLaCqDMXCU4rovUxphwofE0ANlqq9za5Ic'
-export const FED_COORD_KEY = 'YTSBtW9CZ-Xw7SOE3UVFJJtHmKxb6hn0whiUpDevzlI'
+export const FED_COORD_KEY = 'U9cvSODo2NtZI1AI1Qx8bne8My4lFFd0sOzuVdtsiGE'

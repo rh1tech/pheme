@@ -1,7 +1,7 @@
 import { expect, test, type Browser } from '@playwright/test'
 import { login } from './helpers'
 import { openChatAndJoin, renderedMessages, send } from './chat-helpers'
-import { FED_A_URL, FED_B_URL, FED_B_DOMAIN } from './constants'
+import { FED_A_URL, FED_B_URL } from './constants'
 
 // The whole point of federation, proven end to end with real crypto: alice on
 // host A and bob on host B — two SEPARATE, independently-deployed Pheme instances
@@ -95,9 +95,10 @@ test('alice on host A and bob on host B exchange an encrypted message', async ({
   // handle (`bobfed@b.test`) instead of an opaque id.
   await api(bob.page, FED_B_URL, '/v1/me', { username: 'bobfed' }, 'PATCH')
 
-  // Alice (on A) makes a group and adds bob, who lives on B, by his `username@host`
-  // handle. Alice's host resolves that username on B over S2S, records him as a
-  // remote member, and provisions the mirror on B.
+  // Alice (on A) makes a group and adds bob, who lives on B, by his handle using
+  // B's nodelist ALIAS — `bobfed@hostb`, not the full domain. Alice's host maps the
+  // alias to b.test, resolves the username there over S2S, records him as a remote
+  // member, and provisions the mirror on B.
   const conv = await api<{ id: string }>(alice.page, FED_A_URL, '/v1/conversations', {
     kind: 'group',
     title: 'cross-host',
@@ -107,9 +108,9 @@ test('alice on host A and bob on host B exchange an encrypted message', async ({
     alice.page,
     FED_A_URL,
     `/v1/conversations/${conv.id}/members`,
-    { userId: `bobfed@${FED_B_DOMAIN}` },
+    { userId: 'bobfed@hostb' },
   )
-  // The handle resolved to bob's real id on B — not stored as the literal string.
+  // The alias+username resolved to bob's real id on B — not stored as the literal string.
   expect(bobMember.userId).toBe(bob.userId)
 
   // Alice opens the chat: her client establishes the MLS group, claims bob's key

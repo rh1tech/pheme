@@ -27,6 +27,12 @@ import (
 type Node struct {
 	Domain    string            `json:"domain"`
 	PublicKey ed25519.PublicKey `json:"publicKey"`
+	// Alias is an optional short, network-wide name for this host, so a user can
+	// be addressed as `name@pheme1` instead of `name@a-long-host.example.tld`. It
+	// carries no trust — the domain and its key are what authenticate a host — it
+	// is purely a friendlier spelling the whole network agrees on because it is
+	// signed into the same list. Empty means the host is addressed by domain only.
+	Alias string `json:"alias,omitempty"`
 }
 
 // List is the full set, as one signable document.
@@ -130,11 +136,40 @@ func (l List) Lookup(domain string) (ed25519.PublicKey, bool) {
 	return nil, false
 }
 
+// DomainForAlias returns the domain a host alias names, case-insensitively, or
+// false if no host carries that alias.
+func (l List) DomainForAlias(alias string) (string, bool) {
+	alias = strings.ToLower(strings.TrimSpace(alias))
+	if alias == "" {
+		return "", false
+	}
+	for _, n := range l.Nodes {
+		if strings.ToLower(n.Alias) == alias {
+			return n.Domain, true
+		}
+	}
+	return "", false
+}
+
+// AliasForDomain returns a host's alias, case-insensitively, or false if it has
+// none. The inverse of DomainForAlias, for rendering a member as `name@alias`.
+func (l List) AliasForDomain(domain string) (string, bool) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	for _, n := range l.Nodes {
+		if strings.ToLower(n.Domain) == domain && n.Alias != "" {
+			return n.Alias, true
+		}
+	}
+	return "", false
+}
+
 func (l List) validate() error {
 	if l.Expires.Before(l.Issued) || l.Expires.Equal(l.Issued) {
 		return fmt.Errorf("%w: expiry is not after issue", ErrMalformed)
 	}
 	seen := make(map[string]struct{}, len(l.Nodes))
+	domains := make(map[string]struct{}, len(l.Nodes))
+	aliases := make(map[string]struct{}, len(l.Nodes))
 	for _, n := range l.Nodes {
 		d := strings.ToLower(strings.TrimSpace(n.Domain))
 		if !validDomain(d) {
@@ -149,6 +184,27 @@ func (l List) validate() error {
 			return fmt.Errorf("%w: %q appears twice", ErrMalformed, n.Domain)
 		}
 		seen[d] = struct{}{}
+		domains[d] = struct{}{}
+		if n.Alias != "" {
+			a := strings.ToLower(strings.TrimSpace(n.Alias))
+			if !validAlias(a) {
+				return fmt.Errorf("%w: bad alias %q", ErrMalformed, n.Alias)
+			}
+			// An alias must resolve to exactly one host, and must not be readable
+			// as a domain — either would make `name@x` ambiguous, the same reason
+			// a duplicate domain is rejected.
+			if _, dup := aliases[a]; dup {
+				return fmt.Errorf("%w: alias %q appears twice", ErrMalformed, n.Alias)
+			}
+			aliases[a] = struct{}{}
+		}
+	}
+	// Cross-check aliases against domains only after every domain is known, so
+	// order in the list does not matter.
+	for a := range aliases {
+		if _, clash := domains[a]; clash {
+			return fmt.Errorf("%w: alias %q collides with a host domain", ErrMalformed, a)
+		}
 	}
 	return nil
 }
@@ -172,13 +228,15 @@ func (n Node) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Domain    string `json:"domain"`
 		PublicKey string `json:"publicKey"`
-	}{n.Domain, encodeKey(n.PublicKey)})
+		Alias     string `json:"alias,omitempty"`
+	}{n.Domain, encodeKey(n.PublicKey), n.Alias})
 }
 
 func (n *Node) UnmarshalJSON(b []byte) error {
 	var raw struct {
 		Domain    string `json:"domain"`
 		PublicKey string `json:"publicKey"`
+		Alias     string `json:"alias"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
@@ -189,7 +247,27 @@ func (n *Node) UnmarshalJSON(b []byte) error {
 	}
 	n.Domain = raw.Domain
 	n.PublicKey = key
+	n.Alias = raw.Alias
 	return nil
+}
+
+// validAlias accepts a short, dot-free host handle: 2–32 chars of lowercase
+// letters, digits and hyphens, starting alphanumeric. Dot-free is what keeps an
+// alias distinguishable from a domain (a domain always contains a dot).
+func validAlias(a string) bool {
+	if len(a) < 2 || len(a) > 32 {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		c := a[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	first, last := a[0], a[len(a)-1]
+	alnum := func(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') }
+	return alnum(first) && alnum(last)
 }
 
 func validDomain(d string) bool {

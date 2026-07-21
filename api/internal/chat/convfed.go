@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/rh1tech/pheme/api/internal/calls"
@@ -19,6 +20,13 @@ import (
 // satisfies it.
 type hubKeys interface {
 	KeyFor(domain string) (ed25519.PublicKey, error)
+}
+
+// hostAliases resolves the friendly, network-wide host names carried in the
+// nodelist. The nodelist store satisfies it.
+type hostAliases interface {
+	DomainForAlias(alias string) (string, bool)
+	AliasForDomain(domain string) (string, bool)
 }
 
 // peerConversations is the outbound federation surface the chat handler needs:
@@ -72,6 +80,10 @@ type ConvFederation struct {
 	// Keys resolves a hub domain to its public key for verifying an incoming link.
 	// Nil skips verification (single-host or a deployment without a nodelist here).
 	Keys hubKeys
+	// Aliases maps a host alias to its domain, so a user typed as `name@pheme1`
+	// reaches the same host as `name@its-full-domain`. Nil disables aliasing —
+	// only full domains resolve then.
+	Aliases hostAliases
 	// Mailbox and Ringer let a relayed call signal land locally: appended to this
 	// host's call mailbox and rung to its devices. Nil disables cross-host calling
 	// (a deployment with no calling configured).
@@ -732,6 +744,18 @@ func (c *ConvFederation) ForwardCommit(ctx context.Context, hubDomain string, s 
 
 // AddRemoteMember (hub side) records a member who lives on another host and
 // provisions the mirror there, so that user's devices can read and post. The
+// HostDomainFor maps the `@host` part of a handle — a full domain or a short
+// alias — to a domain. An unknown value (or one that is already a domain) is
+// returned unchanged, so a full domain always still works.
+func (c *ConvFederation) HostDomainFor(hostOrAlias string) string {
+	if c.Aliases != nil {
+		if d, ok := c.Aliases.DomainForAlias(strings.ToLower(strings.TrimSpace(hostOrAlias))); ok {
+			return d
+		}
+	}
+	return hostOrAlias
+}
+
 // ResolveRemoteUser turns a `username@remoteDomain` handle into the local id that
 // remote host knows the user by — the id AddRemoteMember then adds. It is how a
 // person on another host is addressed by name instead of by an opaque id.

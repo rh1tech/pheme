@@ -2,7 +2,7 @@
 // admitted hosts and signs it into the document every host mirrors.
 //
 //	pheme-nodelist init                         # create a coordinator key
-//	pheme-nodelist add   <domain> <pubkey>      # admit a host
+//	pheme-nodelist add   <domain> <pubkey> [alias]  # admit a host (alias optional)
 //	pheme-nodelist remove <domain>              # remove a host (revocation)
 //	pheme-nodelist sign  [--days 30]            # emit the signed list to stdout
 //	pheme-nodelist pubkey                       # the key every host must trust
@@ -61,7 +61,9 @@ func usage() {
 
   init                     create a coordinator key (refuses to clobber one)
   pubkey                   print the public key every host must be given
-  add <domain> <pubkey>    admit a host (its pubkey is from pheme-hostkey)
+  add <domain> <pubkey> [alias]
+                           admit a host (pubkey from pheme-hostkey); the optional
+                           alias is a short network-wide name, e.g. pheme1
   remove <domain>          remove a host — this is how revocation happens
   sign [--days N]          sign the roster and print the list to stdout
 
@@ -105,29 +107,41 @@ func cmdPubkey() {
 }
 
 func cmdAdd(args []string) {
-	if len(args) != 2 {
-		die("usage: add <domain> <pubkey>")
+	if len(args) != 2 && len(args) != 3 {
+		die("usage: add <domain> <pubkey> [alias]")
 	}
 	domain := strings.ToLower(strings.TrimSpace(args[0]))
 	key, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(strings.TrimSpace(args[1]), "="))
 	if err != nil || len(key) != ed25519.PublicKeySize {
 		die("%q is not a valid host public key (expected base64url of %d bytes)", args[1], ed25519.PublicKeySize)
 	}
+	alias := ""
+	if len(args) == 3 {
+		alias = strings.ToLower(strings.TrimSpace(args[2]))
+	}
 	r := loadRoster()
 	for i, n := range r.Nodes {
 		if strings.EqualFold(n.Domain, domain) {
 			// Re-adding is how a host's key is ROTATED — replace in place rather
 			// than refuse, or a rotation would need a remove-then-add that leaves
-			// the host absent from any list signed in between.
+			// the host absent from any list signed in between. An alias given here
+			// updates it; omitting it keeps whatever the host already had.
 			r.Nodes[i].PublicKey = key
+			if len(args) == 3 {
+				r.Nodes[i].Alias = alias
+			}
 			saveRoster(r)
 			fmt.Printf("updated %s (key rotated)\n", domain)
 			return
 		}
 	}
-	r.Nodes = append(r.Nodes, nodelist.Node{Domain: domain, PublicKey: key})
+	r.Nodes = append(r.Nodes, nodelist.Node{Domain: domain, PublicKey: key, Alias: alias})
 	saveRoster(r)
-	fmt.Printf("added %s\n", domain)
+	if alias != "" {
+		fmt.Printf("added %s (alias %s)\n", domain, alias)
+	} else {
+		fmt.Printf("added %s\n", domain)
+	}
 }
 
 func cmdRemove(args []string) {

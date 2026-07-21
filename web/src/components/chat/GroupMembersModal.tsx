@@ -6,6 +6,7 @@ import { api, imageUrl } from '../../lib/api'
 import { addGroupMember, removeGroupMember, PeerKeysMissingError } from '../../lib/mls'
 import { notifyError, notifySuccess } from '../../lib/notify'
 import { userLabel } from '../../lib/conversation'
+import { remoteHandle } from '../../lib/handles'
 import { useAuth } from '../../auth/context'
 import { ResponsiveModal } from '../ResponsiveModal'
 import { UserInfoModal } from './UserInfoModal'
@@ -175,12 +176,6 @@ interface AddMemberSearchProps {
   onAddHandle: (handle: string) => void
 }
 
-// A `username@host` handle for someone on another server. Local user search never
-// returns these — the directory a search hits is one host's — so a federated member
-// is added by typing their full handle. A dotted host distinguishes it from a stray
-// '@' in a name query.
-const REMOTE_HANDLE = /^[a-zA-Z0-9_.]{3,30}@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
-
 /** A debounced user search that lists people not already in the group. */
 function AddMemberSearch({ exclude, busy, onPick, onAddHandle }: AddMemberSearchProps) {
   const { t } = useTranslation()
@@ -189,7 +184,7 @@ function AddMemberSearch({ exclude, busy, onPick, onAddHandle }: AddMemberSearch
   const [searching, setSearching] = useState(false)
 
   const trimmed = query.trim()
-  const remoteHandle = REMOTE_HANDLE.test(trimmed) ? trimmed : null
+  const handle = remoteHandle(query)
 
   useEffect(() => {
     const q = query.trim()
@@ -223,11 +218,11 @@ function AddMemberSearch({ exclude, busy, onPick, onAddHandle }: AddMemberSearch
         spellCheck={false}
         enterKeyHint="search"
       />
-      {remoteHandle && (
+      {handle && (
         <UnstyledButton
-          onClick={() => onAddHandle(remoteHandle)}
+          onClick={() => onAddHandle(handle)}
           disabled={busy}
-          aria-label={t('group.addRemote', { handle: remoteHandle })}
+          aria-label={t('group.addRemote', { handle })}
           p="xs"
           style={{ borderRadius: 'var(--mantine-radius-md)' }}
           className="pheme-user-pick"
@@ -237,7 +232,7 @@ function AddMemberSearch({ exclude, busy, onPick, onAddHandle }: AddMemberSearch
               <IconWorld size={16} />
             </Avatar>
             <Text size="sm" truncate>
-              {t('group.addRemote', { handle: remoteHandle })}
+              {t('group.addRemote', { handle })}
             </Text>
             <IconUserPlus size={16} style={{ marginLeft: 'auto', flex: '0 0 auto' }} />
           </Group>

@@ -482,21 +482,23 @@ func (h *Handler) addTarget(ctx context.Context, raw string) (localID, remoteDom
 	}
 
 	// The human handle form. A username cannot contain '@', so the last '@' splits
-	// it from the host with no ambiguity.
+	// it from the host with no ambiguity. The host may be a full domain or a short
+	// nodelist alias (`pheme1`) — resolve the alias to a domain either way.
 	if at := strings.LastIndex(raw, "@"); at > 0 && at < len(raw)-1 {
-		username, host := raw[:at], raw[at+1:]
-		if host == h.HostDomain {
+		username := raw[:at]
+		domain := h.Fed.HostDomainFor(raw[at+1:])
+		if domain == h.HostDomain {
 			u, uerr := h.Store.UserByUsername(ctx, strings.ToLower(username))
 			if uerr != nil {
 				return "", "", false, uerr // store.ErrNotFound on a miss → 404
 			}
 			return u.ID, "", false, nil
 		}
-		ru, rerr := h.Fed.ResolveRemoteUser(ctx, host, username)
+		ru, rerr := h.Fed.ResolveRemoteUser(ctx, domain, username)
 		if rerr != nil {
 			return "", "", false, rerr
 		}
-		return ru.UserID, host, true, nil
+		return ru.UserID, domain, true, nil
 	}
 
 	// A bare local id.

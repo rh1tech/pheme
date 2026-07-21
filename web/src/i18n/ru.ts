@@ -327,6 +327,7 @@ const ru: Resources = {
     createGroup: 'Создать группу',
     searchPeople: 'Поиск людей по имени или @username',
     noPeople: 'Никого не найдено',
+    startRemote: 'Начать чат с {{handle}}',
     startFailed: 'Не удалось начать чат',
     notJoined: 'Настраиваем шифрование — попробуйте ещё раз через мгновение',
     peerNotReady:

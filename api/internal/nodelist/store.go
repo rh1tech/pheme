@@ -93,6 +93,52 @@ func (s *Store) IsPeer(domain string) bool {
 	return err == nil && key != nil
 }
 
+// DomainForAlias resolves a host alias to its domain from the loaded list. It
+// returns false when there is no list, the list has expired, or no host carries
+// the alias — an alias only means something while the list vouching for it is
+// valid, exactly as a key does.
+func (s *Store) DomainForAlias(alias string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.loaded || time.Now().After(s.list.Expires) {
+		return "", false
+	}
+	return s.list.DomainForAlias(alias)
+}
+
+// AliasForDomain returns a host's alias, or false if it has none (or no valid
+// list is loaded). For rendering a remote member as `name@alias`.
+func (s *Store) AliasForDomain(domain string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.loaded || time.Now().After(s.list.Expires) {
+		return "", false
+	}
+	return s.list.AliasForDomain(domain)
+}
+
+// HostInfo is one host as a client needs to see it: its domain and its optional
+// alias. It deliberately omits the key — a browser does not verify S2S signatures.
+type HostInfo struct {
+	Domain string `json:"domain"`
+	Alias  string `json:"alias,omitempty"`
+}
+
+// Hosts lists every host in the loaded list, so a client can offer aliases when a
+// user types a cross-host handle. Empty when no valid list is loaded.
+func (s *Store) Hosts() []HostInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.loaded || time.Now().After(s.list.Expires) {
+		return nil
+	}
+	out := make([]HostInfo, 0, len(s.list.Nodes))
+	for _, n := range s.list.Nodes {
+		out = append(out, HostInfo{Domain: n.Domain, Alias: n.Alias})
+	}
+	return out
+}
+
 // Serial is the serial of the loaded list, or 0 if none.
 func (s *Store) Serial() uint64 {
 	s.mu.RLock()

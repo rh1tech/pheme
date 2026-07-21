@@ -325,6 +325,7 @@ const en = {
     createGroup: 'Create group',
     searchPeople: 'Search people by name or @username',
     noPeople: 'No one found',
+    startRemote: 'Start a chat with {{handle}}',
     startFailed: 'Could not start the chat',
     notJoined: 'Setting up encryption — try again in a moment',
     peerNotReady:
