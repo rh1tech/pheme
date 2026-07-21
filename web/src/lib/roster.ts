@@ -168,3 +168,42 @@ export function missingDevices(
 
   return out
 }
+
+/**
+ * Members who live on another host and have no leaf in the group yet.
+ *
+ * A remote member's devices are not in the LOCAL key-package directory
+ * (`missingDevices` works from that), so they are found here instead: from the
+ * membership list, by home domain. Each is returned as a claim ref with a BLANK
+ * device id — a remote claim is per user, and the member's home host enumerates
+ * the devices — and the server routes it there. Once a member has any leaf they
+ * are skipped, so a settled group does not re-claim and burn their packages every
+ * reconcile.
+ *
+ * Empty whenever no member carries a domain, which is every single-host
+ * deployment — so this adds nothing to the local path.
+ */
+export function remoteMemberRefs(
+  members: readonly { userId: string; domain?: string }[],
+  leaves: readonly string[],
+  selfUserId: string,
+): { userId: string; deviceId: string }[] {
+  const present = new Set(leaves.map((l) => `${domainOf(l)}/${userOf(l)}`))
+  const out: { userId: string; deviceId: string }[] = []
+  for (const m of members) {
+    if (!m.domain) continue // local member — handled by the directory path
+    if (m.userId === selfUserId) continue
+    if (present.has(`${m.domain}/${m.userId}`)) continue // already in the group
+    out.push({ userId: m.userId, deviceId: '' })
+  }
+  return out
+}
+
+/** A userId -> home-domain map for the conversation's remote members. */
+export function domainsByUser(
+  members: readonly { userId: string; domain?: string }[],
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const m of members) if (m.domain) out[m.userId] = m.domain
+  return out
+}

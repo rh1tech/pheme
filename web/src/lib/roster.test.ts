@@ -1,5 +1,40 @@
 import { describe, expect, it } from 'vitest'
-import { deviceIdentity, deviceOf, missingDevices, staleLeaves, userKey, userOf } from './roster'
+import {
+  deviceIdentity,
+  deviceOf,
+  domainsByUser,
+  missingDevices,
+  remoteMemberRefs,
+  staleLeaves,
+  userKey,
+  userOf,
+} from './roster'
+
+describe('remoteMemberRefs', () => {
+  const members = [
+    { userId: 'alice' }, // local (no domain)
+    { userId: 'bob', domain: 'b.example' }, // remote, no leaf yet
+    { userId: 'carol', domain: 'c.example' }, // remote, already a leaf
+  ]
+
+  it('returns only remote members that have no leaf yet, with a blank device id', () => {
+    const leaves = ['mimi://c.example/d/carol/phone']
+    expect(remoteMemberRefs(members, leaves, 'alice')).toEqual([{ userId: 'bob', deviceId: '' }])
+  })
+
+  it('skips ourselves and every local member', () => {
+    expect(remoteMemberRefs([{ userId: 'me', domain: 'b.example' }], [], 'me')).toEqual([])
+    expect(remoteMemberRefs([{ userId: 'x' }], [], 'me')).toEqual([])
+  })
+
+  it('is empty when nobody carries a domain (single-host)', () => {
+    expect(remoteMemberRefs([{ userId: 'a' }, { userId: 'b' }], [], 'a')).toEqual([])
+  })
+
+  it('domainsByUser maps only the remote members', () => {
+    expect(domainsByUser(members)).toEqual({ bob: 'b.example', carol: 'c.example' })
+  })
+})
 
 // The rules that decide who can read a conversation.
 //

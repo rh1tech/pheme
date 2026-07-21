@@ -88,6 +88,14 @@ export interface ConversationMember {
    * or 0 means they have been here from the start.
    */
   joinSeq?: number
+  /**
+   * The home host of a member who lives on another instance, e.g. `b.example`.
+   * Absent or empty for a local member. It qualifies the member's MLS credential
+   * (`mimi://<domain>/d/<user>/<device>`), so the group can tell a member on one
+   * host from a same-named member on another and claim their keys from the right
+   * place.
+   */
+  domain?: string
 }
 
 // A chat message as it comes off the wire. `ciphertext` is base64 of opaque

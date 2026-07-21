@@ -33,7 +33,9 @@ import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
 import {
   deviceIdentity,
   deviceOf,
+  domainsByUser,
   missingDevices as rosterMissingDevices,
+  remoteMemberRefs,
   staleLeaves as rosterStaleLeaves,
   homeDomain,
   setHomeDomain,
@@ -1086,7 +1088,11 @@ async function establishGroup(
   myUserId: string,
 ): Promise<string | null> {
   const { published } = await api.mlsDevices(conversation.id)
-  const targets = rosterMissingDevices(session.identity, published, [], zombieDevices)
+  const localTargets = rosterMissingDevices(session.identity, published, [], zombieDevices)
+  // Members on other hosts are not in the local directory; claim them from their
+  // home host (the server routes it). Empty in a single-host deployment.
+  const members = await api.listConversationMembers(conversation.id)
+  const targets = [...localTargets, ...remoteMemberRefs(members, [], myUserId)]
 
   // Nobody else is reachable. For a direct chat that is the whole conversation, and the
   // user needs to be told plainly rather than watching a message fail to send. (In a
@@ -1197,9 +1203,14 @@ async function reconcileDevices(
     }
 
     const missing = rosterMissingDevices(session.identity, published, leaves, zombieDevices)
-    if (missing.length === 0) return
+    // Remote members are not in the local directory; add those without a leaf yet by
+    // claiming from their home host. domainByUser lets an added leaf's identity be
+    // matched under the member's own domain, not ours. Both are empty single-host.
+    const domainByUser = domainsByUser(members)
+    const remote = remoteMemberRefs(members, leaves, session.userId)
+    if (missing.length === 0 && remote.length === 0) return
 
-    const claimed = await claimFor(conversationId, missing)
+    const claimed = await claimFor(conversationId, [...missing, ...remote])
     if (claimed.length === 0) return // they published nothing after all
     const result = await session.commitAdd(
       conversationId,
@@ -1211,12 +1222,15 @@ async function reconcileDevices(
       // to whatever credential is inside the bytes, and a stale directory entry can carry
       // somebody's long-dead legacy identity. A device that is still not a leaf after its
       // own accepted Add can never be added by this route — remember that, or the next
-      // reconcile claims the same package and commits the same no-op forever.
+      // reconcile claims the same package and commits the same no-op forever. A remote
+      // member's leaf answers to its own home domain, so match under that.
       const now = new Set(await session.memberIdentities(groupId))
-      const duds = claimed.filter((c) => !now.has(deviceIdentity(c.userId, c.deviceId)))
+      const idOf = (c: { userId: string; deviceId: string }) =>
+        deviceIdentity(c.userId, c.deviceId, domainByUser[c.userId])
+      const duds = claimed.filter((c) => !now.has(idOf(c)))
       if (duds.length === 0) return
       for (const dud of duds) {
-        zombieDevices.add(deviceIdentity(dud.userId, dud.deviceId))
+        zombieDevices.add(idOf(dud))
         // Our own dead device's packages we can actually purge — only the owner may — which
         // stops every OTHER member's reconcile from walking into the same trap.
         if (dud.userId === session.userId) {
