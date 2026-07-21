@@ -339,7 +339,38 @@ func (b *Builder) FederationClient() (*federation.Client, error) {
 		return nil, nil
 	}
 	keyID := auth.HostKeyID(key.Public().(ed25519.PublicKey))
-	return federation.NewClient(b.cfg.HostDomain, keyID, key), nil
+	client := federation.NewClient(b.cfg.HostDomain, keyID, key)
+	// A peer is reached at https://<domain> by default. PHEME_PEER_URLS overrides
+	// that for domains reachable at a non-default URL — a private network, a test
+	// harness on loopback, a peer behind a different port. Format: a comma list of
+	// domain=baseURL pairs, e.g. "b.test=http://localhost:8100,c.test=https://c:9443".
+	if overrides := parsePeerURLs(b.cfg.PeerURLs); len(overrides) > 0 {
+		client.PeerURL = func(domain string) string {
+			if u, ok := overrides[domain]; ok {
+				return u
+			}
+			return federation.PeerBaseURL(domain)
+		}
+	}
+	return client, nil
+}
+
+// parsePeerURLs reads the "domain=baseURL,..." override list into a map. Malformed
+// entries are skipped rather than failing startup — a bad override should degrade
+// to the default URL, not take the host down.
+func parsePeerURLs(list string) map[string]string {
+	if strings.TrimSpace(list) == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for _, pair := range strings.Split(list, ",") {
+		domain, url, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		domain, url = strings.TrimSpace(domain), strings.TrimSpace(url)
+		if ok && domain != "" && url != "" {
+			out[domain] = strings.TrimRight(url, "/")
+		}
+	}
+	return out
 }
 
 // Close releases shared resources (the cached Redis client and blob store).

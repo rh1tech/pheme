@@ -111,6 +111,12 @@ type Config struct {
 	// refresh. Empty disables federation even if a coordinator key is set.
 	NodelistPath string
 
+	// PeerURLs overrides where specific peer domains are reached, as a comma list
+	// of "domain=baseURL" pairs. Empty means every peer is reached at
+	// https://<domain>. For private networks, non-default ports, or a loopback test
+	// harness where the nodelist domain is not the URL to dial.
+	PeerURLs string
+
 	// HostKey is this instance's Ed25519 signing key, base64url-encoded 32-byte
 	// seed. Generate one with `pheme-hostkey`.
 	//
@@ -206,6 +212,7 @@ func Load() Config {
 
 		NodelistCoordKey: env("PHEME_NODELIST_COORD_KEY", ""),
 		NodelistPath:     env("PHEME_NODELIST_PATH", ""),
+		PeerURLs:         env("PHEME_PEER_URLS", ""),
 
 		AdminEmails: envList("PHEME_ADMIN_EMAILS"),
 
