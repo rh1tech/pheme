@@ -156,27 +156,14 @@ export function NewChatModals({ directOpen, groupOpen, onClose, onChanged }: New
     }
   }
 
-  // A cross-host chat cannot be a direct chat — those are a fixed local pair and
-  // the server has no mirror for them. So starting one with someone on another host
-  // makes a two-person group instead: create it empty, record the remote member
-  // (the server resolves the handle and provisions the mirror), then open it — the
-  // MLS group is established and their key package claimed on open, as for any new
-  // group.
+  // A chat with one person is a direct chat, cross-host or not. The server resolves
+  // the `username@host` handle, creates the direct conversation, and provisions the
+  // mirror on the other host — rolling the whole thing back if that host cannot be
+  // reached, so there is no orphan to clean up here.
   async function startWithRemote(handle: string) {
     setCreating(true)
     try {
-      const conv = await api.createGroupChat(handle.split('@')[0], [])
-      // Add the remote member as a second step (createConversation cannot resolve a
-      // handle or provision a mirror). If it fails — an unknown handle, a peer that
-      // is down — the group we just made is an empty dead-end, so delete it rather
-      // than leave a turd behind. This is why a failed add used to strand a "1
-      // member" group in the list.
-      try {
-        await api.addConversationMember(conv.id, handle)
-      } catch (addErr) {
-        await api.deleteConversation(conv.id).catch(() => {})
-        throw addErr
-      }
+      const conv = await api.createDirectChat(handle)
       await onChanged()
       onClose()
       reset()

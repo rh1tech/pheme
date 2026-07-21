@@ -98,6 +98,11 @@ func (h *Handler) membersView(ctx context.Context, convID string) []memberView {
 		pub := domain.PublicUser{ID: m.UserID}
 		if u, present := users[m.UserID]; present {
 			pub = u.Public()
+		} else if m.DisplayName != "" || m.Username != "" {
+			// A remote member has no row in this host's user store; their name rides
+			// on the membership itself, carried across the federation boundary.
+			pub.DisplayName = m.DisplayName
+			pub.Username = m.Username
 		}
 		out = append(out, memberView{ConversationMember: m, User: pub})
 	}

@@ -18,9 +18,9 @@ import (
 // user for a conversation genuinely needs.
 type UserResolver interface {
 	UserExists(ctx context.Context, localID string) bool
-	// ResolveUsername maps a (case-insensitive) username to its local id and
-	// display name. ok is false when no such user exists here.
-	ResolveUsername(ctx context.Context, usernameLower string) (id, displayName string, ok bool)
+	// ResolveUsername maps a (case-insensitive) username to its local id, display
+	// name, and canonical username. ok is false when no such user exists here.
+	ResolveUsername(ctx context.Context, usernameLower string) (id, displayName, username string, ok bool)
 }
 
 // Handler serves the host-to-host API. Every route except the public directory
@@ -190,7 +190,7 @@ func (h *Handler) resolveUser(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "username required")
 		return
 	}
-	id, displayName, ok := h.Users.ResolveUsername(r.Context(), strings.ToLower(strings.TrimSpace(req.Username)))
+	id, displayName, username, ok := h.Users.ResolveUsername(r.Context(), strings.ToLower(strings.TrimSpace(req.Username)))
 	if !ok {
 		httpx.Error(w, http.StatusNotFound, "no such user")
 		return
@@ -198,5 +198,6 @@ func (h *Handler) resolveUser(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"userId":      id,
 		"displayName": displayName,
+		"username":    username,
 	})
 }

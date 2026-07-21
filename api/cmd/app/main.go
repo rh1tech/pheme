@@ -319,12 +319,12 @@ func (u userResolver) UserExists(ctx context.Context, localID string) bool {
 // ResolveUsername maps a username to its local id and display name so a peer can
 // add one of our users addressed as `username@thishost`. Only a nodelist peer
 // reaches this, and it returns nothing an added member would not already expose.
-func (u userResolver) ResolveUsername(ctx context.Context, usernameLower string) (string, string, bool) {
+func (u userResolver) ResolveUsername(ctx context.Context, usernameLower string) (string, string, string, bool) {
 	usr, err := u.db.UserByUsername(ctx, usernameLower)
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	return usr.ID, usr.DisplayName, true
+	return usr.ID, usr.DisplayName, usr.Username, true
 }
 
 // remoteChannels adapts the nodelist and the federation client to

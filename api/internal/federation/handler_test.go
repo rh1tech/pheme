@@ -15,11 +15,11 @@ func (f fakeUsers) UserExists(_ context.Context, id string) bool { return f[id] 
 
 // ResolveUsername treats each present key as both a username and its id, which is
 // all the resolve-user test needs.
-func (f fakeUsers) ResolveUsername(_ context.Context, username string) (string, string, bool) {
+func (f fakeUsers) ResolveUsername(_ context.Context, username string) (string, string, string, bool) {
 	if f[username] {
-		return username, username, true
+		return username, username, username, true
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 // serverFor builds a running federation server for host `origin`, trusting the

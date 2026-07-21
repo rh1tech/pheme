@@ -69,7 +69,7 @@ func TestCrossHostConversationRoundTrip(t *testing.T) {
 	}
 
 	// alice adds bob@b.example: records the remote member and provisions B's mirror.
-	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example", "Bob", "bob"); err != nil {
 		t.Fatalf("add remote member: %v", err)
 	}
 	// B now mirrors the conversation with bob as a local member.
@@ -173,7 +173,7 @@ func TestCrossHostCommitRoundTrip(t *testing.T) {
 	conv, _ := aStore.CreateConversation(ctx, domain.Conversation{
 		ID: "conv-c", Kind: domain.ConversationGroup, CreatedAt: now,
 	}, []domain.ConversationMember{{UserID: "alice", Role: domain.RoleAdmin, JoinedAt: now}})
-	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example", "Bob", "bob"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -313,7 +313,7 @@ func TestCrossHostTurnCredentials(t *testing.T) {
 	conv, _ := aStore.CreateConversation(ctx, domain.Conversation{
 		ID: "conv-turn", Kind: domain.ConversationGroup, CreatedAt: now,
 	}, []domain.ConversationMember{{UserID: "alice", Role: domain.RoleAdmin, JoinedAt: now}})
-	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example", "Bob", "bob"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -375,7 +375,7 @@ func TestCrossHostCallSignalReachesCallee(t *testing.T) {
 	conv, _ := aStore.CreateConversation(ctx, domain.Conversation{
 		ID: "conv-call", Kind: domain.ConversationGroup, CreatedAt: now,
 	}, []domain.ConversationMember{{UserID: "alice", Role: domain.RoleAdmin, JoinedAt: now}})
-	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example", "Bob", "bob"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -457,7 +457,7 @@ func TestCrossHostReceiptReachesHub(t *testing.T) {
 	conv, _ := aStore.CreateConversation(ctx, domain.Conversation{
 		ID: "conv-r", Kind: domain.ConversationGroup, CreatedAt: now,
 	}, []domain.ConversationMember{{UserID: "alice", Role: domain.RoleAdmin, JoinedAt: now}})
-	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example", "Bob", "bob"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -525,7 +525,7 @@ func TestSignedOrderingChainConvergesAcrossHosts(t *testing.T) {
 	conv, _ := aStore.CreateConversation(ctx, domain.Conversation{
 		ID: "conv-s", Kind: domain.ConversationGroup, CreatedAt: now,
 	}, []domain.ConversationMember{{UserID: "alice", Role: domain.RoleAdmin, JoinedAt: now}})
-	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example"); err != nil {
+	if err := aFed.AddRemoteMember(ctx, conv, "bob", "b.example", "Bob", "bob"); err != nil {
 		t.Fatal(err)
 	}
 

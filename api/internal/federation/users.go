@@ -16,6 +16,7 @@ var ErrRemoteUserNotFound = errors.New("federation: remote user not found")
 type RemoteUser struct {
 	UserID      string `json:"userId"`
 	DisplayName string `json:"displayName"`
+	Username    string `json:"username"`
 }
 
 // ResolveRemoteUser asks homeDomain to map one of its usernames to a local id,

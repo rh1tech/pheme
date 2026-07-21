@@ -556,9 +556,16 @@ type ConversationMember struct {
 	// means a member who lives on another host, present so this host knows to
 	// relay to (or expect forwards from) that host. Every existing member is
 	// local and so already correct.
-	Domain   string    `bson:"domain,omitempty" json:"domain,omitempty"`
-	Role     Role      `bson:"role" json:"role"`
-	JoinedAt time.Time `bson:"joinedAt" json:"joinedAt"`
+	Domain string `bson:"domain,omitempty" json:"domain,omitempty"`
+	// DisplayName and Username are a denormalised copy of a REMOTE member's profile,
+	// carried across the federation boundary so this host can show their name. A
+	// local member (Domain empty) leaves them blank — their profile is fetched from
+	// the local user store — so this only ever holds what a host could not otherwise
+	// know: who a member on another host actually is.
+	DisplayName string    `bson:"displayName,omitempty" json:"displayName,omitempty"`
+	Username    string    `bson:"username,omitempty" json:"username,omitempty"`
+	Role        Role      `bson:"role" json:"role"`
+	JoinedAt    time.Time `bson:"joinedAt" json:"joinedAt"`
 	// ClearedAt is this member's private "clear history" watermark: messages at or
 	// before it are hidden from THIS member's fetches, on all their devices, while
 	// leaving the shared log — and every other member's view of it — untouched. Zero

@@ -20,6 +20,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/blob"
 	"github.com/rh1tech/pheme/api/internal/calls"
 	"github.com/rh1tech/pheme/api/internal/domain"
+	"github.com/rh1tech/pheme/api/internal/federation"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/ident"
 	"github.com/rh1tech/pheme/api/internal/live"
@@ -291,19 +292,46 @@ func (h *Handler) createDirect(w http.ResponseWriter, r *http.Request, uid strin
 		httpx.Error(w, http.StatusBadRequest, "a direct chat needs exactly one other member")
 		return
 	}
-	other := req.MemberIDs[0]
-	if other == uid {
-		httpx.Error(w, http.StatusBadRequest, "cannot start a direct chat with yourself")
-		return
-	}
-	otherUser, err := h.Store.UserByID(r.Context(), other)
-	if err != nil {
-		httpx.Error(w, http.StatusNotFound, "user not found")
-		return
-	}
 	meUser, err := h.Store.UserByID(r.Context(), uid)
 	if err != nil {
 		httpx.Error(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	// Resolve the other participant. With federation on they may be named by a
+	// `username@host` handle or a qualified id on another host — a direct chat can
+	// cross hosts just as a group can, hubbed on this host with a mirror there.
+	var otherUser domain.User
+	remote := false
+	if h.Fed != nil && h.HostDomain != "" {
+		tgt, terr := h.addTarget(r.Context(), req.MemberIDs[0])
+		if terr != nil {
+			if errors.Is(terr, store.ErrNotFound) || errors.Is(terr, federation.ErrRemoteUserNotFound) {
+				httpx.Error(w, http.StatusNotFound, "user not found")
+				return
+			}
+			httpx.Error(w, http.StatusBadGateway, "could not reach the other host")
+			return
+		}
+		if tgt.remote {
+			remote = true
+			otherUser = domain.User{ID: tgt.localID, Domain: tgt.domain, DisplayName: tgt.displayName, Username: tgt.username}
+		} else {
+			otherUser, err = h.Store.UserByID(r.Context(), tgt.localID)
+			if err != nil {
+				httpx.Error(w, http.StatusNotFound, "user not found")
+				return
+			}
+		}
+	} else {
+		otherUser, err = h.Store.UserByID(r.Context(), req.MemberIDs[0])
+		if err != nil {
+			httpx.Error(w, http.StatusNotFound, "user not found")
+			return
+		}
+	}
+	if !remote && otherUser.ID == uid {
+		httpx.Error(w, http.StatusBadRequest, "cannot start a direct chat with yourself")
 		return
 	}
 
@@ -335,9 +363,18 @@ func (h *Handler) createDirect(w http.ResponseWriter, r *http.Request, uid strin
 		DirectKey: key,
 		CreatedAt: now,
 	}
+	otherMember := domain.ConversationMember{UserID: otherUser.ID, Role: domain.RoleUser, JoinedAt: now}
+	if remote {
+		// A remote participant's profile has no row in this host's user store, so
+		// carry it on the membership — the same denormalised name a group's remote
+		// members get, so the direct chat shows a name and not a bare id.
+		otherMember.Domain = otherUser.Domain
+		otherMember.DisplayName = otherUser.DisplayName
+		otherMember.Username = otherUser.Username
+	}
 	members := []domain.ConversationMember{
 		{UserID: uid, Role: domain.RoleUser, JoinedAt: now},
-		{UserID: other, Role: domain.RoleUser, JoinedAt: now},
+		otherMember,
 	}
 	created, err := h.Store.CreateConversation(r.Context(), conv, members)
 	if err != nil {
@@ -348,6 +385,17 @@ func (h *Handler) createDirect(w http.ResponseWriter, r *http.Request, uid strin
 		}
 		httpx.Error(w, http.StatusInternalServerError, "could not create conversation")
 		return
+	}
+
+	// A cross-host direct chat needs a mirror on the other participant's host, just
+	// like a group does. If it cannot be stood up, the chat is a local dead-end, so
+	// undo the local create rather than leave a half-made cross-host conversation.
+	if remote {
+		if err := h.Fed.ProvisionMirrorOn(r.Context(), created, otherUser.ID, otherUser.Domain); err != nil {
+			_ = h.Store.DeleteConversation(r.Context(), created.ID)
+			httpx.Error(w, http.StatusBadGateway, "could not reach the other host")
+			return
+		}
 	}
 	httpx.JSON(w, http.StatusCreated, created)
 }

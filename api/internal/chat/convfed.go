@@ -192,7 +192,9 @@ func (c *ConvFederation) ProvisionMirror(ctx context.Context, hubDomain string, 
 	}
 	for _, rm := range spec.RemoteMembers {
 		members = append(members, domain.ConversationMember{
-			UserID: rm.UserID, Domain: rm.Domain, Role: domain.RoleUser, JoinedAt: now,
+			UserID: rm.UserID, Domain: rm.Domain,
+			DisplayName: rm.DisplayName, Username: rm.Username,
+			Role: domain.RoleUser, JoinedAt: now,
 		})
 	}
 	if spec.GroupState != nil {
@@ -763,43 +765,74 @@ func (c *ConvFederation) ResolveRemoteUser(ctx context.Context, remoteDomain, us
 	return c.Peers.ResolveRemoteUser(ctx, remoteDomain, username)
 }
 
-// caller then reconciles the MLS group to add the member's devices.
-func (c *ConvFederation) AddRemoteMember(ctx context.Context, conv domain.Conversation, remoteUserID, remoteDomain string) error {
+// caller then reconciles the MLS group to add the member's devices. displayName
+// and username are the added member's own profile, carried so the mirror can show
+// them by name instead of a bare id.
+func (c *ConvFederation) AddRemoteMember(ctx context.Context, conv domain.Conversation, remoteUserID, remoteDomain, displayName, username string) error {
 	now := time.Now().UTC()
 	if _, err := c.Store.AddConversationMember(ctx, domain.ConversationMember{
 		ConversationID: conv.ID, UserID: remoteUserID, Domain: remoteDomain,
+		DisplayName: displayName, Username: username,
 		Role: domain.RoleUser, JoinedAt: now,
 	}); err != nil {
 		return err
 	}
-	// Tell the remote host to stand up its mirror, with this member local to it
-	// and every current member (including us) as remote.
+	return c.ProvisionMirrorOn(ctx, conv, remoteUserID, remoteDomain)
+}
+
+// ProvisionMirrorOn tells peerDomain to stand up (or refresh) its mirror of conv,
+// with mirrorLocalUserID as the member local to it and every OTHER current member —
+// including this host's — carried as a remote member, each with the name this host
+// knows them by. Shared by the group add path and the direct-chat create path.
+func (c *ConvFederation) ProvisionMirrorOn(ctx context.Context, conv domain.Conversation, mirrorLocalUserID, peerDomain string) error {
 	members, err := c.Store.ConversationMembers(ctx, conv.ID)
 	if err != nil {
 		return err
-	}
-	var remotes []federation.RemoteMember
-	for _, m := range members {
-		if m.UserID == remoteUserID {
-			continue // this is the local member on the remote host
-		}
-		d := m.Domain
-		if d == "" {
-			d = c.HostDomain
-		}
-		remotes = append(remotes, federation.RemoteMember{UserID: m.UserID, Domain: d})
 	}
 	spec := federation.MirrorSpec{
 		ConversationID: conv.ID,
 		Kind:           string(conv.Kind),
 		Title:          conv.Title,
-		LocalUserID:    remoteUserID,
-		RemoteMembers:  remotes,
+		LocalUserID:    mirrorLocalUserID,
+		RemoteMembers:  c.remoteMembersExcept(ctx, members, mirrorLocalUserID),
 	}
 	if conv.MLS.GroupID != "" {
 		spec.GroupState = &federation.MirrorGroupSt{
 			GroupID: conv.MLS.GroupID, Epoch: conv.MLS.Epoch, ChainHash: conv.MLS.ChainHash,
 		}
 	}
-	return c.Peers.ProvisionRemoteMirror(ctx, remoteDomain, spec)
+	return c.Peers.ProvisionRemoteMirror(ctx, peerDomain, spec)
+}
+
+// remoteMembersExcept turns this host's member rows into the peer's view of them:
+// everyone but excludeUserID, each qualified with a domain (this host's, for a
+// local member) and named. A local member's name is read authoritatively from the
+// user store; an already-remote member carries the cached name it arrived with.
+func (c *ConvFederation) remoteMembersExcept(ctx context.Context, members []domain.ConversationMember, excludeUserID string) []federation.RemoteMember {
+	localIDs := make([]string, 0, len(members))
+	for _, m := range members {
+		if m.UserID != excludeUserID && m.Domain == "" {
+			localIDs = append(localIDs, m.UserID)
+		}
+	}
+	profiles, _ := c.Store.UsersByIDs(ctx, localIDs)
+
+	out := make([]federation.RemoteMember, 0, len(members))
+	for _, m := range members {
+		if m.UserID == excludeUserID {
+			continue
+		}
+		rm := federation.RemoteMember{
+			UserID: m.UserID, Domain: m.Domain,
+			DisplayName: m.DisplayName, Username: m.Username,
+		}
+		if m.Domain == "" {
+			rm.Domain = c.HostDomain
+			if u, ok := profiles[m.UserID]; ok {
+				rm.DisplayName, rm.Username = u.DisplayName, u.Username
+			}
+		}
+		out = append(out, rm)
+	}
+	return out
 }

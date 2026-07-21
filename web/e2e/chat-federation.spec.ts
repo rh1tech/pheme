@@ -91,27 +91,31 @@ test('alice on host A and bob on host B exchange an encrypted message', async ({
   const alice = await signInOnHost(browser, FED_A_URL, 'alice@a.test')
   const bob = await signInOnHost(browser, FED_B_URL, 'bob@b.test')
 
-  // Bob picks a username on his own host, so alice can address him as a human
-  // handle (`bobfed@b.test`) instead of an opaque id.
-  await api(bob.page, FED_B_URL, '/v1/me', { username: 'bobfed' }, 'PATCH')
+  // Bob picks a username and a display name on his own host, so alice can address
+  // him as a human handle and should see his real name, not a bare id.
+  await api(bob.page, FED_B_URL, '/v1/me', { username: 'bobfed', displayName: 'Bobby' }, 'PATCH')
 
-  // Alice (on A) makes a group and adds bob, who lives on B, by his handle using
-  // B's nodelist ALIAS — `bobfed@hostb`, not the full domain. Alice's host maps the
-  // alias to b.test, resolves the username there over S2S, records him as a remote
-  // member, and provisions the mirror on B.
-  const conv = await api<{ id: string }>(alice.page, FED_A_URL, '/v1/conversations', {
-    kind: 'group',
-    title: 'cross-host',
-    memberIds: [],
+  // Alice (on A) starts a DIRECT chat with bob, who lives on B, addressing him by
+  // his handle via B's nodelist ALIAS — `bobfed@hostb`, not the full domain. Her
+  // host maps the alias to b.test, resolves the username there over S2S, creates the
+  // direct conversation, and provisions the mirror on B. A cross-host 1:1 is a
+  // direct chat, not a group.
+  const conv = await api<{ id: string; kind: string }>(alice.page, FED_A_URL, '/v1/conversations', {
+    kind: 'direct',
+    memberIds: ['bobfed@hostb'],
   })
-  const bobMember = await api<{ userId: string }>(
+  expect(conv.kind).toBe('direct')
+
+  // Bob's real id and — crucially — his display name crossed the boundary: alice's
+  // host has no user row for bob, so a bare id would render as "User". The name
+  // rides on the membership.
+  const roster = await api<{ members: Array<{ userId: string; user: { displayName?: string } }> }>(
     alice.page,
     FED_A_URL,
     `/v1/conversations/${conv.id}/members`,
-    { userId: 'bobfed@hostb' },
   )
-  // The alias+username resolved to bob's real id on B — not stored as the literal string.
-  expect(bobMember.userId).toBe(bob.userId)
+  const bobMember = roster.members.find((m) => m.userId === bob.userId)
+  expect(bobMember?.user.displayName).toBe('Bobby')
 
   // Alice opens the chat: her client establishes the MLS group, claims bob's key
   // package from host B (the server routes the claim), and sends.

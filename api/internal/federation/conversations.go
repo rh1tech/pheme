@@ -119,6 +119,11 @@ type MirrorSpec struct {
 type RemoteMember struct {
 	UserID string `json:"userId"`
 	Domain string `json:"domain"`
+	// DisplayName and Username let the receiving host show this member by name
+	// instead of a bare id. They are the member's own profile as their home host
+	// knows it; a host that cannot supply them (an older peer) simply sends blanks.
+	DisplayName string `json:"displayName,omitempty"`
+	Username    string `json:"username,omitempty"`
 }
 
 // MirrorGroupSt carries the MLS group id/epoch a mirror should start from, when
