@@ -45,7 +45,7 @@ services:
       mongo: { condition: service_healthy }
       redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
-    environment:
+    environment: &svc_env
       PHEME_STORE_DRIVER: mongo
       PHEME_BLOB_DRIVER: gridfs
       PHEME_BROKER_DRIVER: rabbit
@@ -68,7 +68,7 @@ services:
       PHEME_SEED_ADMIN_PASSWORD: ${PHEME_SEED_ADMIN_PASSWORD}
       # Trust the fed test CA so host-to-host S2S over the self-signed cert verifies.
       SSL_CERT_FILE: /fed-ca.pem
-    volumes:
+    volumes: &svc_volumes
       - "${FED_NODELIST}:/nodelist.json:ro"
       - "${FED_CA}:/fed-ca.pem:ro"
     networks:
@@ -76,6 +76,25 @@ services:
       - fed
     ports:
       - "127.0.0.1:${APP_HOST_PORT}:8080"
+
+  # The dispatcher fans a channel broadcast out to its subscribers — INCLUDING remote
+  # ones, over S2S. Channel delivery across hosts does not happen without it, so the
+  # federated-channel test needs it running. Same image and env as the app; it consumes
+  # the broker instead of serving HTTP. It joins the fed network to reach peer hosts and
+  # trusts the same CA.
+  dispatcher:
+    image: ${IMAGE}
+    restart: unless-stopped
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    entrypoint: ["/usr/local/bin/pheme-dispatcher"]
+    environment: *svc_env
+    volumes: *svc_volumes
+    networks:
+      - default
+      - fed
 
 networks:
   fed:

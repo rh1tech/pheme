@@ -221,4 +221,32 @@ bob_read_at_hub=$(curl -s "$HUB/v1/conversations/$CID" -H "authorization: Bearer
   | jq -r --arg b "$BID" '(.members // [])[] | select(.userId==$b) | .readSeq // 0')
 [ "$bob_read_at_hub" = "2" ] || fail "bob's readSeq at the hub = $bob_read_at_hub, want 2 (receipt did not cross hosts)"
 
-log "PASS — cross-host relay (F5d), signed ordering chain (F5b), and sequence receipts (F6) verified on two live hosts"
+log "channels: bob creates an open channel, alice subscribes from the hub (S2S mirror)"
+CHRESP=$(curl -s "$FOL/v1/channels" -H "authorization: Bearer $BTOK" -H 'content-type: application/json' \
+  -d '{"name":"fed-news","subscriptionMode":"open"}')
+CH_ID=$(echo "$CHRESP" | jqget .id)
+CH_PUB=$(echo "$CHRESP" | jqget .publicId)
+[ -n "$CH_PUB" ] && [ "$CH_PUB" != null ] || fail "channel not created"
+subcode=$(curl -s -o /dev/null -w '%{http_code}' "$HUB/v1/channels/join-remote" -H "authorization: Bearer $ATOK" \
+  -H 'content-type: application/json' -d "{\"ref\":\"$CH_PUB@$FOL_DOMAIN\"}")
+[ "$subcode" = "201" ] || fail "cross-host channel subscribe returned $subcode"
+
+log "channels: bob broadcasts -> dispatcher fans it out to the remote subscriber's mirror"
+curl -s -o /dev/null "$FOL/v1/channels/$CH_ID/notify" -H "authorization: Bearer $BTOK" -H 'content-type: application/json' \
+  -d '{"body":"breaking-fed-news"}'
+# The mirror is one of alice's channels (the subscriber owns it). Poll its messages —
+# the fan-out crosses hosts through the dispatcher, so give it a few seconds.
+got=0
+for i in $(seq 1 20); do
+  MIRROR=$(curl -s "$HUB/v1/channels" -H "authorization: Bearer $ATOK" \
+    | jq -r --arg p "$CH_PUB" '(.channels // [])[] | select(.originPublicId==$p) | .id' | head -n1)
+  if [ -n "$MIRROR" ] && [ "$MIRROR" != null ]; then
+    got=$(curl -s "$HUB/v1/channels/$MIRROR/messages" -H "authorization: Bearer $ATOK" \
+      | jq -r '(.messages // [])[]?|.body' | grep -c 'breaking-fed-news' || true)
+    [ "$got" -ge 1 ] && break
+  fi
+  sleep 1
+done
+[ "$got" -ge 1 ] || fail "channel broadcast did not reach the remote subscriber's mirror (dispatcher fan-out)"
+
+log "PASS — cross-host chat relay (F5d), signed ordering chain (F5b), sequence receipts (F6), and channel subscribe + broadcast fan-out (F3) verified on two live hosts"
