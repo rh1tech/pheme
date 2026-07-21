@@ -285,6 +285,17 @@ Each stage ships and is useful before the next one starts.
   applies it — is proven in-process by `convfed_e2e_test.go` over two real signed
   handlers. The remaining two-server, two-browser E2E harness proves only that the
   bytes those tests move decrypt on the far client.
+
+  **Verified live (2026-07-21).** F5d was proven over the wire on two separately
+  deployed hosts (`test-api.example.com` as hub, `follower.example.com` as a
+  follower), each a full stack with its own Mongo, sharing a signed nodelist and
+  authenticating S2S with Ed25519 over TLS. `alice@hub` adding
+  `mimi://follower.example.com/u/<bob>` triggered an S2S mirror provision on the
+  follower (`hubDomain` correctly set); alice's hub post relayed to the mirror;
+  bob's mirror post forwarded to and ordered by the hub; both hosts converged on
+  one ordered log. The payloads were opaque bytes — the ordering/relay half is now
+  proven both in-process and over the network; only the client-side MLS decrypt of
+  those bytes remains for the two-browser harness.
 - **F6 — Ordering rework.** Hub-assigned sequence numbers replacing wall-clock
   ordering. Receipts stop being timestamp watermarks — `domain.go:506-521` is the
   deepest single-clock assumption in the codebase, and two hosts' clocks skewing
