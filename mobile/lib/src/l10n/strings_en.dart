@@ -72,8 +72,8 @@ const Map<String, String> enStrings = {
 
   // join a channel
   'join.title': 'Join a channel',
-  'join.refLabel': 'Trigger ID or phetag',
-  'join.refHint': 'ch_ab12cd34 or my-alias',
+  'join.refLabel': 'Trigger ID, phetag, or name@host',
+  'join.refHint': 'ch_ab12cd34, my-alias, or ch_ab12cd34@host',
   'join.scanQr': 'Scan QR code',
   'join.action': 'Join',
   'join.joined': 'Joined channel',

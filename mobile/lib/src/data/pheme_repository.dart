@@ -163,12 +163,19 @@ class PhemeRepository {
     return ChannelRelation.fromJson(data);
   }
 
-  /// Joins a channel by [ref] — either its trigger ID (publicId) or its phetag
-  /// (alias). Returns the joined channel.
+  /// Joins a channel by [ref]. A local channel is named by its trigger ID
+  /// (publicId) or its phetag; a channel on ANOTHER host is named
+  /// `publicId@host` and joined through the federated endpoint, which subscribes
+  /// over S2S and stands up a local mirror. A phetag/publicId never contains '@',
+  /// so the '@' cleanly picks the remote path. Both return the joined channel
+  /// (the mirror, for a remote one).
   Future<Channel> joinChannel(String ref, {String? deviceId}) {
     final body = <String, dynamic>{'ref': ref};
     if (deviceId != null) body['deviceId'] = deviceId;
-    return _post('/v1/channels/join', body).then(
+    final path = ref.contains('@')
+        ? '/v1/channels/join-remote'
+        : '/v1/channels/join';
+    return _post(path, body).then(
       (d) => Channel.fromJson((d['channel'] as Map).cast<String, dynamic>()),
     );
   }

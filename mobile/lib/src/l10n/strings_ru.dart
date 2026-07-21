@@ -68,8 +68,8 @@ const Map<String, String> ruStrings = {
 
   // join a channel
   'join.title': 'Присоединиться к каналу',
-  'join.refLabel': 'ID триггера или phetag',
-  'join.refHint': 'ch_ab12cd34 или my-alias',
+  'join.refLabel': 'ID триггера, phetag или name@host',
+  'join.refHint': 'ch_ab12cd34, my-alias или ch_ab12cd34@host',
   'join.scanQr': 'Сканировать QR-код',
   'join.action': 'Присоединиться',
   'join.joined': 'Вы присоединились к каналу',
