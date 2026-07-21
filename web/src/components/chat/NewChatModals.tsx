@@ -163,7 +163,17 @@ export function NewChatModals({ directOpen, groupOpen, onClose, onChanged }: New
     setCreating(true)
     try {
       const conv = await api.createGroupChat(handle.split('@')[0], [])
-      await api.addConversationMember(conv.id, handle)
+      // Add the remote member as a second step (createConversation cannot resolve a
+      // handle or provision a mirror). If it fails — an unknown handle, a peer that
+      // is down — the group we just made is an empty dead-end, so delete it rather
+      // than leave a turd behind. This is why a failed add used to strand a "1
+      // member" group in the list.
+      try {
+        await api.addConversationMember(conv.id, handle)
+      } catch (addErr) {
+        await api.deleteConversation(conv.id).catch(() => {})
+        throw addErr
+      }
       await onChanged()
       onClose()
       reset()
