@@ -1,6 +1,7 @@
 import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { API_URL } from './constants'
 import { gotoStable, login } from './helpers'
+import { trackContext } from './fixtures'
 
 /**
  * Helpers for the encrypted-chat specs.
@@ -34,6 +35,9 @@ export async function signInOnNewDevice(
   password: string,
 ): Promise<Device> {
   const context = await browser.newContext()
+  // Closed automatically when the test ends, so a failure part-way through cannot leak a
+  // live Chromium profile into every test that follows. See fixtures.ts.
+  trackContext(context)
   // A "new device" in the crypto suites is an INDEPENDENT device with its own identity — so when a
   // backup already exists (a previous device of this user auto-backed-up), it starts fresh rather
   // than restoring, matching the pre-recovery-code behaviour. And suppress the one-time "save your

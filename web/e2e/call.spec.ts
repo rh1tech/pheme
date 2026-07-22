@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from './fixtures'
+import { type Page } from '@playwright/test'
 import { createUserViaAdmin, loginAsAdmin, uniqueEmail } from './helpers'
 import { openChatAndJoin, send, signInOnNewDevice, startDirectChat } from './chat-helpers'
 

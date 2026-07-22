@@ -1,4 +1,5 @@
-import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test } from './fixtures'
+import { type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { login } from './helpers'
 import { openChatAndJoin, renderedMessages, send } from './chat-helpers'
 import { FED_A_URL, FED_B_URL, FED_B_DOMAIN } from './constants'

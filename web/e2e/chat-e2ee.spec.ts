@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { createUserViaAdmin, loginAsAdmin, uniqueEmail } from './helpers'
 import {
   createGroup,
@@ -13,6 +13,15 @@ const PASSWORD = 'Sup3rSecret!'
 
 // Real crypto between two real people. Chromium is enough; this is not about rendering.
 test.skip(({ browserName }) => browserName !== 'chromium', 'crypto round-trip: chromium only')
+
+// Same budget as every other crypto spec. This file was the first of them and kept the 30s
+// default while chat-multidevice, chat-history-sync, chat-backup, chat-resilience and
+// chat-security were each given 120s as they were written — for work this file also does:
+// several users created, several devices signed in and waiting on published KeyPackages, a
+// group built, members added and removed through the real UI. Its heaviest test spends 16-21s
+// of that 30s on a quiet machine, so any contention at all tipped it over, and it timed out in
+// a different position on every run. That is a mis-set budget, not a flaky test.
+test.describe.configure({ timeout: 120_000 })
 
 /**
  * Two people exchange an encrypted message and can both read it.

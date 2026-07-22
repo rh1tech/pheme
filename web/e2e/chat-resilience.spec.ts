@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { createUserViaAdmin, login, loginAsAdmin, uniqueEmail } from './helpers'
 import {
   deleteKeyPackagesFor,
