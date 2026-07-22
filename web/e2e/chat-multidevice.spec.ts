@@ -313,13 +313,23 @@ test('removing a member cuts off every device they have', async ({ browser }) =>
   })
 
   // NEITHER of Carol's devices can read it. The tablet is the one the old code forgot.
+  //
+  // Asserted by COUNT on both devices. Removal takes the conversation off Carol's list entirely,
+  // so `.last()` matched no element and threw "element(s) not found" instead of passing — this
+  // test failed precisely when the confidentiality it guards was most thoroughly enforced. And
+  // counting is the stronger claim anyway: `.last()` inspected only the newest message, so the
+  // text leaking anywhere above it would have gone unnoticed.
   await carolPhone.page.waitForTimeout(4000)
-  await expect(carolPhone.page.getByTestId('chat-message').last()).not.toContainText(
-    'carol is gone now',
-  )
-  await expect(carolTablet.page.getByTestId('chat-message').last()).not.toContainText(
-    'carol is gone now',
-  )
+  // Both of Carol's clients are alive and rendering — otherwise "no such message" would be
+  // satisfied by a blank page, and the absence below would prove nothing.
+  await expect(carolPhone.page.getByTestId('chat-sidebar')).toBeVisible()
+  await expect(carolTablet.page.getByTestId('chat-sidebar')).toBeVisible()
+  await expect(
+    carolPhone.page.getByTestId('chat-message').filter({ hasText: 'carol is gone now' }),
+  ).toHaveCount(0)
+  await expect(
+    carolTablet.page.getByTestId('chat-message').filter({ hasText: 'carol is gone now' }),
+  ).toHaveCount(0)
 
   await Promise.all([
     owner.context.close(),

@@ -68,8 +68,14 @@ test('the service worker decrypts a push into the notification body', async ({ p
       await wasm_bindgen({ module_or_path: '/mls/pheme_mls_bg.wasm' })
 
       const enc = new TextEncoder()
-      const alice = new wasm_bindgen.MlsClient('alice', 'dev-a')
-      const bob = new wasm_bindgen.MlsClient('bob', 'dev-b')
+      // MlsClient takes (domain, userId, deviceId). The domain arrived with federation, and this
+      // fixture was left on the old two-argument call — so the first argument was read as the
+      // domain, the second as the user, and the device id was missing, which the constructor
+      // rejects outright. It failed on every run and every retry, which reads like flake and was
+      // not. The domain only shapes the identity string here: the worker restores bob wholesale
+      // from exportState(), so it never reconstructs one.
+      const alice = new wasm_bindgen.MlsClient('pheme.test', 'alice', 'dev-a')
+      const bob = new wasm_bindgen.MlsClient('pheme.test', 'bob', 'dev-b')
       alice.createGroup(enc.encode(groupId))
       const staged = alice.stageAdd(enc.encode(groupId), [bob.keyPackage()])
       alice.commitAccepted(enc.encode(groupId))

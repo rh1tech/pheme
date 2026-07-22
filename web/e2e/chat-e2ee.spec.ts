@@ -245,8 +245,19 @@ test('an admin adds and removes a group member, and encryption follows', async (
     timeout: 20_000,
   })
   // Carol must NOT see it — give the stream a moment, then assert absence.
+  //
+  // Absence is asserted by COUNT, not by inspecting the last message. Removal takes the whole
+  // conversation off Carol's list, so there is no last message to look at and `.last()` matched
+  // nothing at all — which throws "element(s) not found" rather than passing. The test failed
+  // hardest exactly when the cut-off was most complete. Counting also asks the stronger question:
+  // `.last()` only ever looked at the newest message, so a leak anywhere above it read as a pass.
   await carol.page.waitForTimeout(3000)
-  await expect(carol.page.getByTestId('chat-message').last()).not.toContainText('after carol left')
+  // Carol's client is alive and rendering — otherwise "no such message" would be satisfied by a
+  // blank page, and the absence below would prove nothing.
+  await expect(carol.page.getByTestId('chat-sidebar')).toBeVisible()
+  await expect(
+    carol.page.getByTestId('chat-message').filter({ hasText: 'after carol left' }),
+  ).toHaveCount(0)
 
   await Promise.all([owner.context.close(), bob.context.close(), carol.context.close()])
 })

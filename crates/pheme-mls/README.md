@@ -100,3 +100,20 @@ does not run `wasm-pack`. After changing this crate, rebuild and copy:
 
     cp pkg/pheme_mls.js pkg/pheme_mls.d.ts pkg/pheme_mls_bg.wasm \
        pkg/pheme_mls_bg.wasm.d.ts ../../web/src/crypto/pkg/
+
+There is a SECOND vendored copy, and forgetting it is the failure this note exists to
+prevent. The service worker cannot use an ES module, so it loads a `no-modules` build of
+the same crate from `web/public/mls/`:
+
+    wasm-pack build --release --target no-modules --out-dir pkg-nomodules
+    cp pkg-nomodules/pheme_mls.js ../../web/public/mls/pheme_mls_nomodules.js
+
+Only the GLUE is vendored there — the worker loads `/mls/pheme_mls_bg.wasm`, which vite
+serves from `web/src/crypto/pkg/`. So the two must be rebuilt TOGETHER: a glue from one
+build talking to a binary from another is an ABI mismatch, and it fails at whichever
+export happens to have shifted rather than anywhere obvious. That is exactly what
+happened — the glue was committed once with the previews feature and never regenerated,
+so when `MlsClient::new` gained its `domain` argument the glue still passed two strings
+to a function expecting three. Production was unharmed (the worker only ever calls
+`MlsPreviewClient`, whose ABI had not moved), but the notification-preview E2E failed on
+every run for weeks and was read as flake.
