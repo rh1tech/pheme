@@ -16,6 +16,7 @@ import '../core/api_client.dart';
 import '../crypto/mls_device.dart';
 import '../data/pheme_repository.dart';
 import 'conversation_shortcuts.dart';
+import 'initials_avatar.dart';
 import 'notification_preview.dart';
 
 /// Background isolate handler. Must be a top-level, vm:entry-point function.
@@ -153,6 +154,9 @@ Future<void> _showDecryptedInBackground(RemoteMessage message) async {
     body: preview ?? fallbackBody,
     avatarUrl: data['senderAvatar'] as String?,
     conversationId: conversationId,
+    // senderId where the server sends one, so the drawn circle is the colour this person already
+    // has in the chat list; the conversation otherwise, which is exactly right for a group.
+    avatarColorId: (data['senderId'] as String?) ?? conversationId,
   );
 }
 
@@ -167,19 +171,48 @@ Future<void> _showDecryptedInBackground(RemoteMessage message) async {
 /// cost the notification nothing, so it is capped in both time and size and every failure returns
 /// null to draw the notification without a picture.
 /// The avatar as an icon for the conversation style, or null.
-Future<ByteArrayAndroidIcon?> _avatarPersonIcon(String? url) async {
-  final bytes = await _avatarBytes(url);
+Future<ByteArrayAndroidIcon?> _avatarPersonIcon(
+  String? url,
+  String? colorId,
+  String? label,
+) async {
+  final bytes = await _avatarBytes(url, colorId, label);
   return bytes == null ? null : ByteArrayAndroidIcon(bytes);
 }
 
 /// The avatar as a largeIcon, for the plain notification the styled one falls back to.
-Future<AndroidBitmap<Object>?> _avatarIcon(String? url) async {
-  final bytes = await _avatarBytes(url);
+Future<AndroidBitmap<Object>?> _avatarIcon(
+  String? url,
+  String? colorId,
+  String? label,
+) async {
+  final bytes = await _avatarBytes(url, colorId, label);
   return bytes == null ? null : ByteArrayAndroidBitmap(bytes);
 }
 
-Future<Uint8List?> _avatarBytes(String? url) async {
-  if (url == null || url.isEmpty) return null;
+/// The drawn circle, when there is no picture to show or it could not be fetched.
+///
+/// Needs something to hash a colour from and something to take letters from; without either, the
+/// notification is drawn with no avatar exactly as it was before.
+Future<Uint8List?> _initialsFallback(String? colorId, String? label) async {
+  if (colorId == null || colorId.isEmpty) return null;
+  if (label == null || label.isEmpty) return null;
+  return initialsAvatarPng(id: colorId, label: label);
+}
+
+Future<Uint8List?> _avatarBytes(
+  String? url,
+  String? colorId,
+  String? label,
+) async {
+  // No picture: draw the initials circle instead of returning nothing.
+  //
+  // Returning null here is what put EMPTY SPACE in the notification for anyone without a profile
+  // picture — every other surface in the app draws them as a coloured circle with their initials,
+  // and this was the one place they vanished. See initials_avatar.dart.
+  if (url == null || url.isEmpty) {
+    return _initialsFallback(colorId, label);
+  }
   try {
     // On the platform HTTP stack like every other request. This one fetches from
     // the SAME host as the API, from a background isolate, so leaving it on the
@@ -205,12 +238,15 @@ Future<Uint8List?> _avatarBytes(String? url) async {
     // An avatar is a thumbnail. Anything past this is not one, and is not worth the memory in a
     // background isolate that the system is entitled to kill.
     if (bytes == null || bytes.isEmpty || bytes.length > 512 * 1024) {
-      return null;
+      return _initialsFallback(colorId, label);
     }
     return Uint8List.fromList(bytes);
   } on Object catch (e) {
+    // A picture that exists but could not be fetched — a slow CDN, no network on the push path —
+    // is no reason to show a gap either. The drawn circle needs nothing but the id and the name,
+    // both of which are already in hand.
     debugPrint('Pheme: notification avatar unavailable: $e');
-    return null;
+    return _initialsFallback(colorId, label);
   }
 }
 
@@ -234,6 +270,11 @@ Future<void> _showChatNotification(
   required String body,
   required String? avatarUrl,
   required String? conversationId,
+  // What the FALLBACK circle's colour is hashed from, when there is no picture to show. The
+  // sender's own id where the push carries one, so the circle matches the colour the chat list
+  // gives that person; the conversation's otherwise, which is right for a group and the closest
+  // available answer for a direct chat from a server that predates senderId.
+  String? avatarColorId,
 }) async {
   // What a tap on this notification should open. A notification the APP draws is not one Firebase
   // knows about, so onMessageOpenedApp never fires for it and the only route back to the chat is
@@ -253,7 +294,7 @@ Future<void> _showChatNotification(
     await ConversationShortcuts.publish(
       conversationId: groupKey,
       name: title ?? 'Chat',
-      avatar: await _avatarBytes(avatarUrl),
+      avatar: await _avatarBytes(avatarUrl, avatarColorId, title),
     );
   }
 
@@ -263,7 +304,7 @@ Future<void> _showChatNotification(
       // Keyed on the conversation, so Android threads successive messages from the same chat
       // together instead of treating each as a new correspondent.
       key: groupKey,
-      icon: await _avatarPersonIcon(avatarUrl),
+      icon: await _avatarPersonIcon(avatarUrl, avatarColorId, title),
     );
     await local.show(
       id: id,
@@ -317,7 +358,7 @@ Future<void> _showChatNotification(
         channelDescription: _androidChannel.description,
         importance: Importance.high,
         priority: Priority.high,
-        largeIcon: await _avatarIcon(avatarUrl),
+        largeIcon: await _avatarIcon(avatarUrl, avatarColorId, title),
         groupKey: groupKey,
       ),
       iOS: DarwinNotificationDetails(threadIdentifier: groupKey),
@@ -588,6 +629,9 @@ class PushService {
           message.data['body'] as String? ??
           'New message',
       avatarUrl: message.data['senderAvatar'] as String?,
+      avatarColorId:
+          (message.data['senderId'] as String?) ??
+          message.data['conversationId'] as String?,
       conversationId: groupKey,
     );
   }
@@ -636,12 +680,19 @@ class PushService {
           debugPrint('Pheme FCM token: $fcmToken');
         }
       }
-
-      // The iOS PushKit token, which is NOT the FCM token — a different token for a different topic,
-      // and the only one that can ring a sleeping iPhone. Both are sent: FCM carries messages, PushKit
-      // carries calls. Null everywhere but iOS.
-      voipToken = await _voipToken();
     }
+
+    // The iOS PushKit token, which is NOT the FCM token — a different token for a different topic,
+    // and the only one that can ring a sleeping iPhone. Both are sent: FCM carries messages, PushKit
+    // carries calls. Null everywhere but iOS.
+    //
+    // OUTSIDE the `_available` guard, deliberately. PushKit is registered by AppDelegate at launch
+    // and owes Firebase nothing — but this call used to sit inside the block above, so an iPhone
+    // whose Firebase init had failed reported NO VoIP token either, and the server could not ring
+    // it. That is precisely the state this app shipped in: there was no GoogleService-Info.plist,
+    // so `_available` was false on every iOS launch, and one missing config file took out calls
+    // as well as messages. Firebase being absent must cost messages only.
+    voipToken = await _voipToken();
 
     // Best effort: a device that has not minted an MLS identity yet still needs a push address,
     // and will send the link on its next registration.
@@ -652,7 +703,7 @@ class PushService {
       fcmToken: fcmToken,
       voipToken: voipToken,
       mlsDeviceId: mlsDeviceId,
-      canRenderPreview: _canRenderPreview,
+      canRenderPreview: canRenderPreview,
     );
     return Registration(
       id: device.id,
@@ -666,19 +717,20 @@ class PushService {
 
   /// Whether THIS build can decrypt a message and draw the notification itself.
   ///
-  /// Android only, for now, and the asymmetry is real rather than an oversight. Android renders a
-  /// preview from the FCM background isolate (see phemeFirebaseBackgroundHandler), which exists.
-  /// iOS would need a NotificationServiceExtension, which does not — so an iPhone says no and
-  /// keeps getting the server's generic text, which is correct and not a degradation: it is
-  /// exactly what it got before.
+  /// Both mobile platforms now can, by different routes. Android renders a preview from the FCM
+  /// background isolate (see phemeFirebaseBackgroundHandler). iOS renders it in a
+  /// NotificationServiceExtension — ios/NotificationService — which reads the sealed MLS state from
+  /// the App Group container and the data key from the App Group keychain, and decrypts through the
+  /// C ABI in mobile/rust/src/cabi.rs. Neither advances any MLS state: both work on a copy.
   ///
-  /// Claiming the capability before it exists would be worse than not having it. The server sends
-  /// a preview data-only, and a device that cannot draw one shows NOTHING — so a premature `true`
-  /// here would silence every notification on iOS.
+  /// This was `Platform.isAndroid` until the extension existed, and the ordering mattered. The
+  /// server sends a preview DATA-ONLY, because a notification payload would be drawn by the system
+  /// tray before anything could decrypt it — so a device that claims this capability and cannot
+  /// honour it shows NOTHING, not even generic text. A premature `true` here would have silenced
+  /// every notification on iOS.
   ///
-  /// Flip this to `Platform.isAndroid || Platform.isIOS` in the same change that adds the
-  /// extension, never before it.
-  bool get _canRenderPreview => Platform.isAndroid;
+  /// The same rule still applies to macOS, which has neither route and must stay false.
+  bool get canRenderPreview => Platform.isAndroid || Platform.isIOS;
 
   /// This device's PushKit token, or null when there is none (Android, or iOS before it has been
   /// issued). Best effort: a missing VoIP token degrades an incoming call to a banner, which is worse

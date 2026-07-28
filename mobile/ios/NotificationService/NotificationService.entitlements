@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		The SAME App Group as Runner. This is the whole mechanism: the group's container holds the
+		sealed MLS state file, and the group's keychain access group holds the data key that opens
+		it. Without this entry the extension is a separate sandbox that can see neither, and every
+		notification falls back to the server's generic text.
+	-->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.tech.rh1.pheme</string>
+	</array>
+
+	<!--
+		NOT com.apple.developer.usernotifications.communication. It belongs on the APP and only on
+		the app: Apple will not issue it for an extension's App ID, and asking for it here fails the
+		build outright —
+		  "Entitlement com.apple.developer.usernotifications.communication not found and
+		   could not be included in profile."
+		`UNNotificationContent.updating(from:)` runs in this process but is authorised by the
+		containing app's entitlement, so the avatar works with the capability on Runner alone.
+	-->
+
+</dict>
+</plist>

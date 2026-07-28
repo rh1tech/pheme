@@ -17,6 +17,41 @@ import flutter_callkit_incoming
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    // The messenger comes from a registrar rather than the bridge: FlutterImplicitEngineBridge
+    // exposes the plugin registry, not the messenger itself.
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "PhemeSharedKeychain") {
+      registerSharedKeychainChannel(registrar.messenger())
+    }
+  }
+
+  /// Lets Dart hand the MLS data key to the NotificationServiceExtension.
+  ///
+  /// MlsStore owns the key and keeps it in the app's own keychain group as it always has; this only
+  /// mirrors it, as a plain item, into the shared App Group where the extension can read it. See
+  /// SharedKeychain for why flutter_secure_storage cannot serve that purpose.
+  ///
+  /// Every result is a plain bool. A failure here means no previews on this device — never an
+  /// error the app has to handle — so nothing on the Dart side is asked to catch anything.
+  private func registerSharedKeychainChannel(_ messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(
+      name: "tech.rh1.pheme/shared_keychain",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "putDataKey":
+        guard let data = (call.arguments as? FlutterStandardTypedData)?.data else {
+          result(false)
+          return
+        }
+        result(SharedKeychain.putDataKey(data))
+      case "clear":
+        SharedKeychain.clear()
+        result(true)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
   }
 
   /// PushKit is the only way to ring a sleeping iPhone.

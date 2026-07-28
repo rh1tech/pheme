@@ -11,8 +11,46 @@
 		`production`, and the server must be pointed at the matching gateway (PHEME_APNS_PRODUCTION):
 		a token minted against one gateway is rejected by the other with BadDeviceToken, which is the
 		single most common reason a VoIP push silently never arrives.
+
+		Which is why this is no longer a literal. It was hardcoded to `development`, so a release or
+		TestFlight build shipped asking for the sandbox gateway and every push to it would have come
+		back BadDeviceToken — with nothing in the app to say why. APS_ENVIRONMENT is set per build
+		configuration in the Runner target: development for Debug and Profile, which are signed with
+		a development profile, and production for Release.
 	-->
 	<key>aps-environment</key>
-	<string>development</string>
+	<string>$(APS_ENVIRONMENT)</string>
+
+	<!--
+		The App Group the app shares with its NotificationServiceExtension, and the reason an
+		iPhone can show a message rather than "New message".
+
+		A preview is decrypted ON THE DEVICE — the server ships MLS ciphertext it cannot read
+		itself — so the extension needs two things the app owns: the sealed MLS state, which
+		MlsStore already writes into this group's container as a file, and the small data key
+		that unseals it, which lives in this group's keychain access group.
+
+		This must also be registered in the Apple Developer portal and be present in the
+		provisioning profile. Until it is, the keychain calls that name the group fail with
+		errSecMissingEntitlement — which MlsStore treats as "no previews on this device" rather
+		than as an error, so an unprovisioned build still stores its keys and still works.
+	-->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.tech.rh1.pheme</string>
+	</array>
+
+	<!--
+		Communication notifications: what puts the SENDER'S AVATAR on a message notification, as a
+		circular portrait beside their name, the way Messages and WhatsApp do.
+
+		There is no field for this. An avatar reaches an iOS notification only by attaching an
+		INSendMessageIntent to the content, and `UNNotificationContent.updating(from:)` requires
+		this entitlement — without it the call throws and the notification renders with the app
+		icon instead. Android reaches the same result through Person/MessagingStyle, which needs no
+		equivalent permission; this is the iOS price for the same picture.
+	-->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
 </dict>
 </plist>

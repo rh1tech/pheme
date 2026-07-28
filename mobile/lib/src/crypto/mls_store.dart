@@ -20,6 +20,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path_provider_foundation/path_provider_foundation.dart';
@@ -81,21 +82,19 @@ class MlsStore {
     accessibility: KeychainAccessibility.first_unlock,
   );
 
-  /// The SHARED access group, readable from the NotificationServiceExtension.
+  /// The native bridge that mirrors the data key into the shared App Group keychain.
   ///
-  /// Used only where sharing is actually needed, and never as the sole home for anything. An
-  /// access group the app is not entitled to makes the keychain call FAIL — errSecMissingEntitlement
-  /// — and the entitlement depends on the App Group being registered in the Apple Developer
-  /// portal and present in the provisioning profile, which is not something the code can
-  /// guarantee about the build it finds itself in.
+  /// This used to be a second [IOSOptions] with `groupId: appGroup`, written through
+  /// flutter_secure_storage. It reached the right access group and was still unreadable by the
+  /// extension, because the plugin stores a Secure-Enclave-wrapped blob rather than the value —
+  /// see [_mirrorDataKeyForExtension] and ios/Runner/SharedKeychain.swift.
   ///
-  /// So the shared group is written to BEST-EFFORT alongside the app's own copy, never instead of
-  /// it. A build without the entitlement stores its keys exactly as it always did and simply does
-  /// not get previews; it does not lose the ability to store keys at all, which is what making
-  /// this the primary location would have risked.
-  static const _sharedIosOptions = IOSOptions(
-    accessibility: KeychainAccessibility.first_unlock,
-    groupId: appGroup,
+  /// Best-effort in exactly the way that option was: a build whose provisioning profile lacks the
+  /// App Group gets errSecMissingEntitlement, the mirror silently does nothing, and the app's own
+  /// copy of the key — which is never conditional on an entitlement — carries on as before. The
+  /// cost is previews on that device, nothing else.
+  static const _sharedKeychain = MethodChannel(
+    'tech.rh1.pheme/shared_keychain',
   );
 
   final FlutterSecureStorage _storage;
@@ -207,22 +206,27 @@ class MlsStore {
   /// Copies the data key into the shared access group, where the NotificationServiceExtension can
   /// read it. Best-effort and deliberately silent.
   ///
-  /// Never the only copy: see [_sharedIosOptions]. On a build whose provisioning profile does not
+  /// Never the only copy: see [_sharedKeychain]. On a build whose provisioning profile does not
   /// carry the App Group, this throws errSecMissingEntitlement and nothing else changes.
   Future<void> _mirrorDataKeyForExtension(String encoded) async {
     if (!Platform.isIOS) return;
     try {
-      final existing = await _storage.read(
-        key: _dataKeyKey,
-        iOptions: _sharedIosOptions,
+      // A NATIVE write, not flutter_secure_storage — even though the shared access group is right
+      // there in the App Group and this used to write it with the plugin's groupId option.
+      //
+      // The plugin does not store a value, it stores a wrapping of one: the payload is
+      // AES-encrypted and the AES key is sealed under a Secure Enclave ECIES key in a companion
+      // `fss.wrapped.<account>` item. So the key WAS reaching the shared group all along, and the
+      // extension still could not read it — a plain SecItemCopyMatching returns ciphertext in a
+      // format only the plugin understands. That is the whole reason previews never worked on iOS.
+      //
+      // The alternative, reimplementing the unwrap in Swift, was rejected deliberately: it copies a
+      // private detail of somebody else's plugin, and the version that changes it would break
+      // previews silently. See ios/Runner/SharedKeychain.swift.
+      final bytes = Uint8List.fromList(
+        encoded.split(',').map(int.parse).toList(growable: false),
       );
-      // Already there. Without this check every message would rewrite the keychain item.
-      if (existing == encoded) return;
-      await _storage.write(
-        key: _dataKeyKey,
-        value: encoded,
-        iOptions: _sharedIosOptions,
-      );
+      await _sharedKeychain.invokeMethod<bool>('putDataKey', bytes);
     } on Object {
       // No entitlement, or a keychain that will not share. Previews do not happen on this device
       // and everything else carries on exactly as before.
