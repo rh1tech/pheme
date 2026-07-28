@@ -54,8 +54,47 @@ class DeviceController extends Notifier<String?> {
       await settings.saveRegisteredPushToken(token);
     }
     await settings.saveRegisteredMlsIdentity(registration.linkedMlsIdentity);
+    // What this build told the server it can do, so a later launch can notice the answer has
+    // changed — which is what an app upgrade does without touching anything else.
+    await settings.saveRegisteredCanRenderPreview(
+      ref.read(pushServiceProvider).canRenderPreview,
+    );
     state = registration.id;
     return registration.id;
+  }
+
+  /// Re-registers so the server learns which MLS device this push address belongs to.
+  ///
+  /// Called the moment an identity is minted (see MlsService.onIdentityMinted), because that is the
+  /// one event that makes an existing registration stale without anything else changing. The launch
+  /// check below covers the same mismatch, but only at launch — so before this existed, a fresh
+  /// install linked its identity on the SECOND run of the app, and previews did not work until the
+  /// user happened to restart. Nothing reported it; the phone just said "New message" forever.
+  ///
+  /// Safe to call spuriously: it re-reads what the server was actually told and returns without a
+  /// request when the link is already recorded. Minting fires on restores and re-mints too, and
+  /// those must not each cost a registration.
+  Future<void> linkMlsIdentity() async {
+    final settings = ref.read(settingsStoreProvider);
+    final mlsDeviceId = await loadMlsDeviceId(const FlutterSecureStorage());
+
+    // The same rule the launch check uses, deliberately — one statement of when a registration is
+    // stale, in one tested place, rather than a second copy here that can drift from it. Passing a
+    // null token says "the token is not what I am asking about": with both sides null the token
+    // comparison cannot fire, so the answer turns purely on the identity link.
+    if (!needsReregistration(
+      current: null,
+      registered: null,
+      hasMlsIdentity: mlsDeviceId != null && mlsDeviceId.isNotEmpty,
+      registeredMlsIdentity: await settings.loadRegisteredMlsIdentity(),
+    )) {
+      return;
+    }
+
+    // Past register()'s early return: the device id is fine, but what the server knows about it
+    // is not, and only a fresh registration carries the link.
+    state = null;
+    await ensureRegistered();
   }
 
   /// Re-registers if this device's push token has changed since the server was last told.
@@ -80,6 +119,9 @@ class DeviceController extends Notifier<String?> {
       registered: registered,
       hasMlsIdentity: hasMls,
       registeredMlsIdentity: registeredMls,
+      canRenderPreview: ref.read(pushServiceProvider).canRenderPreview,
+      registeredCanRenderPreview: await settings
+          .loadRegisteredCanRenderPreview(),
     )) {
       return;
     }
@@ -130,6 +172,8 @@ bool needsReregistration({
   required String? registered,
   bool hasMlsIdentity = false,
   bool registeredMlsIdentity = false,
+  bool canRenderPreview = false,
+  bool registeredCanRenderPreview = false,
 }) {
   // An MLS identity this device has but the server was never told about is the other way a
   // registration goes stale, and it is easy to reach: the device registers when the app starts,
@@ -142,6 +186,22 @@ bool needsReregistration({
   // be revoked. So the device shows "New message" and nothing else, permanently, with nothing
   // anywhere reporting a fault.
   if (hasMlsIdentity && !registeredMlsIdentity) return true;
+
+  // A capability the BUILD has and the server does not know about. Same shape of staleness as the
+  // identity link above, reached a different way: not by the device changing, but by the app being
+  // upgraded underneath a registration that is otherwise perfectly valid.
+  //
+  // This is not hypothetical — it is what happened when iOS gained its NotificationServiceExtension.
+  // The app started reporting canRenderPreview: true, every already-registered iPhone kept the
+  // `false` the server had recorded, and the server went on withholding ciphertext from devices
+  // that could now decrypt it. Nothing was broken and nothing said anything; the previews simply
+  // never arrived.
+  //
+  // Compared in BOTH directions on purpose. A capability that goes away — an OS downgrade, an
+  // entitlement lost when a build is signed differently — matters more than one that appears: the
+  // server sends previews data-only, so a device still claiming a capability it no longer has shows
+  // NOTHING at all rather than generic text.
+  if (canRenderPreview != registeredCanRenderPreview) return true;
 
   if (current == null) return false;
   return current != registered;

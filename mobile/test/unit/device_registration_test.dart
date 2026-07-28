@@ -114,4 +114,52 @@ void _mlsIdentityGroup() {
       );
     });
   });
+
+  group('needsReregistration, preview capability', () {
+    test('a capability the server was never told about forces a re-register', () {
+      // What an app upgrade looks like: the token is unchanged, the identity is linked, and the
+      // only thing that moved is what this BUILD can do. iOS gaining its
+      // NotificationServiceExtension is exactly this case, and without it every already-registered
+      // iPhone kept the server's old `false` and never received a preview.
+      expect(
+        needsReregistration(
+          current: 'token-a',
+          registered: 'token-a',
+          hasMlsIdentity: true,
+          registeredMlsIdentity: true,
+          canRenderPreview: true,
+          registeredCanRenderPreview: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('a capability already registered changes nothing', () {
+      expect(
+        needsReregistration(
+          current: 'token-a',
+          registered: 'token-a',
+          hasMlsIdentity: true,
+          registeredMlsIdentity: true,
+          canRenderPreview: true,
+          registeredCanRenderPreview: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('a capability that has gone away also forces a re-register', () {
+      // This direction matters more than the other. The server sends a preview data-only, so a
+      // device still claiming a capability it has lost shows NOTHING — not even generic text.
+      expect(
+        needsReregistration(
+          current: 'token-a',
+          registered: 'token-a',
+          canRenderPreview: false,
+          registeredCanRenderPreview: true,
+        ),
+        isTrue,
+      );
+    });
+  });
 }

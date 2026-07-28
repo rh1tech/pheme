@@ -47,6 +47,16 @@ final mlsServiceProvider = Provider<MlsService>(
     repository: ref.watch(repositoryProvider),
     storage: ref.watch(secureStorageProvider),
     cache: ref.watch(chatCacheProvider),
+    // Tell the server which MLS device this push address belongs to, as soon as there IS one.
+    // Without this the link waited for the next app launch, and message previews — which the
+    // server withholds from an address it cannot trace to an identity — silently did not work
+    // until then. See MlsService.onIdentityMinted.
+    //
+    // ref.read, not watch: this runs long after the provider is built, and re-reading the
+    // controller here must not rebuild the MLS service — rebuilding it would drop the session.
+    onIdentityMinted: () => unawaited(
+      ref.read(deviceControllerProvider.notifier).linkMlsIdentity(),
+    ),
   ),
 );
 

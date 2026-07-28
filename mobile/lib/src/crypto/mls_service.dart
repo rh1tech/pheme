@@ -92,10 +92,28 @@ class MlsService {
     required FlutterSecureStorage storage,
     required this._cache,
     String namespace = '',
+    this.onIdentityMinted,
   }) : _repo = repository,
        _storage = storage,
        _ns = namespace,
        _store = MlsStore(storage, namespace: namespace);
+
+  /// Called just after this device writes an MLS device id it did not have before.
+  ///
+  /// The push registration wants to know. A device registers for push when the app starts, which on
+  /// a fresh install is BEFORE any identity exists, so the address the server stores carries no
+  /// mlsDeviceId — and the server will not hand ciphertext to an address it cannot trace to an MLS
+  /// device, because such a row survives revocation. The result is a phone that shows "New message"
+  /// and never the message, with nothing anywhere reporting a fault.
+  ///
+  /// device_controller already detects the mismatch, but only in the launch check — so the repair
+  /// landed on the NEXT launch, and until the user happened to restart the app the previews they had
+  /// asked for silently did not work. This closes that window: the moment the identity exists, the
+  /// server is told.
+  ///
+  /// Deliberately a plain callback rather than a dependency on the push layer, which this service
+  /// knows nothing about and should not start knowing about.
+  final void Function()? onIdentityMinted;
 
   final String _ns;
 
@@ -191,7 +209,12 @@ class MlsService {
       store: _store,
       userId: userId,
       storedDeviceId: await loadMlsDeviceId(_storage, namespace: _ns),
-      rememberDeviceId: (id) => saveMlsDeviceId(_storage, id, namespace: _ns),
+      // Fires on a mint AND on a re-mint after a wipe or restore — every case where the id the
+      // push registration was told about may no longer be the one this device holds.
+      rememberDeviceId: (id) async {
+        await saveMlsDeviceId(_storage, id, namespace: _ns);
+        onIdentityMinted?.call();
+      },
       mustRestore: await _needsRestore(userId),
     );
 

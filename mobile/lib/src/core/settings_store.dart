@@ -25,6 +25,7 @@ class SettingsStore {
   /// previews to a push address it cannot trace to an MLS device — so a device that registered too
   /// early shows "New message" forever unless it registers again.
   static const _registeredMlsKey = 'pheme.registeredMlsIdentity';
+  static const _registeredPreviewKey = 'pheme.registeredCanRenderPreview';
 
   /// When this device first looked at its chats.
   ///
@@ -95,4 +96,22 @@ class SettingsStore {
 
   Future<void> saveRegisteredMlsIdentity(bool linked) =>
       _storage.write(key: _registeredMlsKey, value: linked ? 'true' : 'false');
+
+  /// Whether the server was last told this device can render its own previews.
+  ///
+  /// A BUILD fact, not a device one, which is why it has to be remembered: the capability changes
+  /// when the app is upgraded, and an upgrade is exactly the moment nothing else about the
+  /// registration changes. iOS gained the NotificationServiceExtension and reported `true` from
+  /// then on — but every device already registered kept its old `false` on the server, and went on
+  /// receiving generic text with the extension sitting there unused.
+  ///
+  /// Absent means false, which is the safe default: it means an install that predates this asks
+  /// once, on its next launch, rather than assuming the server already knows.
+  Future<bool> loadRegisteredCanRenderPreview() async =>
+      await _storage.read(key: _registeredPreviewKey) == 'true';
+
+  Future<void> saveRegisteredCanRenderPreview(bool can) => _storage.write(
+    key: _registeredPreviewKey,
+    value: can ? 'true' : 'false',
+  );
 }
