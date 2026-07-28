@@ -482,10 +482,12 @@
 			);
 			inputPaths = (
 			);
+			alwaysOutOfDate = 1;
 			name = "Build Rust library";
 			outputFileListPaths = (
 			);
 			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/NotificationService/librust_lib_pheme_mobile.a",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
