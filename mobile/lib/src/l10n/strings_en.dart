@@ -14,6 +14,8 @@ const Map<String, String> enStrings = {
   'common.close': 'Close',
   'common.retry': 'Retry',
   'common.logout': 'Log out',
+  'common.logoutConfirm':
+      'Log out of Pheme on this device? Your chats stay encrypted and come back when you sign in again.',
   'common.settings': 'Settings',
 
   // auth
@@ -85,6 +87,8 @@ const Map<String, String> enStrings = {
   // subscription mode
   'mode.open': 'Open',
   'mode.approval': 'Approval',
+  'mode.openHint': 'Anyone with the reference joins straight away',
+  'mode.approvalHint': 'You approve each request before they can read',
 
   // channel detail
   'channel.fallbackName': 'Channel',
@@ -180,6 +184,7 @@ const Map<String, String> enStrings = {
 
   // phetag + share (owner)
   'channel.phetag': 'Phetag',
+  'channel.phetagPlaceholder': 'my-channel',
   'channel.phetagHint':
       "2–24 characters: letters, numbers, . _ - (can't start with a digit, "
       'dot or dash).',
@@ -244,10 +249,16 @@ const Map<String, String> enStrings = {
   'settings.languageRu': 'Русский',
   'settings.server': 'Server',
   'settings.serverUrl': 'API base URL',
+  'settings.serverLocked': 'Sign out to connect to a different server.',
+  'settings.serverHint':
+      'Point this app at your own Pheme server. Ask its operator for the address, or scan the QR they give you.',
   'settings.serverUrlHint': 'http://10.0.2.2:8080',
   'settings.serverSaved': 'Server URL saved',
   'settings.serverInvalid': 'Enter a valid http(s) URL',
   'settings.serverScan': 'Scan',
+  'settings.serverShareHint':
+      'Let somebody point their Pheme at this server: they scan this, or copy the address.',
+  'settings.serverShare': 'Share server',
   'settings.serverScanHint':
       'Point your camera at the QR code your server operator gave you.',
   'settings.device': 'This device',
@@ -269,6 +280,10 @@ const Map<String, String> enStrings = {
 
   // profile
   'profile.title': 'Your profile',
+  'profile.userTitle': 'Profile',
+  'profile.userNotFound': 'This profile could not be found.',
+  'profile.nothingShared':
+      'This person has not shared anything about themselves yet.',
   'profile.subtitle': 'How you appear to others across Pheme.',
   'profile.uploadAvatar': 'Change avatar',
   'profile.removeAvatar': 'Remove avatar',
@@ -330,6 +345,7 @@ const Map<String, String> enStrings = {
   'chat.yesterday': 'Yesterday',
   'chat.loadingOlder': 'Loading older messages…',
   'chat.conversationMenu': 'Conversation menu',
+  'chat.jumpToLatest': 'Jump to the latest message',
   'chat.deleteChat': 'Delete chat',
   'chat.deleteChatConfirm':
       'This deletes the chat and its messages for both of you. This cannot be undone.',
@@ -362,6 +378,7 @@ const Map<String, String> enStrings = {
   'group.removeAdmin': 'Remove admin',
   'group.remove': 'Remove from group',
   'group.leave': 'Leave group',
+  'group.leaveShort': 'Leave',
   'group.leaveConfirm':
       'You will stop receiving messages from this group. You can be added back by an admin.',
   'group.deleteGroup': 'Delete group',
@@ -464,6 +481,7 @@ const Map<String, String> enStrings = {
   'call.decline': 'Decline',
   'call.hangUp': 'Hang up',
   'call.dismiss': 'Dismiss',
+  'call.minimise': 'Minimise',
   'call.encrypted': 'End-to-end encrypted',
   'call.failed': 'Could not start the call',
   'call.mute': 'Mute',

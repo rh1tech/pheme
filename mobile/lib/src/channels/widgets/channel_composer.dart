@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/snackbar.dart';
 import '../../core/providers.dart';
 import '../../l10n/app_localizations.dart';
+import '../../widgets/glass/glass.dart';
 
 /// The bar at the foot of a channel, where a chat has its message box.
 ///
@@ -109,106 +110,63 @@ class _ChannelComposerState extends ConsumerState<ChannelComposer> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final l10n = context.l10n;
 
-    return SafeArea(
-      top: false,
-      child: Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          border: Border(
-            top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.5)),
-          ),
-        ),
-        padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_images.isNotEmpty)
-              SizedBox(
-                height: 64,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
-                  itemCount: _images.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 6),
-                  itemBuilder: (context, i) => _Thumb(
-                    file: _images[i],
-                    onRemove: () => setState(() => _images.removeAt(i)),
-                  ),
+    // The same bar a chat has, built from the same pieces — see GlassComposerBar. Writing to a
+    // channel and writing to a person are the same act, and they used to look like two products.
+    return GlassComposerBar(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_images.isNotEmpty)
+            SizedBox(
+              height: 64,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
+                itemCount: _images.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 6),
+                itemBuilder: (context, i) => _Thumb(
+                  file: _images[i],
+                  onRemove: () => setState(() => _images.removeAt(i)),
                 ),
               ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.attach_file),
-                  tooltip: l10n.t('chat.attachPhoto'),
-                  onPressed: _sending ? null : _pickImages,
-                ),
-                // Per-message options, behind a gear as the web has it: whether this post may be
-                // commented on is a property of the post, not a setting of the channel.
-                IconButton(
-                  icon: Icon(
-                    Icons.settings_outlined,
-                    color: _allowComments
-                        ? null
-                        : theme.colorScheme.onSurfaceVariant,
-                  ),
-                  tooltip: l10n.t('channel.allowComments'),
-                  onPressed: _sending ? null : _showOptions,
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _text,
-                    focusNode: _focus,
-                    minLines: 1,
-                    maxLines: 5,
-                    textCapitalization: TextCapitalization.sentences,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      hintText: l10n.t('channel.writeMessage'),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      isDense: true,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                IconButton.filled(
-                  // Explicit colours. The filled default resolves to primary on primaryContainer,
-                  // which on this palette is a violet arrow on a violet disc — the button was there
-                  // and could not be read.
-                  style: IconButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                    disabledBackgroundColor: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainerHighest,
-                    disabledForegroundColor: Theme.of(
-                      context,
-                    ).colorScheme.onSurfaceVariant,
-                  ),
-                  icon: _sending
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.send),
-                  tooltip: l10n.t('chat.send'),
-                  onPressed: _canSend ? _send : null,
-                ),
-              ],
             ),
-          ],
-        ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              GlassComposerGlyph(
+                icon: Icons.add_photo_alternate_outlined,
+                semanticLabel: l10n.t('chat.attachPhoto'),
+                onPressed: _sending ? null : _pickImages,
+              ),
+              // Per-message options, behind a gear as the web has it: whether this post may be
+              // commented on is a property of the post, not a setting of the channel.
+              GlassComposerGlyph(
+                icon: Icons.settings_outlined,
+                muted: !_allowComments,
+                semanticLabel: l10n.t('channel.allowComments'),
+                onPressed: _sending ? null : _showOptions,
+              ),
+              Expanded(
+                child: GlassComposerField(
+                  controller: _text,
+                  focusNode: _focus,
+                  maxLines: 5,
+                  hintText: l10n.t('channel.writeMessage'),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 4),
+              GlassSendButton(
+                sending: _sending,
+                enabled: _canSend,
+                onPressed: _send,
+                semanticLabel: l10n.t('chat.send'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

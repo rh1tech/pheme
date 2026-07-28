@@ -9,6 +9,7 @@ import '../../data/app_providers.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../widgets/adaptive/adaptive.dart';
+import '../../widgets/glass/glass.dart';
 import '../../widgets/adaptive/adaptive_search_field.dart';
 import '../../widgets/scroll_hiding_header.dart';
 import '../../widgets/error_view.dart';
@@ -20,9 +21,15 @@ import '../../widgets/message_carousel.dart';
 /// Message history for a channel: searchable, paginated, and updated live from
 /// the SSE stream (new messages prepend unless a search filter is active).
 class MessagesTab extends ConsumerStatefulWidget {
-  const MessagesTab({super.key, required this.channelId});
+  const MessagesTab({super.key, required this.channelId, this.bottomInset = 0});
 
   final String channelId;
+
+  /// How much of the bottom of the screen the composer is covering.
+  ///
+  /// The feed runs underneath it — that is the point of a glass bar — so this is spent as content
+  /// padding, and the last post clears the composer without the feed losing the space.
+  final double bottomInset;
 
   @override
   ConsumerState<MessagesTab> createState() => _MessagesTabState();
@@ -177,7 +184,14 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
           // button — so searching inside a channel looked like a different app from searching for
           // one.
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            // Below the glass bar rather than under it: the page draws edge to edge now, so the
+            // top inset is the bar's own height and this is the first thing beneath it.
+            padding: EdgeInsets.fromLTRB(
+              12,
+              MediaQuery.paddingOf(context).top + GlassMetrics.gap,
+              12,
+              4,
+            ),
             child: AdaptiveSearchField(
               controller: _search,
               placeholder: l10n.t('channel.searchHint'),
@@ -233,48 +247,45 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
         ),
       );
     }
-    return ChatWallpaper(
-      child: ListView.builder(
-        // Reversed, like the chat feed: the newest post sits at the BOTTOM and the channel opens on
-        // it. It used to render newest-first top-down, so opening a channel showed the latest post at
-        // the top of the screen and reading forward meant scrolling up — the opposite of every other
-        // message list in the app.
-        reverse: true,
-        controller: _scroll,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-        itemCount: _messages.length + (_cursor.isNotEmpty ? 1 : 0),
-        itemBuilder: (context, i) {
-          // In a reversed list the last index draws at the TOP, which is where "load older" belongs.
-          if (i >= _messages.length) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              // Older posts arrive on their own now; this says they are coming rather than asking.
-              child: const Center(child: AdaptiveProgress(size: 22)),
-            );
-          }
-
-          final message = _messages[i];
-          // The array runs newest-first and the list is reversed, so index+1 is the post ABOVE this
-          // one on screen — the older one. A separator belongs above the first post of a day, which
-          // means comparing against that older neighbour. Comparing against the newer one put
-          // "Today" underneath the only message of today.
-          final older = i + 1 < _messages.length ? _messages[i + 1] : null;
-          final day = messageDay(message.createdAt);
-          final olderDay = older == null ? null : messageDay(older.createdAt);
-          final startsDay =
-              day != null && (olderDay == null || day != olderDay);
-
-          return Column(
-            children: [
-              if (startsDay) DateSeparator(day: day),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: _MessageCard(message: message),
-              ),
-            ],
+    return ListView.builder(
+      // Reversed, like the chat feed: the newest post sits at the BOTTOM and the channel opens on
+      // it. It used to render newest-first top-down, so opening a channel showed the latest post at
+      // the top of the screen and reading forward meant scrolling up — the opposite of every other
+      // message list in the app.
+      reverse: true,
+      controller: _scroll,
+      padding: EdgeInsets.fromLTRB(12, 8, 12, widget.bottomInset + 12),
+      itemCount: _messages.length + (_cursor.isNotEmpty ? 1 : 0),
+      itemBuilder: (context, i) {
+        // In a reversed list the last index draws at the TOP, which is where "load older" belongs.
+        if (i >= _messages.length) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            // Older posts arrive on their own now; this says they are coming rather than asking.
+            child: const Center(child: AdaptiveProgress(size: 22)),
           );
-        },
-      ),
+        }
+
+        final message = _messages[i];
+        // The array runs newest-first and the list is reversed, so index+1 is the post ABOVE this
+        // one on screen — the older one. A separator belongs above the first post of a day, which
+        // means comparing against that older neighbour. Comparing against the newer one put
+        // "Today" underneath the only message of today.
+        final older = i + 1 < _messages.length ? _messages[i + 1] : null;
+        final day = messageDay(message.createdAt);
+        final olderDay = older == null ? null : messageDay(older.createdAt);
+        final startsDay = day != null && (olderDay == null || day != olderDay);
+
+        return Column(
+          children: [
+            if (startsDay) DateSeparator(day: day),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _MessageCard(message: message),
+            ),
+          ],
+        );
+      },
     );
   }
 }

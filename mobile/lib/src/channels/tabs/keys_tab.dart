@@ -9,6 +9,8 @@ import '../../l10n/app_localizations.dart';
 import '../../models/models.dart';
 import '../../widgets/adaptive/adaptive.dart';
 import '../../widgets/error_view.dart';
+import '../../widgets/glass/glass.dart';
+import '../channel_sheets.dart';
 
 /// Manage a channel's API keys: list active keys, create new ones (the secret
 /// is shown once), and revoke.
@@ -74,9 +76,9 @@ class _KeysTabState extends ConsumerState<KeysTab> {
 
   Future<void> _showCreatedKey(CreatedKey created) {
     final l10n = context.l10n;
-    return showDialog<void>(
+    return showGlassDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => GlassDialog(
         title: Text(l10n.t('channel.keyCreatedTitle')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -107,18 +109,18 @@ class _KeysTabState extends ConsumerState<KeysTab> {
           ],
         ),
         actions: [
-          TextButton(
+          GlassDialogAction(
+            label: l10n.t('common.close'),
             onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text(l10n.t('common.close')),
           ),
-          FilledButton.icon(
+          GlassDialogAction(
+            label: l10n.t('channel.copyKey'),
+            emphasised: true,
             onPressed: () async {
               await Clipboard.setData(ClipboardData(text: created.key));
               if (dialogContext.mounted) Navigator.of(dialogContext).pop();
               if (mounted) notifySuccess(context, l10n.t('channel.keyCopied'));
             },
-            icon: const Icon(Icons.copy, size: 16),
-            label: Text(l10n.t('channel.copyKey')),
           ),
         ],
       ),
@@ -147,25 +149,6 @@ class _KeysTabState extends ConsumerState<KeysTab> {
     }
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: AdaptiveButton.outlined(
-              onPressed: _creating ? null : _create,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _creating
-                      ? const AdaptiveProgress(size: 16)
-                      : const Icon(Icons.add, size: 18),
-                  const SizedBox(width: 8),
-                  Text(l10n.t('channel.createKey')),
-                ],
-              ),
-            ),
-          ),
-        ),
         Expanded(
           child: _keys.isEmpty
               ? Center(
@@ -207,6 +190,17 @@ class _KeysTabState extends ConsumerState<KeysTab> {
                     );
                   },
                 ),
+        ),
+        // Pinned rather than scrolling away with the list: making a key is the reason this sheet
+        // exists, and it used to be a small outlined button tucked against the right margin above
+        // a list that could push it out of reach.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+          child: ChannelSheetAction(
+            label: l10n.t('channel.createKey'),
+            busy: _creating,
+            onPressed: _create,
+          ),
         ),
       ],
     );

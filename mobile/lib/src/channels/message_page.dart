@@ -9,6 +9,7 @@ import '../chat/chat_time.dart';
 import '../chat/widgets/chat_wallpaper.dart';
 import '../chat/widgets/call_event_bubble.dart';
 import '../l10n/app_localizations.dart';
+import '../widgets/glass/glass.dart';
 import '../models/models.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/error_view.dart';
@@ -714,24 +715,24 @@ class _CommentTile extends ConsumerWidget {
                       // way to discover deleting was to try holding the thing you wanted gone.
                       if (canDelete) ...[
                         const SizedBox(width: 2),
-                        SizedBox(
-                          height: 18,
-                          width: 22,
-                          child: PopupMenuButton<String>(
-                            padding: EdgeInsets.zero,
-                            iconSize: 15,
-                            tooltip: l10n.t('comment.menu'),
-                            icon: Icon(
+                        GlassMenuAnchor(
+                          semanticLabel: l10n.t('comment.menu'),
+                          actions: [
+                            GlassMenuAction(
+                              label: l10n.t('common.delete'),
+                              icon: Icons.delete_outline,
+                              destructive: true,
+                              onSelected: onDelete,
+                            ),
+                          ],
+                          child: SizedBox(
+                            height: 18,
+                            width: 22,
+                            child: Icon(
                               Icons.more_horiz,
+                              size: 15,
                               color: scheme.onSurfaceVariant,
                             ),
-                            onSelected: (_) => onDelete(),
-                            itemBuilder: (context) => [
-                              PopupMenuItem(
-                                value: 'delete',
-                                child: Text(l10n.t('common.delete')),
-                              ),
-                            ],
                           ),
                         ),
                       ],

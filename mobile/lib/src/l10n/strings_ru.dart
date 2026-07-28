@@ -11,6 +11,8 @@ const Map<String, String> ruStrings = {
   'common.close': 'Закрыть',
   'common.retry': 'Повторить',
   'common.logout': 'Выйти',
+  'common.logoutConfirm':
+      'Выйти из Pheme на этом устройстве? Чаты останутся зашифрованными и вернутся при следующем входе.',
   'common.settings': 'Настройки',
 
   // auth
@@ -81,6 +83,8 @@ const Map<String, String> ruStrings = {
   // subscription mode
   'mode.open': 'Открытый',
   'mode.approval': 'С подтверждением',
+  'mode.openHint': 'Любой, у кого есть ссылка, подписывается сразу',
+  'mode.approvalHint': 'Вы подтверждаете каждую заявку на подписку',
 
   // channel detail
   'channel.fallbackName': 'Канал',
@@ -177,6 +181,7 @@ const Map<String, String> ruStrings = {
 
   // phetag + share (владелец)
   'channel.phetag': 'Phetag',
+  'channel.phetagPlaceholder': 'moy-kanal',
   'channel.phetagHint':
       '2–24 символа: буквы, цифры, . _ - (не может начинаться с цифры, точки '
       'или дефиса).',
@@ -243,10 +248,17 @@ const Map<String, String> ruStrings = {
   'settings.languageRu': 'Русский',
   'settings.server': 'Сервер',
   'settings.serverUrl': 'Базовый URL API',
+  'settings.serverLocked':
+      'Выйдите из аккаунта, чтобы подключиться к другому серверу.',
+  'settings.serverHint':
+      'Подключите приложение к своему серверу Pheme. Спросите адрес у оператора или отсканируйте его QR-код.',
   'settings.serverUrlHint': 'http://10.0.2.2:8080',
   'settings.serverSaved': 'URL сервера сохранён',
   'settings.serverInvalid': 'Введите корректный http(s) URL',
   'settings.serverScan': 'Сканировать',
+  'settings.serverShareHint':
+      'Дайте другому подключить Pheme к этому серверу: пусть отсканирует код или скопирует адрес.',
+  'settings.serverShare': 'Поделиться сервером',
   'settings.serverScanHint':
       'Наведите камеру на QR-код, который вам дал администратор сервера.',
   'settings.device': 'Это устройство',
@@ -268,6 +280,9 @@ const Map<String, String> ruStrings = {
 
   // profile
   'profile.title': 'Ваш профиль',
+  'profile.userTitle': 'Профиль',
+  'profile.userNotFound': 'Профиль не найден.',
+  'profile.nothingShared': 'Этот человек пока ничего о себе не рассказал.',
   'profile.subtitle': 'Как вас видят другие в Pheme.',
   'profile.uploadAvatar': 'Изменить аватар',
   'profile.removeAvatar': 'Удалить аватар',
@@ -329,6 +344,7 @@ const Map<String, String> ruStrings = {
   'chat.yesterday': 'Вчера',
   'chat.loadingOlder': 'Загрузка старых сообщений…',
   'chat.conversationMenu': 'Меню разговора',
+  'chat.jumpToLatest': 'Перейти к последнему сообщению',
   'chat.deleteChat': 'Удалить чат',
   'chat.deleteChatConfirm':
       'Чат и его сообщения будут удалены у вас обоих. Это действие необратимо.',
@@ -360,6 +376,7 @@ const Map<String, String> ruStrings = {
   'group.removeAdmin': 'Снять админа',
   'group.remove': 'Удалить из группы',
   'group.leave': 'Покинуть группу',
+  'group.leaveShort': 'Выйти',
   'group.leaveConfirm':
       'Вы перестанете получать сообщения этой группы. Администратор сможет добавить вас обратно.',
   'group.deleteGroup': 'Удалить группу',
@@ -462,6 +479,7 @@ const Map<String, String> ruStrings = {
   'call.decline': 'Отклонить',
   'call.hangUp': 'Завершить',
   'call.dismiss': 'Закрыть',
+  'call.minimise': 'Свернуть',
   'call.encrypted': 'Сквозное шифрование',
   'call.failed': 'Не удалось начать звонок',
   'call.mute': 'Выключить микрофон',

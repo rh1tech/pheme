@@ -12,7 +12,7 @@ import '../push/push_service.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/adaptive/adaptive_search_field.dart';
 import '../widgets/brand_logo.dart';
-import '../widgets/scroll_hiding_header.dart';
+import '../widgets/glass/glass.dart';
 import 'widgets/channel_row.dart';
 import '../widgets/error_view.dart';
 import 'create_channel_sheet.dart';
@@ -134,14 +134,35 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
         ? (ios ? CupertinoIcons.bell_fill : Icons.notifications_active_rounded)
         : (ios ? CupertinoIcons.bell : Icons.notifications_none_rounded);
 
+    // Hidden when there is nothing to search, and kept while a search is running however empty its
+    // result — the same rule the Chats tab follows, for the same reasons.
+    final searchable = _hasAnyChannel(channels, joined) || _query.isNotEmpty;
+
+    final search = SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          GlassMetrics.gutter,
+          GlassMetrics.gap,
+          GlassMetrics.gutter,
+          4,
+        ),
+        child: AdaptiveSearchField(
+          controller: _search,
+          placeholder: l10n.t('channels.search'),
+          onChanged: (v) => setState(() => _query = v.trim()),
+        ),
+      ),
+    );
+
     return AdaptiveScaffold(
-      // A TAB, not a pushed route: home_shell keeps this and Chats mounted together, and
-      // two iOS nav bars sharing the default Hero tag is an exception on every rebuild.
-      transitionBetweenRoutes: false,
+      behindChrome: true,
       grouped: true,
       title: const BrandLogo(size: 26),
+      // Leading on both, for the reason the Chats tab gives: this is a brand mark on a home screen,
+      // not the name of a pushed page.
+      centerTitle: false,
       trailing: [
-        AdaptiveIconButton(
+        GlassIconButton(
           icon: notifIcon,
           semanticLabel: registered
               ? l10n.t('channels.notificationsOn')
@@ -150,20 +171,22 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
               ? null
               : () => _enableNotifications(context, ref),
         ),
-        AdaptiveIconButton(
+        GlassIconButton(
           icon: ios
               ? CupertinoIcons.qrcode_viewfinder
               : Icons.qr_code_scanner_rounded,
           semanticLabel: l10n.t('channels.addChannel'),
           onPressed: () => _join(context, ref),
         ),
-        AdaptiveIconButton(
+        GlassIconButton(
           icon: ios ? CupertinoIcons.settings : Icons.settings_outlined,
           semanticLabel: l10n.t('common.settings'),
           onPressed: () => context.push('/settings'),
         ),
+        // Last on the bar on iOS, a floating button on Android — the same split the Chats tab makes,
+        // and for the same reason.
         if (ios)
-          AdaptiveIconButton(
+          GlassIconButton(
             icon: CupertinoIcons.add,
             semanticLabel: l10n.t('channels.newChannel'),
             onPressed: () => _create(context, ref),
@@ -171,56 +194,44 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
       ],
       floatingActionButton: ios
           ? null
-          : FloatingActionButton.extended(
+          : GlassActionButton(
+              icon: Icons.add,
+              semanticLabel: l10n.t('channels.newChannel'),
               onPressed: () => _create(context, ref),
-              icon: const Icon(Icons.add),
-              label: Text(l10n.t('channels.newChannel')),
             ),
-      body: ScrollHidingHeader(
-        // Hidden when there is nothing to search, and kept while a search is running however
-        // empty its result — the same rule the Chats tab follows, for the same reasons.
-        header: (_hasAnyChannel(channels, joined) || _query.isNotEmpty)
-            ? Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                child: AdaptiveSearchField(
-                  controller: _search,
-                  placeholder: l10n.t('channels.search'),
-                  onChanged: (v) => setState(() => _query = v.trim()),
-                ),
-              )
-            : const SizedBox.shrink(),
-        child: AdaptiveRefreshableScrollView(
-          onRefresh: () => Future.wait([
-            ref.read(channelsProvider.notifier).refresh(),
-            ref.read(joinedChannelsProvider.notifier).refresh(),
-          ]),
-          slivers: channels.when(
-            loading: () => const [
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: Center(child: AdaptiveProgress()),
+      body: AdaptiveRefreshableScrollView(
+        onRefresh: () => Future.wait([
+          ref.read(channelsProvider.notifier).refresh(),
+          ref.read(joinedChannelsProvider.notifier).refresh(),
+        ]),
+        slivers: channels.when(
+          loading: () => const [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: AdaptiveProgress()),
+            ),
+          ],
+          error: (e, _) => [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: ErrorView(
+                message: l10n.t('channels.loadFailed'),
+                onRetry: () => ref.read(channelsProvider.notifier).refresh(),
               ),
-            ],
-            error: (e, _) => [
-              SliverFillRemaining(
-                hasScrollBody: false,
-                child: ErrorView(
-                  message: l10n.t('channels.loadFailed'),
-                  onRetry: () => ref.read(channelsProvider.notifier).refresh(),
-                ),
-              ),
-            ],
-            data: (allOwned) {
-              final rows = _rows(
-                _filterOwned(allOwned),
-                _filterJoined(joined.asData?.value ?? const <JoinedChannel>[]),
-              );
-              if (rows.isEmpty) {
-                return [_emptyState(context, searching: _query.isNotEmpty)];
-              }
-              return [
+            ),
+          ],
+          data: (allOwned) {
+            final rows = _rows(
+              _filterOwned(allOwned),
+              _filterJoined(joined.asData?.value ?? const <JoinedChannel>[]),
+            );
+            return [
+              if (searchable) search,
+              if (rows.isEmpty)
+                _emptyState(context, searching: _query.isNotEmpty)
+              else
                 SliverPadding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  padding: const EdgeInsets.symmetric(vertical: 4),
                   sliver: SliverList.builder(
                     itemCount: rows.length,
                     itemBuilder: (context, i) => ChannelRow(
@@ -229,10 +240,8 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
                     ),
                   ),
                 ),
-                const SliverToBoxAdapter(child: SizedBox(height: 96)),
-              ];
-            },
-          ),
+            ];
+          },
         ),
       ),
     );
