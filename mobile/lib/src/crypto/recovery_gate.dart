@@ -3,8 +3,10 @@
 // It does the two things a device has to be walked through exactly once, mirroring the web client's
 // KeyBackup gates:
 //
-//   * a FRESH device that finds a backup waiting is offered a restore (enter the code) or a clean
-//     start — because minting an identity in that state would strand the recoverable history;
+//   * a device the session load refuses to mint an identity for — a FRESH one that finds a backup
+//     waiting, or one whose identity the server has REVOKED and which has just been reduced to that
+//     — is offered a restore (enter the code) or a clean start, because minting in that state would
+//     strand the recoverable history;
 //   * a device that has keys but no backup yet has one created automatically and is shown its
 //     recovery code ONCE, since the code cannot be reproduced on a device that did not generate it.
 //
@@ -52,19 +54,27 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
     if (userId.isEmpty) return;
     final mls = ref.read(mlsServiceProvider);
 
-    // A fresh device with a backup waiting: offer to restore before it mints an identity.
+    // Ask for the session FIRST, and let it be the one to say whether a restore is owed.
+    //
+    // This used to decide from local state alone — no keys on disk, no "start fresh" on record, a
+    // backup on the server — and that question cannot be answered before the session has loaded,
+    // because the load is the only thing that asks the server whether the keys on disk are still
+    // ALIVE. A device revoked from elsewhere still holds its keys, so hasLocalKeys said yes, the
+    // gate stood down, and the load it then triggered (via ensureRecoveryBackup) discarded the dead
+    // identity, found the backup, and threw — into a `catch` that dropped it on the floor. No
+    // prompt, and nothing could be sent or received for the rest of the run.
+    //
+    // load() throws NeedsRestoreException in exactly the cases this gate exists for: a fresh device
+    // with a backup waiting, and a revoked one that has just been reduced to that. Both want the
+    // same prompt.
     try {
-      final needsRestore =
-          !await mls.hasLocalKeys() &&
-          !await mls.hasAcceptedFresh() &&
-          await mls.backupExists();
-      if (needsRestore) {
-        if (mounted) await _promptRestore(userId, mls);
-        return;
-      }
+      await mls.session(userId);
+    } on NeedsRestoreException {
+      if (mounted) await _promptRestore(userId, mls);
+      return;
     } on Object {
-      // Could not reach the server to find out — say nothing and let the next launch retry. The
-      // session bootstrap refuses to mint an identity in this state anyway.
+      // Offline, or the session could not be built for some other reason — say nothing and let the
+      // next launch retry. Nothing here blocks the chat.
       return;
     }
 
