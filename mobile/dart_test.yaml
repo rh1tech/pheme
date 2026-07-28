@@ -1,0 +1,13 @@
+# Tags used by this package's tests.
+tags:
+  # Image goldens: `test/golden/`, which rasterise the app's chrome and compare it byte for
+  # byte against a checked-in PNG.
+  #
+  # They are rasterised by the HOST. A blur, a hairline and an antialiased corner do not come
+  # out identical on macOS and on Linux, so a golden made on a laptop fails on the CI box for
+  # reasons that have nothing to do with the change being tested. CI therefore runs
+  # `flutter test -x golden`, and these stay as a local check:
+  #
+  #   flutter test test/golden                  # compare against the checked-in images
+  #   flutter test test/golden --update-goldens # after a deliberate design change
+  golden:

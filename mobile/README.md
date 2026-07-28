@@ -148,9 +148,14 @@ app is meant to keep working.
 Nothing is needed on iOS: `cupertino_http` uses NSURLSession, which is already
 there.
 
-With no `PHEME_API` define the app points at `http://10.0.2.2:8080`, the Android
-emulator's route to a `make dev` stack on the host (`http://localhost:8080` from
-the iOS simulator).
+With no `PHEME_API` define the app has NO server: the sign-in screen shows an
+empty **Server** field and asks for one. Type the address of a `make dev` stack
+once — `http://10.0.2.2:8080` from the Android emulator, `http://localhost:8080`
+from the iOS simulator — and it persists for the life of the install.
+
+The define still works and is how a build is pointed at a deployment; it seeds
+the field rather than hiding it, so the address is visible and correctable before
+anyone signs in against it.
 
 ## Building against a real server
 
@@ -169,8 +174,10 @@ build time. There is no default to fall back on, which is why a release build
 that forgets the define fails immediately rather than quietly reaching the wrong
 host.
 
-Users of a self-hosted instance never see any of this: they scan the QR their
-operator hands them, or paste the URL, in **Settings → Server**.
+Users of a self-hosted instance never see any of this: the **Server** field is on
+the sign-in, registration and password-reset screens, with a QR button beside it —
+they scan the code their operator hands them, or paste the URL, before they sign
+in. It can be changed later in **Settings → Server**.
 
 ## Quality gate
 

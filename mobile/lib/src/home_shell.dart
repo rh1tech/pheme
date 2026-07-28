@@ -1,9 +1,9 @@
 // The app's two surfaces, side by side.
 //
 // The web keeps chats and channels in one sidebar, because on a wide screen they can share a column.
-// A phone has no such column, and the native answer to "two peer sections" is a tab bar — so that is
-// what this is: the same information architecture, expressed the way each platform expresses it.
-// Cupertino tabs on iOS and macOS, a Material 3 NavigationBar on Android.
+// A phone has no such column, and the answer to "two peer sections" is a tab bar — one floating
+// glass bar, the same on both platforms, rather than a CupertinoTabBar on one and a Material
+// NavigationBar on the other. See GlassTabBar for why it floats.
 //
 // An IndexedStack rather than a switch, so each tab keeps its scroll position, its loaded pages and
 // its open keyboard when the user moves between them.
@@ -19,6 +19,7 @@ import 'core/providers.dart';
 import 'chat/conversations_page.dart';
 import 'l10n/app_localizations.dart';
 import 'widgets/adaptive/platform.dart';
+import 'widgets/glass/glass.dart';
 
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
@@ -59,53 +60,85 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final ios = isCupertino(context);
+    final media = MediaQuery.of(context);
 
-    final pages = const [ConversationsPage(), ChannelsPage()];
-    final body = IndexedStack(index: _tab, children: pages);
+    // Each platform keeps its own icon set — a chat bubble is drawn differently by SF Symbols and by
+    // Material, and borrowing one platform's glyphs for the other is the one place where "identical"
+    // reads as wrong rather than as consistent. The metrics around them are shared.
+    final tabs = [
+      GlassTab(
+        icon: ios ? CupertinoIcons.chat_bubble_2 : Icons.forum_outlined,
+        selectedIcon: ios ? CupertinoIcons.chat_bubble_2_fill : Icons.forum,
+        label: l10n.t('chat.tabChats'),
+      ),
+      GlassTab(
+        icon: ios
+            ? CupertinoIcons.antenna_radiowaves_left_right
+            : Icons.campaign_outlined,
+        selectedIcon: ios
+            ? CupertinoIcons.antenna_radiowaves_left_right
+            : Icons.campaign,
+        label: l10n.t('chat.tabChannels'),
+      ),
+    ];
 
-    if (isCupertino(context)) {
-      return CupertinoPageScaffold(
-        child: Column(
-          children: [
-            Expanded(child: body),
-            CupertinoTabBar(
-              currentIndex: _tab,
-              onTap: (i) => setState(() => _tab = i),
-              items: [
-                BottomNavigationBarItem(
-                  icon: const Icon(CupertinoIcons.chat_bubble_2),
-                  label: l10n.t('chat.tabChats'),
-                ),
-                BottomNavigationBarItem(
-                  icon: const Icon(
-                    CupertinoIcons.antenna_radiowaves_left_right,
-                  ),
-                  label: l10n.t('chat.tabChannels'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-    }
+    // Whether a keyboard is covering the bottom of the screen. Read HERE, above the scaffold, since
+    // the scaffold consumes the inset and the view below it can no longer tell.
+    final keyboardUp = media.viewInsets.bottom > 0;
 
     return Scaffold(
-      body: body,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: [
-          NavigationDestination(
-            icon: const Icon(Icons.forum_outlined),
-            selectedIcon: const Icon(Icons.forum),
-            label: l10n.t('chat.tabChats'),
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.campaign_outlined),
-            selectedIcon: const Icon(Icons.campaign),
-            label: l10n.t('chat.tabChannels'),
-          ),
-        ],
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      // Everything below reads the scaffold's OWN MediaQuery, not the one above it.
+      //
+      // A scaffold that resizes for the keyboard also strips the inset it just consumed, so that
+      // nothing inside subtracts it a second time. Passing the outer MediaQuery down put the inset
+      // back — and the page's own scaffold, seeing a keyboard that had already been made room for,
+      // shrank by its full height again. Two subtractions of a 333pt keyboard from an 874pt screen
+      // left the chat list 208pt tall, which is exactly where it was being cut off.
+      body: Builder(
+        builder: (context) {
+          final media = MediaQuery.of(context);
+          return Stack(
+            children: [
+              Positioned.fill(
+                // The tab bar floats over the pages, so the pages are told about it the same way they
+                // are told about the home indicator: as bottom padding. Their lists spend it as content
+                // padding, and the last chat in the list comes to rest clear of the bar instead of
+                // under it.
+                //
+                // Not while the keyboard is up, though. There the screen is already short, and spending
+                // a bar's height of it on blank space is what made a focused search look like it had
+                // cut the list off. The bar stays visible and the rows run beneath it — which is what
+                // the glass is FOR: content passing under it reads as continuing, where content
+                // stopping short of it reads as the end of the list.
+                child: MediaQuery(
+                  data: media.copyWith(
+                    padding: media.padding.copyWith(
+                      bottom: keyboardUp
+                          ? 0
+                          : GlassMetrics.tabBarExtent(context),
+                    ),
+                  ),
+                  child: IndexedStack(
+                    index: _tab,
+                    children: const [ConversationsPage(), ChannelsPage()],
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: GlassTabBar(
+                  tabs: tabs,
+                  currentIndex: _tab,
+                  onSelected: (i) => setState(() => _tab = i),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

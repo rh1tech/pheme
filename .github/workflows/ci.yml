@@ -292,4 +292,9 @@ jobs:
       # Dart precisely so it runs here, with no NDK and no native library — a test that
       # needs a compiled Rust lib would not run on this box, which means in practice it
       # would not run at all.
-      - run: flutter test
+      #
+      # Everything except `golden`: the IMAGE goldens (test/golden) are rasterised by the
+      # host, and a blur laid down by macOS's Skia is not the same bytes as one laid down
+      # here, so they would fail on this runner for a reason that has nothing to do with
+      # the change under test. They are a local design check — see mobile/dart_test.yaml.
+      - run: flutter test -x golden

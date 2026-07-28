@@ -42,12 +42,16 @@ void _show(BuildContext context, String message, {required bool isError}) {
       SnackBar(
         content: Text(
           message,
-          // Errors use the solid error color; force a high-contrast foreground
-          // so the text is always legible (was white-on-light-red before).
-          style: isError ? TextStyle(color: scheme.onError) : null,
+          // Regular weight on a near-black slab, matching the iOS toast exactly. The Material
+          // default is the theme's inverse surface, which under this app's light theme is a mid
+          // grey carrying semi-bold white — legible, but louder than the thing it is reporting.
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w400,
+          ),
         ),
-        backgroundColor: isError ? scheme.error : null,
-        closeIconColor: isError ? scheme.onError : null,
+        backgroundColor: isError ? scheme.error : const Color(0xFF1C1C1E),
+        closeIconColor: Colors.white,
         showCloseIcon: true,
       ),
     );

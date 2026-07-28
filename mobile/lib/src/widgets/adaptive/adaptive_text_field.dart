@@ -17,9 +17,15 @@ BoxDecoration _cupertinoFieldDecoration(BuildContext context) {
 /// A text input rendered natively per platform: [CupertinoTextField] on iOS,
 /// Material [TextField] on Android.
 ///
-/// [label] is the Material floating label; [placeholder] (falling back to
-/// [label]) is the iOS placeholder / Material hint. Supports multi-line input
-/// via [minLines]/[maxLines].
+/// [label], when given, is drawn as a standing caption ABOVE the field on both platforms;
+/// [placeholder] is the hint inside it. Supports multi-line input via [minLines]/[maxLines].
+///
+/// The label used to be each platform's own idea of one — Material's floating label, and on iOS the
+/// placeholder, which is not a label at all: it is the text that DISAPPEARS as soon as the field has
+/// content. So a filled-in iOS form showed a column of values with nothing naming any of them, and
+/// the profile screen offered two identical-looking boxes both reading "medved", one of which was
+/// the username and one the display name. A caption that stays put costs one line and always says
+/// which field you are in.
 class AdaptiveTextField extends StatelessWidget {
   const AdaptiveTextField({
     super.key,
@@ -64,10 +70,36 @@ class AdaptiveTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final field = _field(context);
+    final caption = label;
+    if (caption == null) return field;
+
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 6),
+          child: Text(
+            caption,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        field,
+      ],
+    );
+  }
+
+  Widget _field(BuildContext context) {
     if (isCupertino(context)) {
       return CupertinoTextField(
         controller: controller,
-        placeholder: placeholder ?? label,
+        placeholder: placeholder,
         obscureText: obscureText,
         keyboardType: keyboardType,
         textInputAction: textInputAction,
@@ -105,7 +137,8 @@ class AdaptiveTextField extends StatelessWidget {
       onChanged: onChanged,
       onSubmitted: onSubmitted,
       decoration: InputDecoration(
-        labelText: label,
+        // No labelText: the caption above the field is the label on both platforms now, and a
+        // floating one as well would say the same word twice.
         hintText: placeholder,
         prefixIcon: prefix,
         suffixIcon: suffix,

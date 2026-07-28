@@ -1,10 +1,17 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
-import 'platform.dart';
+import '../glass/glass_dialog.dart';
 
-/// Shows a native confirmation dialog: [CupertinoAlertDialog] on iOS,
-/// Material [AlertDialog] on Android. Resolves to `true` when confirmed.
+/// Shows a confirmation dialog. Resolves to `true` when confirmed.
+///
+/// One dialog on both platforms now — see [GlassDialog]. This used to fork into a
+/// [CupertinoAlertDialog] and a Material [AlertDialog], which was the right instinct while the rest
+/// of the app was also forking; it is the wrong one now that every bar, menu and sheet around it is
+/// the same design on both.
+///
+/// Kept as a named function rather than folded into its one-line body, because a dozen call sites
+/// ask this question and they should keep asking it in one voice.
 Future<bool> showAdaptiveConfirm(
   BuildContext context, {
   required String title,
@@ -12,52 +19,15 @@ Future<bool> showAdaptiveConfirm(
   required String confirmLabel,
   required String cancelLabel,
   bool isDestructive = false,
-}) async {
-  if (isCupertino(context)) {
-    final result = await showCupertinoDialog<bool>(
-      context: context,
-      builder: (ctx) => CupertinoAlertDialog(
-        title: Text(title),
-        content: message == null ? null : Text(message),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text(cancelLabel),
-          ),
-          CupertinoDialogAction(
-            isDestructiveAction: isDestructive,
-            isDefaultAction: !isDestructive,
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(confirmLabel),
-          ),
-        ],
-      ),
-    );
-    return result ?? false;
-  }
-
-  final scheme = Theme.of(context).colorScheme;
-  final result = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(title),
-      content: message == null ? null : Text(message),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(ctx).pop(false),
-          child: Text(cancelLabel),
-        ),
-        TextButton(
-          style: isDestructive
-              ? TextButton.styleFrom(foregroundColor: scheme.error)
-              : null,
-          onPressed: () => Navigator.of(ctx).pop(true),
-          child: Text(confirmLabel),
-        ),
-      ],
-    ),
+}) {
+  return showGlassConfirm(
+    context,
+    title: title,
+    message: message,
+    confirmLabel: confirmLabel,
+    cancelLabel: cancelLabel,
+    isDestructive: isDestructive,
   );
-  return result ?? false;
 }
 
 /// Transient overlay toast used as the iOS replacement for a Material SnackBar.
@@ -121,9 +91,12 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
+    // Near-black rather than systemGrey. A grey pill on a light page reads as a disabled control
+    // and on a dark one it disappears into the background; the classic toast is a dark slab that
+    // belongs to neither theme and is legible over both.
     final bg = widget.isError
         ? CupertinoColors.systemRed.resolveFrom(context)
-        : CupertinoColors.systemGrey.resolveFrom(context);
+        : const Color(0xFF1C1C1E);
     return Positioned(
       left: 24,
       right: 24,
@@ -135,7 +108,7 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: bg.withValues(alpha: 0.96),
+                color: bg.withValues(alpha: 0.94),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Text(
@@ -144,6 +117,10 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
                 style: const TextStyle(
                   color: CupertinoColors.white,
                   fontSize: 14,
+                  // Stated rather than inherited: a toast is drawn straight into the overlay, with
+                  // no DefaultTextStyle above it, so an unset weight is whatever the ambient style
+                  // happens to be — which is how this ended up bold.
+                  fontWeight: FontWeight.w400,
                   decoration: TextDecoration.none,
                   fontFamily: '.SF Pro Text',
                 ),
