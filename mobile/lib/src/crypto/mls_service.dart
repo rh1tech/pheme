@@ -35,6 +35,7 @@ import 'chat_cache.dart';
 import 'chat_content.dart';
 import 'image_size.dart';
 import 'photo_crypto.dart';
+import 'catch_up_gate.dart';
 import 'mls_device.dart';
 import 'mls_errors.dart';
 import 'mls_session.dart';
@@ -872,42 +873,17 @@ class MlsService {
   /// One catch-up per conversation for a whole pass of failed decrypts.
   ///
   /// A feed opens with fifty messages and asks about each in turn. Without this, fifty unreadable
-  /// ones would each fetch the Commit history — fifty round trips to learn the same thing once. The
-  /// in-flight future is shared, and a completed one is not repeated inside [_decryptRetryGap]: past
-  /// that gap the group may genuinely have moved on, and a message that failed a minute ago deserves
-  /// another look.
-  final _decryptCatchUp = <String, Future<void>>{};
-  final _decryptCatchUpAt = <String, DateTime>{};
-
-  static const _decryptRetryGap = Duration(seconds: 5);
+  /// ones would each fetch the Commit history — fifty round trips to learn the same thing once. See
+  /// [CatchUpGate], which holds the coalescing and the retry gap and is tested on its own.
+  final _decryptGate = CatchUpGate();
 
   Future<void> _catchUpForDecrypt(String conversationId, String myUserId) {
-    final inFlight = _decryptCatchUp[conversationId];
-    if (inFlight != null) return inFlight;
-
-    final last = _decryptCatchUpAt[conversationId];
-    if (last != null && DateTime.now().difference(last) < _decryptRetryGap) {
-      return Future.value();
-    }
-
-    final future = () async {
-      try {
-        final session = await this.session(myUserId);
-        final state = await _repo.mlsGroupState(conversationId);
-        if (!state.isEstablished) return;
-        await _catchUp(session, conversationId, state.groupId);
-      } on Object {
-        // Offline, or a group we are not in. Either way the message stays unread and the next pass
-        // tries again; a failure here must not turn into an exception in the middle of drawing a
-        // list of messages.
-      } finally {
-        _decryptCatchUpAt[conversationId] = DateTime.now();
-        _decryptCatchUp.remove(conversationId);
-      }
-    }();
-
-    _decryptCatchUp[conversationId] = future;
-    return future;
+    return _decryptGate.run(conversationId, () async {
+      final session = await this.session(myUserId);
+      final state = await _repo.mlsGroupState(conversationId);
+      if (!state.isEstablished) return;
+      await _catchUp(session, conversationId, state.groupId);
+    });
   }
 
   /// Applies every Commit the group has made since this device last looked, in order.
@@ -2022,6 +1998,10 @@ class MlsService {
     _readableGroups.clear();
     _waitingSince.clear();
     _historyRequested.clear();
+    // The two maps this replaced were missed here, which left the retry gap armed across a wipe: an
+    // identity that signed out and back in within the gap had its first catch-up suppressed on
+    // behalf of the identity that no longer exists.
+    _decryptGate.reset();
 
     // Disarm auto-backup and forget the secret, so nothing re-seals this identity after it is gone.
     _autoBackupTimer?.cancel();
