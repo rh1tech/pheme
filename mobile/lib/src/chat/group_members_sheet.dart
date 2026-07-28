@@ -14,6 +14,7 @@ import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../crypto/mls_errors.dart';
 import '../l10n/app_localizations.dart';
+import '../widgets/glass/glass.dart';
 import '../models/chat_models.dart';
 import '../models/models.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
@@ -350,28 +351,35 @@ class _MemberRow extends ConsumerWidget {
       ),
       trailing: !canAct
           ? null
-          : PopupMenuButton<String>(
+          : GlassMenuAnchor(
               enabled: !busy,
-              tooltip: l10n.t('group.memberActions'),
-              onSelected: (value) =>
-                  value == 'role' ? onToggleAdmin() : onRemove(),
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: 'role',
-                  child: Text(
-                    l10n.t(
-                      member.isAdmin ? 'group.removeAdmin' : 'group.makeAdmin',
-                    ),
+              semanticLabel: l10n.t('group.memberActions'),
+              actions: [
+                GlassMenuAction(
+                  label: l10n.t(
+                    member.isAdmin ? 'group.removeAdmin' : 'group.makeAdmin',
                   ),
+                  icon: Icons.shield_outlined,
+                  onSelected: onToggleAdmin,
                 ),
-                PopupMenuItem(
-                  value: 'remove',
-                  child: Text(
-                    l10n.t('group.remove'),
-                    style: TextStyle(color: theme.colorScheme.error),
-                  ),
+                GlassMenuAction(
+                  label: l10n.t('group.remove'),
+                  icon: Icons.person_remove_outlined,
+                  destructive: true,
+                  onSelected: onRemove,
                 ),
               ],
+              child: SizedBox.square(
+                dimension: GlassMetrics.minTapTarget,
+                child: Icon(
+                  Icons.more_vert,
+                  color: busy
+                      ? theme.colorScheme.onSurfaceVariant.withValues(
+                          alpha: 0.4,
+                        )
+                      : theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
             ),
     );
   }

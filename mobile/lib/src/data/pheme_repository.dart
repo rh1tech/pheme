@@ -626,6 +626,14 @@ class PhemeRepository {
             .toList(),
       );
 
+  /// One person's public profile.
+  ///
+  /// A 404 here is not only "no such user": a server older than this endpoint answers the same way,
+  /// and the profile view treats both as "nothing more to show" rather than as an error, so the
+  /// screen still works against an instance that has not been updated.
+  Future<PublicProfile> getUserProfile(String userId) =>
+      _get('/v1/users/$userId').then((d) => PublicProfile.fromJson(d));
+
   // --- MLS key material ---
 
   /// Publishes this device's KeyPackages, so other members can add it to a group. The optional

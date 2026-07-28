@@ -365,6 +365,56 @@ class PublicUser {
   );
 }
 
+/// What somebody has published about themselves: the [PublicUser] fields plus the free text.
+///
+/// Separate from [PublicUser] because it costs a request. A picker row needs a name and a picture
+/// and nothing else, and fetching a bio per row to draw a list would be twenty requests to render
+/// twenty names.
+///
+/// No phone and no email — see domain.PublicProfile on the server for why those are withheld rather
+/// than merely unused here.
+class PublicProfile {
+  PublicProfile({
+    required this.id,
+    this.username,
+    this.displayName,
+    this.avatarId,
+    this.bio,
+    this.website,
+  });
+
+  final String id;
+  final String? username;
+  final String? displayName;
+  final String? avatarId;
+  final String? bio;
+  final String? website;
+
+  /// Whether there is anything beyond a name and a face to show.
+  bool get hasDetails =>
+      (bio?.isNotEmpty ?? false) ||
+      (website?.isNotEmpty ?? false) ||
+      (username?.isNotEmpty ?? false);
+
+  factory PublicProfile.fromJson(Map<String, dynamic> j) => PublicProfile(
+    id: j['id'] as String? ?? '',
+    username: j['username'] as String?,
+    displayName: j['displayName'] as String?,
+    avatarId: j['avatarId'] as String?,
+    bio: j['bio'] as String?,
+    website: j['website'] as String?,
+  );
+
+  /// The little a conversation's member roster already knows, for the first frame while the request
+  /// is in flight — and for a server too old to answer it at all.
+  factory PublicProfile.fromPublicUser(PublicUser u) => PublicProfile(
+    id: u.id,
+    username: u.username,
+    displayName: u.displayName,
+    avatarId: u.avatarId,
+  );
+}
+
 /// The authenticated user's own account and profile (`GET/PATCH /v1/me`).
 class User {
   User({

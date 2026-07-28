@@ -13,7 +13,10 @@ import '../widgets/adaptive/adaptive_refresh.dart';
 import '../widgets/adaptive/adaptive_scaffold.dart';
 import '../widgets/adaptive/adaptive_search_field.dart';
 import '../widgets/brand_logo.dart';
-import '../widgets/scroll_hiding_header.dart';
+import '../widgets/glass/glass.dart';
+import '../widgets/swipe_actions.dart';
+import '../core/snackbar.dart';
+import '../widgets/adaptive/adaptive_feedback.dart';
 import '../widgets/adaptive/platform.dart';
 import '../widgets/error_view.dart';
 import 'chat_providers.dart';
@@ -22,6 +25,7 @@ import 'conversation_title.dart';
 import 'new_chat_sheet.dart';
 import 'dart:async';
 
+import 'widgets/call_event_bubble.dart';
 import 'widgets/conversation_avatar.dart';
 import '../push/conversation_shortcuts.dart';
 
@@ -39,6 +43,10 @@ class ConversationsPage extends ConsumerStatefulWidget {
 class _ConversationsPageState extends ConsumerState<ConversationsPage> {
   final _search = TextEditingController();
   String _query = '';
+
+  /// Shared by every row, so opening one row's actions closes any other. Without it a list can end
+  /// up showing two delete buttons at once, and it stops being obvious which row a tap belongs to.
+  final _swipe = SwipeActionsController();
 
   /// Conversations whose notification shortcut has already been published this run.
   ///
@@ -71,6 +79,7 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
   @override
   void dispose() {
     _search.dispose();
+    _swipe.dispose();
     super.dispose();
   }
 
@@ -110,100 +119,113 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
       (list) => _publishShortcuts(list, myUserId, AppLocalizations.of(context)),
     );
 
+    // Hidden when there is nothing to search — an empty account was offered a search box above the
+    // words "No chats yet", which asks the user to look for something the screen has just told them
+    // does not exist.
+    //
+    // It stays while a search is RUNNING, however empty the result. Hiding it the moment a query
+    // matched nothing would take away the only means of clearing that query, and the screen would
+    // be stuck showing "Nothing found" with no way back.
+    final searchable =
+        (conversations.value?.isNotEmpty ?? false) || _query.isNotEmpty;
+
+    final ios = isCupertino(context);
+
     return AdaptiveScaffold(
-      // A TAB, not a pushed route — see the same note on ChannelsPage.
-      transitionBetweenRoutes: false,
+      // The list runs under the glass bar and under the floating tab bar; the scroll view spends
+      // the padding the scaffold hands it, so nothing is hidden and nothing is doubly inset.
+      behindChrome: true,
       // The same brand mark the Channels tab shows. The two are one app and one screen with
       // different contents; titling one with a logo and the other with the word "Chats" made them
       // look like different products sharing a tab bar.
       title: const BrandLogo(size: 26),
+      // Leading, not centred, even on iOS. A centred title is right for a word — it is the name of
+      // the screen you pushed into. This is a brand mark on the app's home screen, and a logo
+      // floating in the middle of the bar with the controls crowded to one side reads as a mistake
+      // rather than as a convention.
+      centerTitle: false,
       trailing: [
-        // iOS keeps the button in the bar: a floating action button is a Material idiom and looks
-        // imported on a Cupertino screen. Android gets the labelled button at the bottom instead —
-        // see floatingActionButton below, and Channels, which this now matches.
-        if (isCupertino(context))
-          AdaptiveIconButton(
-            icon: Icons.add,
-            semanticLabel: l10n.t('chat.newChat'),
-            onPressed: () => showNewChatSheet(context),
-          ),
         // Settings used to live only on the Channels tab, so someone who only uses Chats had no
         // route to them at all — including to the notification-preview setting, which is about
         // chats. /settings is a top-level route; both tabs can reach the same screen.
-        AdaptiveIconButton(
-          icon: isCupertino(context)
-              ? CupertinoIcons.settings
-              : Icons.settings_outlined,
+        GlassIconButton(
+          icon: ios ? CupertinoIcons.settings : Icons.settings_outlined,
           semanticLabel: l10n.t('common.settings'),
           onPressed: () => context.push('/settings'),
         ),
-      ],
-      // A labelled button where the Channels tab has one, rather than a bare "+" in the far
-      // corner. The two tabs are the same screen with different contents; putting their primary
-      // action in different places, with different affordances, made them look unrelated.
-      floatingActionButton: isCupertino(context)
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: () => showNewChatSheet(context),
-              icon: const Icon(Icons.add),
-              label: Text(l10n.t('chat.newChat')),
-            ),
-      body: ScrollHidingHeader(
-        header:
-            // Hidden when there is nothing to search — an empty account was offered a search box
-            // above the words "No chats yet", which asks the user to look for something the screen
-            // has just told them does not exist.
-            //
-            // It stays while a search is RUNNING, however empty the result. Hiding it the moment a
-            // query matched nothing would take away the only means of clearing that query, and the
-            // screen would be stuck showing "Nothing found" with no way back.
-            ((conversations.value?.isNotEmpty ?? false) || _query.isNotEmpty)
-            ? Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                child: AdaptiveSearchField(
-                  controller: _search,
-                  placeholder: l10n.t('chat.search'),
-                  onChanged: (v) => setState(() => _query = v.trim()),
-                ),
-              )
-            : const SizedBox.shrink(),
-        child: conversations.when(
-          loading: () => const Center(child: AdaptiveProgress()),
-          error: (e, _) => ErrorView(
-            message: e.toString(),
-            onRetry: () =>
-                ref.read(conversationListProvider.notifier).refresh(),
+        // The primary action lives where each platform puts it: last on the bar on iOS, and a
+        // floating button on Android. This is a NAVIGATION convention rather than decoration — iOS
+        // has no floating action button and one imported from Material looks it — so it is one of
+        // the few places the two builds are deliberately not identical.
+        if (ios)
+          GlassIconButton(
+            icon: CupertinoIcons.square_pencil,
+            semanticLabel: l10n.t('chat.newChat'),
+            onPressed: () => showNewChatSheet(context),
           ),
-          data: (all) {
-            final list = _filter(all, myUserId, l10n);
+      ],
+      floatingActionButton: ios
+          ? null
+          : GlassActionButton(
+              icon: Icons.edit_outlined,
+              semanticLabel: l10n.t('chat.newChat'),
+              onPressed: () => showNewChatSheet(context),
+            ),
+      body: conversations.when(
+        loading: () => const Center(child: AdaptiveProgress()),
+        error: (e, _) => ErrorView(
+          message: e.toString(),
+          onRetry: () => ref.read(conversationListProvider.notifier).refresh(),
+        ),
+        data: (all) {
+          final list = _filter(all, myUserId, l10n);
 
-            return AdaptiveRefreshableScrollView(
-              onRefresh: () =>
-                  ref.read(conversationListProvider.notifier).refresh(),
-              slivers: [
-                if (list.isEmpty)
-                  SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: _EmptyState(
-                      l10n: l10n,
-                      // "Nothing found" is a different thing from "no chats yet", and telling a
-                      // user to start a chat when they have twenty and mistyped a name is noise.
-                      searching: _query.isNotEmpty,
+          return AdaptiveRefreshableScrollView(
+            onRefresh: () =>
+                ref.read(conversationListProvider.notifier).refresh(),
+            slivers: [
+              // In the list rather than pinned above it. A search field that hides on a scroll
+              // gesture and comes back on another was one more thing moving on screen; carried by
+              // the list itself it goes away when you scroll past it, comes back when you scroll
+              // to the top, and never argues with the bar it sits under.
+              if (searchable)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      GlassMetrics.gutter,
+                      GlassMetrics.gap,
+                      GlassMetrics.gutter,
+                      4,
                     ),
-                  )
-                else
-                  SliverPadding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    sliver: SliverList.builder(
-                      itemCount: list.length,
-                      itemBuilder: (context, i) =>
-                          _ConversationRow(conversation: list[i]),
+                    child: AdaptiveSearchField(
+                      controller: _search,
+                      placeholder: l10n.t('chat.search'),
+                      onChanged: (v) => setState(() => _query = v.trim()),
                     ),
                   ),
-              ],
-            );
-          },
-        ),
+                ),
+              if (list.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _EmptyState(
+                    l10n: l10n,
+                    // "Nothing found" is a different thing from "no chats yet", and telling a
+                    // user to start a chat when they have twenty and mistyped a name is noise.
+                    searching: _query.isNotEmpty,
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  sliver: SliverList.builder(
+                    itemCount: list.length,
+                    itemBuilder: (context, i) =>
+                        _ConversationRow(conversation: list[i], swipe: _swipe),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -260,9 +282,10 @@ class _EmptyState extends StatelessWidget {
 }
 
 class _ConversationRow extends ConsumerWidget {
-  const _ConversationRow({required this.conversation});
+  const _ConversationRow({required this.conversation, required this.swipe});
 
   final Conversation conversation;
+  final SwipeActionsController swipe;
 
   /// The list holds only ciphertext and cannot decrypt a thing, so a preview can only come from the
   /// local plaintext store. When it is not there — a message that arrived while the app was closed,
@@ -271,10 +294,24 @@ class _ConversationRow extends ConsumerWidget {
     String? cached,
     LastChatMessage? last,
     AppLocalizations l10n,
+    String myUserId,
   ) {
     if (last == null) return '';
     // Control traffic is not something a person said. It has no preview.
     if (ContentType.control.contains(last.contentType)) return '';
+
+    // A call event's body is JSON — `{"outcome":"failed"}` — because it has to mean something to a
+    // client that has never heard of call events. It is not a sentence, and showing it raw is how a
+    // failed call ended up in the chat list as a fragment of wire format.
+    if (last.contentType == ContentType.callEvent) {
+      final outcome = CallOutcome.parse(cached);
+      if (outcome == null) return l10n.t('call.statusEnded');
+      return callEventLabel(
+        outcome,
+        isOwn: last.senderId == myUserId,
+        l10n: l10n,
+      );
+    }
     // A photo with no caption. The cache writes a marker rather than an empty string, because an empty
     // row reads as a bug rather than as a picture.
     if (cached == '__photo__') return l10n.t('chat.photo');
@@ -294,6 +331,7 @@ class _ConversationRow extends ConsumerWidget {
       ref.watch(chatCacheProvider).preview(conversation.id),
       last,
       l10n,
+      myUserId,
     );
     final unread = ref.watch(unreadProvider(conversation));
 
@@ -303,54 +341,65 @@ class _ConversationRow extends ConsumerWidget {
         ? conversation.id
         : (other?.userId ?? conversation.id);
 
-    return InkWell(
-      onTap: () => context.push('/chats/${conversation.id}'),
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            ConversationAvatar(
-              id: avatarId,
-              label: title,
-              imageUrl: conversationAvatarUrl(
-                isGroup: conversation.isGroup,
-                groupAvatarId: conversation.avatarId,
-                otherAvatarId: other?.user.avatarId,
-                toUrl: ref.read(repositoryProvider).imageUrl,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        last == null ? '' : chatListTime(l10n, last.createdAt),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
+    // Whether this reader may end the conversation for everyone, or only walk away from it. Same
+    // rule the chat's own menu applies — a plain member of a group cannot delete it.
+    final canDelete = !conversation.isGroup || conversation.isAdmin(myUserId);
+
+    return SwipeActions(
+      controller: swipe,
+      actions: [
+        SwipeAction(
+          label: canDelete
+              ? l10n.t('common.delete')
+              : l10n.t('group.leaveShort'),
+          icon: canDelete ? Icons.delete_outline : Icons.logout,
+          color: theme.colorScheme.error,
+          onPressed: () => canDelete
+              ? _deleteFromList(context, ref, conversation)
+              : _leaveFromList(context, ref, conversation, myUserId),
+        ),
+      ],
+      child: Material(
+        color: theme.colorScheme.surface,
+        child: InkWell(
+          onTap: () => context.push('/chats/${conversation.id}'),
+          child: Padding(
+            // More room on the trailing edge than the leading one: the avatar is a solid shape that
+            // holds its own against the screen edge, and the time is four small characters that were
+            // being crowded into the corner by it.
+            padding: const EdgeInsets.fromLTRB(GlassMetrics.gutter, 9, 16, 9),
+            child: Row(
+              // Centred, so the trailing block below sits against the middle of the row rather than
+              // against the top of the title.
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                ConversationAvatar(
+                  id: avatarId,
+                  label: title,
+                  imageUrl: conversationAvatarUrl(
+                    isGroup: conversation.isGroup,
+                    groupAvatarId: conversation.avatarId,
+                    otherAvatarId: other?.user.avatarId,
+                    toUrl: ref.read(repositoryProvider).imageUrl,
                   ),
-                  const SizedBox(height: 2),
-                  Row(
+                ),
+                const SizedBox(width: GlassMetrics.gutter),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Expanded(
-                        child: Text(
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (preview.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
                           preview,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -358,12 +407,34 @@ class _ConversationRow extends ConsumerWidget {
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
-                      ),
+                      ],
+                    ],
+                  ),
+                ),
+                // The time and the unread dot, as one block, vertically centred.
+                //
+                // The time used to ride on the title's own line, so it sat against the top of a
+                // two-line row and hard against the chevron — and on a row with no preview it was the
+                // only thing up there, floating. Centred and given room, it reads as a property of the
+                // row rather than as a word appended to the name.
+                if (last != null || unread) ...[
+                  const SizedBox(width: 10),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (last != null)
+                        Text(
+                          chatListTime(l10n, last.createdAt),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
                       if (unread) ...[
-                        const SizedBox(width: 8),
+                        if (last != null) const SizedBox(height: 5),
                         Container(
-                          width: 8,
-                          height: 8,
+                          width: 9,
+                          height: 9,
                           decoration: BoxDecoration(
                             color: theme.colorScheme.primary,
                             shape: BoxShape.circle,
@@ -373,17 +444,78 @@ class _ConversationRow extends ConsumerWidget {
                     ],
                   ),
                 ],
-              ),
+                if (isCupertino(context)) ...[
+                  const SizedBox(width: 8),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ],
+              ],
             ),
-            if (isCupertino(context))
-              Icon(
-                Icons.chevron_right,
-                size: 18,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-          ],
+          ),
         ),
       ),
     );
+  }
+}
+
+/// Deletes a conversation from the LIST.
+///
+/// Deliberately not the chat page's version of this: that one navigates home afterwards, which is
+/// right when you are standing inside the conversation you just deleted and wrong when you are
+/// already looking at the list — it would throw away the reader's place for no reason.
+Future<void> _deleteFromList(
+  BuildContext context,
+  WidgetRef ref,
+  Conversation conversation,
+) async {
+  final l10n = AppLocalizations.of(context);
+  final isGroup = conversation.isGroup;
+  final confirmed = await showAdaptiveConfirm(
+    context,
+    title: l10n.t(isGroup ? 'group.deleteGroup' : 'chat.deleteChat'),
+    message: l10n.t(
+      isGroup ? 'group.deleteGroupConfirm' : 'chat.deleteChatConfirm',
+    ),
+    confirmLabel: l10n.t('common.delete'),
+    cancelLabel: l10n.t('common.cancel'),
+    isDestructive: true,
+  );
+  if (!confirmed || !context.mounted) return;
+
+  try {
+    await ref.read(conversationListProvider.notifier).delete(conversation.id);
+    if (context.mounted) notifySuccess(context, l10n.t('chat.chatDeleted'));
+  } on Object catch (e) {
+    if (context.mounted) notifyError(context, l10n.t('chat.deleteFailed'), e);
+  }
+}
+
+/// Leaves a group from the list, for a member who may not delete it for everyone.
+Future<void> _leaveFromList(
+  BuildContext context,
+  WidgetRef ref,
+  Conversation conversation,
+  String myUserId,
+) async {
+  final l10n = AppLocalizations.of(context);
+  final confirmed = await showAdaptiveConfirm(
+    context,
+    title: l10n.t('group.leave'),
+    message: l10n.t('group.leaveConfirm'),
+    confirmLabel: l10n.t('group.leave'),
+    cancelLabel: l10n.t('common.cancel'),
+    isDestructive: true,
+  );
+  if (!confirmed || !context.mounted) return;
+
+  try {
+    await ref
+        .read(conversationListProvider.notifier)
+        .leave(conversation.id, myUserId);
+  } on Object catch (e) {
+    if (context.mounted) notifyError(context, l10n.t('chat.deleteFailed'), e);
   }
 }

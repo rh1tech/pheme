@@ -185,13 +185,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         : user.email;
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      // Wider gutters and a bottom that clears the home indicator. At 16 all round the fields ran
+      // almost to the edge of the screen, which on a form of six stacked boxes reads as a wall
+      // rather than as a set of things to fill in.
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
       children: [
-        Text(
-          l10n.t('profile.subtitle'),
-          style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
-        ),
-        const SizedBox(height: 16),
         Center(
           child: Column(
             children: [
@@ -221,52 +219,67 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     ),
                 ],
               ),
+              // Under the avatar, centred, rather than alone in the top-left corner.
+              //
+              // It is a caption for the whole screen — "how you appear to others" — and at the top
+              // it read as a stray line of body text that the page had failed to lay out, sitting
+              // above a centred avatar it had no visible relationship to. Beneath the thing it is
+              // actually describing, it reads as a caption.
+              const SizedBox(height: 4),
+              Text(
+                l10n.t('profile.subtitle'),
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 28),
         AdaptiveTextField(
           controller: _username,
           label: l10n.t('profile.username'),
           textInputAction: TextInputAction.next,
         ),
-        const SizedBox(height: 4),
-        Text(
-          l10n.t('profile.usernameHint'),
-          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.only(left: 4),
+          child: Text(
+            l10n.t('profile.usernameHint'),
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         AdaptiveTextField(
           controller: _displayName,
           label: l10n.t('profile.displayName'),
           textInputAction: TextInputAction.next,
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 28),
         Text(
           l10n.t('profile.contactInfo'),
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
         AdaptiveTextField(
           controller: _bio,
           label: l10n.t('profile.bio'),
           minLines: 2,
           maxLines: 4,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         AdaptiveTextField(
           controller: _phone,
           label: l10n.t('profile.phone'),
           keyboardType: TextInputType.phone,
           textInputAction: TextInputAction.next,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         AdaptiveTextField(
           controller: _website,
           label: l10n.t('profile.website'),
           keyboardType: TextInputType.url,
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 28),
         AdaptiveButton.filled(
           onPressed: _saving ? null : _save,
           child: _saving

@@ -6,6 +6,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,11 +21,15 @@ import '../crypto/mls_errors.dart';
 import '../core/providers.dart';
 import '../l10n/app_localizations.dart';
 import '../models/chat_models.dart';
+import '../models/models.dart';
 import '../calls/call_controller.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
 import '../widgets/adaptive/adaptive_feedback.dart';
 import '../widgets/adaptive/adaptive_scaffold.dart';
+import '../widgets/adaptive/platform.dart';
 import '../widgets/error_view.dart';
+import '../widgets/glass/glass.dart';
+import '../widgets/measured_height.dart';
 import 'chat_providers.dart';
 import 'chat_time.dart';
 import 'conversation_title.dart';
@@ -143,6 +148,14 @@ class _ChatViewState extends ConsumerState<_ChatView> {
 
   /// The message being replied to, if any.
   ChatMessage? _replyingTo;
+
+  /// How much room the floating composer is taking, measured rather than assumed.
+  ///
+  /// The composer overlaps the feed now instead of sitting in a column beside it — that is what lets
+  /// messages slide under it and under the bar — so the feed has to reserve exactly its height as
+  /// bottom padding. It grows with a reply quote, a strip of attached photos and up to six lines of
+  /// text, so there is no constant to reserve instead.
+  double _composerHeight = 0;
 
   String get _conversationId => widget.conversation.id;
 
@@ -343,18 +356,38 @@ class _ChatViewState extends ConsumerState<_ChatView> {
         : (other?.userId ?? conversation.id);
 
     return AdaptiveScaffold(
+      // The feed runs the full height of the screen, under the bar at the top and under the composer
+      // at the bottom, which is the whole point of making both of them glass.
+      behindChrome: true,
+      // Leading-aligned on both platforms, against the iOS convention this bar otherwise follows: the
+      // title here is a block — avatar, name, member count — and iOS centres a title by measuring the
+      // space left over by the controls on either side, which for a block this wide leaves it
+      // squeezed into a third of the bar.
+      centerTitle: false,
       title: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          ConversationAvatar(
-            id: avatarId,
-            label: title,
-            size: 32,
-            imageUrl: conversationAvatarUrl(
-              isGroup: conversation.isGroup,
-              groupAvatarId: conversation.avatarId,
-              otherAvatarId: other?.user.avatarId,
-              toUrl: ref.read(repositoryProvider).imageUrl,
+          // The avatar opens the person behind it — their bio, their links, their @name.
+          //
+          // A direct chat only. A group's picture stands for the group, and there is no single
+          // person to open; its roster is already one tap away in the menu.
+          _AvatarButton(
+            onPressed: other == null || conversation.isGroup
+                ? null
+                : () => context.push(
+                    '/users/${other.userId}',
+                    extra: PublicProfile.fromPublicUser(other.user),
+                  ),
+            child: ConversationAvatar(
+              id: avatarId,
+              label: title,
+              size: 32,
+              imageUrl: conversationAvatarUrl(
+                isGroup: conversation.isGroup,
+                groupAvatarId: conversation.avatarId,
+                otherAvatarId: other?.user.avatarId,
+                toUrl: ref.read(repositoryProvider).imageUrl,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -381,109 +414,96 @@ class _ChatViewState extends ConsumerState<_ChatView> {
           ),
         ],
       ),
+      // Two controls and a menu, where there were four controls and a menu. A group chat put call,
+      // lock, members and overflow in a row that ran into the title; "members" is a destination
+      // rather than an action, and it reads better as the first item of the menu than as a fourth
+      // circle nobody could name on sight.
       trailing: [
         // 1:1 only — the call code is a two-party exchange, and a group call would need signed
         // signalling (every member can derive every other member's key, which gives group
         // authenticity but not sender authenticity). Hidden entirely when the server has no TURN
         // configured, rather than offered as a button that cannot work.
         if (!conversation.isGroup && callingAvailable && !onACall)
-          AdaptiveIconButton(
-            icon: Icons.call_outlined,
+          GlassIconButton(
+            icon: isCupertino(context) ? CupertinoIcons.phone : Icons.call,
             semanticLabel: l10n.t('call.start'),
             // Enabled the moment we know we hold the group — which, on a chat this device has
             // opened before, is the first frame.
             onPressed: feed.joined == true ? () => _placeCall() : null,
           ),
-        AdaptiveIconButton(
-          icon: Icons.lock_outline,
+        GlassIconButton(
+          icon: isCupertino(context) ? CupertinoIcons.lock : Icons.lock_outline,
           semanticLabel: l10n.t('safety.verify'),
           onPressed: () => showSafetyNumberSheet(context, _conversationId),
         ),
-        if (conversation.isGroup)
-          AdaptiveIconButton(
-            icon: Icons.group_outlined,
-            semanticLabel: l10n.t('group.membersTitle'),
-            onPressed: () => showGroupMembersSheet(context, conversation),
-          ),
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.more_vert),
-          tooltip: l10n.t('chat.conversationMenu'),
-          onSelected: (value) {
-            if (value == 'clear') {
-              _confirmClearHistory(context, ref, conversation);
-            } else if (value == 'delete') {
-              _confirmDeleteConversation(context, ref, conversation);
-            } else if (value == 'leave') {
-              _confirmLeaveGroup(context, ref, conversation, myUserId);
-            }
-          },
-          itemBuilder: (context) => [
-            // Anyone may clear their OWN history — it is per-member and touches no one else.
-            PopupMenuItem<String>(
-              value: 'clear',
-              child: Text(l10n.t('chat.clearHistory')),
-            ),
-            // A direct chat: either party may delete it. A group: only an admin deletes it for
-            // everyone; a plain member can leave instead.
-            if (!conversation.isGroup || conversation.isAdmin(myUserId))
-              PopupMenuItem<String>(
-                value: 'delete',
-                child: Text(
-                  conversation.isGroup
-                      ? l10n.t('group.deleteGroup')
-                      : l10n.t('chat.deleteChat'),
-                ),
-              )
-            else
-              PopupMenuItem<String>(
-                value: 'leave',
-                child: Text(l10n.t('group.leave')),
-              ),
-          ],
+        _ConversationMenu(
+          conversation: conversation,
+          myUserId: myUserId,
+          onMembers: () => showGroupMembersSheet(context, conversation),
+          onClear: () => _confirmClearHistory(context, ref, conversation),
+          onDelete: () =>
+              _confirmDeleteConversation(context, ref, conversation),
+          onLeave: () =>
+              _confirmLeaveGroup(context, ref, conversation, myUserId),
         ),
       ],
-      body: Column(
-        children: [
-          Expanded(
-            // The wallpaper the web draws, behind the feed rather than around it, so the jump-to-
-            // bottom button and the unseen counter still float above the messages.
-            child: ChatWallpaper(
-              child: Stack(
-                children: [
-                  _Feed(
-                    feed: feed,
-                    conversation: conversation,
-                    myUserId: myUserId,
-                    scroll: _scroll,
-                    onReply: _startReply,
-                  ),
-                  Positioned(
-                    right: 12,
-                    bottom: 12,
-                    child: _JumpToBottom(
-                      visible: !_atBottom,
-                      unseen: _unseen,
-                      onPressed: _scrollToBottom,
-                    ),
-                  ),
-                ],
+      // The wallpaper now runs edge to edge — behind the bar and behind the composer — rather than
+      // stopping at the feed. It is what the glass has to blur; a bar with nothing but a flat colour
+      // behind it is just a translucent rectangle.
+      body: ChatWallpaper(
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: _Feed(
+                feed: feed,
+                conversation: conversation,
+                myUserId: myUserId,
+                scroll: _scroll,
+                onReply: _startReply,
+                // The bar at the top and the composer at the bottom, spent as content padding so
+                // the first and last message clear both without the feed losing the space.
+                padding: EdgeInsets.fromLTRB(
+                  GlassMetrics.gutter,
+                  MediaQuery.paddingOf(context).top + GlassMetrics.gap,
+                  GlassMetrics.gutter,
+                  _composerHeight + GlassMetrics.gap,
+                ),
               ),
             ),
-          ),
-          _Composer(
-            controller: _composer,
-            sending: _sending,
-            onSend: _send,
-            notice: _notice(feed, l10n),
-            onAttach: _photos.length >= _maxPhotos ? () {} : _attach,
-            photos: _photos,
-            onRemovePhoto: (i) => setState(() => _photos.removeAt(i)),
-            replyingTo: _replyingTo,
-            replyAuthor: _replyAuthor(conversation),
-            replyText: _replyText(feed, l10n),
-            onCancelReply: () => setState(() => _replyingTo = null),
-          ),
-        ],
+            Positioned(
+              right: GlassMetrics.gutter,
+              bottom: _composerHeight + GlassMetrics.gap,
+              child: _JumpToBottom(
+                visible: !_atBottom,
+                unseen: _unseen,
+                onPressed: _scrollToBottom,
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: MeasuredHeight(
+                onChange: (h) {
+                  if (mounted) setState(() => _composerHeight = h);
+                },
+                child: _Composer(
+                  controller: _composer,
+                  sending: _sending,
+                  onSend: _send,
+                  notice: _notice(feed, l10n),
+                  onAttach: _photos.length >= _maxPhotos ? () {} : _attach,
+                  photos: _photos,
+                  onRemovePhoto: (i) => setState(() => _photos.removeAt(i)),
+                  replyingTo: _replyingTo,
+                  replyAuthor: _replyAuthor(conversation),
+                  replyText: _replyText(feed, l10n),
+                  onCancelReply: () => setState(() => _replyingTo = null),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -516,6 +536,116 @@ class _ChatViewState extends ConsumerState<_ChatView> {
   }
 }
 
+/// The chat header's avatar, when it is a way in to somebody's profile.
+///
+/// A plain GestureDetector with a press state rather than an InkWell: a splash spreading out of a
+/// 32pt circle at the top of the bar draws more attention than the tap deserves, and the rest of the
+/// bar's controls already sink rather than splash.
+class _AvatarButton extends StatefulWidget {
+  const _AvatarButton({required this.child, required this.onPressed});
+
+  final Widget child;
+  final VoidCallback? onPressed;
+
+  @override
+  State<_AvatarButton> createState() => _AvatarButtonState();
+}
+
+class _AvatarButtonState extends State<_AvatarButton> {
+  bool _down = false;
+
+  void _set(bool down) {
+    if (_down != down) setState(() => _down = down);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.onPressed == null) return widget.child;
+
+    return Semantics(
+      button: true,
+      label: AppLocalizations.of(context).t('profile.userTitle'),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => _set(true),
+        onTapUp: (_) => _set(false),
+        onTapCancel: () => _set(false),
+        onTap: widget.onPressed,
+        child: AnimatedScale(
+          scale: _down ? 0.92 : 1,
+          duration: GlassMetrics.pressDuration,
+          curve: Curves.easeOut,
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+/// The conversation's overflow menu: everything you do TO a chat rather than in it.
+///
+/// Which entries exist depends on what this reader may actually do — see [GlassMenuButton] for the
+/// menu itself.
+class _ConversationMenu extends StatelessWidget {
+  const _ConversationMenu({
+    required this.conversation,
+    required this.myUserId,
+    required this.onMembers,
+    required this.onClear,
+    required this.onDelete,
+    required this.onLeave,
+  });
+
+  final Conversation conversation;
+  final String myUserId;
+  final VoidCallback onMembers;
+  final VoidCallback onClear;
+  final VoidCallback onDelete;
+  final VoidCallback onLeave;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    // A direct chat: either party may delete it. A group: only an admin deletes it for everyone; a
+    // plain member can leave instead.
+    final canDelete = !conversation.isGroup || conversation.isAdmin(myUserId);
+
+    return GlassMenuButton(
+      semanticLabel: l10n.t('chat.conversationMenu'),
+      actions: [
+        if (conversation.isGroup)
+          GlassMenuAction(
+            label: l10n.t('group.membersTitle'),
+            icon: Icons.group_outlined,
+            onSelected: onMembers,
+          ),
+        // Anyone may clear their OWN history — it is per-member and touches no one else.
+        GlassMenuAction(
+          label: l10n.t('chat.clearHistory'),
+          icon: Icons.cleaning_services_outlined,
+          onSelected: onClear,
+        ),
+        if (canDelete)
+          GlassMenuAction(
+            label: conversation.isGroup
+                ? l10n.t('group.deleteGroup')
+                : l10n.t('chat.deleteChat'),
+            icon: Icons.delete_outline,
+            destructive: true,
+            onSelected: onDelete,
+          )
+        else
+          GlassMenuAction(
+            label: l10n.t('group.leave'),
+            icon: Icons.logout,
+            destructive: true,
+            onSelected: onLeave,
+          ),
+      ],
+    );
+  }
+}
+
 /// The button that appears when the reader has scrolled back into history, carrying a count of what
 /// has arrived since. Fades and lifts rather than popping, so it does not snatch at the eye.
 class _JumpToBottom extends StatelessWidget {
@@ -545,19 +675,12 @@ class _JumpToBottom extends StatelessWidget {
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              Material(
-                elevation: 3,
-                shape: const CircleBorder(),
-                color: theme.colorScheme.surfaceContainerHigh,
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: onPressed,
-                  child: const SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: Icon(Icons.arrow_downward, size: 20),
-                  ),
-                ),
+              GlassIconButton(
+                icon: Icons.arrow_downward,
+                semanticLabel: AppLocalizations.of(
+                  context,
+                ).t('chat.jumpToLatest'),
+                onPressed: onPressed,
               ),
               if (unseen > 0)
                 Positioned(
@@ -604,6 +727,7 @@ class _Feed extends ConsumerWidget {
     required this.myUserId,
     required this.scroll,
     required this.onReply,
+    required this.padding,
   });
 
   final MessageFeedState feed;
@@ -612,6 +736,9 @@ class _Feed extends ConsumerWidget {
   final ScrollController scroll;
   final void Function(ChatMessage) onReply;
 
+  /// Room for the chrome the feed runs underneath: the glass bar above, the composer below.
+  final EdgeInsets padding;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
@@ -619,14 +746,19 @@ class _Feed extends ConsumerWidget {
 
     // A bubble-shaped skeleton rather than a spinner. It says "messages are coming" instead of
     // "something is happening", and the feed does not jolt when they land.
-    if (feed.loading && feed.messages.isEmpty) return const _FeedSkeleton();
+    if (feed.loading && feed.messages.isEmpty) {
+      return _FeedSkeleton(padding: padding);
+    }
 
     if (feed.messages.isEmpty) {
-      return Center(
-        child: Text(
-          l10n.t('chat.noChatMessages'),
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+      return Padding(
+        padding: padding,
+        child: Center(
+          child: Text(
+            l10n.t('chat.noChatMessages'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       );
@@ -638,7 +770,7 @@ class _Feed extends ConsumerWidget {
     return ListView.builder(
       controller: scroll,
       reverse: true,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: padding,
       itemCount: items.length + (feed.loadingOlder ? 1 : 0),
       itemBuilder: (context, i) {
         if (i >= items.length) {
@@ -698,7 +830,9 @@ class _Feed extends ConsumerWidget {
 /// Bubble-shaped placeholders, alternating sides and widths so the feed looks like a conversation
 /// before it is one.
 class _FeedSkeleton extends StatelessWidget {
-  const _FeedSkeleton();
+  const _FeedSkeleton({required this.padding});
+
+  final EdgeInsets padding;
 
   static const _widths = [0.55, 0.4, 0.68, 0.35, 0.5, 0.6];
 
@@ -709,7 +843,7 @@ class _FeedSkeleton extends StatelessWidget {
 
     return ListView.builder(
       reverse: true,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: padding,
       itemCount: _widths.length,
       itemBuilder: (context, i) {
         final own = i.isEven;
@@ -930,134 +1064,96 @@ class _Composer extends StatelessWidget {
     final canSend =
         !sending && (controller.text.trim().isNotEmpty || photos.isNotEmpty);
 
-    return SafeArea(
-      top: false,
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border(
-            top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.5)),
-          ),
-        ),
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-        child: Column(
-          children: [
-            if (notice != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.lock_outline,
-                      size: 16,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        notice!,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+    final palette = GlassPalette.of(context);
 
-            // What you are replying to, above the box you are typing into — so the context is where
-            // the eye already is.
-            if (replyingTo != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: ReplyQuote(
-                        author: replyAuthor,
-                        text: replyText,
-                        compact: true,
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: onCancelReply,
-                      icon: const Icon(Icons.close, size: 18),
-                      tooltip: l10n.t('common.cancel'),
-                    ),
-                  ],
-                ),
-              ),
-
-            if (photos.isNotEmpty)
-              SizedBox(
-                height: 72,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.only(bottom: 8),
-                  itemCount: photos.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 6),
-                  itemBuilder: (context, i) => _PickedPhoto(
-                    bytes: photos[i],
-                    onRemove: () => onRemovePhoto(i),
+    return GlassComposerBar(
+      child: Column(
+        children: [
+          if (notice != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.lock_outline,
+                    size: 15,
+                    color: palette.mutedForeground,
                   ),
-                ),
-              ),
-
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                IconButton(
-                  onPressed: sending ? null : onAttach,
-                  icon: const Icon(Icons.photo_outlined),
-                  tooltip: l10n.t('chat.attachPhoto'),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: controller,
-                    minLines: 1,
-                    maxLines: 6,
-                    textInputAction: TextInputAction.newline,
-                    keyboardType: TextInputType.multiline,
-                    decoration: InputDecoration(
-                      hintText: l10n.t('chat.composerPlaceholder'),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: BorderSide.none,
-                      ),
-                      filled: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
+                  const SizedBox(width: GlassMetrics.gap),
+                  Expanded(
+                    child: Text(
+                      notice!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: palette.mutedForeground,
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 6),
-                IconButton.filled(
-                  onPressed: canSend ? onSend : null,
-                  // The default filled button paints its icon in onPrimary, but on this theme the
-                  // arrow came out near-black on the purple fill — unreadable. Pin it to onPrimary so
-                  // both the arrow and the sending spinner stay legible against the fill.
-                  style: IconButton.styleFrom(
-                    foregroundColor: theme.colorScheme.onPrimary,
-                    disabledForegroundColor: theme.colorScheme.onSurfaceVariant
-                        .withValues(alpha: 0.5),
-                  ),
-                  icon: sending
-                      ? SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: theme.colorScheme.onPrimary,
-                          ),
-                        )
-                      : const Icon(Icons.arrow_upward, size: 20),
-                  tooltip: l10n.t('chat.send'),
-                ),
-              ],
+                ],
+              ),
             ),
-          ],
-        ),
+
+          // What you are replying to, above the box you are typing into — so the context is where
+          // the eye already is.
+          if (replyingTo != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(6, 2, 2, 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ReplyQuote(
+                      author: replyAuthor,
+                      text: replyText,
+                      compact: true,
+                    ),
+                  ),
+                  GlassComposerGlyph(
+                    icon: Icons.close,
+                    semanticLabel: l10n.t('common.cancel'),
+                    onPressed: onCancelReply,
+                  ),
+                ],
+              ),
+            ),
+
+          if (photos.isNotEmpty)
+            SizedBox(
+              height: 72,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
+                itemCount: photos.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 6),
+                itemBuilder: (context, i) => _PickedPhoto(
+                  bytes: photos[i],
+                  onRemove: () => onRemovePhoto(i),
+                ),
+              ),
+            ),
+
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              GlassComposerGlyph(
+                icon: Icons.add_photo_alternate_outlined,
+                semanticLabel: l10n.t('chat.attachPhoto'),
+                onPressed: sending ? null : onAttach,
+              ),
+              Expanded(
+                child: GlassComposerField(
+                  controller: controller,
+                  hintText: l10n.t('chat.composerPlaceholder'),
+                ),
+              ),
+              const SizedBox(width: 4),
+              GlassSendButton(
+                sending: sending,
+                enabled: canSend,
+                onPressed: onSend,
+                semanticLabel: l10n.t('chat.send'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
