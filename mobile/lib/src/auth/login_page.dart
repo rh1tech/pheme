@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../core/validators.dart';
+import '../core/server_address.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/brand_logo.dart';
@@ -28,6 +29,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _code = TextEditingController();
+
+  /// The server, seeded from whatever this install already points at — the address a previous
+  /// sign-in used, or the one a build was compiled with. Seeded, not assumed: it is a field the user
+  /// can see and correct, and on a fresh install with no compiled default it starts empty and has to
+  /// be filled in like any other.
+  late final _server = TextEditingController(
+    text: ref.read(initialAppStateProvider).savedBaseUrl ?? '',
+  );
   final _formKey = GlobalKey<FormState>();
   bool _registerMode = false;
   bool _pendingVerify = false;
@@ -41,6 +50,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     _email.dispose();
     _password.dispose();
     _code.dispose();
+    _server.dispose();
     super.dispose();
   }
 
@@ -57,6 +67,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     FocusScope.of(context).unfocus();
+
+    // The server first, and awaited: everything below is a request, and a request needs to know
+    // where it is going. Sending credentials to the previous address and only then switching would
+    // hand one server the password meant for another.
+    await ref
+        .read(settingsControllerProvider.notifier)
+        .setBaseUrl(_server.text.trim());
+    if (!mounted) return;
+
     setState(() => _loading = true);
     final auth = ref.read(authControllerProvider.notifier);
     final email = _email.text.trim();
@@ -156,6 +175,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             _registerMode
                 ? l10n.t('auth.registerSubtitle')
                 : l10n.t('auth.signInSubtitle'),
+            textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 16),
@@ -187,17 +207,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             },
           ),
           if (_registerMode) PasswordStrengthBar(password: _password.text),
-          if (!_registerMode)
-            Align(
-              alignment: Alignment.centerRight,
-              child: AdaptiveButton.text(
-                onPressed: _loading
-                    ? null
-                    : () => context.push('/forgot-password'),
-                child: Text(l10n.t('auth.forgotPassword')),
-              ),
-            ),
           const SizedBox(height: 12),
+          // The third field, on sign-in and registration alike. Which server you are talking to is
+          // part of who you are signing in as — the same email exists on two Pheme instances and is
+          // two different people.
+          ServerFormField(controller: _server, enabled: !_loading),
+          const SizedBox(height: 16),
           AdaptiveButton.filled(
             onPressed: _loading ? null : _submit,
             child: _loading
@@ -219,6 +234,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   : l10n.t('auth.noAccount'),
             ),
           ),
+          // Last, under the register link. It used to sit between the fields and the Sign in button,
+          // interrupting the form on the way to the thing almost everybody came to press. Both of
+          // these are ways OUT of signing in, so they belong together at the foot of the card.
+          if (!_registerMode)
+            AdaptiveButton.text(
+              onPressed: _loading
+                  ? null
+                  : () => context.push('/forgot-password'),
+              child: Text(l10n.t('auth.forgotPassword')),
+            ),
         ],
       ),
     );

@@ -15,6 +15,8 @@ Widget _wrap(Widget child) {
           themeMode: ThemeMode.system,
           locale: Locale('en'),
           baseUrl: 'http://localhost:8080',
+          // Never signed in on this install, so the server field starts empty and asks.
+          savedBaseUrl: null,
           deviceId: null,
         ),
       ),

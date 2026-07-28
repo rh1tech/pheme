@@ -117,6 +117,13 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
       children: [
         _SectionHeader(title: l10n.t('security.statusHeading')),
         ListTile(
+          // Dense, with the padding stated rather than inherited. A stock ListTile is built for a
+          // 56pt row with generous air around it, and isThreeLine adds more on top — on a screen
+          // that is a list of short facts about devices it left every row swimming, and the page
+          // scrolled for a handful of lines.
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           leading: Icon(
             _backedUp ? Icons.verified_user : Icons.gpp_maybe,
             color: _backedUp ? Colors.green : theme.colorScheme.tertiary,
@@ -129,7 +136,6 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
               _backedUp ? 'security.backupOnHint' : 'security.backupOffHint',
             ),
           ),
-          isThreeLine: true,
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -160,6 +166,9 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
         ? device.label
         : device.deviceId.substring(0, device.deviceId.length.clamp(0, 8));
     return ListTile(
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
       leading: const Icon(Icons.devices_outlined),
       title: Row(
         children: [
@@ -226,7 +235,7 @@ class _SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
       child: Text(
         title.toUpperCase(),
         style: theme.textTheme.labelMedium?.copyWith(

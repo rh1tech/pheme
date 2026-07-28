@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/providers.dart';
+import '../core/validators.dart';
 
 class SettingsState {
   const SettingsState({
@@ -52,9 +53,17 @@ class SettingsController extends Notifier<SettingsState> {
   }
 
   Future<void> setBaseUrl(String url) async {
-    final trimmed = url.trim();
-    if (trimmed.isEmpty || trimmed == state.baseUrl) return;
+    // Normalised HERE, so it cannot matter which screen the address came from. A bare hostname typed
+    // on the sign-in form and one pasted into Settings have to end up as the same stored string, or
+    // the app talks to two different addresses depending on where you entered it.
+    final trimmed = normalizeServerUrl(url);
+    if (trimmed == null) return;
     state = state.copyWith(baseUrl: trimmed);
+    // Written even when it matches what is already in force. It used to return early on a match,
+    // which is fine as an optimisation and wrong as a record: a build compiled with PHEME_API is
+    // ALREADY pointed there, so signing in against that very address stored nothing, and the
+    // install could never tell "the user chose this" from "this was baked in". See
+    // InitialAppState.savedBaseUrl.
     await ref.read(settingsStoreProvider).saveBaseUrl(trimmed);
   }
 }

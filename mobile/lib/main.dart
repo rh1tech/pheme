@@ -34,10 +34,12 @@ Future<void> main() async {
   final settingsStore = SettingsStore(storage);
 
   await tokenStore.load();
+  final saved = await settingsStore.loadBaseUrl();
   final initial = InitialAppState(
     themeMode: await settingsStore.loadThemeMode(),
     locale: await settingsStore.loadLocale(),
-    baseUrl: await settingsStore.loadBaseUrl() ?? kDefaultBaseUrl,
+    baseUrl: saved ?? kDefaultBaseUrl,
+    savedBaseUrl: saved,
     deviceId: await settingsStore.loadDeviceId(),
   );
 

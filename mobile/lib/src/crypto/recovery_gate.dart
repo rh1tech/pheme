@@ -24,6 +24,7 @@ import '../core/snackbar.dart';
 import '../l10n/app_localizations.dart';
 import 'mls_errors.dart';
 import 'mls_service.dart';
+import '../widgets/glass/glass.dart';
 
 class RecoveryGate extends ConsumerStatefulWidget {
   const RecoveryGate({required this.child, super.key});
@@ -80,13 +81,13 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
   /// shown again on a device that did not generate it.
   Future<void> _showCode(String code) {
     final l10n = AppLocalizations.of(context);
-    return showDialog<void>(
+    return showGlassDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) {
         var acked = false;
         return StatefulBuilder(
-          builder: (ctx, setState) => AlertDialog(
+          builder: (ctx, setState) => GlassDialog(
             title: Text(l10n.t('recovery.setupTitle')),
             content: SingleChildScrollView(
               child: Column(
@@ -113,9 +114,10 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
               ),
             ),
             actions: [
-              TextButton(
+              GlassDialogAction(
+                label: l10n.t('recovery.done'),
+                emphasised: true,
                 onPressed: acked ? () => Navigator.of(ctx).pop() : null,
-                child: Text(l10n.t('recovery.done')),
               ),
             ],
           ),
@@ -128,7 +130,7 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
   Future<void> _promptRestore(String userId, MlsService mls) {
     final l10n = AppLocalizations.of(context);
     final controller = TextEditingController();
-    return showDialog<void>(
+    return showGlassDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) {
@@ -161,7 +163,7 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
               if (ctx.mounted) Navigator.of(ctx).pop();
             }
 
-            return AlertDialog(
+            return GlassDialog(
               title: Text(l10n.t('recovery.restoreTitle')),
               content: SingleChildScrollView(
                 child: Column(
@@ -186,13 +188,14 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
                 ),
               ),
               actions: [
-                TextButton(
+                GlassDialogAction(
+                  label: l10n.t('backup.skip'),
                   onPressed: busy ? null : startFresh,
-                  child: Text(l10n.t('backup.skip')),
                 ),
-                FilledButton(
+                GlassDialogAction(
+                  label: l10n.t('backup.restore'),
+                  emphasised: true,
                   onPressed: busy ? null : restore,
-                  child: Text(l10n.t('backup.restore')),
                 ),
               ],
             );
@@ -265,7 +268,7 @@ Future<void> showRecoveryCodeSheet(BuildContext context, WidgetRef ref) async {
   final code = await mls.recoveryCode();
   if (!context.mounted) return;
 
-  await showDialog<void>(
+  await showGlassDialog<void>(
     context: context,
     builder: (ctx) {
       var busy = false;
@@ -292,7 +295,7 @@ Future<void> showRecoveryCodeSheet(BuildContext context, WidgetRef ref) async {
             }
           }
 
-          return AlertDialog(
+          return GlassDialog(
             title: Text(l10n.t('recovery.viewTitle')),
             content: SingleChildScrollView(
               child: Column(
@@ -309,13 +312,14 @@ Future<void> showRecoveryCodeSheet(BuildContext context, WidgetRef ref) async {
               ),
             ),
             actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: Text(l10n.t('recovery.done')),
-              ),
-              TextButton(
+              GlassDialogAction(
+                label: l10n.t('recovery.regenerate'),
                 onPressed: busy ? null : regenerate,
-                child: Text(l10n.t('recovery.regenerate')),
+              ),
+              GlassDialogAction(
+                label: l10n.t('recovery.done'),
+                emphasised: true,
+                onPressed: () => Navigator.of(ctx).pop(),
               ),
             ],
           );

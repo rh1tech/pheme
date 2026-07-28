@@ -3,13 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../channels/qr_scanner_page.dart';
 import '../core/app_config.dart';
 import '../core/providers.dart';
+import '../core/server_address.dart';
 import '../core/snackbar.dart';
 import '../crypto/recovery_gate.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/adaptive/adaptive.dart';
+import '../widgets/glass/glass.dart';
 import 'settings_controller.dart';
 
 /// App preferences: theme, language, API server, device push status and logout.
@@ -21,10 +22,6 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
-  late final TextEditingController _baseUrl = TextEditingController(
-    text: ref.read(settingsControllerProvider).baseUrl,
-  );
-
   /// How much this account's notifications may reveal: 'preview', 'sender' or 'generic'.
   ///
   /// It lives here and not in [SettingsState] because it is a property of the ACCOUNT, not
@@ -85,7 +82,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   void dispose() {
-    _baseUrl.dispose();
     super.dispose();
   }
 
@@ -99,41 +95,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   ///
   /// Scanned raw: unlike a channel code there is no `ref` to extract, and a
   /// query parameter in a server URL is part of the address.
-  Future<void> _scanBaseUrl() async {
-    final l10n = context.l10n;
-    final scanned = await Navigator.of(context).push<String>(
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (_) => QrScannerPage(
-          raw: true,
-          instruction: l10n.t('settings.serverScanHint'),
-        ),
-      ),
-    );
-    if (scanned == null || scanned.isEmpty || !mounted) return;
-    _baseUrl.text = scanned;
-    // Validation lives in _saveBaseUrl, so a QR carrying something that is not a
-    // server URL is refused the same way a typo is.
-    await _saveBaseUrl();
-  }
-
-  Future<void> _saveBaseUrl() async {
-    final l10n = context.l10n;
-    final value = _baseUrl.text.trim();
-    final uri = Uri.tryParse(value);
-    if (value.isEmpty ||
-        uri == null ||
-        !uri.hasScheme ||
-        !(uri.isScheme('http') || uri.isScheme('https')) ||
-        !uri.hasAuthority) {
-      notifyError(context, l10n.t('settings.serverInvalid'));
-      return;
-    }
-    FocusScope.of(context).unfocus();
-    await ref.read(settingsControllerProvider.notifier).setBaseUrl(value);
-    if (mounted) notifySuccess(context, l10n.t('settings.serverSaved'));
-  }
-
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
@@ -192,9 +153,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         _ValueRow(
           icon: Icons.dns_outlined,
           title: l10n.t('settings.serverUrl'),
-          value: _baseUrl.text,
-          onTap: () => _editBaseUrl(l10n),
+          value: _serverHost(settings.baseUrl),
+          // Read-only, and the tap SHOWS it rather than edits it — see _ServerNote.
+          onTap: () => showServerQr(context, ref),
         ),
+        const _ServerNote(),
         const Divider(height: 24),
         _SectionHeader(title: l10n.t('settings.device')),
         ListTile(
@@ -245,7 +208,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             l10n.t('common.logout'),
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
-          onTap: () => ref.read(authControllerProvider.notifier).logout(),
+          onTap: () => _confirmLogout(l10n),
         ),
         const Divider(height: 24),
         _SectionHeader(title: l10n.t('settings.about')),
@@ -293,36 +256,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ),
         CupertinoListSection.insetGrouped(
           header: Text(l10n.t('settings.server')),
+          footer: Text(l10n.t('settings.serverLocked')),
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  AdaptiveTextField(
-                    controller: _baseUrl,
-                    label: l10n.t('settings.serverUrl'),
-                    keyboardType: TextInputType.url,
-                    onSubmitted: (_) => _saveBaseUrl(),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: AdaptiveButton.filled(
-                          onPressed: _saveBaseUrl,
-                          child: Text(l10n.t('common.save')),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      AdaptiveButton(
-                        onPressed: _scanBaseUrl,
-                        child: Text(l10n.t('settings.serverScan')),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+            CupertinoListTile.notched(
+              leading: const Icon(CupertinoIcons.globe),
+              title: Text(l10n.t('settings.serverUrl')),
+              additionalInfo: Text(_serverHost(settings.baseUrl)),
+              trailing: const CupertinoListTileChevron(),
+              onTap: () => showServerQr(context, ref),
             ),
           ],
         ),
@@ -385,7 +326,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 l10n.t('common.logout'),
                 style: const TextStyle(color: CupertinoColors.destructiveRed),
               ),
-              onTap: () => ref.read(authControllerProvider.notifier).logout(),
+              onTap: () => _confirmLogout(l10n),
             ),
           ],
         ),
@@ -426,25 +367,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     required List<(T, String, String?)> options,
     required T current,
   }) {
-    return showDialog<T>(
+    return showGlassDialog<T>(
       context: context,
-      builder: (context) => SimpleDialog(
+      builder: (context) => GlassDialog(
         title: Text(title),
-        children: [
-          for (final option in options)
-            ListTile(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final option in options)
               // A tapped row with a check rather than RadioListTile: the Radio group API wants a
               // RadioGroup ancestor now, and this matches the rows the rest of the screen uses.
-              leading: Icon(
-                option.$1 == current
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked,
+              _ChoiceRow(
+                label: option.$2,
+                detail: option.$3,
+                selected: option.$1 == current,
+                onTap: () => Navigator.of(context).pop(option.$1),
               ),
-              title: Text(option.$2),
-              subtitle: option.$3 == null ? null : Text(option.$3!),
-              onTap: () => Navigator.of(context).pop(option.$1),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -496,46 +437,26 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     if (picked != null) await _setPrivacy(picked);
   }
 
-  /// The server address, in a dialog rather than a text field wired into the page.
-  ///
-  /// It sat inline with its own Save button, which is the one control on this screen that could be
-  /// left half-edited: type a new address, never press Save, and the screen shows something that
-  /// is not what the app is talking to.
-  Future<void> _editBaseUrl(AppLocalizations l10n) async {
-    final field = TextEditingController(text: _baseUrl.text);
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(l10n.t('settings.serverUrl')),
-        content: TextField(
-          controller: field,
-          keyboardType: TextInputType.url,
-          autofocus: true,
-          onSubmitted: (_) => Navigator.of(context).pop(true),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: Text(l10n.t('common.cancel')),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Text(l10n.t('common.save')),
-          ),
-        ],
-      ),
+  /// Logging out is not destructive — the account and its history survive — but it is a door that
+  /// shuts: the next screen is the sign-in form, and getting back in means having the password to
+  /// hand. It was a single tap on a row in a list of rows.
+  Future<void> _confirmLogout(AppLocalizations l10n) async {
+    final confirmed = await showAdaptiveConfirm(
+      context,
+      title: l10n.t('common.logout'),
+      message: l10n.t('common.logoutConfirm'),
+      confirmLabel: l10n.t('common.logout'),
+      cancelLabel: l10n.t('common.cancel'),
+      isDestructive: true,
     );
-    if (saved ?? false) {
-      _baseUrl.text = field.text.trim();
-      await _saveBaseUrl();
-    }
-    field.dispose();
+    if (!confirmed || !mounted) return;
+    await ref.read(authControllerProvider.notifier).logout();
   }
 
   Future<void> _showAbout(AppLocalizations l10n) {
-    return showDialog<void>(
+    return showGlassDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => GlassDialog(
         title: Text(l10n.t('settings.about')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -549,9 +470,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ],
         ),
         actions: [
-          TextButton(
+          GlassDialogAction(
+            label: l10n.t('common.close'),
+            emphasised: true,
             onPressed: () => Navigator.of(context).pop(),
-            child: Text(l10n.t('common.close')),
           ),
         ],
       ),
@@ -695,6 +617,104 @@ class _ValueRow extends StatelessWidget {
         ],
       ),
       onTap: onTap,
+    );
+  }
+}
+
+/// One option in a [_choose] dialog: a label, an optional line of detail, and a check when it is
+/// the one currently in force.
+class _ChoiceRow extends StatelessWidget {
+  const _ChoiceRow({
+    required this.label,
+    required this.detail,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String? detail;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                      color: scheme.onSurface,
+                    ),
+                  ),
+                  if (detail != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      detail!,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            // Only the chosen one is marked. A column of empty circles is a column of controls that
+            // all look available to press; the question is which one is set, not which exist.
+            if (selected) ...[
+              const SizedBox(width: 12),
+              Icon(Icons.check, size: 20, color: scheme.primary),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The host, without the unlisted path prefix.
+///
+/// The prefix is twelve meaningless characters and takes more room than the name of the server it
+/// belongs to; nobody verifies it by eye. It is in the QR and on the clipboard, which is where it
+/// gets used.
+String _serverHost(String baseUrl) {
+  final host = Uri.tryParse(baseUrl)?.host ?? '';
+  return host.isEmpty ? baseUrl : host;
+}
+
+/// Why the address cannot be changed from here.
+///
+/// It used to be editable, with its own Save button — which meant an account could be signed in
+/// against one server while the app was told to talk to another. Everything below the change
+/// (the session, the device registration, the MLS identity, the keys) belongs to the server it was
+/// made on, and none of it survives being pointed elsewhere. Signing out is what actually ends
+/// those, so signing out is what changes the server.
+class _ServerNote extends StatelessWidget {
+  const _ServerNote();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      child: Text(
+        AppLocalizations.of(context).t('settings.serverLocked'),
+        style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+      ),
     );
   }
 }

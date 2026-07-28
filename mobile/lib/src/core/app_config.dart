@@ -12,18 +12,22 @@ import 'package:flutter/material.dart';
 /// hardcode here: the bare hostname without a prefix reaches the decoy site, not
 /// the API.
 ///
-/// A build with no define falls through to [kFallbackBaseUrl], which is a local
-/// backend. That is the right failure: a developer build reaches a developer's
-/// server, and a release build that forgot the define fails immediately and
-/// obviously rather than quietly talking to the wrong host.
+/// A build with no define has NO server, and that is deliberate.
 ///
-/// Users of a self-hosted instance do not need any of this — they scan the QR
-/// their operator gives them, or paste the URL, in Settings → Server.
+/// There used to be a hardcoded fallback here — the Android emulator's route to a
+/// developer machine. It made the app look like it knew where to go when it did
+/// not, and on a product that is self-hosted as often as not, guessing an address
+/// is worse than admitting there isn't one: the sign-in screen shows an empty
+/// server field and asks, which is the honest question.
+///
+/// The define still works and is how a build is pointed at a deployment. It seeds
+/// the field rather than hiding it; the user can see the address they are about
+/// to sign in against, and correct it.
+///
+/// For a local backend, type it once on the sign-in screen — `http://10.0.2.2:8080`
+/// from the Android emulator, `http://localhost:8080` from the iOS simulator. It
+/// persists, so it is once per install rather than once per launch.
 const String _envBaseUrl = String.fromEnvironment('PHEME_API');
-
-/// Where a build with no `PHEME_API` define points: the Android emulator's route
-/// to the host machine. `http://localhost:8080` from the iOS simulator.
-const String kFallbackBaseUrl = 'http://10.0.2.2:8080';
 
 /// The release this build came from, for the About screen.
 ///
@@ -38,9 +42,10 @@ const String appVersion = String.fromEnvironment(
 /// Shown in About. Not translated: a name is a name.
 const String appCopyright = '© 2026 Mikhail Matveev';
 const String appWebsite = 'https://app.example.com';
-const String kDefaultBaseUrl = _envBaseUrl == ''
-    ? kFallbackBaseUrl
-    : _envBaseUrl;
+
+/// What the sign-in screen's server field starts with: the compiled address, or
+/// nothing at all.
+const String kDefaultBaseUrl = _envBaseUrl;
 
 /// App-wide initial state loaded from persistent storage at startup. Provided
 /// via an override in main(); the in-app controllers seed themselves from it.
@@ -49,12 +54,23 @@ class InitialAppState {
     required this.themeMode,
     required this.locale,
     required this.baseUrl,
+    required this.savedBaseUrl,
     required this.deviceId,
   });
 
   final ThemeMode themeMode;
   final Locale? locale;
+
+  /// What the app talks to: the address this install has been pointed at, or the compiled one.
   final String baseUrl;
+
+  /// The address the USER chose, or null if they never have.
+  ///
+  /// Distinct from [baseUrl] on purpose. A build compiled with PHEME_API still has somewhere to
+  /// talk to, but nobody has told this install where their server is — and the sign-in screen must
+  /// not present a compiled-in address as though it were the user's answer. An empty field asks the
+  /// question; a filled one pretends it has already been answered.
+  final String? savedBaseUrl;
 
   /// Locally-registered push device id, or null if the device hasn't been
   /// registered for notifications yet.

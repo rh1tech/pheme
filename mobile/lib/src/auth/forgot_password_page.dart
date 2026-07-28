@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/providers.dart';
 import '../core/snackbar.dart';
+import '../core/server_address.dart';
 import '../core/validators.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/adaptive/adaptive.dart';
@@ -27,6 +28,13 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
   final _email = TextEditingController();
   final _code = TextEditingController();
   final _password = TextEditingController();
+
+  /// The server, here for the same reason it is on the sign-in form: a reset code is sent by a
+  /// SERVER, and somebody who has never signed in on this device has not told the app which one.
+  /// Seeded from whatever the install already points at.
+  late final _server = TextEditingController(
+    text: ref.read(initialAppStateProvider).savedBaseUrl ?? '',
+  );
   bool _codeSent = false;
   bool _loading = false;
   int _cooldown = 0;
@@ -38,6 +46,7 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
     _email.dispose();
     _code.dispose();
     _password.dispose();
+    _server.dispose();
     super.dispose();
   }
 
@@ -53,7 +62,20 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
 
   Future<void> _requestCode() async {
     if (!_email.text.contains('@')) return;
+    final l10n = context.l10n;
+    if (!isValidServerUrl(_server.text)) {
+      notifyError(context, l10n.t('settings.serverInvalid'));
+      return;
+    }
     FocusScope.of(context).unfocus();
+
+    // Before the request, not after: a reset code has to be asked of the right server, and asking
+    // the previous one would leak the email address to a host the user did not choose.
+    await ref
+        .read(settingsControllerProvider.notifier)
+        .setBaseUrl(_server.text.trim());
+    if (!mounted) return;
+
     setState(() => _loading = true);
     try {
       await ref.read(repositoryProvider).forgotPassword(_email.text.trim());
@@ -141,11 +163,13 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
       children: [
         Text(
           l10n.t('auth.forgotTitle'),
+          textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 8),
         Text(
           l10n.t('auth.forgotSubtitle'),
+          textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 16),
@@ -157,6 +181,8 @@ class _ForgotPasswordPageState extends ConsumerState<ForgotPasswordPage> {
           label: l10n.t('auth.email'),
           onSubmitted: (_) => _requestCode(),
         ),
+        const SizedBox(height: 12),
+        ServerFormField(controller: _server, enabled: !_loading),
         const SizedBox(height: 16),
         AdaptiveButton.filled(
           onPressed: _loading ? null : _requestCode,
