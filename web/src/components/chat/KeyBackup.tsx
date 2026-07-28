@@ -5,12 +5,11 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
 import {
   IdentityAlreadySetUpError,
+  NeedsRestoreError,
   acceptFreshIdentity,
-  backupExists,
   ensureRecoveryBackup,
-  hasAcceptedFresh,
-  hasLocalKeys,
   loadRecoveryCode,
+  mlsSession,
   regenerateRecoveryCode,
   restoreWithSecret,
 } from '../../lib/mls'
@@ -178,14 +177,25 @@ export function KeyRestoreGate() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
+    if (!userId) return
     let active = true
     const run = async () => {
       try {
-        if (await hasLocalKeys()) return
-        // The user already chose to start fresh here; do not nag to restore a backup they declined.
-        if (await hasAcceptedFresh()) return
-        const exists = await backupExists()
-        if (!exists || !active) return
+        // Ask for the session, and let IT be the one to say whether a restore is owed.
+        //
+        // This used to decide from local state alone — no keys in IndexedDB, no "start fresh" on
+        // record, a backup on the server — and that question cannot be answered before the session
+        // has loaded, because Session.load is the only thing that asks the server whether the keys
+        // in IndexedDB are still ALIVE. A browser revoked from another device still holds its keys,
+        // so hasLocalKeys said yes and the gate stood down; the load running alongside it then
+        // discarded the dead identity, found the backup, and threw into a `catch` nobody was
+        // watching. No prompt, and nothing sendable for the rest of the session.
+        //
+        // Session.load throws NeedsRestoreError in exactly the cases this gate exists for: a fresh
+        // browser with a backup waiting, and a revoked one just reduced to that. Same prompt.
+        await mlsSession(userId)
+      } catch (e) {
+        if (!active || !(e instanceof NeedsRestoreError)) return
         // Test hook: a fresh independent device (the multi-device crypto suites) starts over rather
         // than restoring. Production never sets this, so a real second device sees the prompt.
         if ((window as { __phemeAutoStartFresh?: boolean }).__phemeAutoStartFresh) {
@@ -193,16 +203,13 @@ export function KeyRestoreGate() {
           return
         }
         setNeeded(true)
-      } catch {
-        // Could not reach the server to find out. Say nothing rather than guess: the session
-        // bootstrap refuses to mint an identity in this state anyway.
       }
     }
     void run()
     return () => {
       active = false
     }
-  }, [])
+  }, [userId])
 
   async function restore() {
     if (busy || secret.trim().length === 0 || !userId) return
