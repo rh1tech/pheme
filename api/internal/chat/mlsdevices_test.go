@@ -336,3 +336,47 @@ func TestTerminatingASessionlessDeviceSignsTheUserOut(t *testing.T) {
 		t.Errorf("post-terminate: got %d, want 401 — the user's other sessions should end too", rec.Code)
 	}
 }
+
+// A terminated device is absent from the list AND named in `revoked`.
+//
+// Both halves matter, and the second is the one that was missing. A client cannot tell "I was
+// revoked" from "I have never registered" by absence alone, and the two demand opposite responses:
+// the first means this device's keys are dead everywhere and it must mint a new identity, the
+// second means it should just register. A browser that could not tell kept using keys its peers had
+// already pruned — every send failed with UseAfterEviction and nothing said why.
+func TestListMyDevicesNamesRevokedOnes(t *testing.T) {
+	f := newFixture(t)
+	uid, tok := f.user(t, "revoked-list@pheme.test")
+
+	f.publishDevice(t, tok, "dev-alive", "Kept")
+	f.publishDevice(t, tok, "dev-dead", "Terminated")
+	if rec := f.do(http.MethodDelete, "/v1/mls/devices/dev-dead", tok, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("terminate: %d %s", rec.Code, rec.Body)
+	}
+
+	// A fresh token, because terminating a device that carries no recorded session id signs the
+	// user out EVERYWHERE — see terminateDevice, which does that deliberately rather than report a
+	// removal it cannot enforce. Devices published through this fixture have no session id, so the
+	// original token is dead by design and the assertions below would read as a 401.
+	access, _, _, err := f.tokens.Issue(uid, string(domain.RoleUser))
+	if err != nil {
+		t.Fatalf("re-issue token: %v", err)
+	}
+
+	rec := f.do(http.MethodGet, "/v1/mls/devices", access, nil)
+	var got struct {
+		Devices []struct {
+			DeviceID string `json:"deviceId"`
+		} `json:"devices"`
+		Revoked []string `json:"revoked"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Devices) != 1 || got.Devices[0].DeviceID != "dev-alive" {
+		t.Fatalf("devices = %+v, want only dev-alive", got.Devices)
+	}
+	if len(got.Revoked) != 1 || got.Revoked[0] != "dev-dead" {
+		t.Fatalf("revoked = %v, want [dev-dead] — a client cannot recover without being told", got.Revoked)
+	}
+}

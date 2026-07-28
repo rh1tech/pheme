@@ -28,6 +28,7 @@ import init, { MlsClient, encryptBackup, decryptBackup } from '../crypto/pkg/phe
 import wasmUrl from '../crypto/pkg/pheme_mls_bg.wasm?url'
 import { ApiError, api } from './api'
 import { idbClearExcept, idbGet, idbSet, idbSetMany } from './idb'
+import { revokedLocally } from './revoked'
 // The roster rules — who belongs in a group and who does not — live in their own module so they can
 // be tested without WASM, a server or a real group. See roster.ts.
 import {
@@ -421,7 +422,22 @@ class Session {
       // group is established afresh, and the plaintext this device has already decrypted
       // lives in the message cache, which is left alone.
       const isLegacy = restored !== null && deviceOf(restored.identity) === ''
-      const keep = restored !== null && !isLegacy
+
+      // State whose device the server has REVOKED. Same conclusion as a legacy credential, for a
+      // different reason: the keys are real but every co-member has already pruned this leaf, so
+      // the group it holds is one this device is no longer in.
+      //
+      // Without this the browser went on using it. Nothing asked whether the identity in IndexedDB
+      // was still alive, so no recovery prompt appeared, every send failed with
+      // GroupStateError(UseAfterEviction), and messages from the other devices arrived and silently
+      // would not open — a chat that looked like it was working and was not.
+      //
+      // Only a POSITIVE answer counts. The check is skipped entirely when the server cannot be
+      // reached, because destroying a working identity on a failed request would turn every offline
+      // launch into a lost device — see revokedLocally.
+      const isRevoked = restored !== null && (await revokedLocally(deviceOf(restored.identity)))
+
+      const keep = restored !== null && !isLegacy && !isRevoked
 
       let client: MlsClient
       let deviceId: string

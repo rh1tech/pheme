@@ -305,6 +305,19 @@ export const api = {
   /** The signed-in user's own devices — for the "your devices" panel. */
   myDevices: () =>
     request<{ devices: MLSDevice[] }>('/v1/mls/devices').then((r) => r.devices ?? []),
+
+  /**
+   * The same call, keeping the ids of this user's REVOKED devices.
+   *
+   * Separate because it answers a different question: not "what should the panel show" but "is the
+   * identity this browser is holding still alive?". Absence cannot answer that — a device missing
+   * from the live list may equally never have registered — and the two demand opposite responses.
+   */
+  myDeviceRegistry: () =>
+    request<{ devices: MLSDevice[]; revoked?: string[] }>('/v1/mls/devices').then((r) => ({
+      live: r.devices ?? [],
+      revoked: r.revoked ?? [],
+    })),
   /**
    * Registers this device in the user's own registry and refreshes its last-seen, without
    * publishing key packages — called on session load so a device lists itself from launch.

@@ -256,13 +256,23 @@ func (h *Handler) listMyDevices(w http.ResponseWriter, r *http.Request) {
 	// Terminated devices are kept as tombstones now, so they have to be filtered out here or a
 	// device the user just removed would reappear in their own list — which reads as the removal
 	// having failed.
+	//
+	// Their ids are still reported, separately, and that is not redundant: it is the only way a
+	// client can tell "I was revoked" from "I have never registered". Absence alone cannot say
+	// which, and the two demand opposite responses — the first means this device's keys are dead
+	// and it must mint a new identity, the second means it should simply register. A revoked
+	// browser that could not tell went on using keys every one of its peers had already pruned,
+	// and every send failed with UseAfterEviction while incoming messages silently would not open.
 	live := make([]domain.MLSDevice, 0, len(devices))
+	revoked := make([]string, 0)
 	for _, d := range devices {
 		if d.RevokedAt == nil {
 			live = append(live, d)
+		} else {
+			revoked = append(revoked, d.DeviceID)
 		}
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"devices": live})
+	httpx.JSON(w, http.StatusOK, map[string]any{"devices": live, "revoked": revoked})
 }
 
 type registerDeviceRequest struct {
