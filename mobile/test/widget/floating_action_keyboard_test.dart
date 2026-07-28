@@ -13,6 +13,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pheme_mobile/src/core/snackbar.dart';
+import 'package:pheme_mobile/src/theme.dart';
 import 'package:pheme_mobile/src/l10n/app_localizations.dart';
 import 'package:pheme_mobile/src/widgets/adaptive/adaptive.dart';
 import 'package:pheme_mobile/src/widgets/glass/glass.dart';
@@ -26,6 +28,9 @@ const _keyboardHeight = 900 / 3;
 Widget _harness() {
   return MaterialApp(
     debugShowCheckedModeBanner: false,
+    // The app's real theme, not a default one: the chrome's metrics and the snackbar's floating
+    // behaviour both come from it, and a harness without it measures a different app.
+    theme: lightTheme,
     localizationsDelegates: const [
       AppLocalizations.delegate,
       GlobalMaterialLocalizations.delegate,
@@ -153,6 +158,8 @@ void main() {
     );
   });
 
+  _snackbarTests();
+
   testWidgets('with the keyboard up, it still clears the tab bar', (
     tester,
   ) async {
@@ -166,6 +173,43 @@ void main() {
       lessThanOrEqualTo(tabBar.top),
       reason:
           'moving it up must not park it on top of the tab bar, which moved up too',
+    );
+  });
+}
+
+// A message reported from a tab must be readable, which means clearing the tab bar.
+//
+// Same root cause as the button above, and found by looking for it rather than by hitting it: the
+// theme floats snackbars 12pt off the bottom of the scaffold, and the tab bar floats INSIDE that
+// same scaffold — so the message was drawn underneath the chrome painted over it. Nothing about the
+// scaffold's own geometry knows the bar is there; only BottomChrome does.
+void _snackbarTests() {
+  testWidgets('a snackbar clears the floating tab bar', (tester) async {
+    tester.view.physicalSize = const Size(1170, 2000);
+    tester.view.devicePixelRatio = 3;
+    tester.view.padding = const FakeViewPadding(top: 141, bottom: 102);
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(_harness());
+    await tester.pumpAndSettle();
+
+    // Reported from inside the page, which is where every real caller reports from — and the only
+    // place BottomChrome is visible.
+    final context = tester.element(find.byType(ListView));
+    notifySuccess(context, 'Saved');
+    await tester.pumpAndSettle();
+
+    // The TEXT, not the SnackBar widget: a floating snackbar's own box spans the full width and
+    // height it was given and carries the margin inside itself, so measuring it says nothing about
+    // where the message actually landed. What is being promised here is that the words are legible,
+    // and the words are what to measure.
+    final message = tester.getRect(find.text('Saved'));
+    final tabBar = tester.getRect(find.byType(GlassTabBar));
+
+    expect(
+      message.bottom,
+      lessThanOrEqualTo(tabBar.top),
+      reason: 'the message was drawn underneath the bar painted over it',
     );
   });
 }
