@@ -59,15 +59,17 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v7
+      # No `cache:` on either — same reasoning as ci.yml. These are self-hosted runners
+      # whose ~/go, ~/.cache/go-build and ~/.npm are already on the disk this job runs on,
+      # so GitHub's cache round-trips them over the internet for nothing and counts
+      # against a limit that has real work queued behind it.
       - uses: actions/setup-go@v7
         with:
           go-version-file: api/go.mod
-          cache-dependency-path: api/go.sum
+          cache: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
 
@@ -92,9 +94,33 @@ jobs:
         env:
           PW_PORT_OFFSET: ${{ matrix.shard }}
 
-      - uses: actions/upload-artifact@v7
-        if: ${{ !cancelled() }}
-        with:
-          name: playwright-report-shard-${{ matrix.shard }}
-          path: web/playwright-report/
-          retention-days: 7
+      # The report stays on the runner rather than going to GitHub.
+      #
+      # These are self-hosted runners, so an upload sends the report out to GitHub's
+      # artifact store and counts against the account's storage — for a file that was
+      # already on the disk of the box that produced it. Kept here instead, under a
+      # path a person can read directly.
+      #
+      # Only on failure. A passing run's report tells nobody anything, and the whole
+      # point of not uploading is to stop accumulating reports nobody opens.
+      - name: Keep the report
+        if: failure()
+        run: |
+          dest="/opt/pheme-ci/playwright-reports/${{ github.run_id }}-shard${{ matrix.shard }}"
+          mkdir -p "$dest"
+          cp -r playwright-report/. "$dest"/ 2>/dev/null || true
+          echo "report: $dest"
+          echo "read it with: ssh rh1 'npx serve $dest'  (or scp it down)"
+          {
+            echo "### Playwright report (shard ${{ matrix.shard }})"
+            echo ''
+            echo "Kept on the runner, not uploaded: \`$dest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Anything older than a fortnight is not being looked at. `always()` so a run
+      # that failed before the report existed still tidies up after the ones before it.
+      - name: Prune old reports
+        if: always()
+        run: |
+          find /opt/pheme-ci/playwright-reports -mindepth 1 -maxdepth 1 -type d \
+            -mtime +14 -exec rm -rf {} + 2>/dev/null || true

@@ -47,10 +47,22 @@ jobs:
         working-directory: api
     steps:
       - uses: actions/checkout@v7
+      # NO `cache:`. Every job here runs on a self-hosted runner whose disk persists
+      # between runs, so the module cache (~/go/pkg/mod) and the build cache
+      # (~/.cache/go-build) are already sitting on this box — 820 MB and 8 GB of them.
+      # GitHub's cache was uploading half a gigabyte of that over the internet and
+      # downloading it back on every run, to populate directories that were never empty.
+      #
+      # It was not free: the caches in this file had grown to 5.75 GB of the repo's
+      # 10 GB limit, which evicts by least-recently-used — so the entries that were
+      # genuinely doing nothing were also crowding out the ones that were.
+      #
+      # deploy.yml reached the same conclusion about Docker layers; this is that fix,
+      # applied to the toolchains.
       - uses: actions/setup-go@v7
         with:
           go-version-file: api/go.mod
-          cache-dependency-path: api/go.sum
+          cache: false
       # The store has two hand-written implementations of one interface, and production runs the
       # Mongo one while almost every test exercised the in-memory one. They have already disagreed:
       # the profile update that blanked people's display names was Mongo-only behaviour. The
@@ -189,11 +201,11 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v7
+      # No `cache: npm` — see the API job. npm's own cache (~/.npm) persists on this
+      # runner, which is what `npm ci` actually installs from.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run lint
       - run: npm run build
@@ -205,10 +217,33 @@ jobs:
   crypto:
     name: Crypto (Rust)
     runs-on: [self-hosted, linux, ci]
+    # Build artefacts go OUTSIDE the workspace, because checkout cleans the workspace
+    # and would take them with it. ~/.cargo (the registry) already survives on its own;
+    # this is the part that did not, and it is why the run was recompiling the whole
+    # dependency graph twice — once per manifest — every time.
+    #
+    # Both manifests share one directory deliberately: they share most of their
+    # dependencies, so the second cargo invocation gets them already built.
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # Set here rather than in `env:`, which takes its values literally — `$HOME`
+      # there would reach cargo as the four characters, not as a path.
+      #
+      # A persistent cache is a cache that grows, and a cargo target directory grows
+      # without bound: old dependency versions are never reclaimed. Nothing in it is
+      # precious, so past a ceiling the cheapest correct thing is to start again.
+      - name: Point cargo at a persistent build directory
+        run: |
+          target="$HOME/.cache/pheme-cargo-target"
+          mkdir -p "$target"
+          size=$(du -sm "$target" | cut -f1)
+          echo "cargo target dir: $target (${size} MB)"
+          if [ "$size" -gt 10240 ]; then
+            echo "over 10 GB, clearing"
+            rm -rf "${target:?}"/*
+          fi
+          echo "CARGO_TARGET_DIR=$target" >> "$GITHUB_ENV"
       # The MLS core, shared by the web (via WASM) and the phone (via FFI). It has tests
       # and nothing was running them.
       - run: cargo test --manifest-path crates/pheme-mls/Cargo.toml
@@ -237,10 +272,19 @@ jobs:
         working-directory: mobile
     steps:
       - uses: actions/checkout@v7
+      # `cache: false`, and it costs nothing. The action downloads the SDK only when
+      # $RUNNER_TOOL_CACHE/flutter/<channel>-<version>-<arch>/flutter/bin/flutter is
+      # missing — that check does not consult the `cache` input at all — and the SDK is
+      # already unpacked there on both runners.
+      #
+      # This was the single worst offender: the same 1.6 GB SDK was held THREE times in
+      # GitHub's cache, 4.8 GB of the repo's 5.75 GB. Cache entries are scoped per branch,
+      # so every PR branch that ran this job stored its own copy of an identical SDK.
+      # ~/.pub-cache persists locally for the package cache.
       - uses: subosito/flutter-action@v2
         with:
           flutter-version-file: mobile/pubspec.yaml
-          cache: true
+          cache: false
       - run: flutter pub get
       - run: dart format --set-exit-if-changed lib test
       - run: flutter analyze
