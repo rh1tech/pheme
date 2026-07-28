@@ -120,9 +120,17 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                           : GlassMetrics.tabBarExtent(context),
                     ),
                   ),
-                  child: IndexedStack(
-                    index: _tab,
-                    children: const [ConversationsPage(), ChannelsPage()],
+                  // Stated separately from the padding, because the padding above answers "how much
+                  // should the last row leave?" and goes to zero with the keyboard up, while this
+                  // answers "what must a floating button clear?" and never does — the bar rides up
+                  // with the keyboard rather than going away. Conflating them hid the pencil and the
+                  // plus behind the tab bar whenever the search field had focus.
+                  child: BottomChrome(
+                    extent: GlassMetrics.tabBarExtent(context),
+                    child: IndexedStack(
+                      index: _tab,
+                      children: const [ConversationsPage(), ChannelsPage()],
+                    ),
                   ),
                 ),
               ),

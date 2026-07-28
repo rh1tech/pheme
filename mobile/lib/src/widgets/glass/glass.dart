@@ -8,4 +8,5 @@ export 'glass_dialog.dart';
 export 'glass_menu.dart';
 export 'glass_surface.dart';
 export 'glass_tab_bar.dart';
+export 'bottom_chrome.dart';
 export 'glass_tokens.dart';

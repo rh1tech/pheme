@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../glass/glass.dart';
@@ -138,9 +139,17 @@ class AdaptiveScaffold extends StatelessWidget {
               if (floatingActionButton != null)
                 Positioned(
                   right: GlassMetrics.gutter,
-                  // Above whatever the page already reserves at the bottom — the home indicator on
-                  // a pushed page, the home indicator PLUS the floating tab bar on a tab.
-                  bottom: media.padding.bottom + GlassMetrics.gutter,
+                  // Above whatever the page reserves at the bottom — the home indicator on a pushed
+                  // page, the home indicator PLUS the floating tab bar on a tab.
+                  //
+                  // The larger of the two, because they answer different questions and the padding
+                  // goes to zero with the keyboard up: the LIST is meant to run under the tab bar
+                  // then, but the button is meant to stay in front of it. Taking the padding alone
+                  // parked the pencil entirely behind the bar the moment the search field was
+                  // focused. See BottomChrome.
+                  bottom:
+                      math.max(media.padding.bottom, BottomChrome.of(context)) +
+                      GlassMetrics.gutter,
                   child: floatingActionButton!,
                 ),
             ],
