@@ -23,6 +23,31 @@ import 'call_state.dart';
 class CallController extends Notifier<CallState?> {
   CallEngine? _engine;
 
+  /// Every call id this device has already had an engine for — placed or taken.
+  ///
+  /// "Do we know this call?" cannot be answered by [_engine] alone, and that gap is what made a
+  /// caller's own phone ring. There are two windows where the engine is null for a call we very
+  /// much know about:
+  ///
+  ///   * while [place] is awaiting `CallEngine.place` — the microphone, the peer connection, the
+  ///     key derivation — the id exists and the engine does not;
+  ///   * after a call ENDS, because dismiss() clears the engine, while the other end may still
+  ///     send a trailing signal for it.
+  ///
+  /// A nudge arriving in either window looked like "a call we know nothing about", so the device
+  /// started an INCOMING engine for a call it had just placed itself, and showed the caller a
+  /// ringing screen for their own outgoing call.
+  final _known = <String>{};
+
+  /// Bounded because it is only ever a guard against stale signals, and a signal for a call from
+  /// hours ago is not something this app has to answer for. Oldest out first.
+  static const _knownLimit = 32;
+
+  void _remember(String callId) {
+    _known.add(callId);
+    if (_known.length > _knownLimit) _known.remove(_known.first);
+  }
+
   @override
   CallState? build() {
     // The live stream nudges us that a call has moved. It is ONLY a nudge — the signal itself is read
@@ -44,8 +69,13 @@ class CallController extends Notifier<CallState?> {
       }
 
       // A call we know nothing about. Somebody is calling.
+      //
+      // "Nothing about" has to mean it: a call this device placed, or has already finished, is not
+      // an incoming one however quiet the engine has gone.
       final conversationId = next.value?.conversationId;
-      if (conversationId != null && engine == null) {
+      if (conversationId != null &&
+          engine == null &&
+          !_known.contains(signal.callId)) {
         unawaited(_receive(conversationId, signal.callId));
       }
     });
@@ -60,11 +90,17 @@ class CallController extends Notifier<CallState?> {
   Future<void> place(String conversationId) async {
     if (_engine != null) return; // already on one
 
+    // A UUID, because iOS identifies a call to CallKit BY a UUID and will not report one under
+    // anything else. Opaque to the server, so the shape is free.
+    //
+    // Claimed BEFORE the await, not inside the call below: everything after this point yields, and
+    // the whole point of the claim is to cover the stretch where there is no engine yet.
+    final callId = newUuid();
+    _remember(callId);
+
     final engine = await CallEngine.place(
       conversationId: conversationId,
-      // A UUID, because iOS identifies a call to CallKit BY a UUID and will not report one under
-      // anything else. Opaque to the server, so the shape is free.
-      callId: newUuid(),
+      callId: callId,
       userId: ref.read(myUserIdProvider),
       repository: ref.read(repositoryProvider),
       mls: ref.read(mlsServiceProvider),
@@ -78,6 +114,7 @@ class CallController extends Notifier<CallState?> {
 
   /// Takes an incoming call: start the engine, and let it read the invite out of the mailbox.
   Future<void> _receive(String conversationId, String callId) async {
+    if (_known.contains(callId)) return; // ours, or already done with
     if (_engine != null) {
       // Already on a call. The polite answer is "busy", but we cannot send one — a busy signal has to
       // be sealed under a key derived for THAT call, and deriving it would mean standing up a whole
@@ -86,6 +123,7 @@ class CallController extends Notifier<CallState?> {
     }
 
     try {
+      _remember(callId);
       final engine = await CallEngine.incoming(
         conversationId: conversationId,
         callId: callId,

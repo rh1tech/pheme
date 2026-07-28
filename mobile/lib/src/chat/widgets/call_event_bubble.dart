@@ -33,6 +33,28 @@ enum CallOutcome {
   }
 }
 
+/// What the transcript calls this outcome.
+///
+/// Pulled out of the bubble because the conversation LIST needs the same sentence: its preview was
+/// showing the message's raw body, so a failed call appeared in the chat list as
+/// `{"outcome":"failed"}`. The body of a call event is JSON by design — it has to survive being read
+/// by a client that does not know this event type — and JSON is not something to show anybody.
+String callEventLabel(
+  CallOutcome outcome, {
+  required bool isOwn,
+  required AppLocalizations l10n,
+}) => switch (outcome) {
+  CallOutcome.declined => l10n.t(
+    isOwn ? 'call.eventDeclinedOut' : 'call.eventDeclinedIn',
+  ),
+  CallOutcome.failed => l10n.t('call.eventFailed'),
+  // The same unanswered call is "No answer" to the person who made it and "Missed call" to the
+  // person who did not hear it.
+  CallOutcome.missed => l10n.t(
+    isOwn ? 'call.eventMissedOut' : 'call.eventMissedIn',
+  ),
+};
+
 class CallEventBubble extends StatelessWidget {
   const CallEventBubble({
     super.key,
@@ -59,15 +81,7 @@ class CallEventBubble extends StatelessWidget {
         ? (dark ? const Color(0xFFFF8787) : const Color(0xFFC92A2A))
         : theme.colorScheme.onSurfaceVariant;
 
-    final label = switch (outcome) {
-      CallOutcome.declined => l10n.t(
-        isOwn ? 'call.eventDeclinedOut' : 'call.eventDeclinedIn',
-      ),
-      CallOutcome.failed => l10n.t('call.eventFailed'),
-      CallOutcome.missed => l10n.t(
-        isOwn ? 'call.eventMissedOut' : 'call.eventMissedIn',
-      ),
-    };
+    final label = callEventLabel(outcome, isOwn: isOwn, l10n: l10n);
 
     return Center(
       child: Container(

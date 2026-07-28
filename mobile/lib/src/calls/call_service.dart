@@ -29,6 +29,8 @@
 
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
+
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -52,6 +54,16 @@ class CallService {
   StreamSubscription<CallEvent?>? _events;
   Timer? _watchdog;
 
+  /// Calls whose CallKit screen WE took down, because the app was already showing its own.
+  ///
+  /// iOS insists every VoIP push reports a call, so the system ringer is not optional — but once the
+  /// app is in front of the user with its own incoming-call screen, two ringers for one call is one
+  /// too many, and the system one is the one that does not belong to this app.
+  ///
+  /// Tracked because ending a CallKit call raises the same event as the USER ending it, and that
+  /// event hangs the call up. Without this set, dismissing the duplicate would decline the call.
+  final _suppressed = <String>{};
+
   /// Calls we have already ended. A late or duplicate push for one of these must be reported and then
   /// immediately ended — never rung.
   final _ended = <String>{};
@@ -66,7 +78,21 @@ class CallService {
     _ref.listen<CallState?>(callProvider, (previous, next) {
       if (next == null) return;
 
+      // Our own ringer is up and the user is looking at it: take the system one away.
+      //
+      // Driven off OUR state rather than off the CallKit incoming event, deliberately. The push
+      // usually beats the live-stream nudge, so at the moment CallKit reports the call this app may
+      // not yet know there is one — and dismissing the system ringer then would leave the user with
+      // no ringer at all. By the time this fires, the screen exists.
+      if (next.isIncomingRing &&
+          _isForeground &&
+          !_suppressed.contains(next.callId)) {
+        _suppressed.add(next.callId);
+        unawaited(FlutterCallkitIncoming.endCall(next.callId));
+      }
+
       if (next.status == CallStatus.ended) {
+        _suppressed.remove(next.callId);
         _ended.add(next.callId);
         _watchdog?.cancel();
         _watchdog = null;
@@ -144,6 +170,13 @@ class CallService {
     });
   }
 
+  /// Whether the user is actually looking at this app.
+  ///
+  /// `resumed` and nothing else: `inactive` covers a phone mid-swipe or with the control centre
+  /// pulled down, and an app the user cannot currently see is one whose ringer they cannot answer.
+  bool get _isForeground =>
+      WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+
   Future<void> _onPlatformEvent(CallEvent? event) async {
     if (event == null) return;
     final notifier = _ref.read(callProvider.notifier);
@@ -162,10 +195,14 @@ class CallService {
       // in which case this is a no-op — which is exactly what we want, because the alternative is
       // caring about which of the two got there first.
       case CallEventActionCallEnded(:final callKitParams):
+        // Our own doing — see [_suppressed]. The call is alive and ringing in the app; only its
+        // duplicate on the system ringer has gone.
+        if (_suppressed.contains(callKitParams.id)) break;
         _ended.add(callKitParams.id);
         await notifier.hangUp();
 
       case CallEventActionCallTimeout(:final id):
+        if (_suppressed.contains(id)) break;
         _ended.add(id);
         await notifier.hangUp();
 
