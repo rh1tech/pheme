@@ -869,6 +869,47 @@ class MlsService {
     }
   }
 
+  /// One catch-up per conversation for a whole pass of failed decrypts.
+  ///
+  /// A feed opens with fifty messages and asks about each in turn. Without this, fifty unreadable
+  /// ones would each fetch the Commit history — fifty round trips to learn the same thing once. The
+  /// in-flight future is shared, and a completed one is not repeated inside [_decryptRetryGap]: past
+  /// that gap the group may genuinely have moved on, and a message that failed a minute ago deserves
+  /// another look.
+  final _decryptCatchUp = <String, Future<void>>{};
+  final _decryptCatchUpAt = <String, DateTime>{};
+
+  static const _decryptRetryGap = Duration(seconds: 5);
+
+  Future<void> _catchUpForDecrypt(String conversationId, String myUserId) {
+    final inFlight = _decryptCatchUp[conversationId];
+    if (inFlight != null) return inFlight;
+
+    final last = _decryptCatchUpAt[conversationId];
+    if (last != null && DateTime.now().difference(last) < _decryptRetryGap) {
+      return Future.value();
+    }
+
+    final future = () async {
+      try {
+        final session = await this.session(myUserId);
+        final state = await _repo.mlsGroupState(conversationId);
+        if (!state.isEstablished) return;
+        await _catchUp(session, conversationId, state.groupId);
+      } on Object {
+        // Offline, or a group we are not in. Either way the message stays unread and the next pass
+        // tries again; a failure here must not turn into an exception in the middle of drawing a
+        // list of messages.
+      } finally {
+        _decryptCatchUpAt[conversationId] = DateTime.now();
+        _decryptCatchUp.remove(conversationId);
+      }
+    }();
+
+    _decryptCatchUp[conversationId] = future;
+    return future;
+  }
+
   /// Applies every Commit the group has made since this device last looked, in order.
   ///
   /// Without this, a device that was closed while the group changed can never decrypt again: MLS will
@@ -892,12 +933,21 @@ class MlsService {
         continue;
       }
       if (msg.contentType == ContentType.mlsCommit) {
-        await session
-            .applyCommit(groupId, msg.ciphertext, msg.mlsEpoch ?? 0)
-            .catchError((_) {
-              // A Commit we cannot apply is from a branch we are not on, or one we already have.
-              // Neither is fixed by retrying, and neither should stop us applying the rest.
-            });
+        await session.applyCommit(groupId, msg.ciphertext, msg.mlsEpoch ?? 0).catchError((
+          Object e,
+        ) {
+          // A Commit we cannot apply is from a branch we are not on, or one we already have.
+          // Neither is fixed by retrying, and neither should stop us applying the rest.
+          //
+          // SAID OUT LOUD, though. This swallow is how a forked device — one that holds the
+          // group but can no longer apply anybody's Commits — stays silent while every message
+          // after the fork renders as unreadable. It took a database dump to see it last time.
+          // One line in the log is the difference between "the app is broken" and a diagnosis.
+          debugPrint(
+            'pheme/mls: commit at epoch ${msg.mlsEpoch} not applied for '
+            '$conversationId ($groupId): $e',
+          );
+        });
       }
     }
   }
@@ -1211,7 +1261,29 @@ class MlsService {
     if (groups == null || groups.isEmpty) return null;
 
     final session = await this.session(myUserId);
-    final plaintext = await session.decryptAny(groups, message.ciphertext);
+    var plaintext = await session.decryptAny(groups, message.ciphertext);
+
+    // A failed decrypt has TWO causes and they are not the same thing.
+    //
+    //   * The message predates this device's membership. Permanent, and correct to say so.
+    //   * WE ARE BEHIND. The Commit that carried the group to the epoch this message was sealed at
+    //     has not been applied here yet, so the key to open it does not exist on this device — YET.
+    //
+    // The second was being reported as the first. A sender that commits and then immediately sends —
+    // which is exactly what happens when a device joins, or rejoins after signing back in — produces
+    // messages the other end cannot open for the second or two before its own catch-up lands. Those
+    // messages were marked unreadable, permanently, and nothing ever looked again: the bubble says
+    // "Not available on this device" for a message whose key was about to arrive.
+    //
+    // So catch up and ask once more. MLS keeps MAX_PAST_EPOCHS (32) behind the head, so a message a
+    // few epochs old opens perfectly well once the Commits in front of it are applied.
+    if (plaintext == null) {
+      await _catchUpForDecrypt(conversationId, myUserId);
+      plaintext = await session.decryptAny(
+        _readableGroups[conversationId] ?? groups,
+        message.ciphertext,
+      );
+    }
     if (plaintext == null) return null;
 
     final content = parseContent(plaintext);

@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../crypto/mls_device.dart';
 
+import '../chat/chat_providers.dart';
 import '../core/providers.dart';
 
 /// This device's server-issued id.
@@ -54,6 +55,9 @@ class DeviceController extends Notifier<String?> {
       await settings.saveRegisteredPushToken(token);
     }
     await settings.saveRegisteredMlsIdentity(registration.linkedMlsIdentity);
+    // Which account this row now belongs to, so a later launch can tell that the handset has been
+    // signed into somebody else since.
+    await settings.saveRegisteredUserId(ref.read(myUserIdProvider));
     // What this build told the server it can do, so a later launch can notice the answer has
     // changed — which is what an app upgrade does without touching anything else.
     await settings.saveRegisteredCanRenderPreview(
@@ -122,6 +126,8 @@ class DeviceController extends Notifier<String?> {
       canRenderPreview: ref.read(pushServiceProvider).canRenderPreview,
       registeredCanRenderPreview: await settings
           .loadRegisteredCanRenderPreview(),
+      currentUserId: ref.read(myUserIdProvider),
+      registeredUserId: await settings.loadRegisteredUserId(),
     )) {
       return;
     }
@@ -174,7 +180,38 @@ bool needsReregistration({
   bool registeredMlsIdentity = false,
   bool canRenderPreview = false,
   bool registeredCanRenderPreview = false,
+  String? currentUserId,
+  String? registeredUserId,
 }) {
+  // The handset has been signed into somebody else since it was registered.
+  //
+  // Checked FIRST, and it is the one form of staleness that is not about this device at all — every
+  // other fact here still matches: the same token, the same MLS identity, the same capabilities. So
+  // nothing looked stale, no registration was sent, and the server's row kept the previous account.
+  //
+  // What that costs is not a missing notification. The row still WORKS; it just names the wrong
+  // person. The server rings this handset for the previous account's calls — so signing in as one
+  // user and calling another made the caller's own phone ring, because the directory still held it
+  // as the callee's device. It also means the account actually signed in gets no pushes at all,
+  // having never been registered.
+  //
+  // A null CURRENT id is "not signed in yet", which is evidence of nothing.
+  //
+  // A null REGISTERED id is a device from before the owner was recorded — and it re-registers, once.
+  // The instinct is to leave those alone and save a request per install; that instinct is wrong
+  // here, and expensively so. DeviceController.build() seeds its state from the stored device id, so
+  // ensureRegistered() returns early on every launch and NOTHING else ever sends a registration
+  // again. This check is the only path back to the server. Treating an unknown owner as safe means
+  // every handset already carrying a wrong one keeps it forever — which is exactly the state this
+  // was written to repair, on a phone that had relaunched a dozen times.
+  //
+  // The cost of being wrong the other way is one POST per install, once.
+  if (currentUserId != null &&
+      currentUserId.isNotEmpty &&
+      currentUserId != registeredUserId) {
+    return true;
+  }
+
   // An MLS identity this device has but the server was never told about is the other way a
   // registration goes stale, and it is easy to reach: the device registers when the app starts,
   // which can be before the MLS identity has been minted, and registerDevice attaches whatever

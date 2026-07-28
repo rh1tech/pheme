@@ -4,7 +4,6 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../core/jwt.dart';
 import '../core/providers.dart';
 import '../crypto/chat_cache.dart';
 import '../crypto/chat_envelope_cache.dart';
@@ -60,11 +59,21 @@ final mlsServiceProvider = Provider<MlsService>(
   ),
 );
 
-/// The signed-in user's id, decoded from the access token.
+/// The signed-in user's id.
+///
+/// Taken from the auth state, which CHANGES when somebody signs in or out. It used to be decoded
+/// from `tokenStoreProvider.current`, and that is a one-shot read wearing a watch: the store is a
+/// plain Provider whose instance never changes, so watching it never fires again and this provider
+/// kept whatever it computed the first time anything asked. Read once before sign-in — which is the
+/// normal order of events on a cold start — it stayed at '' for the rest of the run.
+///
+/// Nothing announced that. An empty id simply means "no member matches me", so
+/// [Conversation.otherMember] returned the FIRST member instead, which in a chat you started is
+/// you: open a new chat with anyone and the header showed your own name and your own face. It
+/// corrected itself on the next launch, which is the worst kind of bug — one that disappears when
+/// you go looking for it.
 final myUserIdProvider = Provider<String>((ref) {
-  final tokens = ref.watch(tokenStoreProvider).current;
-  if (tokens == null) return '';
-  return decodeUserId(tokens.accessToken) ?? '';
+  return ref.watch(authControllerProvider.select((s) => s.userId)) ?? '';
 });
 
 /// Per-conversation read state. Local to this device on purpose — an unread dot that does not sync

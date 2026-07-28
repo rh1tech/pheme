@@ -212,6 +212,11 @@ class Conversation {
 
   /// The other person in a direct chat. Null for a group, or if the roster has not loaded.
   ConversationMember? otherMember(String myUserId) {
+    // Without an id there is no "other": every member differs from nothing, so the first one wins
+    // and a direct chat gets named after whoever created it — you, most of the time. Answering "I
+    // do not know" is the honest result, and it surfaces as a neutral placeholder rather than as
+    // confidently the wrong person.
+    if (myUserId.isEmpty) return null;
     for (final m in members) {
       if (m.userId != myUserId) return m;
     }

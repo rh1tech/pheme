@@ -162,4 +162,64 @@ void _mlsIdentityGroup() {
       );
     });
   });
+
+  // A handset that has been signed into somebody else.
+  //
+  // The third form this staleness has taken, and the only one where nothing about the DEVICE has
+  // changed: same token, same MLS identity, same capabilities. Nothing looked stale, so no
+  // registration was sent, and the server's row kept the previous account — which made it ring this
+  // phone for their calls, and left the account actually signed in with no push address at all.
+  group('needsReregistration, account handover', () {
+    test('a handset signed into a different account must re-register', () {
+      expect(
+        needsReregistration(
+          current: 'same-token',
+          registered: 'same-token',
+          currentUserId: 'xtreme',
+          registeredUserId: 'medved',
+        ),
+        isTrue,
+      );
+    });
+
+    test('the same account changes nothing', () {
+      expect(
+        needsReregistration(
+          current: 'same-token',
+          registered: 'same-token',
+          currentUserId: 'xtreme',
+          registeredUserId: 'xtreme',
+        ),
+        isFalse,
+      );
+    });
+
+    test('not being signed in yet is not evidence of staleness', () {
+      expect(
+        needsReregistration(
+          current: 'same-token',
+          registered: 'same-token',
+          currentUserId: '',
+          registeredUserId: 'medved',
+        ),
+        isFalse,
+      );
+    });
+
+    test('a registration whose owner was never recorded re-registers once', () {
+      // The case that matters most, and the one an instinct to avoid churn gets wrong: nothing else
+      // ever sends a registration again, so a handset that already holds the wrong owner can only be
+      // repaired here. One POST per install, once, against a phone that otherwise rings for somebody
+      // else forever.
+      expect(
+        needsReregistration(
+          current: 'same-token',
+          registered: 'same-token',
+          currentUserId: 'xtreme',
+          registeredUserId: null,
+        ),
+        isTrue,
+      );
+    });
+  });
 }

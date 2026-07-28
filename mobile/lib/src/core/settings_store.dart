@@ -26,6 +26,7 @@ class SettingsStore {
   /// early shows "New message" forever unless it registers again.
   static const _registeredMlsKey = 'pheme.registeredMlsIdentity';
   static const _registeredPreviewKey = 'pheme.registeredCanRenderPreview';
+  static const _registeredUserKey = 'pheme.registeredUserId';
 
   /// When this device first looked at its chats.
   ///
@@ -80,6 +81,22 @@ class SettingsStore {
 
   Future<void> clearDeviceId() => _storage.delete(key: _deviceIdKey);
 
+  /// Forgets this device's push registration entirely — the id and everything recorded about what
+  /// the server was told.
+  ///
+  /// Called on sign-out. Logging out wiped the chat data (keys, envelopes, pins, read state) and
+  /// left this alone, which is understandable — a push registration is not chat data — and wrong:
+  /// the id survived, DeviceController seeded its state from it, ensureRegistered() returned early
+  /// forever, and the next account inherited the previous one's row on the server. The handset went
+  /// on being the previous account's device, and the server rang it for their calls.
+  Future<void> clearDeviceRegistration() async {
+    await _storage.delete(key: _deviceIdKey);
+    await _storage.delete(key: _registeredTokenKey);
+    await _storage.delete(key: _registeredMlsKey);
+    await _storage.delete(key: _registeredPreviewKey);
+    await _storage.delete(key: _registeredUserKey);
+  }
+
   Future<String?> loadRegisteredPushToken() =>
       _storage.read(key: _registeredTokenKey);
 
@@ -110,8 +127,18 @@ class SettingsStore {
   Future<bool> loadRegisteredCanRenderPreview() async =>
       await _storage.read(key: _registeredPreviewKey) == 'true';
 
-  Future<void> saveRegisteredCanRenderPreview(bool can) => _storage.write(
-    key: _registeredPreviewKey,
-    value: can ? 'true' : 'false',
-  );
+  /// Which ACCOUNT the server's device row belongs to.
+  ///
+  /// A push address belongs to whoever is signed in on the handset now. Sign out and in as somebody
+  /// else and every other recorded fact still matches — same token, same MLS identity, same
+  /// capabilities — so nothing looked stale and the device was never registered again. The row kept
+  /// the previous account, and the server went on ringing this phone for their calls.
+  Future<String?> loadRegisteredUserId() =>
+      _storage.read(key: _registeredUserKey);
+
+  Future<void> saveRegisteredUserId(String userId) =>
+      _storage.write(key: _registeredUserKey, value: userId);
+
+  Future<void> saveRegisteredCanRenderPreview(bool can) =>
+      _storage.write(key: _registeredPreviewKey, value: can ? 'true' : 'false');
 }
