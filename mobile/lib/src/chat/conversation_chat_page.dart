@@ -17,6 +17,7 @@ import '../crypto/chat_content.dart';
 import '../core/api_exception.dart';
 import '../core/snackbar.dart';
 import '../crypto/mls_errors.dart';
+import '../core/providers.dart';
 import '../l10n/app_localizations.dart';
 import '../models/chat_models.dart';
 import '../calls/call_controller.dart';
@@ -345,7 +346,17 @@ class _ChatViewState extends ConsumerState<_ChatView> {
       title: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          ConversationAvatar(id: avatarId, label: title, size: 32),
+          ConversationAvatar(
+            id: avatarId,
+            label: title,
+            size: 32,
+            imageUrl: conversationAvatarUrl(
+              isGroup: conversation.isGroup,
+              groupAvatarId: conversation.avatarId,
+              otherAvatarId: other?.user.avatarId,
+              toUrl: ref.read(repositoryProvider).imageUrl,
+            ),
+          ),
           const SizedBox(width: 8),
           Flexible(
             child: Column(

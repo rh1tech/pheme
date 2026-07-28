@@ -34,6 +34,26 @@ Color avatarColor(String id) {
   return _palette[hash % _palette.length];
 }
 
+/// The picture to draw for a conversation, or null to fall back to initials.
+///
+/// A group shows its own picture; a direct chat shows the OTHER person's, which is the same rule
+/// the colour follows — a chat and the person in it should look alike wherever they appear.
+///
+/// This exists because every chat surface drew initials and nothing else. The widget has always
+/// taken an [imageUrl] and the server has always sent an avatarId, but the four call sites in the
+/// chat — the list, the header, the new-chat sheet and the members sheet — simply never passed
+/// one, so a user with a perfectly good profile picture appeared as their initials everywhere
+/// except in channels, which did pass it. One helper rather than four copies of the rule.
+String? conversationAvatarUrl({
+  required bool isGroup,
+  required String? groupAvatarId,
+  required String? otherAvatarId,
+  required String Function(String id) toUrl,
+}) {
+  final id = isGroup ? groupAvatarId : otherAvatarId;
+  return (id == null || id.isEmpty) ? null : toUrl(id);
+}
+
 /// Up to two uppercase initials, or '#' when there is nothing to take them from.
 String avatarInitials(String label) {
   final words = label.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty);

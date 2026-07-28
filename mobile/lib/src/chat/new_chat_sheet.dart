@@ -348,7 +348,14 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
         final label = userLabel(user);
 
         return ListTile(
-          leading: ConversationAvatar(id: user.id, label: label, size: 36),
+          leading: ConversationAvatar(
+            id: user.id,
+            label: label,
+            size: 36,
+            imageUrl: (user.avatarId?.isNotEmpty ?? false)
+                ? ref.read(repositoryProvider).imageUrl(user.avatarId!)
+                : null,
+          ),
           title: Text(label),
           trailing: _groupMode ? const Icon(Icons.add) : null,
           enabled: !_busy,

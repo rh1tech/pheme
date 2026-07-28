@@ -213,6 +213,11 @@ class _GroupMembersSheetState extends ConsumerState<_GroupMembersSheet> {
                       id: user.id,
                       label: userLabel(user),
                       size: 34,
+                      imageUrl: (user.avatarId?.isNotEmpty ?? false)
+                          ? ref
+                                .read(repositoryProvider)
+                                .imageUrl(user.avatarId!)
+                          : null,
                     ),
                     title: Text(userLabel(user)),
                     trailing: const Icon(Icons.person_add_alt),
@@ -288,7 +293,7 @@ class _GroupMembersSheetState extends ConsumerState<_GroupMembersSheet> {
   }
 }
 
-class _MemberRow extends StatelessWidget {
+class _MemberRow extends ConsumerWidget {
   const _MemberRow({
     required this.member,
     required this.isMe,
@@ -306,7 +311,7 @@ class _MemberRow extends StatelessWidget {
   final VoidCallback onRemove;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
 
@@ -314,7 +319,14 @@ class _MemberRow extends StatelessWidget {
     final name = isMe ? '$label (${l10n.t('group.you')})' : label;
 
     return ListTile(
-      leading: ConversationAvatar(id: member.userId, label: label, size: 34),
+      leading: ConversationAvatar(
+        id: member.userId,
+        label: label,
+        size: 34,
+        imageUrl: (member.user.avatarId?.isNotEmpty ?? false)
+            ? ref.read(repositoryProvider).imageUrl(member.user.avatarId!)
+            : null,
+      ),
       title: Row(
         children: [
           Flexible(child: Text(name, overflow: TextOverflow.ellipsis)),

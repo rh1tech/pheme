@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/providers.dart';
 import '../l10n/app_localizations.dart';
 import '../models/chat_models.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
@@ -110,6 +111,8 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
     );
 
     return AdaptiveScaffold(
+      // A TAB, not a pushed route — see the same note on ChannelsPage.
+      transitionBetweenRoutes: false,
       // The same brand mark the Channels tab shows. The two are one app and one screen with
       // different contents; titling one with a logo and the other with the word "Chats" made them
       // look like different products sharing a tab bar.
@@ -307,7 +310,16 @@ class _ConversationRow extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           children: [
-            ConversationAvatar(id: avatarId, label: title),
+            ConversationAvatar(
+              id: avatarId,
+              label: title,
+              imageUrl: conversationAvatarUrl(
+                isGroup: conversation.isGroup,
+                groupAvatarId: conversation.avatarId,
+                otherAvatarId: other?.user.avatarId,
+                toUrl: ref.read(repositoryProvider).imageUrl,
+              ),
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
