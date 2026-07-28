@@ -135,6 +135,9 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
         : (ios ? CupertinoIcons.bell : Icons.notifications_none_rounded);
 
     return AdaptiveScaffold(
+      // A TAB, not a pushed route: home_shell keeps this and Chats mounted together, and
+      // two iOS nav bars sharing the default Hero tag is an exception on every rebuild.
+      transitionBetweenRoutes: false,
       grouped: true,
       title: const BrandLogo(size: 26),
       trailing: [

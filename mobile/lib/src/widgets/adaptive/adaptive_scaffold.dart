@@ -21,6 +21,7 @@ class AdaptiveScaffold extends StatelessWidget {
     this.automaticallyImplyLeading = true,
     this.resizeToAvoidBottomInset = true,
     this.grouped = false,
+    this.transitionBetweenRoutes = true,
   });
 
   final Widget body;
@@ -30,6 +31,18 @@ class AdaptiveScaffold extends StatelessWidget {
   final Widget? floatingActionButton;
   final bool automaticallyImplyLeading;
   final bool resizeToAvoidBottomInset;
+
+  /// Whether this page's iOS nav bar animates into the next page's during a route
+  /// push. Leave true for a page that is pushed; set FALSE for a page that lives in
+  /// a tab alongside its siblings.
+  ///
+  /// [CupertinoNavigationBar] implements that animation with a [Hero], and when
+  /// enabled every bar shares one default tag. Two bars alive at once under the same
+  /// navigator therefore collide — "There are multiple heroes that share the same tag
+  /// within a subtree" — which is exactly what home_shell's [IndexedStack] does: it
+  /// keeps BOTH tab pages mounted, deliberately, so each keeps its scroll position.
+  /// The tabs are not routes and have no transition to take part in, so they opt out.
+  final bool transitionBetweenRoutes;
 
   /// When true, iOS fills the page with the grouped-table background
   /// (`systemGroupedBackground`) so inset list sections sit on grey, matching
@@ -46,6 +59,7 @@ class AdaptiveScaffold extends StatelessWidget {
             : null,
         navigationBar: CupertinoNavigationBar(
           automaticallyImplyLeading: automaticallyImplyLeading,
+          transitionBetweenRoutes: transitionBetweenRoutes,
           leading: leading,
           middle: title,
           trailing: trailing.isEmpty
@@ -60,7 +74,22 @@ class AdaptiveScaffold extends StatelessWidget {
         // the Cupertino label style for the whole body.
         child: DefaultTextStyle(
           style: CupertinoTheme.of(context).textTheme.textStyle,
-          child: SafeArea(top: false, child: body),
+          // And it provides no Material ancestor either, which is the other half of the
+          // same problem. ListTile, Card, InkWell and friends assert on one and throw
+          // "No Material widget found" — a full-screen red error, not a degraded layout.
+          //
+          // That is what "Devices & security" was on iOS: security_page.dart builds its
+          // rows with ListTile, found no Material above it, and rendered the error box
+          // instead of the page. It is not alone — settings, chat, conversations and
+          // forgot-password all put Material widgets inside this scaffold, so the fix
+          // belongs here rather than in any one of them.
+          //
+          // MaterialType.transparency paints nothing, so the Cupertino background (plain
+          // or `grouped`) still shows through and nothing about the iOS look changes.
+          child: Material(
+            type: MaterialType.transparency,
+            child: SafeArea(top: false, child: body),
+          ),
         ),
       );
     }
