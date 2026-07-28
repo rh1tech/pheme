@@ -206,10 +206,23 @@ class MlsService {
     // identity is qualified by the right host. Best-effort: a failure leaves the
     // 'local' default, correct for a non-federated host.
     await _ensureHomeDomain();
+
+    // Is the identity on this device still alive?
+    //
+    // Removing a device elsewhere kills its session, and the app signs out — but nothing destroyed
+    // the keys, so signing in again restored the SAME dead identity: every message already
+    // decrypted was still readable, and every co-member had long since pruned this leaf, so nothing
+    // could be sent. The web had this exact hole; this is the same fix.
+    final storedId = await loadMlsDeviceId(_storage, namespace: _ns);
+    final revoked = await _isRevoked(storedId);
+    if (revoked) await _discardRevokedIdentity();
+
     final session = await MlsSession.load(
       store: _store,
       userId: userId,
-      storedDeviceId: await loadMlsDeviceId(_storage, namespace: _ns),
+      // Nothing to restore from when the stored one is dead — load mints a fresh identity, which is
+      // the only thing this device can legitimately come back as.
+      storedDeviceId: revoked ? null : storedId,
       // Fires on a mint AND on a re-mint after a wipe or restore — every case where the id the
       // push registration was told about may no longer be the one this device holds.
       rememberDeviceId: (id) async {
@@ -1985,6 +1998,62 @@ class MlsService {
   /// leaving them readable on a shared device after signing out would defeat it. There is no way to
   /// re-derive them afterwards except from the passphrase-protected backup — which is the point of
   /// that backup.
+  /// Whether the server says this device's identity has been revoked.
+  ///
+  /// Answers only when it is sure. Offline, an expired session, an older server that does not report
+  /// tombstones — all read as "not revoked", so the identity is kept. Wrongly keeping a dead one
+  /// costs a failed send; wrongly destroying a live one takes the keys to every conversation on this
+  /// handset, on a launch that merely happened to have no signal.
+  Future<bool> _isRevoked(String? deviceId) async {
+    if (deviceId == null || deviceId.isEmpty) return false;
+    try {
+      final revoked = await _repo.revokedDeviceIds();
+      return revoked.contains(deviceId);
+    } on Object {
+      return false;
+    }
+  }
+
+  /// Destroys a revoked identity and everything it decrypted, without disturbing the session
+  /// bookkeeping the caller is in the middle of.
+  ///
+  /// Deliberately not [wipeLocalKeys]: that clears `_session` too, and it is called from INSIDE the
+  /// load that is building `_session`, so it would null the future its own caller is about to
+  /// return and send the next caller off to mint a second identity.
+  ///
+  /// The message cache goes with the keys. Minting a fresh identity alone does not cut a device off
+  /// — the plaintext of everything it already opened is still on the disk, readable by whoever is
+  /// holding the handset, which is exactly what the person removing the device was preventing.
+  Future<void> _discardRevokedIdentity() async {
+    _store.invalidate();
+    _restoreNeeded = null;
+    _settling.clear();
+    _readableGroups.clear();
+    _waitingSince.clear();
+    _historyRequested.clear();
+    _decryptGate.reset();
+
+    await rust.mlsUnload();
+    await _store.wipe();
+    await _cache.wipe();
+    await clearMlsDeviceId(_storage, namespace: _ns);
+  }
+
+  /// Forgets the in-memory session without touching a single key on disk.
+  ///
+  /// For a sign-out the server forced on us. The session is memoised per user, so signing back in as
+  /// the SAME account reused it — and if the session died because this device was removed, that
+  /// means carrying on with an identity the server has already buried. The next caller re-runs the
+  /// load, which is the only place that asks whether it is still alive.
+  ///
+  /// Not a wipe: this also fires on an ordinary expired token.
+  void forgetSession() {
+    _session = null;
+    _sessionUserId = '';
+    _restoreNeeded = null;
+    _settling.clear();
+  }
+
   Future<void> wipeLocalKeys() async {
     // Same ordering as restoreKeys, and for the same reason: a session whose operations are queued
     // behind its mutex must be refused BEFORE the client they are queued against is unloaded, or one

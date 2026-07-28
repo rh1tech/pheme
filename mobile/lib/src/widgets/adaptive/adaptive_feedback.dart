@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
@@ -97,10 +99,18 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
     final bg = widget.isError
         ? CupertinoColors.systemRed.resolveFrom(context)
         : const Color(0xFF1C1C1E);
+    // Above the keyboard when there is one.
+    //
+    // The toast is inserted into the ROOT overlay, which is not resized for the keyboard the way a
+    // scaffold's body is — so a message reported while typing was drawn underneath it, in the one
+    // situation where the reason for the message is usually what was just typed. viewInsets is the
+    // keyboard; padding.bottom is the home indicator, and a platform reports it as zero while the
+    // keyboard is up, so taking the larger of the two is right in both states rather than additive.
+    final lift = math.max(media.viewInsets.bottom, media.padding.bottom);
     return Positioned(
       left: 24,
       right: 24,
-      bottom: media.padding.bottom + 24,
+      bottom: lift + 24,
       child: SafeArea(
         child: FadeTransition(
           opacity: _controller,

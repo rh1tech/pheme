@@ -667,6 +667,19 @@ class PhemeRepository {
         .toList();
   }
 
+  /// The ids of this user's REVOKED devices.
+  ///
+  /// A different question from [myDevices], which lists only the live ones: this asks whether a
+  /// particular identity is DEAD. Absence from the live list cannot answer that — a device missing
+  /// from it may equally never have registered — and the two want opposite responses, so the server
+  /// names the tombstones explicitly.
+  Future<List<String>> revokedDeviceIds() async {
+    final d = await _get('/v1/mls/devices');
+    return ((d['revoked'] as List?) ?? const [])
+        .map((e) => e as String)
+        .toList();
+  }
+
   /// Terminates one of the caller's own devices server-side: deletes its key packages so it cannot
   /// be re-added, revokes its login, and forgets it from the registry. The MLS leaf removal is done
   /// first, client-side, by MlsService.terminateOwnDevice.

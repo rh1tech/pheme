@@ -130,7 +130,17 @@ class AuthController extends Notifier<AuthState> {
   }
 
   /// Called by the API client when a refresh fails irrecoverably.
+  ///
+  /// The MLS session goes with the identity. It is memoised per user, so without this a sign-in as
+  /// the SAME account reuses it — and when the session died because this device was REMOVED from
+  /// elsewhere, that means coming back up on an identity the server has already buried: every
+  /// message still readable, and nothing sendable, because every co-member pruned the leaf.
+  ///
+  /// Keys on disk are untouched here. This also fires on an ordinary expired token, and whether the
+  /// identity is actually dead is a question for the server, asked on the next load.
   void onSessionExpired() {
-    if (state.isAuthenticated) state = const AuthState();
+    if (!state.isAuthenticated) return;
+    state = const AuthState();
+    ref.read(mlsServiceProvider).forgetSession();
   }
 }
