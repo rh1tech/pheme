@@ -50,6 +50,14 @@ type ChatNotification struct {
 	// none. It is an id and not a URL because only a transport knows the public base to
 	// resolve it against.
 	SenderAvatarID string
+	// SenderID is the sender's user id, and it is here for one narrow purpose: a client with no
+	// picture to show draws a coloured circle with the sender's initials instead, and that colour
+	// is HASHED FROM THIS ID. Without it a direct chat's notification hashed the conversation id
+	// and gave the same person a different colour in the notification than in the chat list.
+	//
+	// Travels under exactly the same privacy rule as the name and the avatar: a recipient who
+	// asked not to be told who is messaging them is not told, and identifies() gates all three.
+	SenderID string
 	// Kind separates "you have a message" from "your phone is ringing". They are the same
 	// push transport but not the same event: a call is worth waking a device for and stops
 	// mattering in thirty seconds, whereas a message can wait and should not expire.
@@ -353,6 +361,12 @@ func chatNotificationPayload(publicBaseURL string, n ChatNotification) notificat
 	// no other way to reach it.
 	if icon != "" {
 		data["senderAvatar"] = icon
+	}
+	// See ChatNotification.SenderID: what a client hashes the fallback avatar's colour from. Only
+	// when the notification may identify the sender at all — the same gate the name and the picture
+	// pass through.
+	if n.identifies() && n.SenderID != "" {
+		data["senderId"] = n.SenderID
 	}
 	// The encrypted body, for the device to decrypt and show. Base64 because a push payload is
 	// JSON; still ciphertext, and still unreadable to everything it passes through — this

@@ -290,6 +290,7 @@ func (h *Handler) deliverPush(
 			MessageID:            msg.ID,
 			SenderName:           name,
 			SenderAvatarID:       avatarID,
+			SenderID:             msg.SenderID,
 			Privacy:              key.privacy,
 			DeviceRendersPreview: key.rendersPreview,
 			// Passed to every group; the payload builder attaches it only for the group that
