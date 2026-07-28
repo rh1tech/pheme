@@ -122,6 +122,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	// only — never email — and requires a minimum query length to limit
 	// enumeration. Any authenticated user may search; membership is not involved.
 	mux.HandleFunc("GET /v1/users/search", h.searchUsers)
+	// One person's public profile, for the view you reach by tapping their avatar in a
+	// chat. Registered alongside the search route above: Go's mux prefers the more
+	// specific pattern, so the literal "search" still wins over this wildcard.
+	mux.HandleFunc("GET /v1/users/{id}", h.getUserProfile)
 	// MLS key directory (public KeyPackages) — the E2EE handshake material.
 	mux.HandleFunc("POST /v1/mls/key-packages", h.publishKeyPackages)
 	mux.HandleFunc("GET /v1/mls/key-packages/count", h.keyPackageCount)
@@ -195,6 +199,26 @@ func (h *Handler) searchUsers(w http.ResponseWriter, r *http.Request) {
 		out = append(out, u.Public())
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"users": out})
+}
+
+// getUserProfile serves one person's public profile.
+//
+// Open to any signed-in caller, which is the same posture as user search: it returns
+// what somebody published about themselves and nothing they did not — see
+// domain.PublicProfile for what is deliberately withheld. Restricting it to people you
+// share a conversation with would not protect anything search already gives away, and
+// would break the one case it exists for, which is looking somebody up before you have
+// a conversation with them.
+func (h *Handler) getUserProfile(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireUser(w, r); !ok {
+		return
+	}
+	u, err := h.Store.UserByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "user not found")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, u.PublicProfileOf())
 }
 
 func (h *Handler) requireUser(w http.ResponseWriter, r *http.Request) (string, bool) {

@@ -255,6 +255,38 @@ func (u User) Public() PublicUser {
 	return PublicUser{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, AvatarID: u.AvatarID}
 }
 
+// PublicProfile is what a person has chosen to publish about themselves: the
+// PublicUser fields plus the free-text ones they filled in on their own profile
+// screen, which that screen groups under "contact information".
+//
+// PHONE IS NOT HERE, and neither is email. Both are ways to reach somebody off
+// this service, which is a different thing from a bio or a link — one is a
+// description you write for strangers, the other is a contact detail you give
+// to people you choose. A profile view is served to any signed-in caller, so it
+// carries only the first kind. If phone should be visible it wants to be a
+// deliberate per-user setting, not a field that arrives because it happened to
+// be in the same struct.
+type PublicProfile struct {
+	ID          string `json:"id"`
+	Username    string `json:"username,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	AvatarID    string `json:"avatarId,omitempty"`
+	Bio         string `json:"bio,omitempty"`
+	Website     string `json:"website,omitempty"`
+}
+
+// PublicProfileOf returns the fuller public projection of u.
+func (u User) PublicProfileOf() PublicProfile {
+	return PublicProfile{
+		ID:          u.ID,
+		Username:    u.Username,
+		DisplayName: u.DisplayName,
+		AvatarID:    u.AvatarID,
+		Bio:         u.Bio,
+		Website:     u.Website,
+	}
+}
+
 // ChannelStatus controls whether a channel accepts and delivers notifications.
 type ChannelStatus string
 
