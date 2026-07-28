@@ -20,5 +20,13 @@
   <string>????</string>
   <key>CFBundleVersion</key>
   <string>1.0</string>
+  <!-- The deployment target every OTHER piece of the iOS build already uses: 15.0 in each Xcode
+       target, and the floor firebase-core/firebase-messaging demand. This is the file Flutter reads
+       when it generates the SwiftPM package that wraps the plugins, and with the key ABSENT it fell
+       back to 13.0 — so the generated package declared a floor lower than its own dependencies and
+       the device build failed on Target Integrity. It is regenerated on every build, so the fix has
+       to live here rather than in the ephemeral package. -->
+  <key>MinimumOSVersion</key>
+  <string>15.0</string>
 </dict>
 </plist>
