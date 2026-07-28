@@ -22,6 +22,8 @@ import { LanguageSwitcher } from '../components/LanguageSwitcher'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { Logo } from '../components/Logo'
 import { PasswordStrength } from '../components/PasswordStrength'
+import { ServerInput } from '../components/ServerInput'
+import { deployedBaseUrl, isValidServerUrl, saveBaseUrl, storedBaseUrl } from '../lib/server'
 
 const RESEND_SECONDS = 120
 
@@ -35,13 +37,18 @@ export function ForgotPasswordPage() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [cooldown, startCooldown] = useCountdown()
+  // Needed here for the same reason as on the sign-in form, and arguably more: a reset code is sent
+  // by the server that holds the account, so asking the wrong one produces silence rather than an
+  // error — no code arrives and nothing says why.
+  const [server, setServer] = useState(() => storedBaseUrl() || deployedBaseUrl())
 
   function fail(err: unknown) {
     notifyError(err instanceof ApiError ? err.message : t('auth.requestFailed'))
   }
 
   async function requestCode() {
-    if (email.trim() === '') return
+    if (!canRequest) return
+    saveBaseUrl(server)
     setLoading(true)
     try {
       await api.forgotPassword(email)
@@ -81,6 +88,7 @@ export function ForgotPasswordPage() {
     }
   }
 
+  const canRequest = email.trim() !== '' && isValidServerUrl(server)
   const canReset = code.length === 6 && checkPassword(password).acceptable
 
   return (
@@ -110,7 +118,13 @@ export function ForgotPasswordPage() {
                 onChange={(e) => setEmail(e.currentTarget.value)}
                 onKeyDown={(e) => e.key === 'Enter' && requestCode()}
               />
-              <Button onClick={requestCode} loading={loading} disabled={email.trim() === ''} fullWidth mt="xs">
+              <ServerInput
+                value={server}
+                onChange={setServer}
+                disabled={loading}
+                onEnter={requestCode}
+              />
+              <Button onClick={requestCode} loading={loading} disabled={!canRequest} fullWidth mt="xs">
                 {t('auth.sendCode')}
               </Button>
               <Anchor size="sm" ta="center" onClick={() => navigate('/login')}>

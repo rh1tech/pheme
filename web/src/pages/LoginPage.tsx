@@ -22,6 +22,8 @@ import { LanguageSwitcher } from '../components/LanguageSwitcher'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { Logo } from '../components/Logo'
 import { PasswordStrength } from '../components/PasswordStrength'
+import { ServerInput } from '../components/ServerInput'
+import { deployedBaseUrl, isValidServerUrl, saveBaseUrl, storedBaseUrl } from '../lib/server'
 
 const RESEND_SECONDS = 120
 
@@ -36,6 +38,10 @@ export function LoginPage() {
   const [code, setCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [cooldown, startCooldown] = useCountdown()
+  // Seeded from whatever this browser already points at — the address a previous sign-in chose, or
+  // the one this deployment was configured with. Seeded, not assumed: it is a field the person can
+  // see and correct, and on a build with no configured default it starts empty.
+  const [server, setServer] = useState(() => storedBaseUrl() || deployedBaseUrl())
   // Set the moment a sign-in succeeds; see the redirect below.
   const [signedIn, setSignedIn] = useState(false)
 
@@ -64,6 +70,10 @@ export function LoginPage() {
 
   async function submitCredentials() {
     if (!canSubmitCredentials) return
+    // The server first, and before any request: everything below sends credentials, and a request
+    // needs to know where it is going. Signing in against the previous address and only then
+    // switching would hand one server the password meant for another.
+    saveBaseUrl(server)
     setLoading(true)
     try {
       if (mode === 'login') {
@@ -115,7 +125,9 @@ export function LoginPage() {
   }
 
   const canSubmitCredentials =
-    email.trim() !== '' && (mode === 'login' || checkPassword(password).acceptable)
+    email.trim() !== '' &&
+    isValidServerUrl(server) &&
+    (mode === 'login' || checkPassword(password).acceptable)
 
   return (
     <Center mih="100vh" p="md">
@@ -185,6 +197,12 @@ export function LoginPage() {
                 />
                 {mode === 'register' && <PasswordStrength value={password} />}
               </div>
+              <ServerInput
+                value={server}
+                onChange={setServer}
+                disabled={loading}
+                onEnter={submitCredentials}
+              />
               {mode === 'login' && (
                 <Anchor size="sm" onClick={() => navigate('/forgot-password')}>
                   {t('auth.forgotPassword')}

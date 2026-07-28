@@ -53,6 +53,10 @@ const en = {
     resendIn: 'Resend in {{seconds}}s',
     back: 'Back',
     forgotPassword: 'Forgot password?',
+    server: 'Server',
+    serverPlaceholder: 'pheme.example.com',
+    serverHint: 'The Pheme server your account lives on',
+    serverInvalid: "That doesn't look like a server address",
     forgotTitle: 'Reset your password',
     forgotSubtitle: "Enter your email and we'll send you a reset code.",
     sendCode: 'Send code',
@@ -92,6 +96,12 @@ const en = {
     notificationsEnabled: 'Browser notifications enabled',
     notificationsOn: 'Notifications on',
     enableFailed: 'Could not enable',
+  },
+  settings: {
+    serverTitle: 'Server',
+    serverHint: 'The Pheme server this session belongs to. To use another one, sign out and enter its address on the sign-in form.',
+    serverShare: 'Share',
+    serverShareHint: 'Scan this on another device, or copy the address, to sign in to the same server.',
   },
   profile: {
     title: 'Your profile',

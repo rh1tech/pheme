@@ -1,6 +1,7 @@
 // Pheme App API client with bearer auth and transparent access-token refresh.
 
 import { nprogress } from '@mantine/nprogress'
+import { apiBase } from './server'
 import {
   loadTokens,
   saveTokens,
@@ -45,11 +46,11 @@ import type {
   UserStatus,
 } from './types'
 
-// Resolve the API base URL: runtime config (production container) first, then
-// the build-time Vite env (local dev), then a localhost default.
-const runtimeApiBase =
-  typeof window !== 'undefined' ? window.__PHEME_CONFIG?.apiBase : undefined
-const BASE = runtimeApiBase || import.meta.env.VITE_API_BASE || 'http://localhost:8080'
+// The API base is no longer a constant resolved once at module load. It is whatever server this
+// person signed in to — see lib/server.ts — falling back to what the deployment guessed. Read per
+// request, so choosing a server on the sign-in form takes effect for the sign-in itself rather than
+// for the reload after it.
+const BASE = () => apiBase() || 'http://localhost:8080'
 
 /** Raised when the session is no longer valid and the user must re-authenticate. */
 export class AuthError extends Error {}
@@ -94,7 +95,7 @@ async function rawFetch<T>(path: string, opts: RequestOptions, token?: string): 
   if (!isForm) headers['Content-Type'] = 'application/json'
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(`${BASE()}${path}`, {
     method: opts.method ?? 'GET',
     headers,
     body:
@@ -213,7 +214,7 @@ async function requestBinary(
   }
 
   const send = (accessToken: string): Promise<Response> =>
-    fetch(`${BASE}${path}`, {
+    fetch(`${BASE()}${path}`, {
       method: init.method,
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -862,7 +863,7 @@ export const api = {
 
 /** Absolute URL of a processed message image (served publicly by the App API). */
 export function imageUrl(id: string): string {
-  return `${BASE}/v1/images/${id}`
+  return `${BASE()}/v1/images/${id}`
 }
 
 // A stream connection must last longer than the token that opened it is valid for,
@@ -902,5 +903,5 @@ export async function streamUrl(): Promise<string | null> {
       return null // refresh() has already cleared the session and signalled auth failure
     }
   }
-  return `${BASE}/v1/stream?token=${encodeURIComponent(access)}`
+  return `${BASE()}/v1/stream?token=${encodeURIComponent(access)}`
 }

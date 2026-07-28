@@ -22,6 +22,7 @@ import { useAuth } from '../auth/context'
 import { APP_VERSION, BUILD_ID } from '../lib/version'
 import type { NotificationPrivacy, User } from '../lib/types'
 import { CardListSkeleton } from '../components/Skeletons'
+import { ServerSection } from '../components/ServerSection'
 
 export function ProfilePage() {
   const { t } = useTranslation()
@@ -257,6 +258,12 @@ export function ProfilePage() {
 
           </>
         )}
+
+        {/* Outside the `user &&` gate too, and for the same kind of reason: the server describes
+            the connection rather than the account, and it is most worth reading when the profile
+            did NOT load — that is the moment somebody wants to check they are pointed at the right
+            place. */}
+        <ServerSection />
 
         {/* Outside the `user &&` gate on purpose: the version must still be readable when the
             profile failed to load, which is exactly when someone is filing the bug report that

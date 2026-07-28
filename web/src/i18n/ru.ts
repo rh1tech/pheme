@@ -55,6 +55,10 @@ const ru: Resources = {
     resendIn: 'Повтор через {{seconds}} с',
     back: 'Назад',
     forgotPassword: 'Забыли пароль?',
+    server: 'Сервер',
+    serverPlaceholder: 'pheme.example.com',
+    serverHint: 'Сервер Pheme, на котором находится ваша учётная запись',
+    serverInvalid: 'Это не похоже на адрес сервера',
     forgotTitle: 'Сброс пароля',
     forgotSubtitle: 'Введите эл. почту, и мы пришлём код для сброса.',
     sendCode: 'Отправить код',
@@ -94,6 +98,12 @@ const ru: Resources = {
     notificationsEnabled: 'Уведомления в браузере включены',
     notificationsOn: 'Уведомления включены',
     enableFailed: 'Не удалось включить',
+  },
+  settings: {
+    serverTitle: 'Сервер',
+    serverHint: 'Сервер Pheme, к которому относится этот сеанс. Чтобы использовать другой, выйдите и укажите его адрес на форме входа.',
+    serverShare: 'Поделиться',
+    serverShareHint: 'Отсканируйте это на другом устройстве или скопируйте адрес, чтобы войти на тот же сервер.',
   },
   profile: {
     title: 'Ваш профиль',
