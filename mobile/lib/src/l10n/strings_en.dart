@@ -320,6 +320,7 @@ const Map<String, String> enStrings = {
   'chat.title': 'Chats',
   'chat.tabChats': 'Chats',
   'chat.tabChannels': 'Channels',
+  'chat.addPeople': 'People',
   'chat.searchPeople': 'Search people by name or @username',
   'chat.noPeople': 'No one found',
   'chat.startRemote': 'Start a chat with {handle}',

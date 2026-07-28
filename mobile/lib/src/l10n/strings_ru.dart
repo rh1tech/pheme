@@ -319,6 +319,7 @@ const Map<String, String> ruStrings = {
   'chat.title': 'Чаты',
   'chat.tabChats': 'Чаты',
   'chat.tabChannels': 'Каналы',
+  'chat.addPeople': 'Участники',
   'chat.searchPeople': 'Поиск людей по имени или @username',
   'chat.noPeople': 'Никого не найдено',
   'chat.startRemote': 'Начать чат с {handle}',

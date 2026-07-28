@@ -235,8 +235,13 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
                   ),
                   if (_groupMode) ...[
                     const SizedBox(height: 12),
+                    // Labelled, not just hinted. The placeholder is an EXAMPLE — "Weekend plans" —
+                    // so on its own it says what a group name might look like and never what the
+                    // box is for, and it disappears the moment anything is typed. The string
+                    // already existed and was simply never used here.
                     AdaptiveTextField(
                       controller: _groupTitle,
+                      label: l10n.t('chat.groupName'),
                       placeholder: l10n.t('chat.groupNamePlaceholder'),
                       onChanged: (_) => setState(() {}),
                     ),
@@ -259,6 +264,7 @@ class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
                   const SizedBox(height: 12),
                   AdaptiveTextField(
                     controller: _query,
+                    label: l10n.t('chat.addPeople'),
                     placeholder: l10n.t('chat.searchPeople'),
                     onChanged: _onQueryChanged,
                   ),

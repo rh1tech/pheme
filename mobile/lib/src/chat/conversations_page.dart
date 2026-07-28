@@ -11,7 +11,6 @@ import '../models/chat_models.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
 import '../widgets/adaptive/adaptive_refresh.dart';
 import '../widgets/adaptive/adaptive_scaffold.dart';
-import '../widgets/adaptive/adaptive_search_field.dart';
 import '../widgets/brand_logo.dart';
 import '../widgets/glass/glass.dart';
 import '../widgets/swipe_actions.dart';
@@ -19,6 +18,7 @@ import '../core/snackbar.dart';
 import '../widgets/adaptive/adaptive_feedback.dart';
 import '../widgets/adaptive/platform.dart';
 import '../widgets/error_view.dart';
+import '../widgets/pinned_search_header.dart';
 import 'chat_providers.dart';
 import 'chat_time.dart';
 import 'conversation_title.dart';
@@ -171,62 +171,88 @@ class _ConversationsPageState extends ConsumerState<ConversationsPage> {
               semanticLabel: l10n.t('chat.newChat'),
               onPressed: () => showNewChatSheet(context),
             ),
-      body: conversations.when(
-        loading: () => const Center(child: AdaptiveProgress()),
-        error: (e, _) => ErrorView(
-          message: e.toString(),
-          onRetry: () => ref.read(conversationListProvider.notifier).refresh(),
-        ),
-        data: (all) {
-          final list = _filter(all, myUserId, l10n);
+      body: Builder(
+        builder: (context) {
+          final media = MediaQuery.of(context);
+          // The field is pinned OUTSIDE the scroll view, so the list is told to start below it the
+          // same way it is told to start below the bar: as top padding. AdaptiveRefreshableScrollView
+          // spends that as a leading gap, so the first chat clears the field and the rest pass under
+          // it.
+          final feed = MediaQuery(
+            data: media.copyWith(
+              padding: media.padding.copyWith(
+                top:
+                    media.padding.top +
+                    (searchable ? PinnedSearchHeader.extent : 0),
+              ),
+            ),
+            child: _feed(context, ref, l10n, conversations, myUserId),
+          );
 
-          return AdaptiveRefreshableScrollView(
-            onRefresh: () =>
-                ref.read(conversationListProvider.notifier).refresh(),
-            slivers: [
-              // In the list rather than pinned above it. A search field that hides on a scroll
-              // gesture and comes back on another was one more thing moving on screen; carried by
-              // the list itself it goes away when you scroll past it, comes back when you scroll
-              // to the top, and never argues with the bar it sits under.
-              if (searchable)
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                      GlassMetrics.gutter,
-                      GlassMetrics.gap,
-                      GlassMetrics.gutter,
-                      4,
-                    ),
-                    child: AdaptiveSearchField(
-                      controller: _search,
-                      placeholder: l10n.t('chat.search'),
-                      onChanged: (v) => setState(() => _query = v.trim()),
-                    ),
-                  ),
+          if (!searchable) return feed;
+
+          return Stack(
+            children: [
+              Positioned.fill(child: feed),
+              Positioned(
+                top: media.padding.top,
+                left: 0,
+                right: 0,
+                child: PinnedSearchHeader(
+                  controller: _search,
+                  placeholder: l10n.t('chat.search'),
+                  onChanged: (v) => setState(() => _query = v.trim()),
                 ),
-              if (list.isEmpty)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _EmptyState(
-                    l10n: l10n,
-                    // "Nothing found" is a different thing from "no chats yet", and telling a
-                    // user to start a chat when they have twenty and mistyped a name is noise.
-                    searching: _query.isNotEmpty,
-                  ),
-                )
-              else
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  sliver: SliverList.builder(
-                    itemCount: list.length,
-                    itemBuilder: (context, i) =>
-                        _ConversationRow(conversation: list[i], swipe: _swipe),
-                  ),
-                ),
+              ),
             ],
           );
         },
       ),
+    );
+  }
+
+  Widget _feed(
+    BuildContext context,
+    WidgetRef ref,
+    AppLocalizations l10n,
+    AsyncValue<List<Conversation>> conversations,
+    String myUserId,
+  ) {
+    return conversations.when(
+      loading: () => const Center(child: AdaptiveProgress()),
+      error: (e, _) => ErrorView(
+        message: e.toString(),
+        onRetry: () => ref.read(conversationListProvider.notifier).refresh(),
+      ),
+      data: (all) {
+        final list = _filter(all, myUserId, l10n);
+
+        return AdaptiveRefreshableScrollView(
+          onRefresh: () =>
+              ref.read(conversationListProvider.notifier).refresh(),
+          slivers: [
+            if (list.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: _EmptyState(
+                  l10n: l10n,
+                  // "Nothing found" is a different thing from "no chats yet", and telling a
+                  // user to start a chat when they have twenty and mistyped a name is noise.
+                  searching: _query.isNotEmpty,
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                sliver: SliverList.builder(
+                  itemCount: list.length,
+                  itemBuilder: (context, i) =>
+                      _ConversationRow(conversation: list[i], swipe: _swipe),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }

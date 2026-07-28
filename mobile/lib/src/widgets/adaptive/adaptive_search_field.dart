@@ -28,12 +28,14 @@ class AdaptiveSearchField extends StatefulWidget {
 
   @override
   State<AdaptiveSearchField> createState() => _AdaptiveSearchFieldState();
+
+  /// The field's height. Public because a page that PINS this one has to reserve exactly this much
+  /// room for it above its list, and a number guessed at the call site drifts from this one.
+  static const double height = 40;
 }
 
 class _AdaptiveSearchFieldState extends State<AdaptiveSearchField> {
   final _focus = FocusNode();
-
-  static const double _height = 40;
 
   @override
   void initState() {
@@ -67,11 +69,11 @@ class _AdaptiveSearchFieldState extends State<AdaptiveSearchField> {
     final muted = scheme.onSurfaceVariant;
 
     final field = Container(
-      height: _height,
+      height: AdaptiveSearchField.height,
       padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         color: scheme.onSurface.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(_height / 2),
+        borderRadius: BorderRadius.circular(AdaptiveSearchField.height / 2),
       ),
       child: Row(
         children: [
@@ -148,7 +150,12 @@ class _AdaptiveSearchFieldState extends State<AdaptiveSearchField> {
                   child: Padding(
                     padding: const EdgeInsets.only(left: 4),
                     child: SizedBox(
-                      height: GlassMetrics.minTapTarget,
+                      // The FIELD's height, not minTapTarget. At 44 against a 40pt field the row
+                      // grew by 4pt the moment the field took focus, and everything below it —
+                      // the whole chat list — stepped down by that much. The generous horizontal
+                      // padding keeps this comfortable to hit; a tap target that shoves the page
+                      // is not worth the extra 4pt.
+                      height: AdaptiveSearchField.height,
                       child: Center(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 8),

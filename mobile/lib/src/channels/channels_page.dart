@@ -10,11 +10,11 @@ import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../push/push_service.dart';
 import '../widgets/adaptive/adaptive.dart';
-import '../widgets/adaptive/adaptive_search_field.dart';
 import '../widgets/brand_logo.dart';
 import '../widgets/glass/glass.dart';
 import 'widgets/channel_row.dart';
 import '../widgets/error_view.dart';
+import '../widgets/pinned_search_header.dart';
 import 'create_channel_sheet.dart';
 import 'join_channel_sheet.dart';
 
@@ -138,22 +138,6 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
     // result — the same rule the Chats tab follows, for the same reasons.
     final searchable = _hasAnyChannel(channels, joined) || _query.isNotEmpty;
 
-    final search = SliverToBoxAdapter(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          GlassMetrics.gutter,
-          GlassMetrics.gap,
-          GlassMetrics.gutter,
-          4,
-        ),
-        child: AdaptiveSearchField(
-          controller: _search,
-          placeholder: l10n.t('channels.search'),
-          onChanged: (v) => setState(() => _query = v.trim()),
-        ),
-      ),
-    );
-
     return AdaptiveScaffold(
       behindChrome: true,
       grouped: true,
@@ -199,50 +183,91 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
               semanticLabel: l10n.t('channels.newChannel'),
               onPressed: () => _create(context, ref),
             ),
-      body: AdaptiveRefreshableScrollView(
-        onRefresh: () => Future.wait([
-          ref.read(channelsProvider.notifier).refresh(),
-          ref.read(joinedChannelsProvider.notifier).refresh(),
-        ]),
-        slivers: channels.when(
-          loading: () => const [
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: Center(child: AdaptiveProgress()),
-            ),
-          ],
-          error: (e, _) => [
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: ErrorView(
-                message: l10n.t('channels.loadFailed'),
-                onRetry: () => ref.read(channelsProvider.notifier).refresh(),
+      body: Builder(
+        builder: (context) {
+          final media = MediaQuery.of(context);
+          // Same arrangement as Chats: the field is pinned outside the scroll view, and the list is
+          // told to begin below it as top padding.
+          final feed = MediaQuery(
+            data: media.copyWith(
+              padding: media.padding.copyWith(
+                top:
+                    media.padding.top +
+                    (searchable ? PinnedSearchHeader.extent : 0),
               ),
             ),
-          ],
-          data: (allOwned) {
-            final rows = _rows(
-              _filterOwned(allOwned),
-              _filterJoined(joined.asData?.value ?? const <JoinedChannel>[]),
-            );
-            return [
-              if (searchable) search,
-              if (rows.isEmpty)
-                _emptyState(context, searching: _query.isNotEmpty)
-              else
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  sliver: SliverList.builder(
-                    itemCount: rows.length,
-                    itemBuilder: (context, i) => ChannelRow(
-                      channel: rows[i].channel,
-                      role: rows[i].role,
-                    ),
-                  ),
+            child: _feed(context, ref, l10n, channels, joined),
+          );
+
+          if (!searchable) return feed;
+
+          return Stack(
+            children: [
+              Positioned.fill(child: feed),
+              Positioned(
+                top: media.padding.top,
+                left: 0,
+                right: 0,
+                child: PinnedSearchHeader(
+                  controller: _search,
+                  placeholder: l10n.t('channels.search'),
+                  onChanged: (v) => setState(() => _query = v.trim()),
                 ),
-            ];
-          },
-        ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _feed(
+    BuildContext context,
+    WidgetRef ref,
+    AppLocalizations l10n,
+    AsyncValue<List<Channel>> channels,
+    AsyncValue<List<JoinedChannel>> joined,
+  ) {
+    return AdaptiveRefreshableScrollView(
+      onRefresh: () => Future.wait([
+        ref.read(channelsProvider.notifier).refresh(),
+        ref.read(joinedChannelsProvider.notifier).refresh(),
+      ]),
+      slivers: channels.when(
+        loading: () => const [
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(child: AdaptiveProgress()),
+          ),
+        ],
+        error: (e, _) => [
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: ErrorView(
+              message: l10n.t('channels.loadFailed'),
+              onRetry: () => ref.read(channelsProvider.notifier).refresh(),
+            ),
+          ),
+        ],
+        data: (allOwned) {
+          final rows = _rows(
+            _filterOwned(allOwned),
+            _filterJoined(joined.asData?.value ?? const <JoinedChannel>[]),
+          );
+          return [
+            if (rows.isEmpty)
+              _emptyState(context, searching: _query.isNotEmpty)
+            else
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                sliver: SliverList.builder(
+                  itemCount: rows.length,
+                  itemBuilder: (context, i) =>
+                      ChannelRow(channel: rows[i].channel, role: rows[i].role),
+                ),
+              ),
+          ];
+        },
       ),
     );
   }
