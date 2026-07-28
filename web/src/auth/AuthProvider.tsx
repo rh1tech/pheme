@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, setOnAuthFailure } from '../lib/api'
 import { clearTokens, loadTokens, saveTokens } from '../lib/tokens'
-import { wipeLocalKeys } from '../lib/mls'
+import { forgetSession, wipeLocalKeys } from '../lib/mls'
 import { notifyError } from '../lib/notify'
 import i18n from '../i18n'
 import { decodeRole, decodeUserId } from '../lib/jwt'
@@ -43,7 +43,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // When the API client detects an unrecoverable auth failure, drop session state.
   useEffect(() => {
-    setOnAuthFailure(() => setIdentity({ userId: null, role: null }))
+    setOnAuthFailure(() => {
+      setIdentity({ userId: null, role: null })
+      // The MLS session goes with the identity. It is memoised per user, so without this a sign-in
+      // as the SAME user in this tab reuses it — and if the session died because this device was
+      // revoked, that means carrying on with a group every co-member has already evicted us from.
+      // Keys on disk are untouched; only the next load decides whether they are still good.
+      forgetSession()
+    })
   }, [])
 
   const applyTokens = useCallback((res: { accessToken: string; refreshToken: string; userId: string; role: string }) => {

@@ -437,6 +437,21 @@ class Session {
       // launch into a lost device — see revokedLocally.
       const isRevoked = restored !== null && (await revokedLocally(deviceOf(restored.identity)))
 
+      // Everything this identity ever decrypted goes with it.
+      //
+      // The point of revoking a device is to cut it off, and minting a fresh identity alone does not
+      // do that: the plaintext of every message this browser had already opened sits in the content
+      // cache, readable by whoever is sitting in front of it. Signing back in after a revocation
+      // showed the whole history in clear, which is precisely what the person doing the revoking was
+      // trying to prevent.
+      //
+      // Only on a REVOKED identity — not on a legacy one, which is this device's own state that
+      // nobody asked to destroy.
+      if (isRevoked) {
+        await wipeUnlocked()
+        clearPreviews()
+      }
+
       const keep = restored !== null && !isLegacy && !isRevoked
 
       let client: MlsClient
@@ -2166,6 +2181,29 @@ function encodeVersion(version: number): Uint8Array {
  * signing out would defeat it. There is no way to re-derive them afterwards except
  * from the passphrase-protected backup — which is the point of that backup.
  */
+/**
+ * Forgets the in-memory session, without touching a single key on disk.
+ *
+ * Called when the API reports the session is gone — a revoked device, an expired token, a signed-out
+ * sibling tab. The next caller re-runs Session.load, which is the ONLY place that asks whether this
+ * device's identity is still alive.
+ *
+ * Without it, signing back in as the same user in the same tab reused the memoised promise:
+ * `readyUserId === userId`, so nothing re-established, and the browser went on holding a group it
+ * had already been evicted from. Every send failed with UseAfterEviction and no amount of signing
+ * in again could clear it, because signing in again was exactly what did not re-establish.
+ *
+ * Deliberately NOT a wipe. This fires on ordinary token expiry too, and destroying the keys to every
+ * conversation because a token aged out would be far worse than the bug it fixes. Whether the
+ * identity is dead is a question for the server, asked on the next load.
+ */
+export function forgetSession(): void {
+  ready = null
+  readyUserId = ''
+  restoreNeeded = null
+  settling.clear()
+}
+
 export async function wipeLocalKeys(): Promise<void> {
   return withMlsLock(async () => {
     await wipeUnlocked()
