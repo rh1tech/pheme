@@ -1448,12 +1448,30 @@ async function tryExternalJoin(
     // help; let the caller announce and wait.
     if (!info || info.groupId !== groupId) return null
 
-    const result = await session.joinByExternalCommit(
-      conversationId,
-      groupId,
-      base64ToBytes(info.groupInfo),
-      info.epoch,
-    )
+    // A GroupInfo that is PRESENT but unusable is as good as one that was never published, and
+    // until now it was not treated that way: the miss above is handled, a conflict below is
+    // handled, and a throw went past both.
+    //
+    // The join is built locally before anything is sent, so a GroupInfo the client cannot open —
+    // `PublicGroupError(UnknownSender)`, seen on a real conversation — threw out of here, past the
+    // caller, and surfaced as "Send failed" on every attempt. Every retry re-fetched the same bytes
+    // and failed identically, so the chat stayed stuck for good with no way forward.
+    //
+    // Falling back is the answer the caller already has for "external join cannot help": announce,
+    // and let a member admit this device. Slower — it waits for someone to be online — but it
+    // finishes, which the alternative never does.
+    let result: 'accepted' | 'conflict'
+    try {
+      result = await session.joinByExternalCommit(
+        conversationId,
+        groupId,
+        base64ToBytes(info.groupInfo),
+        info.epoch,
+      )
+    } catch (e) {
+      console.warn('pheme/mls: external join failed, announcing instead', e)
+      return null
+    }
     if (result === 'accepted') {
       rememberReadableGroup(conversationId, groupId)
       // Republish at the new epoch so the NEXT joiner can external-join without waiting either.
