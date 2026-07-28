@@ -3,6 +3,7 @@ import { ActionIcon, Button, Card, Group, Menu, Stack, Table, Text } from '@mant
 import { IconDots } from '@tabler/icons-react'
 import { Trans, useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
+import { memberLabel } from '../lib/conversation'
 import { notifyError, notifySuccess } from '../lib/notify'
 import type { Member } from '../lib/types'
 import { ChannelRoleBadge, MemberStatusBadge } from './badges'
@@ -134,7 +135,7 @@ export function SubscribersPanel({ channelId }: SubscribersPanelProps) {
         <Text size="sm">
           <Trans
             i18nKey="channel.subscribers.removeConfirm"
-            values={{ email: confirmRemove?.email ?? '' }}
+            values={{ name: confirmRemove ? memberLabel(confirmRemove) : '' }}
             components={{ bold: <b /> }}
           />
         </Text>
@@ -151,7 +152,7 @@ export function SubscribersPanel({ channelId }: SubscribersPanelProps) {
             <Card key={m.userId} withBorder padding="sm">
               <Group justify="space-between" wrap="nowrap">
                 <Text size="sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {m.email}
+                  {memberLabel(m)}
                 </Text>
                 <Group gap="xs" wrap="nowrap">
                   <Button
@@ -198,7 +199,7 @@ export function SubscribersPanel({ channelId }: SubscribersPanelProps) {
               <Table.Tbody>
                 {members.map((m) => (
                   <Table.Tr key={m.userId}>
-                    <Table.Td>{m.email}</Table.Td>
+                    <Table.Td>{memberLabel(m)}</Table.Td>
                     <Table.Td>
                       <ChannelRoleBadge role={m.role} />
                     </Table.Td>

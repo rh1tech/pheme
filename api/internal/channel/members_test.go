@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -167,14 +168,17 @@ func TestApprovalQueueApproveDenyAndBan(t *testing.T) {
 	var appr struct {
 		Members []struct {
 			UserID string `json:"userId"`
-			Email  string `json:"email"`
 			Status string `json:"status"`
 		} `json:"members"`
 		Total int `json:"total"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &appr)
-	if len(appr.Members) != 1 || appr.Members[0].UserID != subUser.ID || appr.Members[0].Email != "sub@b.com" {
+	if len(appr.Members) != 1 || appr.Members[0].UserID != subUser.ID {
 		t.Fatalf("approvals = %+v, want one for %s", appr.Members, subUser.ID)
+	}
+	// The address they signed up with is not part of what an owner is shown. See withProfiles.
+	if bytes.Contains(rec.Body.Bytes(), []byte("sub@b.com")) {
+		t.Fatalf("approvals leaked the subscriber's email: %s", rec.Body)
 	}
 
 	// Approve → membership active and the device now delivers.

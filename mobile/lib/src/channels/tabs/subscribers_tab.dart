@@ -170,7 +170,7 @@ class _SubscribersTabState extends ConsumerState<SubscribersTab> {
         final ok = await showAdaptiveConfirm(
           context,
           title: l10n.t('channel.ban'),
-          message: l10n.tp('channel.banConfirm', {'email': m.email}),
+          message: l10n.tp('channel.banConfirm', {'name': m.label}),
           confirmLabel: l10n.t('channel.ban'),
           cancelLabel: l10n.t('common.cancel'),
           isDestructive: true,
@@ -190,7 +190,7 @@ class _SubscribersTabState extends ConsumerState<SubscribersTab> {
         final ok = await showAdaptiveConfirm(
           context,
           title: l10n.t('channel.removeMember'),
-          message: l10n.tp('channel.removeMemberConfirm', {'email': m.email}),
+          message: l10n.tp('channel.removeMemberConfirm', {'name': m.label}),
           confirmLabel: l10n.t('channel.removeMember'),
           cancelLabel: l10n.t('common.cancel'),
           isDestructive: true,
@@ -228,7 +228,7 @@ class _SubscribersTabState extends ConsumerState<SubscribersTab> {
       return showCupertinoModalPopup<_MemberAction>(
         context: context,
         builder: (ctx) => CupertinoActionSheet(
-          title: Text(m.email),
+          title: Text(m.label),
           actions: [
             CupertinoActionSheetAction(
               onPressed: () => Navigator.of(ctx).pop(roleAction),
@@ -262,7 +262,7 @@ class _SubscribersTabState extends ConsumerState<SubscribersTab> {
           children: [
             ListTile(
               title: Text(
-                m.email,
+                m.label,
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
@@ -400,7 +400,7 @@ class _ApprovalCard extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              member.email,
+              member.label,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w500),
             ),
@@ -448,7 +448,7 @@ class _MemberCard extends StatelessWidget {
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
         title: Text(
-          member.email,
+          member.label,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.w500),
         ),

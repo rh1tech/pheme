@@ -222,9 +222,9 @@ const Map<String, String> ruStrings = {
   'channel.memberRemoved': 'Подписчик удалён',
   'channel.memberUpdateFailed': 'Не удалось обновить подписчика',
   'channel.memberRemoveFailed': 'Не удалось удалить подписчика',
-  'channel.removeMemberConfirm': 'Удалить «{email}» из этого канала?',
+  'channel.removeMemberConfirm': 'Удалить «{name}» из этого канала?',
   'channel.banConfirm':
-      'Заблокировать «{email}»? Пользователь перестанет получать сообщения '
+      'Заблокировать «{name}»? Пользователь перестанет получать сообщения '
       'этого канала.',
   'channel.roleAdmin': 'Админ',
   'channel.statusActive': 'Активен',

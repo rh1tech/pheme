@@ -251,12 +251,25 @@ func (h *AppHandler) leaveChannel(w http.ResponseWriter, r *http.Request) {
 // memberView embeds a membership with the user's email for display.
 type memberView struct {
 	domain.ChannelMember
-	Email string `json:"email"`
+	// Flattened rather than an embedded PublicProfile: both structs carry `json:"id"`, and Go drops
+	// BOTH sides of a tag collision at the same depth rather than picking one — so embedding it
+	// would have silently deleted the member's own id from every response.
+	Username    string `json:"username,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	AvatarID    string `json:"avatarId,omitempty"`
 }
 
-// withEmails decorates members with their email addresses, resolved via a single
-// users lookup (mirrors the admin handlers' id→email map).
-func (h *AppHandler) withEmails(ctx context.Context, members []domain.ChannelMember) []memberView {
+// withProfiles decorates members with their PUBLIC identity, resolved via a single users lookup.
+//
+// It used to attach the email address, which meant subscribing to a channel handed your email to
+// whoever runs it — and a channel owner is an ordinary user, not an operator. Nobody agreed to that
+// by pressing Subscribe. The name and handle are what somebody published about themselves, and they
+// are what an owner needs to recognise a subscriber; the address they signed up with is not.
+//
+// Server administrators still see emails — see admin_handler.go. That is a different surface with a
+// different audience: there the email IS the account identifier, and the person reading it operates
+// the instance.
+func (h *AppHandler) withProfiles(ctx context.Context, members []domain.ChannelMember) []memberView {
 	out := make([]memberView, 0, len(members))
 
 	// Only the members being listed are fetched. This used to call ListUsers, which reads EVERY
@@ -269,13 +282,19 @@ func (h *AppHandler) withEmails(ctx context.Context, members []domain.ChannelMem
 	}
 	users, err := h.Store.UsersByIDs(ctx, ids)
 	if err != nil {
-		// The email is a decoration on a list that is useful without it. Losing it must not cost
-		// the administrator the member list itself.
-		slog.Default().Warn("could not load member emails", "channelMembers", len(members), "error", err)
+		// The profile is a decoration on a list that is useful without it. Losing it must not cost
+		// the owner the member list itself.
+		slog.Default().Warn("could not load member profiles", "channelMembers", len(members), "error", err)
 		users = nil
 	}
 	for _, m := range members {
-		out = append(out, memberView{ChannelMember: m, Email: users[m.UserID].Email})
+		p := users[m.UserID].PublicProfileOf()
+		out = append(out, memberView{
+			ChannelMember: m,
+			Username:      p.Username,
+			DisplayName:   p.DisplayName,
+			AvatarID:      p.AvatarID,
+		})
 	}
 	return out
 }
@@ -296,7 +315,7 @@ func (h *AppHandler) listApprovals(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not load approvals")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"members": h.withEmails(r.Context(), members), "total": total})
+	httpx.JSON(w, http.StatusOK, map[string]any{"members": h.withProfiles(r.Context(), members), "total": total})
 }
 
 // listMembers returns a channel's subscribers, lazily paginated by offset/limit
@@ -325,7 +344,7 @@ func (h *AppHandler) listMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"members": h.withEmails(r.Context(), members), "total": total, "offset": offset, "limit": limit,
+		"members": h.withProfiles(r.Context(), members), "total": total, "offset": offset, "limit": limit,
 	})
 }
 

@@ -222,12 +222,18 @@ export interface ChannelRelation {
   status: MemberStatus | 'none'
 }
 
-// A channel subscriber (member), with the user's email for display.
+// A channel subscriber (member), carrying the user's PUBLIC identity for display.
+//
+// This used to carry their email, which meant subscribing to a channel handed your address to
+// whoever runs it — and a channel owner is an ordinary user, not an operator of the server. Nobody
+// agreed to that by pressing Subscribe. Use memberLabel() to render one.
 export interface Member {
   id: string
   channelId: string
   userId: string
-  email: string
+  username?: string
+  displayName?: string
+  avatarId?: string
   role: ChannelRole
   status: MemberStatus
   createdAt: string

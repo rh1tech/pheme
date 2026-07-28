@@ -224,9 +224,9 @@ const Map<String, String> enStrings = {
   'channel.memberRemoved': 'Subscriber removed',
   'channel.memberUpdateFailed': 'Could not update subscriber',
   'channel.memberRemoveFailed': 'Could not remove subscriber',
-  'channel.removeMemberConfirm': 'Remove “{email}” from this channel?',
+  'channel.removeMemberConfirm': 'Remove “{name}” from this channel?',
   'channel.banConfirm':
-      'Ban “{email}”? They will stop receiving messages from this channel.',
+      'Ban “{name}”? They will stop receiving messages from this channel.',
   'channel.roleAdmin': 'Admin',
   'channel.statusActive': 'Active',
   'channel.statusPending': 'Pending',

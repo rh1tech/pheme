@@ -181,19 +181,47 @@ void main() {
   });
 
   group('ChannelMember.fromJson', () {
-    test('reads role, status and email', () {
+    test('reads role, status and the public identity', () {
       final m = ChannelMember.fromJson({
         'id': 'm1',
         'channelId': 'c1',
         'userId': 'u1',
-        'email': 'a@b.com',
+        'username': 'ada',
+        'displayName': 'Ada Lovelace',
         'role': 'admin',
         'status': 'pending',
       });
       expect(m.userId, 'u1');
-      expect(m.email, 'a@b.com');
+      expect(m.username, 'ada');
+      expect(m.displayName, 'Ada Lovelace');
       expect(m.role, ChannelRole.admin);
       expect(m.status, MemberStatus.pending);
+    });
+
+    // The label is what every subscriber row, action sheet and confirmation prints. It used to be
+    // the email address; a row with nothing to print cannot be acted on, so it must never be empty.
+    test(
+      'labels a member by name, then handle, then a stub — never nothing',
+      () {
+        ChannelMember at(Map<String, dynamic> extra) =>
+            ChannelMember.fromJson({'userId': 'abcdef123456', ...extra});
+
+        expect(at({'displayName': 'Ada', 'username': 'ada'}).label, 'Ada');
+        expect(at({'username': 'ada'}).label, '@ada');
+        expect(at({}).label, 'User abcdef');
+      },
+    );
+
+    // The promise the server now keeps — see withProfiles. Pinned here too, because this is the
+    // model that would happily surface it again if the field came back.
+    test('carries no email even when the server sends one', () {
+      final m = ChannelMember.fromJson({
+        'userId': 'u1',
+        'username': 'ada',
+        'email': 'ada@example.com',
+      });
+      expect(m.label, '@ada');
+      expect(m.toString(), isNot(contains('example.com')));
     });
   });
 

@@ -247,7 +247,9 @@ class ChannelMember {
     required this.id,
     required this.channelId,
     required this.userId,
-    required this.email,
+    required this.username,
+    required this.displayName,
+    required this.avatarId,
     required this.role,
     required this.status,
     required this.createdAt,
@@ -256,16 +258,33 @@ class ChannelMember {
   final String id;
   final String channelId;
   final String userId;
-  final String email;
+
+  /// The subscriber's PUBLIC identity. This used to be their email address, which meant subscribing
+  /// to a channel handed your email to whoever runs it — and a channel owner is an ordinary user,
+  /// not an operator of the server. Nobody agreed to that by pressing Subscribe.
+  final String username;
+  final String displayName;
+  final String avatarId;
+
   final ChannelRole role;
   final MemberStatus status;
   final String createdAt;
+
+  /// What to call this person on screen: the name they chose, then their handle, then a stub built
+  /// from the id — never nothing, because a row with no label cannot be acted on.
+  String get label {
+    if (displayName.isNotEmpty) return displayName;
+    if (username.isNotEmpty) return '@$username';
+    return 'User ${userId.length > 6 ? userId.substring(0, 6) : userId}';
+  }
 
   factory ChannelMember.fromJson(Map<String, dynamic> j) => ChannelMember(
     id: j['id'] as String? ?? '',
     channelId: j['channelId'] as String? ?? '',
     userId: j['userId'] as String? ?? '',
-    email: j['email'] as String? ?? '',
+    username: j['username'] as String? ?? '',
+    displayName: j['displayName'] as String? ?? '',
+    avatarId: j['avatarId'] as String? ?? '',
     role: ChannelRole.fromWire(j['role'] as String?),
     status: MemberStatus.fromWire(j['status'] as String?),
     createdAt: j['createdAt'] as String? ?? '',

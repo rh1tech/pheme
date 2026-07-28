@@ -55,10 +55,10 @@ func (c *countingUserStore) report() (int, []int) {
 // memberListing decodes the handler's response.
 type memberListing struct {
 	Members []struct {
-		UserID string `json:"userId"`
-		Email  string `json:"email"`
-		Role   string `json:"role"`
-		Status string `json:"status"`
+		UserID   string `json:"userId"`
+		Username string `json:"username"`
+		Role     string `json:"role"`
+		Status   string `json:"status"`
 	} `json:"members"`
 	Total int `json:"total"`
 }
@@ -102,7 +102,7 @@ func TestListingMembersReadsOnlyThoseMembers(t *testing.T) {
 			"to decorate one page, so this request gets slower as the product grows", all)
 	}
 	if len(sizes) == 0 {
-		t.Fatal("no scoped user lookup was made; where did the emails come from?")
+		t.Fatal("no scoped user lookup was made; where did the profiles come from?")
 	}
 	for _, n := range sizes {
 		if n > 3 {
@@ -111,19 +111,29 @@ func TestListingMembersReadsOnlyThoseMembers(t *testing.T) {
 	}
 }
 
-// The emails belong to the right people. A lookup keyed wrongly would decorate the list with
-// somebody else's address, which is worse than showing none.
-func TestMemberEmailsBelongToTheirMembers(t *testing.T) {
+// The profiles belong to the right people, and no email appears at all.
+//
+// Two separate promises. A lookup keyed wrongly would label a member with somebody else's name,
+// which is worse than showing none. And the address a subscriber signed up with is not part of what
+// a channel's owner is shown — an owner is an ordinary user, and nobody agreed to hand over their
+// email by pressing Subscribe.
+func TestMemberProfilesBelongToTheirMembersAndCarryNoEmail(t *testing.T) {
 	f := newAppFixture(t)
 	ownerToken, owner := f.tokenFor(t, "email-owner@pheme.test")
 	ch := channelFor(t, f, owner.ID, "emails")
 
 	want := map[string]string{}
+	emails := []string{}
 	for i := 0; i < 4; i++ {
 		email := fmt.Sprintf("real-member-%d@pheme.test", i)
 		u := seedUser(t, f.store, email, domain.RoleUser)
+		username := fmt.Sprintf("member%d", i)
+		if _, err := f.store.UpdateUserProfile(context.Background(), u.ID, domain.UserProfileUpdate{Username: &username}); err != nil {
+			t.Fatalf("seed username: %v", err)
+		}
 		joinChannel(t, f, ch.ID, u.ID, domain.RoleUser)
-		want[u.ID] = email
+		want[u.ID] = username
+		emails = append(emails, email)
 	}
 	// Somebody who is not in the channel, whose address must not appear.
 	outsider := seedUser(t, f.store, "not-a-member@pheme.test", domain.RoleUser)
@@ -145,12 +155,19 @@ func TestMemberEmailsBelongToTheirMembers(t *testing.T) {
 			t.Errorf("a listed member (%s) is not one of the channel's members", m.UserID)
 			continue
 		}
-		if m.Email != want[m.UserID] {
-			t.Errorf("member %s is listed with email %q, want %q", m.UserID, m.Email, want[m.UserID])
+		if m.Username != want[m.UserID] {
+			t.Errorf("member %s is listed as %q, want %q", m.UserID, m.Username, want[m.UserID])
 		}
 	}
-	if body := rec.Body.String(); strings.Contains(body, "not-a-member@pheme.test") {
+	body := rec.Body.String()
+	if strings.Contains(body, "not-a-member@pheme.test") {
 		t.Errorf("a non-member's email address appeared in the listing: %s", body)
+	}
+	// Nor any MEMBER's address. This is the promise that regressed the whole point of the change.
+	for _, email := range emails {
+		if strings.Contains(body, email) {
+			t.Errorf("a member's email address appeared in the listing: %s", body)
+		}
 	}
 	_ = outsider
 }
@@ -188,7 +205,7 @@ func TestListingMembersIsForAdministratorsOnly(t *testing.T) {
 
 // A member list that cannot load emails is still a member list. Losing a decoration must not cost
 // the administrator the page.
-func TestMemberListingSurvivesAnEmailLookupFailure(t *testing.T) {
+func TestMemberListingSurvivesAProfileLookupFailure(t *testing.T) {
 	f := newAppFixture(t)
 	ownerToken, owner := f.tokenFor(t, "degrade-owner@pheme.test")
 	ch := channelFor(t, f, owner.ID, "degrade")
