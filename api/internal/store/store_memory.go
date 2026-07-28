@@ -669,8 +669,25 @@ func (m *Memory) RevokeAPIKey(_ context.Context, keyID string) error {
 func (m *Memory) CreateDevice(_ context.Context, d domain.Device) (domain.Device, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Mirrors Mongo: a device IS its push address, so re-registering the same one updates rather
-	// than duplicating. Two rows for one phone means the fan-out pushes to it twice.
+	// Mirrors Mongo: a push address belongs to one account at a time, so a row holding this
+	// registration's address under a different user is stale — the handset has been signed into
+	// somebody else since. Left behind, it makes one phone two people's device, and the server rings
+	// it for the previous account.
+	if d.UserID != "" {
+		for id, existing := range m.devices {
+			if existing.UserID == d.UserID {
+				continue
+			}
+			sameAddress := (d.WebPushSub != "" && existing.WebPushSub == d.WebPushSub) ||
+				(d.FCMToken != "" && existing.FCMToken == d.FCMToken)
+			if sameAddress {
+				delete(m.devices, id)
+			}
+		}
+	}
+
+	// A device IS its push address, so re-registering the same one updates rather than duplicating.
+	// Two rows for one phone means the fan-out pushes to it twice.
 	for id, existing := range m.devices {
 		if existing.UserID != d.UserID {
 			continue

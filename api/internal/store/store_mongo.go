@@ -39,11 +39,15 @@ func NewMongo(ctx context.Context, uri, dbName string, blobs blob.Store) (*Mongo
 		return nil, err
 	}
 	m := &Mongo{client: client, db: client.Database(dbName), blobs: blobs}
-	if err := m.ensureIndexes(ctx); err != nil {
+	// Migrations FIRST, indexes second. The order matters now that an index enforces an invariant
+	// rather than only speeding a query up: a unique index refuses to build while a violation
+	// exists, so a deployment carrying old bad rows would fail to start — which is how a fix becomes
+	// an outage, and on a self-hosted product it is somebody else's outage. Clean, then enforce.
+	if err := m.migrate(ctx); err != nil {
 		_ = client.Disconnect(ctx)
 		return nil, err
 	}
-	if err := m.migrate(ctx); err != nil {
+	if err := m.ensureIndexes(ctx); err != nil {
 		_ = client.Disconnect(ctx)
 		return nil, err
 	}
@@ -61,6 +65,56 @@ func (m *Mongo) migrate(ctx context.Context) error {
 		bson.M{"$set": bson.M{"commentsAllowed": true}},
 	); err != nil {
 		return err
+	}
+	// One push address, one account — see releasePushAddress. Existing deployments carry rows from
+	// before that was enforced, and those rows are not merely untidy: the server rings a handset for
+	// whichever accounts claim it, so somebody who signed out of one account and into another on the
+	// same phone gets the previous account's calls. This clears them, and is what lets the unique
+	// index below be built at all.
+	if err := m.releaseSharedPushAddresses(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// releaseSharedPushAddresses drops device rows whose push address is also held by a different
+// account, keeping the most recently created — the handset's current owner.
+//
+// Idempotent, and after the first run it matches nothing, so it costs one aggregation on startup.
+func (m *Mongo) releaseSharedPushAddresses(ctx context.Context) error {
+	for _, field := range []string{"fcmToken", "webPushEndpoint"} {
+		pipeline := mongo.Pipeline{
+			{{Key: "$match", Value: bson.M{field: bson.M{"$exists": true, "$ne": ""}}}},
+			{{Key: "$sort", Value: bson.D{{Key: "createdAt", Value: -1}}}},
+			{{Key: "$group", Value: bson.M{
+				"_id":   "$" + field,
+				"ids":   bson.M{"$push": "$_id"},
+				"users": bson.M{"$addToSet": "$userId"},
+			}}},
+			// Only addresses claimed by more than one account. A device legitimately re-registering
+			// under the SAME account is the dedupe's business, not this one's.
+			{{Key: "$match", Value: bson.M{"users.1": bson.M{"$exists": true}}}},
+		}
+		cursor, err := m.db.Collection("devices").Aggregate(ctx, pipeline)
+		if err != nil {
+			return err
+		}
+		var groups []struct {
+			IDs []string `bson:"ids"`
+		}
+		if err := cursor.All(ctx, &groups); err != nil {
+			return err
+		}
+		for _, g := range groups {
+			if len(g.IDs) < 2 {
+				continue
+			}
+			// Sorted newest-first above, so everything after the first is a previous owner.
+			if _, err := m.db.Collection("devices").
+				DeleteMany(ctx, bson.M{"_id": bson.M{"$in": g.IDs[1:]}}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -83,6 +137,21 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 			// from before dedupe (that is the bug this indexes for), and a unique index would
 			// refuse to build until they were cleaned up — turning a fix into an outage.
 			{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "fcmToken", Value: 1}}, Options: options.Index().SetPartialFilterExpression(bson.M{"fcmToken": bson.M{"$exists": true}})},
+			// The token WITHOUT the user, which is how CreateDevice finds rows holding this
+			// handset's address under somebody else — see releasePushAddress. A handset that
+			// changes hands is otherwise invisible to every index here, because they all lead
+			// with userId, and the one query that has to cross accounts would scan.
+			//
+			// UNIQUE, and that is the point: it makes "one handset, one account" a property of the
+			// database rather than of remembering to call releasePushAddress. Three separate code
+			// paths had to agree to keep that true, and the one that forgot rang the wrong person's
+			// phone for five hours.
+			//
+			// Safe to build because migrate() runs FIRST and has already cleared any address held by
+			// two accounts — see NewMongo. Without that ordering this index would refuse to build on
+			// exactly the deployments carrying the bug, and refuse to start the API with it.
+			{Keys: bson.D{{Key: "fcmToken", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"fcmToken": bson.M{"$exists": true}})},
+			{Keys: bson.D{{Key: "webPushEndpoint", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"webPushEndpoint": bson.M{"$exists": true}})},
 		},
 		"subscriptions":  {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "deviceId", Value: 1}}}},
 		"channelMembers": {{Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "channelId", Value: 1}, {Key: "status", Value: 1}}}, {Keys: bson.D{{Key: "userId", Value: 1}}}},
@@ -651,6 +720,21 @@ func (m *Mongo) RevokeAPIKey(ctx context.Context, keyID string) error {
 }
 
 func (m *Mongo) CreateDevice(ctx context.Context, d domain.Device) (domain.Device, error) {
+	// A push address belongs to ONE account at a time — whoever is signed in on that handset now.
+	//
+	// Sign out of one account on a phone and into another, and the old row survived: the dedupe
+	// below is scoped by userId, so the new registration became a SECOND row and the first one was
+	// left pointing at the same physical device. The server then rang that phone for the previous
+	// account's calls. Signed in as one user, calling another, the caller's own phone rang — because
+	// it was still, as far as the directory was concerned, the callee's device.
+	//
+	// So the address is claimed here before it is registered. Deliberately not scoped to the
+	// platform or to the MLS device: it is the token that names the handset, and any row holding it
+	// under a different user is stale by definition.
+	if err := m.releasePushAddress(ctx, d); err != nil {
+		return domain.Device{}, err
+	}
+
 	// A device IS its push address. Registering the same address again updates the row rather than
 	// adding another, because two rows for one phone means the fan-out sends to it twice and the
 	// user gets every message twice — which is exactly what happened: mobile had no dedupe at all,
@@ -723,8 +807,50 @@ func (m *Mongo) CreateDevice(ctx context.Context, d domain.Device) (domain.Devic
 	if d.ID == "" {
 		d.ID = mongoID()
 	}
-	_, err := m.db.Collection("devices").InsertOne(ctx, d)
-	return d, err
+	if _, err := m.db.Collection("devices").InsertOne(ctx, d); err != nil {
+		// The address index is unique now, so two registrations racing for the same handset can
+		// reach here together and one loses. That is not an error worth showing anybody: the row
+		// the winner wrote is the row this caller wanted. Re-read it rather than failing a
+		// registration over a race the user cannot see or avoid.
+		if mongo.IsDuplicateKeyError(err) {
+			if filter := devicePushIdentity(d); filter != nil {
+				var winner domain.Device
+				if ferr := m.db.Collection("devices").FindOne(ctx, filter).Decode(&winner); ferr == nil {
+					return winner, nil
+				}
+			}
+		}
+		return domain.Device{}, err
+	}
+	return d, nil
+}
+
+// releasePushAddress drops any device row holding this registration's push address under a
+// DIFFERENT user, so one handset cannot be two people's device at once.
+func (m *Mongo) releasePushAddress(ctx context.Context, d domain.Device) error {
+	if d.UserID == "" {
+		return nil
+	}
+	address := pushAddress(d)
+	if address == nil {
+		return nil
+	}
+	address["userId"] = bson.M{"$ne": d.UserID}
+	_, err := m.db.Collection("devices").DeleteMany(ctx, address)
+	return err
+}
+
+// pushAddress is the part of devicePushIdentity that names the HANDSET rather than the account: the
+// web push endpoint, or the FCM token. Nil when a registration carries neither, which is a device
+// the directory cannot address and therefore cannot confuse with another.
+func pushAddress(d domain.Device) bson.M {
+	if endpoint := webPushEndpoint(d.WebPushSub); endpoint != "" {
+		return bson.M{"webPushEndpoint": endpoint}
+	}
+	if d.FCMToken != "" {
+		return bson.M{"fcmToken": d.FCMToken}
+	}
+	return nil
 }
 
 // devicePushIdentity is the query that finds an already-registered device, or nil when this

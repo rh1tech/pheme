@@ -351,3 +351,56 @@ func TestConformance_ReregisteringDoesNotEraseAnMLSIdentity(t *testing.T) {
 		}
 	})
 }
+
+// A handset that changes hands.
+//
+// This is not hypothetical and it is not cosmetic. Signing out of one account on a phone and into
+// another left the first account's row in place, because the dedupe was scoped by userId — so the
+// registry held one physical device twice, under two people. The server then rang that phone for
+// the previous account: signed in as one user and calling another, the CALLER's own phone rang,
+// because the directory still believed it belonged to the person being called.
+//
+// The push address names the handset. The user is a property of whoever is signed in on it now.
+func TestConformance_ADeviceBelongsToOneAccountAtATime(t *testing.T) {
+	eachStore(t, func(t *testing.T, s storeUnderTest) {
+		ctx := context.Background()
+		const token = "apns-token-shared-by-one-handset"
+
+		if _, err := s.store.CreateDevice(ctx, domain.Device{
+			UserID: "first-owner", Platform: domain.PlatformIOS,
+			FCMToken: token, VoIPToken: "voip-1",
+			CreatedAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("first owner registers: %v", err)
+		}
+
+		// The same handset, now signed into somebody else.
+		if _, err := s.store.CreateDevice(ctx, domain.Device{
+			UserID: "second-owner", Platform: domain.PlatformIOS,
+			FCMToken: token, VoIPToken: "voip-1",
+			CreatedAt: time.Now().UTC(), LastSeenAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("second owner registers: %v", err)
+		}
+
+		stale, err := s.store.DevicesForUsers(ctx, []string{"first-owner"})
+		if err != nil {
+			t.Fatalf("devices for first owner: %v", err)
+		}
+		if len(stale) != 0 {
+			t.Errorf("the previous account kept %d device(s) holding this handset's push address; "+
+				"it will be rung for their calls and messages", len(stale))
+		}
+
+		current, err := s.store.DevicesForUsers(ctx, []string{"second-owner"})
+		if err != nil {
+			t.Fatalf("devices for second owner: %v", err)
+		}
+		if len(current) != 1 {
+			t.Fatalf("the current account has %d devices, want exactly 1", len(current))
+		}
+		if current[0].FCMToken != token {
+			t.Errorf("current registration lost its token: %q", current[0].FCMToken)
+		}
+	})
+}
