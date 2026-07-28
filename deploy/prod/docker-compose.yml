@@ -73,6 +73,22 @@ services:
       # stopped being true when chat arrived.
       PHEME_PUSH_DRIVER: ${PHEME_PUSH_DRIVER:-webpush}
       PHEME_FCM_CREDENTIALS: /run/secrets/fcm-service-account.json
+      # APNs, for iOS VoIP pushes ONLY — the ringing call screen. FCM carries every other iOS
+      # notification but cannot reach PushKit, so a call needs a direct APNs connection.
+      #
+      # All four empty is a supported deployment, not a broken one: bootstrap.voip() logs and
+      # returns nil, and an iPhone then gets an ordinary alert for an incoming call — a banner
+      # instead of a ring. That is exactly how this host ran until now.
+      #
+      # PHEME_APNS_PRODUCTION must match the aps-environment the APP was signed with. A token
+      # minted against one gateway is rejected by the other with BadDeviceToken, and that is the
+      # single most common reason a VoIP push silently never arrives. Debug and Profile builds are
+      # signed `development` (sandbox, so false); only a Release build is `production`.
+      PHEME_APNS_KEY_FILE: ${PHEME_APNS_KEY_FILE:-}
+      PHEME_APNS_KEY_ID: ${PHEME_APNS_KEY_ID:-}
+      PHEME_APNS_TEAM_ID: ${PHEME_APNS_TEAM_ID:-}
+      PHEME_APNS_BUNDLE_ID: ${PHEME_APNS_BUNDLE_ID:-}
+      PHEME_APNS_PRODUCTION: ${PHEME_APNS_PRODUCTION:-false}
       PHEME_MONGO_URI: "mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/?authSource=admin"
       PHEME_MONGO_DB: pheme
       # Absolute App API base for image URLs in push notifications (reuses the
@@ -125,6 +141,11 @@ services:
       # The same Firebase service-account key the dispatcher mounts. See the note there for the
       # ownership the distroless non-root user (uid 65532) needs.
       - ${PHEME_FCM_CREDENTIALS_HOST:-/opt/pheme/fcm-service-account.json}:/run/secrets/fcm-service-account.json:ro
+      # The APNs .p8 signing key, same ownership rules as the file above. The default points at a
+      # placeholder that need not exist as a real key: with PHEME_APNS_KEY_FILE unset the app never
+      # opens it, so a host with no APNs key mounts a harmless empty file — the same trick the
+      # nodelist below uses.
+      - ${PHEME_APNS_KEY_HOST:-/opt/pheme/no-apns-key.p8}:/run/secrets/apns-key.p8:ro
       # The signed nodelist, for a host that has joined a federated network. A
       # standalone host leaves PHEME_NODELIST_FILE unset and this mounts a harmless
       # empty placeholder that the app never reads (PHEME_NODELIST_PATH is unset too).
@@ -165,6 +186,8 @@ services:
       #   sudo chown 65532:65532 <file> && sudo chmod 600 <file>
       # Keep it out of git.
       - ${PHEME_FCM_CREDENTIALS_HOST:-/opt/pheme/fcm-service-account.json}:/run/secrets/fcm-service-account.json:ro
+      # The APNs .p8, same ownership rules. See the app service for why the default is a placeholder.
+      - ${PHEME_APNS_KEY_HOST:-/opt/pheme/no-apns-key.p8}:/run/secrets/apns-key.p8:ro
 
   web:
     image: ${WEB_IMAGE}

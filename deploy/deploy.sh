@@ -28,6 +28,12 @@ PROJECT="pheme-$ENV_NAME"
 # PHEME_NODELIST_PATH is also set. Create it if it does not exist yet.
 [ -f "$ROOT/no-nodelist.json" ] || echo '{}' > "$ROOT/no-nodelist.json"
 
+# Same trick for the APNs signing key, which only a host that rings iPhones has. Without the
+# file, Docker would create a DIRECTORY at the bind-mount source and mount that — harmless while
+# PHEME_APNS_KEY_FILE is unset, but confusing to find later. A host that does have a key points
+# PHEME_APNS_KEY_HOST at it and this placeholder goes unused.
+[ -f "$ROOT/no-apns-key.p8" ] || : > "$ROOT/no-apns-key.p8"
+
 if [ -n "${API_IMAGE:-}" ]; then
   sed -i "s|^API_IMAGE=.*|API_IMAGE=${API_IMAGE}|" "$ENV_FILE"
 fi
