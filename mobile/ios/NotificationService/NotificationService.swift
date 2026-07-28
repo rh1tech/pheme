@@ -175,6 +175,14 @@ final class NotificationService: UNNotificationServiceExtension {
       attachments: nil
     )
 
+    // The picture has to be set on the INTENT as well as on the INPerson.
+    //
+    // Setting it only on the sender is the documented-looking thing to do and it silently does not
+    // work: the notification renders as a communication notification, with the name, and wearing
+    // the app icon where the portrait should be. No error is thrown and nothing is logged — the
+    // avatar just is not there. setImage(_:forParameterNamed:) is what actually attaches it.
+    intent.setImage(INImage(imageData: avatar), forParameterNamed: \.sender)
+
     // Donating is what lets the conversation appear in Focus settings and the share sheet, so the
     // user can allow this chat through a Focus mode. Incoming, because we are receiving.
     let interaction = INInteraction(intent: intent, response: nil)
