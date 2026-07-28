@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -64,9 +65,15 @@ class AuthController extends Notifier<AuthState> {
       final deviceId = await loadMlsDeviceId(const FlutterSecureStorage());
       if (deviceId == null || deviceId.isEmpty) return;
       await ref.read(repositoryProvider).terminateDevice(deviceId);
-    } on Object {
+    } on Object catch (e) {
       // A sign-out must complete. An identity left standing is the bug this exists to prevent, but
       // refusing to sign somebody out because the server was unreachable is a worse one.
+      //
+      // Said out loud, though. Swallowing this silently cost an afternoon: the identities in the
+      // directory looked wrong, there was no way to tell whether the call had failed or never been
+      // made, and the only evidence either way was on the server. If a leaf outlives its device
+      // again, this line is what distinguishes "the request failed" from "we never asked".
+      debugPrint('pheme/auth: could not retire this device on sign-out: $e');
     }
   }
 
