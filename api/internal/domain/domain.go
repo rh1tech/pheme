@@ -562,7 +562,7 @@ type Conversation struct {
 	// native and so already correct with no backfill.
 	//
 	// Immutable once set. A conversation's hub is part of its identity (see
-	// docs/adr-federation-hub-migration.md); "moving" a conversation to a new hub
+	// docs/development/adr-federation-hub-migration.md); "moving" a conversation to a new hub
 	// is creating a new conversation and importing history, never rewriting this
 	// field. Nothing should offer to change it in place.
 	HubDomain string `bson:"hubDomain,omitempty" json:"hubDomain,omitempty"`

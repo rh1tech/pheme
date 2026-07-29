@@ -186,7 +186,8 @@ void main() {
 
     // External join: a new device joins an EXISTING group with nobody online to admit it, and does so
     // WITHOUT resetting — so the offline party is not stranded on a group nobody else is in. This is
-    // the scenario that broke in the field, and the reason external join exists. See docs/external-join.md.
+    // the scenario that broke in the field, and the reason external join exists.
+    // See docs/development/external-join.md.
     testWidgets('external-joins with no one online, and strands nobody', (
       _,
     ) async {

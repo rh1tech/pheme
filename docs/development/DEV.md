@@ -43,7 +43,7 @@ per driver env var. Every infra dependency has an interface with an in-memory
 implementation (default) and a real one, so services run with zero external
 infra unless configured otherwise.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and data model.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the original design and data model.
 
 ## 3. Repository layout
 
@@ -79,7 +79,8 @@ web/          Vite + React + TypeScript + Mantine SPA
 mobile/       Flutter app (Riverpod + go_router + Dio); see mobile/README.md
 deploy/       docker-compose for Mongo/RabbitMQ/Redis (+ k8s later)
 scripts/      dev scripts (setup, dev, infra, stop) — see scripts/README.md
-docs/         ARCHITECTURE.md, DEV.md (this file)
+docs/         Public operator and protocol documentation
+  development/ Historical design notes and this contributor guide
 ```
 
 ## 4. Backend conventions (Go)
@@ -182,7 +183,7 @@ Open http://localhost:5173. `make help` lists all targets (build, test, lint,
 infra-*, vapid, web-build). Setup auto-detects port conflicts and writes the
 gitignored `.env.dev`, `deploy/.env` and `web/.env.local`. To become an admin,
 set `PHEME_ADMIN_EMAILS` in `.env.dev`. Details in
-[../scripts/README.md](../scripts/README.md).
+[../../scripts/README.md](../../scripts/README.md).
 
 ## 9. Testing
 

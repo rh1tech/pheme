@@ -1,73 +1,134 @@
 # Pheme
 
-Pheme is a notification relay service. Websites trigger a channel by its public
-ID via a simple HTTP API; all devices subscribed to that channel receive an
-instant push notification. Every message is persisted server-side, so history is
-never lost and can be browsed or exported.
+Pheme is a self-hosted communication system for private conversations and
+durable broadcast channels. It combines MLS end-to-end encrypted chat, encrypted
+voice-call signalling, push delivery, and optional federation between
+independently operated servers.
 
-## Why
-Sending reliable notifications from a website to specific people usually relies
-on email or chat webhooks, which are fragile and easy to miss. Pheme gives you a
-durable, push-first channel: trigger once, deliver everywhere (iOS, Android,
-browser), and keep a full history.
+Servers route and store conversation ciphertext but do not hold the keys needed
+to read it. Web and Flutter clients share the same Rust MLS implementation, so
+the encryption protocol is not reimplemented separately for each platform.
 
-## Monorepo layout
+## What Pheme provides
+
+- **End-to-end encrypted conversations** using MLS (RFC 9420), including groups,
+  multiple devices, membership changes, receipts, history handoff, and encrypted
+  attachments.
+- **Voice calls** over WebRTC with MLS-derived signalling encryption and
+  optional TURN relay support.
+- **Broadcast channels** with API-key ingestion, images, comments, membership
+  controls, push delivery, and durable history.
+- **Web, Android, iOS, and macOS clients**, with English and Russian interfaces.
+- **Self-hosting** through Docker Compose, with MongoDB, RabbitMQ, Redis, nginx,
+  and optional push, mail, and TURN integrations.
+- **Federation** for cross-server channels, conversations, receipts, MLS
+  commits, and call signalling. Federation is permissioned through a signed
+  nodelist rather than open to arbitrary servers.
+
+## Architecture
+
+```text
+web / mobile clients
+        |
+        | HTTPS + JWT
+        v
+     App API  <---------------- signed HTTPS ----------------> peer App APIs
+        |                   federation and conversation hubs
+        +---- MongoDB   durable records, ciphertext, GridFS blobs
+        +---- Redis     live events, OTPs, limits, replay protection
+        +---- FCM/APNs/Web Push
+
+website integrations
+        |
+        | HTTPS + channel API key
+        v
+    Ingest API ---- RabbitMQ ---- Dispatcher ---- storage + push
 ```
-pheme/
-├── api/        Go services — Ingest API, App API, Dispatcher worker (one module, 3 binaries)
-├── web/        Vite + TypeScript + Mantine SPA (+ Web Push service worker)
-├── mobile/     Flutter app (Firebase Cloud Messaging)
-├── deploy/     docker-compose stack (Mongo, RabbitMQ, Redis) + k8s (later)
-└── docs/       Architecture and design docs
-```
 
-## Stack
-| Layer            | Technology                                  |
-|------------------|---------------------------------------------|
-| API & workers    | Go                                          |
-| Web frontend     | TypeScript · Vite · Mantine                 |
-| Mobile           | Flutter · firebase_messaging                |
-| Database         | MongoDB                                     |
-| Message broker   | RabbitMQ (durable queue + DLQ)              |
-| Cache / realtime | Redis (rate-limit, pub/sub, idempotency)    |
-| Push delivery    | Firebase Cloud Messaging + Web Push (VAPID) |
+The Go backend contains three binaries:
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
+| Binary | Purpose |
+|---|---|
+| `pheme-app` | Authentication, channels, encrypted conversations, calls, live events, admin API, and federation |
+| `pheme-ingest` | Rate-limited, idempotent channel notification ingestion |
+| `pheme-dispatcher` | Durable channel-message consumption, persistence, and push fan-out |
 
-## Quick start
+The clients perform MLS operations locally through `crates/pheme-mls`. The
+server acts as an untrusted delivery service for conversation content. It still
+sees operational metadata such as accounts, membership, timing, and routing; E2EE
+does not hide that metadata.
+
+## Run locally
+
+Requirements: Go, Node.js with npm, Docker Compose, and `lsof`.
 
 ```bash
-make setup   # one-time: checks tools, picks free ports, generates VAPID keys
-make dev     # build + run infra, API services and the web app; streams logs
+make setup
+make dev
 ```
 
-Then open **http://localhost:5173**. Press Ctrl-C to stop the services
-(`make stop ARGS=--all` also stops the Docker infrastructure).
+Open `http://localhost:5173`. `make setup` generates gitignored local secrets and
+configuration; `make dev` starts MongoDB, RabbitMQ, Redis, the three Go services,
+and the web client.
 
-`make setup` auto-detects port conflicts (e.g. an existing local MongoDB) and
-picks alternate host ports, writing the gitignored `.env.dev`, `deploy/.env` and
-`web/.env.local`. To make yourself an admin, set `PHEME_ADMIN_EMAILS` in
-`.env.dev`.
+Useful commands:
 
-Run `make help` for all targets (build, test, lint, infra-up/down/reset, logs,
-vapid). See [scripts/README.md](scripts/README.md) for details.
-
-### Manual (without the scripts)
 ```bash
-docker compose -f deploy/docker-compose.yml up -d   # Mongo, RabbitMQ, Redis
-cd api
-export PHEME_STORE_DRIVER=mongo PHEME_BROKER_DRIVER=rabbit \
-       PHEME_LIVE_DRIVER=redis PHEME_RATELIMIT_DRIVER=redis \
-       PHEME_MONGO_URI='mongodb://pheme:pheme@localhost:27017/?authSource=admin'
-go run ./cmd/app         # App API    :8080  (auth, channels, history, SSE)
-go run ./cmd/ingest      # Ingest API :8081  (public trigger, API-key auth)
-go run ./cmd/dispatcher  # Worker      (consume → persist → push → live event)
+make help
+make test
+make lint
+make web-build
+make stop ARGS=--all
 ```
-Omit the env vars to run with zero-dependency in-memory backends.
 
-## Status
-Phase 1 (scaffold) and phase 2 (infrastructure) complete: JWT auth (Argon2id),
-MongoDB persistence, RabbitMQ broker with DLQ, Redis rate limiting and live
-pub/sub, and FCM + Web Push senders — all selectable per environment and
-verified end-to-end against the docker-compose stack. Web and mobile clients are
-the next phases.
+For a standalone internet deployment, start with
+[`docs/deployment.md`](docs/deployment.md). Do not reuse development credentials
+or expose the local infrastructure ports publicly.
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `api/` | Go APIs, workers, persistence, delivery, and federation |
+| `crates/pheme-mls/` | Shared Rust MLS client core, compiled for WASM and mobile FFI |
+| `web/` | React, TypeScript, Vite, and Mantine web client |
+| `mobile/` | Flutter client for Android, iOS, and macOS |
+| `deploy/` | Compose stacks, nginx template, TURN config, and self-host setup |
+| `scripts/` | Local development automation |
+| `test/` | Cross-component and federation test harnesses |
+| `docs/` | Public deployment, operation, protocol, and federation documentation |
+| `docs/development/` | Historical design records and contributor references |
+
+## Documentation
+
+1. [Deployment](docs/deployment.md)
+2. [Server operation](docs/server-operation.md)
+3. [Protocol and security model](docs/protocol.md)
+4. [Federation](docs/federation.md)
+5. [Development guide](docs/development/DEV.md)
+
+## Project status
+
+Pheme is under active development. Core channels, MLS conversations, calls, and
+permissioned federation are implemented and tested. Operators should read the
+documented federation availability limits and back up each conversation hub:
+there is no automatic hub migration if a hub disappears permanently.
+
+## Licensing
+
+The complete community edition is licensed under the
+[GNU General Public License v3](LICENSE). If you distribute a modified version,
+the GPL generally requires you to provide its corresponding source under the
+same license.
+
+Separate commercial terms may be negotiated for Pheme-owned code when an
+organization needs to keep its modifications proprietary. A commercial license
+is granted only by a signed agreement; this repository does not itself grant
+commercial rights. See [commercial licensing](COMMERCIAL-LICENSE.md).
+
+**Current limitation:** parts of the web client are derived from GPLv3-licensed
+Telegram Web K code. Those parts cannot be relicensed by the Pheme project, so
+the current web client is not available for closed-source distribution. The
+affected code and attribution are documented in [`web/NOTICE.md`](web/NOTICE.md).
+Third-party dependencies and vendored code remain under their respective
+licenses.

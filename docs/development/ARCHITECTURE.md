@@ -1,4 +1,4 @@
-# Pheme Architecture
+# Pheme Architecture (historical development reference)
 
 ## 1. Overview
 Pheme delivers website-originated notifications to users' devices in real time and
@@ -102,7 +102,9 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 - API keys stored hashed (SHA-256 of a high-entropy secret); shown once on creation; multiple keys per channel with revocation.
 - Passwords hashed with Argon2id; a light strength policy (min 8 chars, ≥2 character classes, common-password blocklist) is enforced on register, reset, and admin-set.
 - **Email-verified registration.** Register does not create a user; it stores a pending signup in the OTP store and emails a 6-digit code. `verify` confirms it (creating the account). Codes are stored as SHA-256 hashes, expire (default 30 min), invalidate after 3 wrong attempts, and are rate-limited to one send per email per 2 minutes. Password reset uses the same code mechanism.
-- **Transactional mail** is sent via the `email` driver (`log` for dev, `smtp` in prod). Production relays through a host Postfix + OpenDKIM (DKIM `d=app.example.com`), delivering direct-to-MX with SPF/DKIM/DMARC and forward-confirmed rDNS for inbox placement. The relay never sends third-party mail (Brevo is not used).
+- **Transactional mail** is sent via the `email` driver (`log` for dev, `smtp`
+  in production). Operators are responsible for a trusted relay and the
+  sender-domain SPF, DKIM, and DMARC configuration.
 - JWT: short-lived access token + rotating refresh token. The token carries the user's role.
 - Roles: `user` (default) and `admin`. Admins are designated by the `PHEME_ADMIN_EMAILS` allowlist and the role is (re)synced on every register/login, so changing the list takes effect on next login. Admin-only endpoints live under `/v1/admin/*` and verify the role from the JWT. Admins can also add users directly from the panel (`POST /v1/admin/users`), creating an active account with no email step.
 - **Initial admin seeding.** When `PHEME_SEED_ADMIN_EMAIL` and `PHEME_SEED_ADMIN_PASSWORD` are both set, the App API ensures a verified, active admin with those credentials exists at startup (created only if missing). This is opt-in (no-op when unset), bootstraps the first admin without the email-verification flow, and backs the E2E suite.
@@ -144,4 +146,3 @@ docker-compose stack is up.
 
 > **Note:** the MongoDB root user created by compose authenticates against the
 > `admin` database — use `?authSource=admin` in `PHEME_MONGO_URI`.
-

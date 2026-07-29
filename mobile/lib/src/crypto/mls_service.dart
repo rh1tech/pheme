@@ -478,7 +478,7 @@ class MlsService {
       // JOIN IT BY EXTERNAL COMMIT — add our own leaf, with no Welcome and no member's help. This is
       // the whole point of the mechanism: a new device opens a chat whose group already exists and is
       // in it a round trip later, non-destructively, whether or not anyone else is online. See
-      // docs/external-join.md.
+      // docs/development/external-join.md.
       final joined = await _tryExternalJoin(
         session,
         conversation,

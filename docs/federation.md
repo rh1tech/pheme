@@ -1,370 +1,247 @@
-# Federation: a network of self-hosted instances
+# Federation
 
-Status: **design, not built.** Nothing here is implemented. This exists to settle
-the decisions that have to be made before the first line, because three of them
-are baked into MLS credentials and into every stored identifier — get one wrong
-and it costs a second migration through the same code.
+Pheme federation connects independently operated instances while preserving
+client-side MLS encryption. It is **permissioned federation**: servers join a
+network by appearing in a coordinator-signed nodelist. It is not an open network
+where any domain can begin sending requests.
 
-## The goal
+## What is federated
 
-Users on one Pheme instance can message users on another, without giving up the
-property that makes the app worth running: the server cannot read messages, and
-neither can anyone else's server.
+- user lookup by qualified identifier or network host alias;
+- subscriptions and delivery for open broadcast channels, including processed
+  images;
+- conversation provisioning and full ciphertext mirrors;
+- messages, MLS commits, key-package claims, and sequence-based receipts;
+- encrypted call signalling, ringing nudges, and short-lived TURN credentials.
 
-Instances join a common network. Each is operated by whoever runs it. New hosts
-apply to join; the host map is a signed list every instance mirrors.
+Approval-mode channel membership and comments on mirrored channel posts are not
+currently federated.
 
-## What we are following, and how loosely
+## Network trust
 
-The IETF **MIMI** working group exists for exactly this problem — federated
-messaging over MLS — and its shape is the right one to follow. But it is not a
-spec you can conform to today, and the plan this document replaces was too
-confident about that. As of July 2026:
+Each host has an Ed25519 keypair. A coordinator maintains a roster mapping
+domains and optional short aliases to public keys, signs the complete list, and
+publishes it. Every member configures the coordinator public key and a local copy
+of the signed list.
 
-| Document | Rev | Status |
-|---|---|---|
-| `draft-ietf-mimi-arch` | 03 | WG document |
-| `draft-ietf-mimi-protocol` | 06 | WG document, expires 2026-10-27 |
-| `draft-ietf-mimi-content` | 09 | WG document, most mature |
-| `draft-ietf-mimi-room-policy` | 04 | WG document |
+The list carries an issue time, expiry, and increasing serial:
 
-**Nothing is an RFC.** No document shepherd, no IESG evaluation scheduled. The
-credential section of the protocol draft still contains a literal
-`TODO: What types of credential are required / allowed?`.
+- the signature proves the coordinator approved its contents;
+- expiry prevents an isolated server from trusting removed peers forever;
+- the serial supports rollback prevention;
+- removing a host and publishing a new list revokes that peer.
 
-So: follow MIMI's **shape** (hub-per-room, provider-qualified identifiers, HTTPS
-between providers), keep our own choices **pluggable** where MIMI has not
-decided, and do not block on it settling. Where MIMI is silent — and it is
-silent about a lot — the decision is ours and is recorded below.
+Admission is centralized even though hosting and data are distributed. This is
+a deliberate spam/abuse boundary, not a claim of fully decentralized governance.
 
-There is no complete open-source MIMI implementation to read. The nearest thing
-is [phnx-im/air](https://github.com/phnx-im/air), by two of the draft authors,
-built on OpenMLS — which we already use.
+## Host-to-host discovery and authentication
 
----
+A federated host exposes:
 
-## Decision 1 — identifiers
-
-**Adopt MIMI's `mimi://` URI form.**
-
-```
-user       mimi://a.example/u/alice
-device     mimi://a.example/d/<deviceId>
-room       mimi://a.example/r/<roomId>
-MLS group  mimi://a.example/g/<groupId>
+```text
+GET /.well-known/pheme-federation
+/federation/v1/*
 ```
 
-Note this is *not* `im:user@domain` (RFC 7565) — earlier drafts used that and
-the current protocol draft replaced it with its own hierarchical scheme. The
-authority component carries the provider domain, which is the whole point: an
-identifier says which host is authoritative for it.
+The discovery document advertises implemented endpoint paths. Requests are sent
+over HTTPS and signed with the origin host key. Signatures bind method, path,
+origin, destination, key id, timestamp, nonce, and body hash. The receiving host
+looks up the origin in its verified nodelist and rejects unknown, expired,
+replayed, stale, misaddressed, or invalid requests.
 
-### What this breaks here
+These endpoints are deliberately unprefixed because a peer cannot discover a
+private client API prefix. A standalone host should not proxy them at all; nginx
+then serves the same decoy response as any unknown path.
 
-| Today | Problem |
-|---|---|
-| `User.ID` — bare 24-char hex (`domain.go`) | Nothing distinguishes local from remote |
-| `usernamePattern` `^[a-zA-Z_][a-zA-Z0-9_.]{2,29}$` | Cannot hold `@`, `:` or `/` |
-| `DirectKey(a, b) = a + ":" + b` | `:` is in the qualified form; the key becomes ambiguous |
-| MLS credential `userId:deviceId` (`crates/pheme-mls/src/lib.rs`) | Unqualified, and `:` again |
-| JWT: HS256 shared secret, no `iss`/`aud`/`kid` | Two hosts sharing a secret cross-authenticate by bare id |
+## Conversation hub model
 
-**Storage keeps local opaque ids.** Mongo `_id`s stay as they are; a `Domain`
-field is added, and the qualified `mimi://` URI is the *wire* identity, derived
-not stored. Rewriting every primary key would be a far larger migration for no
-benefit — the qualified form matters at boundaries, not in indexes.
+The host of the member who creates a conversation becomes its immutable hub.
+The hub:
 
-**`DirectKey` stops being a string join.** It becomes a hash of the two
-qualified identifiers, sorted. A separator-based key cannot survive identifiers
-that contain the separator, and picking a different separator just moves the
-problem to whichever character the next identifier scheme uses.
+- owns the authoritative ordered ciphertext log;
+- assigns message sequence numbers;
+- performs MLS epoch compare-and-set;
+- signs the MLS ordering chain;
+- relays accepted events to participant hosts.
 
-**MLS credential identity becomes the qualified device URI — but not in F0.**
-This is the one identity change that invalidates every existing group's ratchet
-tree, and it is deliberately deferred to F5. The reasoning, recorded because it
-will look like an omission otherwise:
+Other participant hosts are followers. A follower stores a complete mirror for
+local reads, forwards local writes to the hub, verifies the returned order and
+signature, and persists only the authoritative echo.
 
-- It buys nothing until there are cross-host groups to put remote members into,
-  which is F5. Done now, it is pure risk against no benefit.
-- It fights the lesson the zombie-KeyPackage incident taught. `user_of()`'s
-  legacy fallback and the whole `zombieDevices` machinery exist because *mixing
-  credential formats within one group* is the documented footgun — a keypackage
-  under a legacy credential once burned ~500 epochs in a reconcile war.
-  Introducing a second format into live single-host groups, with no federation
-  to justify it, re-loads that gun.
-- MIMI has not decided the credential format — the protocol draft's credential
-  section is a literal `TODO`. Committing to a wire format inside the credential
-  before F5 tells us what cross-host membership needs is the premature
-  generality this whole document is trying to avoid.
+### Availability consequence
 
-So the credential stays `userId:deviceId` through F0–F4. F5 defines the
-qualified form, migrates the trees, and handles the mixed-format transition as
-one deliberate piece of work — by which time MIMI may have resolved its own
-`TODO`. There is precedent for the migration itself: identities already gained a
-device half once, and `user_of()` still carries that compatibility path.
+If the hub is temporarily unreachable, history remains readable from every
+mirror but new events pause. Followers do not accept writes independently, so
+the network favors consistency and avoids split brain.
 
----
+If the hub disappears permanently, the conversation becomes read-only in v1.
+There is no automatic migration. Moving a conversation would require a new
+conversation identity, new MLS group, explicit history import, and member
+re-addition. Operators must treat every hosted conversation as durable state and
+back up MongoDB and the host identity.
 
-## Decision 2 — ordering integrity: **we add what MIMI dropped**
+## Join an existing federation
 
-This is the decision that matters most, and the one where we deliberately do
-*not* follow the current draft.
+Joining requires coordination. Obtain the network's admission policy, current
+nodelist URL, coordinator public key, and contact method from its coordinator.
 
-MIMI rooms have one **hub** provider that orders events; other providers are
-followers that proxy their users' requests to it. That part we adopt — it maps
-exactly onto what the code already does, since
-`store_mongo_keypackages.go`'s single-document compare-and-set *is* a hub, just
-one that currently has no peers.
+### 1. Deploy and verify a standalone server
 
-But the current protocol draft has **no ordering integrity whatsoever**. Its
-`FanoutMessage` carries a wall-clock timestamp and nothing else — no sequence
-number, no previous-message hash, no transcript hash. Followers take the hub's
-word for ordering, backed only by MLS's own epoch progression.
+Complete [deployment.md](deployment.md). The API domain must have working HTTPS,
+correct time synchronization, persistent MongoDB/Redis, and an off-host backup.
+Do not request admission for an unverified or temporary host.
 
-This is a regression from **Linearized Matrix**, the draft MIMI descends from,
-which had providers "attach verifiable hashes and signatures to each event as a
-safeguard against the hub server modifying the events."
+### 2. Generate the host identity
 
-**We cannot accept that.** Pheme's entire proposition is that the server is
-untrusted. Today that holds: the server relays ciphertext it cannot open. Under
-MIMI-as-drafted, a *remote* hub — run by someone the user has never met — could
-reorder, drop, or selectively deliver messages to some participants and not
-others, with no in-protocol way to detect it. MLS gives confidentiality and
-epoch agreement; it does not give delivery integrity. Adopting the hub model
-without compensating would quietly downgrade the one property the product is for.
+From the repository:
 
-So: **every fanout message carries a sequence number and a hash of the previous
-message, signed by the hub.** Each follower verifies the chain and can prove a
-hub equivocated. This is what Linearized Matrix did, it is not much code, and it
-keeps "your friend's server cannot lie to you about what was said" true.
+```bash
+cd api
+go run ./cmd/hostkey -env
+```
 
-We should raise the gap on `mimi@ietf.org` rather than only solving it privately
-— it is likely to be addressed before RFC, and being an implementer with a
-concrete design is the useful way to raise it.
+Store the emitted `PHEME_HOST_KEY` seed with the deployment secrets. Derive the
+public key by running the tool without `-env`; send only the public key, desired
+domain, and optional alias to the coordinator.
 
----
+The domain must match `PHEME_HOST_DOMAIN` and the externally reachable
+federation hostname. Keep the private seed out of tickets, chat logs, nodelists,
+and Git.
 
-## Decision 3 — host admission: a signed nodelist
+### 3. Obtain admission
 
-Faithful to FidoNet, and the operator's stated preference. A coordinator
-compiles and signs a `domain → public key` map; every host mirrors it; new
-operators apply.
+The coordinator adds the domain and public key, signs a new nodelist with a
+higher serial, and publishes it. Confirm that the issued document contains the
+exact domain and public key before enabling federation.
 
-The tradeoff is real and should be stated in the project's own docs rather than
-glossed: **admission is centralised**, and that is a different thing from the
-hosting being decentralised. What it buys is a workable answer to spam and abuse
-from day one, which open federation does not have.
+### 4. Store and configure the nodelist
 
-Each host has an **Ed25519 keypair**. The public half is its nodelist entry. It
-signs S2S requests and its own JWTs (`kid` names the key, so rotation is a new
-entry rather than a flag day).
+Fetch the signed document to a stable host path:
 
----
+```bash
+sudo install -d -m 0750 /opt/pheme
+curl --fail --proto '=https' --tlsv1.2 \
+  https://network.example/nodelist.json \
+  | sudo tee /opt/pheme/nodelist.json >/dev/null
+sudo chmod 0644 /opt/pheme/nodelist.json
+```
 
-## Decision 4 — transport
+Set:
 
-HTTPS, following MIMI: **mutual TLS**, certificates authenticating both provider
-domains, discovery via `/.well-known/mimi-protocol-directory`.
+```dotenv
+PHEME_HOST_DOMAIN=chat.example.com
+PHEME_HOST_KEY=<private-host-key-seed>
+PHEME_NODELIST_COORD_KEY=<coordinator-public-key>
+PHEME_NODELIST_PATH=/nodelist.json
+PHEME_NODELIST_FILE=/opt/pheme/nodelist.json
+```
 
-One deviation to consider: MIMI dropped Matrix's per-request signatures in
-favour of mTLS alone. Since we already require a host signing key for the
-nodelist and for the ordering chain, signing requests with it costs little and
-does not depend on the TLS terminator being the application — which matters when
-half the point of this project is that hosts sit behind CDNs and reverse
-proxies. **Do both.**
+The production Compose stack mounts `PHEME_NODELIST_FILE` at
+`/nodelist.json`. Both nodelist settings are required. A configured federated
+server refuses to start with a missing, malformed, expired, or incorrectly
+signed list rather than silently becoming standalone.
 
----
+`PHEME_PEER_URLS` can override resolution for private networks and tests:
 
-## Decision 5 — hub selection and migration
+```dotenv
+PHEME_PEER_URLS=peer.example=https://10.0.0.12:8443
+```
 
-MIMI specifies **neither**. I scanned the protocol draft: no hub selection
-algorithm, and the word "migrat" does not appear.
+Production normally leaves it empty and uses `https://<peer-domain>`.
 
-**Selection: the creator's host.** Simplest, matches the draft's examples, and
-matches the room identifier already encoding the hub domain.
+### 5. Expose federation routes
 
-**Migration: unsolved, and we should say so rather than pretend.** Because the
-room ID embeds the hub domain, moving a room changes its identifier — which is
-very likely why MIMI leaves it open rather than an oversight. For v1 a room
-whose hub disappears is a room that stops accepting new events; its history is
-still readable by every participant, because they all hold it. That is a real
-limitation and belongs in the user-facing docs, not just here.
+Render nginx with federation enabled:
 
----
+```bash
+set -a
+. /opt/pheme/stack.env
+set +a
+PHEME_FEDERATION=1 \
+PHEME_API_HOST=chat.example.com \
+PHEME_DECOY_DIR=example-decoy \
+PHEME_SSL_SNIPPET=/etc/nginx/snippets/pheme-ssl.conf \
+  ./deploy/nginx/render.sh | sudo tee /etc/nginx/sites-available/chat.example.com.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
 
-## Staging
+Restart the App API and confirm the log reports federation enabled with the
+expected origin and nodelist serial.
 
-Each stage ships and is useful before the next one starts.
+### 6. Verify with the coordinator
 
-- **F0 — Qualified identity.** `mimi://` forms (the `ident` package), `Domain`
-  on users, `DirectKey` superseded by `ident.PairKey`, asymmetric JWTs with
-  `iss`/`aud`/`kid`. All backwards-compatible: no data migration, and every
-  change is a no-op until `PHEME_HOST_DOMAIN`/`PHEME_HOST_KEY` are set. **No
-  federation yet** — local groundwork, worth doing on its own merits since the
-  HS256 shared secret with no issuer claim is weak today, single-instance or
-  not. **Excludes the MLS credential**, which is deferred to F5 for the reasons
-  under Decision 1. *Shipped.*
-- **F1 — Host identity + nodelist.** Keypair per host, signed list format,
-  compiler tooling, mirroring, the application process. Self-contained.
-- **F2 — S2S transport.** mTLS + signed requests, `.well-known` directory,
-  starting with liveness and user-existence lookup. Proves the trust model
-  without touching messaging.
-- **F3 — Federated channels first.** *Shipped, incl. images.* Broadcast has no
-  group state, no epoch, no ordering authority. A user on one host subscribes to
-  an open channel on another (`channel-subscribe`); the origin records the peer
-  HOST and fans each new post out to it (`channel-delivery`), where a mirror
-  persists it and delivers to local subscribers. Posts now carry their images:
-  the origin serves them under its unlisted path prefix, which a peer cannot
-  fetch, so the processed bytes travel inline on the S2S transport and the
-  subscriber re-hosts them in its own blob store (best-effort — the text still
-  arrives if an image cannot be carried). Still open: **approval-mode** channels
-  do not federate — the approval queue would need to model a remote host or user,
-  which title/body/image broadcast does not yet; and comments on a mirrored post
-  are not federated (a mirror is read-only broadcast).
-- **F4 — Server-inspectable handshakes.** *Shipped (epoch).* Handshake Commits
-  are now `PublicMessage` (`wire_format_policy` in the pheme-mls crate, MIXED so
-  the rollout needs no flag day). A ~200-line dependency-free Go decoder
-  (`internal/mlswire`) reads the epoch a Commit is built on, and `postMLSCommit`
-  refuses a Commit whose declared `baseEpoch` disagrees with the parsed one —
-  the lie the old framing could not catch. Opportunistic: an opaque
-  PrivateMessage still proceeds on its declared value, so nothing breaks during
-  the rollout. NOT done: parsing the Remove proposals to enforce admin-only
-  removal — that needs a server-side leaf→user map and, for real authenticity,
-  the GroupContext hashes a stateless server does not have (RFC 9420 §6). Full
-  commit authenticity is inherently the hub's job, which is F5. MIMI's
-  SemiPrivateMessage (leaks less than PublicMessage) is the eventual target but
-  depends on a younger draft OpenMLS 0.8 may not implement.
-- **F5 — MLS hub model.** *Not started — this is the centerpiece, and unlike
-  F0–F4 it does not decompose into a standalone increment: its parts are
-  interdependent, and all of them are live cryptography. It wants a dedicated
-  run with a full context budget, not the tail of another stage.* Execution
-  order for that run:
-  1. **Qualified credentials (F5a).** *Shipped.* `Client::new` takes the host domain; the
-     MLS credential becomes `mimi://domain/d/<user>/<device>` (a form whose user
-     half is itself a `mimi://domain/u/<user>`), and `user_of` parses it back to
-     the qualified user. With no real users this is a CLEAN BREAK — no
-     mixed-format groups, none of the zombie-KeyPackage danger that made it
-     unsafe before (see Decision 1). Rebuild the WASM and the mobile FFI; the
-     E2E suite is the proof that qualified credentials still encrypt/decrypt.
-     Foundational: every cross-host member is named by one of these.
-  2. **Signed ordering chain (F5b, Decision 2).** Each commit the hub accepts
-     gets `(seq, prevHash, hash=H(prevHash‖seq‖commit), hubSig)`, stored with the
-     epoch advance in the same atomic CAS (`CommitMLSGroup`). The hub key is F0's
-     host key. A follower verifies the chain links and the signature. Build this
-     WITH its consumer (step 4), not before — a chain nothing verifies is
-     speculative.
-  3. **Cross-host key-package claim (F5c).** *Shipped* — the key-package half:
-     a signed S2S endpoint lets a hub claim a remote user's key packages. Remote
-     membership resolution (a conversation holding a remote member) is part of
-     F5d below. S2S endpoints so
-     a hub can fetch a remote user's key packages (extending F2's signed
-     transport) and resolve a remote member — the `chat.go` `UserByID` gate that
-     rejects remote users today becomes a nodelist-aware lookup.
-  4. **Hub commit-proxying (F5d).** *Plumbing built.* A follower's member builds
-     a commit locally and posts it to its own host, which forwards it to the
-     conversation's hub over S2S; the hub runs the F4 epoch check and the CAS,
-     then fans the accepted commit back to every participant host. The relay
-     layer is `chat.ConvFederation` (both the inbound `federation.Conversation-
-     Service` and the outbound helper the chat handler calls) with S2S endpoints
-     in `federation/conversations.go`:
-       - hub → follower: `conversation-provision` (stand up a mirror),
-         `conversation-relay` (deliver accepted messages/commits);
-       - follower → hub: `conversation-submit-message`,
-         `conversation-submit-commit` (forward a local device's post).
-     A qualified `mimi://host/u/id` in the add-member endpoint records a remote
-     member and provisions its host's mirror. On a mirror, `postMessage` and
-     `postMLSCommit` forward to the hub instead of appending locally; on the hub
-     they append and relay. The message and commit round-trips (append→relay,
-     forward→order→apply-both-sides, and the epoch-conflict path) are covered by
-     `chat/convfed_e2e_test.go`, wired over real HTTP through two signed
-     federation handlers. Remaining: F5b's signed ordering chain (below) and the
-     live two-server encrypted decrypt test.
+From outside the host:
 
-  The hub-migration ADR this called for is written: `docs/adr-federation-hub-migration.md`
-  (creator's host is the hub, immutably; hub-down pauses new events but never
-  splits; permanent loss freezes the conversation read-only, with a manual
-  re-home escape hatch and no automatic migration in v1).
+```bash
+curl --fail https://chat.example.com/.well-known/pheme-federation
+```
 
-  5. **Signed ordering chain (F5b).** *Built.* `internal/mlschain` is the
-     primitive: `hash = H(prevHash ‖ seq ‖ groupID ‖ commit)` (seq = the epoch the
-     commit produces, so nothing new is counted) plus a hub Ed25519 signature over
-     it. The store extends the chain inside the same atomic CAS as the epoch
-     advance (`CommitMLSGroup`, both backends), so `prevHash` is read and the new
-     head written under one lock — the chain cannot race the order it certifies.
-     The hub signs each link with its host key; a follower's `DeliverRelayed` and
-     `ForwardCommit` recompute the hash from their own head, compare it to the
-     hub's, and verify the signature before advancing — a mismatch (reorder, drop,
-     fork) or a non-hub signature is refused and the mirror does not move. Covered
-     by `mlschain/*_test.go` and `chat/convfed_e2e_test.go`
-     (`TestSignedOrderingChainConvergesAcrossHosts`,
-     `TestMirrorRefusesTamperedOrderingLink`).
+The liveness endpoint itself requires a correctly signed peer request; use
+another admitted instance or the federation E2E harness rather than an unsigned
+`curl`. Verify remote user lookup, a cross-host open-channel subscription, and a
+cross-host encrypted conversation before onboarding users.
 
-  **On F5d's verification blocker:** the delivery service is a Go server with no
-  MLS, so the *plaintext-decrypt* half of a cross-host round-trip can only be
-  proven by two real clients on two servers. The message-ordering half — that the
-  hub relays and orders opaque ciphertext correctly, and a mirror forwards and
-  applies it — is proven in-process by `convfed_e2e_test.go` over two real signed
-  handlers. The remaining two-server, two-browser E2E harness proves only that the
-  bytes those tests move decrypt on the far client.
+### 7. Keep membership current
 
-  **Verified live (2026-07-21).** F5d was proven over the wire on two separately
-  deployed hosts (`test-api.example.com` as hub, `follower.example.com` as a
-  follower), each a full stack with its own Mongo, sharing a signed nodelist and
-  authenticating S2S with Ed25519 over TLS. `alice@hub` adding
-  `mimi://follower.example.com/u/<bob>` triggered an S2S mirror provision on the
-  follower (`hubDomain` correctly set); alice's hub post relayed to the mirror;
-  bob's mirror post forwarded to and ordered by the hub; both hosts converged on
-  one ordered log. The payloads were opaque bytes — the ordering/relay half is now
-  proven both in-process and over the network; only the client-side MLS decrypt of
-  those bytes remains for the two-browser harness.
-- **F6 — Ordering rework.** *Foundation built; receipts + clients staged.*
-    - **Done:** every message now carries `ChatMessage.Seq`, a per-conversation
-      sequence the hub assigns atomically on append (`$inc` on the conversation
-      doc in Mongo; a per-conversation counter in the memory store). The hub is
-      the single sequencer via one rule — assign only when `Seq == 0`, so a
-      message authored on a host gets the next value and one relayed from the hub
-      keeps the hub's (carried on `RelayedMessage.Seq`, stored verbatim on the
-      mirror). The transcript now sorts `createdAt` then `seq`, so messages
-      sharing a millisecond come back in a stable order instead of a random,
-      page-dependent one. Legacy messages have `seq 0` and tie among themselves as
-      before. Additive and clock-agnostic; no client change needed for this part.
-    - **Done:** receipts are now **sequence** watermarks, not timestamps.
-      `ConversationMember.DeliveredSeq`/`ReadSeq` (and `JoinSeq`, the floor a
-      member starts at) replace `DeliveredAt`/`ReadAt`; a client reports the `seq`
-      of the newest message it received/read, and a sender's ticks are a sequence
-      comparison with no clock in it — the fix for the cross-host skew hazard.
-      Clean break across server, web (`receipts.ts`) and mobile (`receipts.dart`).
-      Receipts also cross hosts now: a follower forwards a member's watermark to
-      the hub (`conversation-submit-receipt`), which relays it to every participant
-      host (`conversation-relay-receipt`), so a sender on one host sees a reader on
-      another move their ticks — proven live in the federation E2E.
-    - **Done:** the message pagination cursor is now the compound `(createdAt, seq)`
-      bound matching the sort, so a page boundary inside a group of same-instant
-      messages neither skips nor repeats them.
+Refresh the nodelist before expiry using an atomic replacement:
 
-- **Calls — federated.** A 1:1 voice call in a cross-host conversation now
-  connects. Calls have no hub: every participant host relays its members' sealed
-  signals to every other (`conversation-call-signal`), which lands them in that
-  host's own call mailbox — so each host holds a complete ordered copy and every
-  device fetches from home — nudges its local members, and rings them if the signal
-  asked (`conversation-call-nudge` is the keep-ringing re-ping). The sealed SDP/ICE
-  is opaque to every server, exactly as in a single-host call. The answer lock
-  stays deliberately host-local: a member's devices all live on that member's home
-  host, which is the set the first-to-answer lock arbitrates. **TURN is shared
-  across hosts too:** when a client fetches ICE for a cross-host conversation
-  (`/v1/calls/ice-servers?conversationId=…`), its host adds every remote
-  participant host's TURN — each minted by that host from its own secret and
-  fetched over the signed transport (`conversation-turn`, gated on the asker having
-  a member in the conversation). Both peers then hold both hosts' TURN, so ICE
-  finds a relay they share; the secret never leaves its host, only a short-lived
-  credential does.
+```bash
+curl --fail https://network.example/nodelist.json -o /opt/pheme/nodelist.json.new
+mv /opt/pheme/nodelist.json.new /opt/pheme/nodelist.json
+docker compose --env-file /opt/pheme/stack.env restart app
+```
 
-## What federation does not fix
+Validate the coordinator signature and increasing serial before replacement in
+automated update tooling. Coordinate host-key rotation as a new nodelist issue;
+do not replace a private key before peers trust the new public key.
 
-- **Push.** FCM/APNs deliver to the OS. A federated network does not change
-  which of them is reachable.
-- **Metadata.** The hub sees who talks to whom and when, as the local server
-  does today. Cross-host, that is now visible to *someone else's* operator too.
-  That is a genuine reduction in privacy versus single-instance, and users
-  should be told plainly.
-- **Availability.** A room is only as available as its hub.
+## Operate a federation coordinator
+
+The coordinator tool stores `coordinator.key` and `roster.json` in its working
+directory:
+
+```bash
+mkdir pheme-network && cd pheme-network
+go run /path/to/pheme/api/cmd/nodelist init
+go run /path/to/pheme/api/cmd/nodelist pubkey
+```
+
+Admit, rotate, or remove a host:
+
+```bash
+go run /path/to/pheme/api/cmd/nodelist add chat.example.com <host-public-key> example
+go run /path/to/pheme/api/cmd/nodelist remove chat.example.com
+```
+
+Issue the list:
+
+```bash
+go run /path/to/pheme/api/cmd/nodelist sign --days 30 > nodelist.json
+```
+
+Publish `nodelist.json` over any reliable channel; authenticity comes from the
+signature, but HTTPS still protects availability and reduces tampering noise.
+Back up `coordinator.key` offline. Its compromise lets an attacker admit keys;
+its loss requires distributing a new trust anchor to every host.
+
+Use an admission process that verifies domain control, operator identity,
+security contacts, abuse handling, backup readiness, and the submitted host
+fingerprint. Keep roster changes reviewable.
+
+## Operational checklist
+
+- Synchronize clocks with NTP; signatures allow only five minutes of skew.
+- Alert before nodelist expiry.
+- Keep Redis available to every App API replica for nonce replay protection.
+- Do not rewrite `/federation/v1/*` paths between signing and application.
+- Retain logs for signature and relay failures without logging message bodies or
+  credentials.
+- Back up MongoDB and the host key off-host.
+- Test peer removal and key rotation before an incident.
+- Tell users that cross-host metadata is visible to more than one operator and
+  that hub loss freezes new events.
+
+Design history and implementation staging are preserved in
+[`development/federation.md`](development/federation.md), with the hub decision
+in [`development/adr-federation-hub-migration.md`](development/adr-federation-hub-migration.md).

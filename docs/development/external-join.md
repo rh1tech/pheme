@@ -1,4 +1,4 @@
-# External join: a new device joins an existing group instantly, without a reset
+# External join: a new device joins an existing group without a reset
 
 ## The problem
 

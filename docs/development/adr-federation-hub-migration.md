@@ -2,8 +2,8 @@
 
 **Status:** Accepted (v1 scope). Prerequisite for F5b/F5d in `federation.md`.
 **Date:** 2026-07-21.
-**Context doc:** `docs/federation.md` (Decision 5 states the summary; this is the
-argument the staging plan asks for before F5b is built).
+**Context doc:** `docs/development/federation.md` (Decision 5 states the
+summary; this is the argument the staging plan asked for before F5b was built).
 
 ## Context
 
@@ -95,8 +95,8 @@ not schedule:
 So v1's answer is explicit and honest: **a hub is a single point of failure for
 *new events* in the conversations it hosts.** This belongs in the user-facing
 docs, not buried here. The mitigation an operator has today is operational, not
-protocol: keep the hub host alive, and back it up (`docs/DEV.md` /
-`deploy/self-host`).
+protocol: keep the hub host alive and back it up (see
+`docs/server-operation.md`).
 
 ### The escape hatch, if we ever need one
 
