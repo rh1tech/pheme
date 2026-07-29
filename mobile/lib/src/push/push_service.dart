@@ -138,7 +138,7 @@ Future<void> _showDecryptedInBackground(RemoteMessage message) async {
   await local.initialize(
     settings: const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      iOS: DarwinInitializationSettings(),
+      iOS: DarwinInitializationSettings(requestAlertPermission: false, requestBadgePermission: false, requestSoundPermission: false),
     ),
   );
   await local
@@ -503,7 +503,7 @@ class PushService {
       await _local.initialize(
         settings: const InitializationSettings(
           android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-          iOS: DarwinInitializationSettings(),
+          iOS: DarwinInitializationSettings(requestAlertPermission: false, requestBadgePermission: false, requestSoundPermission: false),
         ),
         onDidReceiveNotificationResponse: _onLocalNotificationTap,
       );
@@ -668,7 +668,7 @@ class PushService {
 
     if (_available) {
       final messaging = FirebaseMessaging.instance;
-      final settings = await messaging.requestPermission();
+      final settings = await messaging.getNotificationSettings();
 
       // A denial costs the user their notifications. It must not also cost them the ability to answer
       // a call, so we carry on and register without a token.
