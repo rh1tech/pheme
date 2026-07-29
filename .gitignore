@@ -45,6 +45,3 @@ deploy/**/stack.env
 *.sqlite
 *.sqlite3
 
-# Generated store/marketing screenshots. The capture specs are committed, the
-# output is not: it is megabytes of PNG that regenerates from them on demand.
-/screenshots/
