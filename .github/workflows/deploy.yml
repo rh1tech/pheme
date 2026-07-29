@@ -180,7 +180,7 @@ jobs:
       # production forever, and litter that looks like real user data is worse than no test.
       - name: Smoke
         env:
-          WEB_URL: ${{ vars.PROD_WEB_URL || 'https://app.example.com' }}
+          WEB_URL: ${{ vars.PROD_WEB_URL }}
           # Must include the unlisted path prefix the API is mounted under, exactly
           # as PHEME_API_BASE in stack.env does — without it every request below
           # lands on the decoy site and the smoke test measures nothing. Held as a
@@ -295,7 +295,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Smoke
         env:
-          WEB_URL: ${{ vars.PROD_WEB_URL_2 || 'https://test.example.com' }}
+          WEB_URL: ${{ vars.PROD_WEB_URL_2 }}
           API_URL: ${{ secrets.PROD_API_URL_2 }}
           EXPECTED_VERSION: ${{ github.ref_name }}
         run: |

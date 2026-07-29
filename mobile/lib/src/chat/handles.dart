@@ -1,5 +1,5 @@
 // A `username@host` handle names someone on another Pheme server. The host may be a
-// full domain (`hub.example.com`) or a short nodelist alias (`kn86r`) — the
+// full domain (`chat.example.com`) or a short nodelist alias (`pheme1`) — the
 // server resolves either to a domain and then the username to an id. Local user search
 // only ever returns people on this host, so a federated member is reached by typing
 // their whole handle.

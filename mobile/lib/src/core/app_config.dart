@@ -41,7 +41,7 @@ const String appVersion = String.fromEnvironment(
 
 /// Shown in About. Not translated: a name is a name.
 const String appCopyright = '© 2026 Mikhail Matveev';
-const String appWebsite = 'https://app.example.com';
+const String appWebsite = 'https://github.com/rh1tech/pheme';
 
 /// What the sign-in screen's server field starts with: the compiled address, or
 /// nothing at all.

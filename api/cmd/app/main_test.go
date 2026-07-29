@@ -89,7 +89,7 @@ func TestCORSPreflightShortCircuits(t *testing.T) {
 // the request header must be lowercased too or a browser sending "HTTPS://..."
 // would be refused.
 func TestCORSMatchesOriginCaseInsensitively(t *testing.T) {
-	rec := doWithOrigin(t, []string{"https://app.example.com"}, http.MethodGet, "HTTPS://Pheme.RH1.Tech")
+	rec := doWithOrigin(t, []string{"https://app.example.com"}, http.MethodGet, "HTTPS://APP.EXAMPLE.COM")
 
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got == "" {
 		t.Error("Allow-Origin unset, want a case-insensitive match")

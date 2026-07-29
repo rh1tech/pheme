@@ -18,8 +18,8 @@ import (
 type SMTPSender struct {
 	addr        string // host:port
 	host        string // host alone, for PlainAuth / TLS ServerName
-	from        string // full From header, e.g. "Pheme <noreply@app.example.com>"
-	fromAddr    string // bare envelope address, e.g. "noreply@app.example.com"
+	from        string // full From header, e.g. "Pheme <noreply@example.com>"
+	fromAddr    string // bare envelope address, e.g. "noreply@example.com"
 	auth        smtp.Auth
 	insecureTLS bool // skip STARTTLS cert verification (for an internal relay)
 	now         func() time.Time

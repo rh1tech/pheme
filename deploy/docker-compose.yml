@@ -7,10 +7,10 @@ services:
     image: mongo:7
     restart: unless-stopped
     ports:
-      - "${MONGO_HOST_PORT:-27017}:27017"
+      - "127.0.0.1:${MONGO_HOST_PORT:-27017}:27017"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-pheme}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:-pheme}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:?set MONGO_USER in deploy/.env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:?set MONGO_PASS in deploy/.env}
       MONGO_INITDB_DATABASE: ${MONGO_DB:-pheme}
     volumes:
       - mongo-data:/data/db
@@ -24,11 +24,11 @@ services:
     image: rabbitmq:3.13-management
     restart: unless-stopped
     ports:
-      - "${RABBIT_HOST_PORT:-5672}:5672"   # AMQP
-      - "${RABBIT_MGMT_HOST_PORT:-15672}:15672" # management UI
+      - "127.0.0.1:${RABBIT_HOST_PORT:-5672}:5672"   # AMQP
+      - "127.0.0.1:${RABBIT_MGMT_HOST_PORT:-15672}:15672" # management UI
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBIT_USER:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:-guest}
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER:?set RABBIT_USER in deploy/.env}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS:?set RABBIT_PASS in deploy/.env}
     volumes:
       - rabbit-data:/var/lib/rabbitmq
     healthcheck:
@@ -42,7 +42,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${REDIS_HOST_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:

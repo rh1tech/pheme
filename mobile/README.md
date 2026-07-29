@@ -5,8 +5,8 @@ message history, send notifications as a channel owner, manage API keys, and
 register the device for push via Firebase Cloud Messaging.
 
 It talks to the same **App API** as the web client (JWT auth). See
-[../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for the endpoint list and
-[../docs/DEV.md](../docs/DEV.md) for the overall system.
+[../docs/protocol.md](../docs/protocol.md) for the protocol and
+[../docs/development/DEV.md](../docs/development/DEV.md) for contributor notes.
 
 ## Structure
 

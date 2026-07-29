@@ -8,7 +8,7 @@
 # the path prefix — never has to be committed anywhere. Reads the same variable
 # names the Pheme stack.env uses, so you can source that file first:
 #
-#   set -a; . /opt/pheme/prod/stack.env; set +a; ./render.sh
+#   set -a; . /opt/pheme/stack.env; set +a; ./render.sh
 #
 set -euo pipefail
 

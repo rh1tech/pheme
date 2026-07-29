@@ -6,8 +6,7 @@ member's domain to its public key. Every instance mirrors the same document.
 
 It is faithful to FidoNet's nodelist: compiled and signed centrally, mirrored
 everywhere. Admission is a reviewed change to a file. See
-`docs/federation.md`, Decision 3, for why admission is centralised even though
-hosting is not.
+`docs/federation.md` for the current trust and operating model.
 
 ## The coordinator
 
@@ -56,7 +55,7 @@ local copy and sets `PHEME_NODELIST_COORD_KEY` to the coordinator public key:
 
 ```sh
 PHEME_NODELIST_COORD_KEY=<coordinator pubkey>
-PHEME_NODELIST_PATH=/opt/pheme/prod/nodelist.json
+PHEME_NODELIST_PATH=/opt/pheme/nodelist.json
 ```
 
 Both must be set to join the network. Setting one without the other is treated as

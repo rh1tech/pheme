@@ -5,17 +5,17 @@ void main() {
   group('remoteHandle', () {
     test('accepts username@full-domain', () {
       expect(
-        remoteHandle('medved@hub.example.com'),
-        'medved@hub.example.com',
+        remoteHandle('medved@chat.example.com'),
+        'medved@chat.example.com',
       );
     });
 
     test('accepts username@alias (dot-free host)', () {
-      expect(remoteHandle('bear@kn87r'), 'bear@kn87r');
+      expect(remoteHandle('bear@pheme1'), 'bear@pheme1');
     });
 
     test('trims surrounding whitespace', () {
-      expect(remoteHandle('  bear@kn87r  '), 'bear@kn87r');
+      expect(remoteHandle('  bear@pheme1  '), 'bear@pheme1');
     });
 
     test('rejects a plain name with no @', () {
@@ -27,7 +27,7 @@ void main() {
     });
 
     test('rejects a too-short username', () {
-      expect(remoteHandle('ab@kn87r'), isNull);
+      expect(remoteHandle('ab@pheme1'), isNull);
     });
   });
 }

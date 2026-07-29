@@ -1,7 +1,7 @@
 # Production Pheme stack (one environment per Compose project).
 #
 # Run with, e.g.:
-#   docker compose -p pheme-prod --env-file /opt/pheme/prod/stack.env \
+#   docker compose -p pheme-prod --env-file /opt/pheme/stack.env \
 #     -f docker-compose.yml up -d
 #
 # Infra (mongo/rabbitmq/redis) is internal-only. The web, app and ingest
@@ -131,11 +131,8 @@ services:
       PHEME_MAIL_DRIVER: ${PHEME_MAIL_DRIVER:-smtp}
       PHEME_SMTP_HOST: ${PHEME_SMTP_HOST:-host.docker.internal}
       PHEME_SMTP_PORT: ${PHEME_SMTP_PORT:-25}
-      PHEME_SMTP_FROM: ${PHEME_SMTP_FROM:-Pheme <noreply@app.example.com>}
-      # The host Postfix presents its relay.example.com cert, which won't match
-      # host.docker.internal; the hop is on the private docker bridge, so skip
-      # STARTTLS verification for it (outbound MX TLS is unaffected).
-      PHEME_SMTP_INSECURE_TLS: ${PHEME_SMTP_INSECURE_TLS:-true}
+      PHEME_SMTP_FROM: ${PHEME_SMTP_FROM:-Pheme <noreply@example.com>}
+      PHEME_SMTP_INSECURE_TLS: ${PHEME_SMTP_INSECURE_TLS:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -229,14 +226,14 @@ services:
       # container a directory of dangling symlinks into `archive/`. A certbot deploy hook
       # publishes a readable copy here and restarts this container on renewal — see
       # turnserver.conf, which explains why the restart is not optional.
-      - ${PHEME_TURN_CERT_DIR:-/opt/pheme/prod/turn-certs}:/certs:ro
+      - ${PHEME_TURN_CERT_DIR:-/opt/pheme/turn-certs}:/certs:ro
     # The realm and the shared secret are passed here, not in turnserver.conf: that file is
     # in git and coturn does not expand environment variables. The secret must be the same
     # one the App API signs credentials with (PHEME_TURN_SECRET).
     command:
       - "-c"
       - "/etc/coturn/turnserver.conf"
-      - "--realm=${PHEME_TURN_REALM:-app.example.com}"
+      - "--realm=${PHEME_TURN_REALM:-example.com}"
       - "--static-auth-secret=${PHEME_TURN_SECRET:-}"
 
 volumes:

@@ -5,7 +5,7 @@ name: Federation E2E
 # client API — the proof that F5d (relay/forward/mirror) and F5b (signed ordering
 # chain, verified by the follower) work between real servers, not just in-process.
 #
-# Runs on the kn87r box (the `fed` label), which is powerful enough to hold two
+# Runs on a self-hosted runner with the `fed` label, sized to hold two
 # whole stacks plus a TLS-terminating fedproxy at once. Everything is inside
 # Docker: no host nginx, no DNS, no Cloudflare, nothing to clean up by hand.
 

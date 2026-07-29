@@ -5,13 +5,17 @@ Local development infrastructure for Pheme.
 ## Usage
 ```bash
 cp .env.example .env
+${EDITOR:-vi} .env  # replace both change-me passwords
 docker compose -f docker-compose.yml up -d
 ```
 
 Services:
-- **MongoDB** — `localhost:27017` (persistence)
-- **RabbitMQ** — `localhost:5672`, management UI at http://localhost:15672
-- **Redis** — `localhost:6379`
+- **MongoDB** — `127.0.0.1:27017` (persistence)
+- **RabbitMQ** — `127.0.0.1:5672`, management UI at http://127.0.0.1:15672
+- **Redis** — `127.0.0.1:6379`
+
+All ports bind to loopback. The Compose file refuses to start until MongoDB and
+RabbitMQ credentials are set in `.env`.
 
 Stop and remove:
 ```bash
