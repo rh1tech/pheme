@@ -170,3 +170,62 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// A per-address limit is only a limit when the address distinguishes callers.
+// Behind a proxy with TrustProxyHeaders off, every request carries the proxy's
+// address — so keying a bucket on it would lock the whole instance out after one
+// user's wrong passwords, which is worse than not limiting by address at all.
+func TestProxiedRequestsAreNotOneSharedAddressBucket(t *testing.T) {
+	h, _, mux := newTestAuth()
+	h.Limiter = ratelimit.NewTokenBucket(1.0/600.0, 2)
+	h.TrustProxyHeaders = false // nothing tells us who the real client is
+
+	for _, email := range []string{"a@b.com", "c@d.com", "e@f.com", "g@h.com"} {
+		if _, err := h.Store.CreateUser(context.Background(), activeUser(t, email)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Two users burn the shared address bucket from behind the proxy...
+	for i := 0; i < 4; i++ {
+		postFrom(mux, "/v1/auth/login", map[string]string{"email": "a@b.com", "password": "nope"}, "127.0.0.1:9000")
+	}
+	// ...an unrelated user must still be able to sign in.
+	rec := postFrom(mux, "/v1/auth/login",
+		map[string]string{"email": "c@d.com", "password": "abcd1234"}, "127.0.0.1:9001")
+	if rec.Code == http.StatusTooManyRequests {
+		t.Fatal("one user's failures locked another out — the proxy address is being used as a bucket key")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+}
+
+// With a trusted proxy header the address IS meaningful, so the bucket applies.
+func TestTrustedProxyHeaderRestoresThePerAddressBucket(t *testing.T) {
+	h, _, mux := newTestAuth()
+	h.Limiter = ratelimit.NewTokenBucket(1.0/600.0, 3)
+	h.TrustProxyHeaders = true
+
+	var throttled bool
+	for i := 0; i < 10; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/v1/auth/login",
+			bytes.NewReader(encodeJSON(map[string]string{"email": "ghost" + itoa(i) + "@b.com", "password": "x"})))
+		req.Header.Set("X-Forwarded-For", "203.0.113.7")
+		req.RemoteAddr = "127.0.0.1:9000"
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			throttled = true
+			break
+		}
+	}
+	if !throttled {
+		t.Fatal("one forwarded-for address sprayed ten accounts without being throttled")
+	}
+}
+
+func encodeJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}

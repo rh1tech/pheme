@@ -40,3 +40,26 @@ func ClientIP(r *http.Request, trustProxy bool) string {
 	}
 	return host
 }
+
+// ClientIPIsDistinct reports whether ClientIP returned something that actually
+// tells one caller from another.
+//
+// It does not when a reverse proxy is in front and trustProxy is off: every
+// request then carries the proxy's own address, and anything keyed on it is one
+// shared bucket for the entire instance rather than a per-caller limit. A
+// per-address rate limit in that state does not protect the service, it takes it
+// down — the first eight wrong passwords lock out everybody.
+//
+// Loopback and private ranges are the signal. A caller reaching a public API
+// genuinely from 127.0.0.1 or a Docker bridge address is a proxy hop in all but
+// the development case, where limiting by address matters least.
+func ClientIPIsDistinct(ip string, trustProxy bool) bool {
+	if trustProxy {
+		return true // the header names the real client
+	}
+	addr := net.ParseIP(ip)
+	if addr == nil {
+		return false // unparseable is not something to key a bucket on
+	}
+	return !addr.IsLoopback() && !addr.IsPrivate() && !addr.IsLinkLocalUnicast()
+}

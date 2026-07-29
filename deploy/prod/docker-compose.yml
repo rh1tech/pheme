@@ -97,6 +97,10 @@ services:
       PHEME_RABBIT_URI: "amqp://${RABBIT_USER}:${RABBIT_PASS}@rabbitmq:5672/"
       PHEME_REDIS_ADDR: "redis:6379"
       PHEME_JWT_SECRET: ${PHEME_JWT_SECRET}
+      PHEME_JWT_LEGACY_UNTIL: ${PHEME_JWT_LEGACY_UNTIL:-}
+      # Host nginx overwrites X-Forwarded-For, so the API can key its auth
+      # rate limits on the real client address instead of the proxy's.
+      PHEME_TRUST_PROXY_HEADERS: ${PHEME_TRUST_PROXY_HEADERS:-true}
       # This host's own identity: issuer of its tokens, and in a federated
       # network the name its nodelist entry is filed under.
       PHEME_HOST_DOMAIN: ${PHEME_HOST_DOMAIN:-}

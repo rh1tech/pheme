@@ -96,7 +96,16 @@ func (h *AuthHandler) allow(w http.ResponseWriter, r *http.Request, action, acco
 		tooMany(w)
 		return false
 	}
-	if !h.Limiter.Allow("auth:" + action + ":ip:" + httpx.ClientIP(r, h.TrustProxyHeaders)) {
+	// The address bucket is applied only when the address distinguishes callers.
+	// Behind a proxy with TrustProxyHeaders off, every request carries the proxy's
+	// address, and one bucket for the whole instance is not a rate limit — it is an
+	// outage that eight wrong passwords can trigger for everybody. The account
+	// bucket above still applies, and it is the one that bounds guessing anyway.
+	ip := httpx.ClientIP(r, h.TrustProxyHeaders)
+	if !httpx.ClientIPIsDistinct(ip, h.TrustProxyHeaders) {
+		return true
+	}
+	if !h.Limiter.Allow("auth:" + action + ":ip:" + ip) {
 		tooMany(w)
 		return false
 	}
