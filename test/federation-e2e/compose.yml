@@ -54,6 +54,9 @@ services:
       PHEME_OTP_DRIVER: redis
       PHEME_PUSH_DRIVER: log
       PHEME_MAIL_DRIVER: log
+      # A harness signs the same accounts in repeatedly; a budget sized for a
+      # human would throttle it. Production keeps the tight default.
+      PHEME_AUTH_RATE_BURST: "10000"
       PHEME_MONGO_URI: "mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/?authSource=admin"
       PHEME_MONGO_DB: pheme
       PHEME_RABBIT_URI: "amqp://pheme:pheme@rabbitmq:5672/"

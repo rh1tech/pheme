@@ -113,6 +113,9 @@ export default defineConfig({
         PHEME_CORS_ORIGINS: WEB_URL,
         PHEME_JWT_SECRET: 'e2e-test-secret',
         PHEME_MAIL_DRIVER: 'log',
+        // The suite signs the seeded admin in dozens of times, which a budget
+        // sized for a human would throttle. Production keeps the tight default.
+        PHEME_AUTH_RATE_BURST: '10000',
         PHEME_SEED_ADMIN_EMAIL: ADMIN_EMAIL,
         PHEME_SEED_ADMIN_PASSWORD: ADMIN_PASSWORD,
         // Calling on, with NO ICE servers: the two browsers are on the same machine and reach
@@ -137,6 +140,9 @@ export default defineConfig({
         PHEME_CORS_ORIGINS: WEB_URL,
         PHEME_JWT_SECRET: 'e2e-fed-a-secret',
         PHEME_MAIL_DRIVER: 'log',
+        // The suite signs the seeded admin in dozens of times, which a budget
+        // sized for a human would throttle. Production keeps the tight default.
+        PHEME_AUTH_RATE_BURST: '10000',
         PHEME_SEED_ADMIN_EMAIL: `alice@${FED_A_DOMAIN}`,
         PHEME_SEED_ADMIN_PASSWORD: ADMIN_PASSWORD,
         PHEME_TURN_URLS: 'direct',
@@ -158,6 +164,9 @@ export default defineConfig({
         PHEME_CORS_ORIGINS: WEB_URL,
         PHEME_JWT_SECRET: 'e2e-fed-b-secret',
         PHEME_MAIL_DRIVER: 'log',
+        // The suite signs the seeded admin in dozens of times, which a budget
+        // sized for a human would throttle. Production keeps the tight default.
+        PHEME_AUTH_RATE_BURST: '10000',
         PHEME_SEED_ADMIN_EMAIL: `bob@${FED_B_DOMAIN}`,
         PHEME_SEED_ADMIN_PASSWORD: ADMIN_PASSWORD,
         PHEME_TURN_URLS: 'direct',

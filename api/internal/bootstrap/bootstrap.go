@@ -181,14 +181,22 @@ func (b *Builder) Limiter() ratelimit.Limiter {
 // budget is really N budgets, and an attacker only has to be unlucky enough to keep
 // landing on the same instance.
 func (b *Builder) AuthLimiter() ratelimit.Limiter {
-	const burst = 8.0
-	const perSecond = 1.0 / 120.0
+	burst := float64(b.cfg.AuthRateBurst)
+	refill := float64(b.cfg.AuthRateRefillSeconds)
+	if burst <= 0 {
+		burst = 8
+	}
+	if refill <= 0 {
+		refill = 120
+	}
+	perSecond := 1.0 / refill
 	switch b.cfg.RateLimitDriver {
 	case "redis":
-		b.logger.Info("auth ratelimit: redis")
+		b.logger.Info("auth ratelimit: redis", "burst", burst, "refillSeconds", refill)
 		return ratelimit.NewRedisLimiter(b.redisClient(), perSecond, burst, "pheme:rl:auth")
 	default:
-		b.logger.Info("auth ratelimit: in-memory (limits are per-instance)")
+		b.logger.Info("auth ratelimit: in-memory (limits are per-instance)",
+			"burst", burst, "refillSeconds", refill)
 		return ratelimit.NewTokenBucket(perSecond, burst)
 	}
 }

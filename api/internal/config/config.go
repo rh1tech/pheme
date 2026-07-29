@@ -149,6 +149,17 @@ type Config struct {
 	// apparent address and evade every per-IP limit.
 	TrustProxyHeaders bool
 
+	// AuthRateBurst and AuthRateRefillSeconds size the credential-endpoint throttle:
+	// how many attempts are allowed back to back, and how slowly the budget refills.
+	//
+	// Configurable because a human and a test harness need different budgets from the
+	// same code. The defaults suit a person — a handful of retries, then a drip — and
+	// an automated suite that signs the same account in dozens of times legitimately
+	// needs more. Raising these on a real deployment weakens the limit; that is the
+	// operator's call to make deliberately.
+	AuthRateBurst         int
+	AuthRateRefillSeconds int
+
 	// Authorization
 	AdminEmails []string // emails granted the admin role on register/login
 
@@ -235,6 +246,9 @@ func Load() Config {
 		LegacyHS256Until: envTime("PHEME_JWT_LEGACY_UNTIL"),
 
 		TrustProxyHeaders: envBool("PHEME_TRUST_PROXY_HEADERS", false),
+
+		AuthRateBurst:         envInt("PHEME_AUTH_RATE_BURST", 8),
+		AuthRateRefillSeconds: envInt("PHEME_AUTH_RATE_REFILL_SECONDS", 120),
 
 		NodelistCoordKey: env("PHEME_NODELIST_COORD_KEY", ""),
 		NodelistPath:     env("PHEME_NODELIST_PATH", ""),
