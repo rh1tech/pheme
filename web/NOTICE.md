@@ -2,7 +2,7 @@
 
 The Pheme **web client** (this `web/` directory) is licensed under the
 **GNU General Public License v3** — see [LICENSE](./LICENSE) and the repository
-licensing summary in [`../LICENSE`](../LICENSE).
+licensing summary in [`../LICENSING.md`](../LICENSING.md).
 
 It is licensed this way because parts of its chat behaviour are derived from
 **Telegram Web K**, which is GPL v3:

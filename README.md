@@ -124,7 +124,8 @@ same license.
 Separate commercial terms may be negotiated for Pheme-owned code when an
 organization needs to keep its modifications proprietary. A commercial license
 is granted only by a signed agreement; this repository does not itself grant
-commercial rights. See [commercial licensing](COMMERCIAL-LICENSE.md).
+commercial rights. See [commercial licensing](COMMERCIAL-LICENSE.md), and
+[`LICENSING.md`](LICENSING.md) for how the two licenses fit together.
 
 **Current limitation:** parts of the web client are derived from GPLv3-licensed
 Telegram Web K code. Those parts cannot be relicensed by the Pheme project, so

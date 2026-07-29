@@ -6,8 +6,9 @@ distributing that code. No commercial rights are granted by this document. A
 commercial license exists only when the relevant copyright holder and the
 licensee execute a separate written agreement.
 
-Without such an agreement, the repository is available under GNU GPL v3 as
-stated in [`LICENSE`](LICENSE).
+Without such an agreement, the repository is available under GNU GPL v3, whose
+text is in [`LICENSE`](LICENSE); the licensing model as a whole is summarized in
+[`LICENSING.md`](LICENSING.md).
 
 ## Current scope limitation
 
