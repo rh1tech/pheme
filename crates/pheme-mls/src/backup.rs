@@ -85,6 +85,13 @@ pub fn decrypt(
     nonce: &[u8],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, String> {
+    // Length-check before use: `Nonce::from_slice` PANICS on anything but 12
+    // bytes, and these three arrive from the server, which this design treats as
+    // untrusted. A corrupt or hostile blob must fail as a wrong passphrase does,
+    // not take down the client's WASM instance.
+    if salt.len() != SALT_LEN || nonce.len() != NONCE_LEN {
+        return Err("wrong passphrase or corrupt backup".to_string());
+    }
     let key = derive_key(passphrase, salt)?;
     let cipher = Aes256Gcm::new_from_slice(key.as_slice()).map_err(|e| format!("aes key: {e}"))?;
     cipher

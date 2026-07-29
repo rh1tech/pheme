@@ -33,6 +33,16 @@ func serverFor(t *testing.T, origin string, lookup fakeLookup, users fakeUsers) 
 	return srv.URL
 }
 
+// clientFor builds a signing client that reaches the test server whatever domain
+// it is asked for. The domain still travels into the signature — it is the
+// nodelist spelling, not the dial address — so the destination binding is
+// exercised exactly as in production.
+func clientFor(origin, keyID string, key ed25519.PrivateKey, base string) *Client {
+	c := NewClient(origin, keyID, key)
+	c.PeerURL = func(string) string { return base }
+	return c
+}
+
 // The whole F2 loop: host A signs a request, host B verifies it against the
 // nodelist, and B's handler runs knowing who A is. Nothing faked but the
 // nodelist and the user table.
@@ -44,12 +54,12 @@ func TestLivenessEndToEnd(t *testing.T) {
 	base := serverFor(t, "b.example", fakeLookup{"a.example": aPub}, nil)
 
 	// A calls B.
-	client := NewClient("a.example", "a-key-1", aKey)
+	client := clientFor("a.example", "a-key-1", aKey, base)
 	var out struct {
 		Origin string `json:"origin"`
 		Peer   string `json:"peer"`
 	}
-	if err := client.GetJSON(context.Background(), base+"/federation/v1/liveness", &out); err != nil {
+	if err := client.GetJSON(context.Background(), "b.example", "/federation/v1/liveness", &out); err != nil {
 		t.Fatalf("liveness call failed: %v", err)
 	}
 	if out.Origin != "b.example" {
@@ -66,13 +76,13 @@ func TestUserExistsEndToEnd(t *testing.T) {
 	aKey := hostKey(t, 1)
 	aPub := aKey.Public().(ed25519.PublicKey)
 	base := serverFor(t, "b.example", fakeLookup{"a.example": aPub}, fakeUsers{"real-user": true})
-	client := NewClient("a.example", "a-key-1", aKey)
+	client := clientFor("a.example", "a-key-1", aKey, base)
 
 	var out struct {
 		Exists bool `json:"exists"`
 	}
 	if err := client.PostJSON(context.Background(),
-		base+"/federation/v1/user-exists", map[string]string{"userId": "real-user"}, &out); err != nil {
+		"b.example", "/federation/v1/user-exists", map[string]string{"userId": "real-user"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !out.Exists {
@@ -80,7 +90,7 @@ func TestUserExistsEndToEnd(t *testing.T) {
 	}
 
 	if err := client.PostJSON(context.Background(),
-		base+"/federation/v1/user-exists", map[string]string{"userId": "ghost"}, &out); err != nil {
+		"b.example", "/federation/v1/user-exists", map[string]string{"userId": "ghost"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if out.Exists {
@@ -92,14 +102,14 @@ func TestResolveUserEndToEnd(t *testing.T) {
 	aKey := hostKey(t, 1)
 	aPub := aKey.Public().(ed25519.PublicKey)
 	base := serverFor(t, "b.example", fakeLookup{"a.example": aPub}, fakeUsers{"alice": true})
-	client := NewClient("a.example", "a-key-1", aKey)
+	client := clientFor("a.example", "a-key-1", aKey, base)
 
 	var out struct {
 		UserID      string `json:"userId"`
 		DisplayName string `json:"displayName"`
 	}
 	if err := client.PostJSON(context.Background(),
-		base+"/federation/v1/resolve-user", map[string]string{"username": "alice"}, &out); err != nil {
+		"b.example", "/federation/v1/resolve-user", map[string]string{"username": "alice"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if out.UserID != "alice" {
@@ -109,7 +119,7 @@ func TestResolveUserEndToEnd(t *testing.T) {
 	// An unknown username is a 404, which PostJSON surfaces as an error — never a
 	// silent empty id the caller might add as a member.
 	err := client.PostJSON(context.Background(),
-		base+"/federation/v1/resolve-user", map[string]string{"username": "nobody"}, &out)
+		"b.example", "/federation/v1/resolve-user", map[string]string{"username": "nobody"}, &out)
 	if err == nil {
 		t.Error("resolving a nonexistent username succeeded")
 	}
@@ -121,8 +131,8 @@ func TestAnUntrustedHostIsRejectedEndToEnd(t *testing.T) {
 	// B's nodelist does not contain c.example.
 	base := serverFor(t, "b.example", fakeLookup{}, nil)
 
-	client := NewClient("c.example", "c-key-1", strangerKey)
-	err := client.GetJSON(context.Background(), base+"/federation/v1/liveness", &struct{}{})
+	client := clientFor("c.example", "c-key-1", strangerKey, base)
+	err := client.GetJSON(context.Background(), "b.example", "/federation/v1/liveness", &struct{}{})
 	if err == nil {
 		t.Fatal("an untrusted host's call succeeded")
 	}

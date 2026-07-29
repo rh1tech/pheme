@@ -9,7 +9,7 @@
 // This is faithful to FidoNet's nodelist: compiled and signed centrally,
 // mirrored everywhere. The tradeoff is that admission is centralised even though
 // hosting is not; the alternative, open federation, has no answer to spam and
-// abuse on day one. See docs/federation.md, Decision 3.
+// abuse on day one. See docs/development/federation.md, Decision 3.
 package nodelist
 
 import (
@@ -113,6 +113,15 @@ func VerifyAt(doc string, coord ed25519.PublicKey, now time.Time) (List, error) 
 	var l List
 	if err := json.Unmarshal(sd.List, &l); err != nil {
 		return List{}, fmt.Errorf("%w: %v", ErrMalformed, err)
+	}
+	// Re-validate, even though Sign already did. Trusting the coordinator is not
+	// the same as trusting whatever tool produced the bytes it signed, and the
+	// failure is not graceful: a node carrying a wrong-sized key flows through
+	// KeyFor into ed25519.Verify, which PANICS rather than returning false. A
+	// trust anchor that can be made to crash the verifier by being merely
+	// malformed is worse than one that refuses to load.
+	if err := l.validate(); err != nil {
+		return List{}, err
 	}
 	// Time is checked only after the signature, so an attacker cannot learn
 	// anything by probing with malformed documents.

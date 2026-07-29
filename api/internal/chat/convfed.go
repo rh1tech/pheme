@@ -180,6 +180,11 @@ func (c *ConvFederation) ProvisionMirror(ctx context.Context, hubDomain string, 
 	if _, err := c.Store.ConversationByID(ctx, spec.ConversationID); err == nil {
 		return nil // already mirrored
 	}
+	if err := c.checkMirrorSpec(ctx, hubDomain, spec); err != nil {
+		c.log().Warn("refusing to provision a mirror",
+			"hub", hubDomain, "conversation", spec.ConversationID, "reason", err)
+		return err
+	}
 	now := time.Now().UTC()
 	conv := domain.Conversation{
 		ID:        spec.ConversationID,
@@ -206,6 +211,77 @@ func (c *ConvFederation) ProvisionMirror(ctx context.Context, hubDomain string, 
 	}
 	_, err := c.Store.CreateConversation(ctx, conv, members)
 	return err
+}
+
+// maxPeerText bounds a plaintext field a peer supplies and this host will show to
+// a user. Title, display name and username are the only unencrypted, attacker-
+// chosen strings that cross the federation boundary; a cap keeps a hostile peer
+// from using them as a payload delivery channel.
+const maxPeerText = 200
+
+// checkMirrorSpec is the authorization ProvisionMirror was missing.
+//
+// Standing up a mirror creates a conversation in a local user's list, with a
+// title and member names the CALLER chose. Without these checks the only barrier
+// was nodelist membership — and per docs/development/federation.md Decision 3 that is
+// centralised admission of HOSTS, which is not the same thing as consent between
+// USERS. Any admitted host could put an arbitrary conversation, with arbitrary
+// plaintext in it, in front of anybody here.
+//
+// DeleteMirror twenty lines below already reasoned this way ("so a signed peer
+// cannot delete a conversation it has nothing to do with"); creating one deserves
+// the same treatment.
+//
+// NOTE: this establishes that the caller has a stake and the subject exists. It
+// is deliberately NOT a consent model — holding unsolicited cross-host invitations
+// in a request queue the user approves is a product decision, and the right one,
+// but it changes the client contract and belongs with that work.
+func (c *ConvFederation) checkMirrorSpec(ctx context.Context, hubDomain string, spec federation.MirrorSpec) error {
+	// The subject must be a real, usable account here. Provisioning for an id
+	// that does not exist creates a conversation nobody can ever open, which a
+	// peer could do unboundedly.
+	user, err := c.Store.UserByID(ctx, spec.LocalUserID)
+	if err != nil {
+		return errNoSuchLocalUser
+	}
+	if user.Status == domain.UserBlocked {
+		return errNoSuchLocalUser
+	}
+
+	// The calling hub must actually be part of the conversation it is asking us
+	// to mirror: at least one member has to be homed there. A host with no member
+	// in a conversation has no business creating it on someone else's server.
+	hasStake := false
+	for _, rm := range spec.RemoteMembers {
+		if strings.EqualFold(rm.Domain, hubDomain) {
+			hasStake = true
+			break
+		}
+	}
+	if !hasStake {
+		return errHubNotInConversation
+	}
+
+	// A remote member must not claim to live here — that is this host's own
+	// namespace, and a peer asserting into it could shadow a local member.
+	for _, rm := range spec.RemoteMembers {
+		if c.HostDomain != "" && strings.EqualFold(rm.Domain, c.HostDomain) {
+			return errRemoteMemberClaimsLocal
+		}
+		if rm.UserID == spec.LocalUserID {
+			return errRemoteMemberClaimsLocal
+		}
+	}
+
+	if len(spec.Title) > maxPeerText {
+		return errPeerTextTooLong
+	}
+	for _, rm := range spec.RemoteMembers {
+		if len(rm.DisplayName) > maxPeerText || len(rm.Username) > maxPeerText {
+			return errPeerTextTooLong
+		}
+	}
+	return nil
 }
 
 // DeleteMirror deletes this host's copy of a conversation because fromDomain — a
@@ -746,6 +822,13 @@ var (
 	errChainMismatch = convFedError("ordering chain hash does not match")
 	errChainUnsigned = convFedError("ordering chain signature invalid")
 	errNoCalling     = convFedError("calling is not configured on this host")
+
+	// Mirror-provisioning refusals. All map to one opaque status at the handler,
+	// so a peer probing for which local ids exist learns nothing from the code.
+	errNoSuchLocalUser         = convFedError("no such local user to mirror for")
+	errHubNotInConversation    = convFedError("the calling host has no member in this conversation")
+	errRemoteMemberClaimsLocal = convFedError("a remote member claims a local identity")
+	errPeerTextTooLong         = convFedError("a peer-supplied text field is too long")
 )
 
 type convFedError string

@@ -49,7 +49,7 @@ type Config struct {
 	VAPIDSubject    string // VAPID contact: an https: URL or mailto: address. Apple Web Push requires an https: URL (it rejects mailto: with 403 BadJwtToken).
 
 	// PublicAPIURL is the externally reachable base URL of the App API (e.g.
-	// "https://pheme-api.rh1.tech"), used to build absolute image URLs for push
+	// "https://chat.example.com"), used to build absolute image URLs for push
 	// notifications. Empty disables notification images (history still carries them).
 	PublicAPIURL string
 
@@ -58,7 +58,7 @@ type Config struct {
 	// directly, and TURN is the relay of last resort for them.
 	//
 	// TURNURLs is a comma-separated list of ICE URLs, e.g.
-	//   stun:turn.rh1.tech:3478,turn:turn.rh1.tech:3478?transport=udp,turns:turn.rh1.tech:5349?transport=tcp
+	//   stun:turn.example.com:3478,turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349?transport=tcp
 	// Empty disables calling entirely rather than shipping a half-working feature.
 	//
 	// TURNSecret is coturn's `static-auth-secret`. It NEVER leaves the server: what a
@@ -74,7 +74,7 @@ type Config struct {
 	MailDriver      string // log | smtp
 	SMTPHost        string
 	SMTPPort        int
-	SMTPFrom        string // From header, e.g. "Pheme <noreply@app.example.com>"
+	SMTPFrom        string // From header, e.g. "Pheme <noreply@example.com>"
 	SMTPUser        string // optional SMTP AUTH user (empty = no auth)
 	SMTPPass        string
 	SMTPInsecureTLS bool // skip STARTTLS cert verification (internal relay only)
@@ -95,7 +95,7 @@ type Config struct {
 	// gets no CORS headers at all rather than a wildcard.
 	CORSOrigins []string
 
-	// HostDomain is this instance's own domain, e.g. "hub.example.com".
+	// HostDomain is this instance's own domain, e.g. "chat.example.com".
 	// It becomes the issuer and audience of every token, and in a federated
 	// network it is the name peers know this host by and the key the nodelist
 	// entry is filed under. Empty keeps the pre-federation behaviour.
@@ -127,10 +127,27 @@ type Config struct {
 	// local user held the same id, with a signature that verifies and nothing
 	// visibly wrong.
 	//
-	// Turning this on does not sign anyone out — tokens issued under the secret
-	// keep verifying until they expire. Drop PHEME_JWT_SECRET once the longest
-	// refresh token issued under it has aged out (30 days by default).
+	// Turning this on signs nobody out ONLY if PHEME_JWT_LEGACY_UNTIL is set to
+	// a date far enough ahead to cover the longest refresh token already issued
+	// (30 days by default). Without it, tokens signed with the shared secret
+	// stop verifying the moment the key is turned on.
 	HostKey string
+
+	// LegacyHS256Until is the RFC3339 date until which a host that has a key of
+	// its own still honours tokens signed with PHEME_JWT_SECRET.
+	//
+	// It exists so the switch to asymmetric signing can be made without signing
+	// every session out, and it is a date rather than a flag because the window
+	// has to close on its own. While it is open the host accepts the weaker
+	// algorithm, which is exactly the state the key was meant to leave behind.
+	LegacyHS256Until time.Time
+
+	// TrustProxyHeaders decides whether X-Forwarded-For identifies the caller for
+	// rate limiting. Set it when a reverse proxy that OVERWRITES the header sits in
+	// front (the deploy/nginx configs do); leave it off otherwise, because the header
+	// is client-supplied and honouring it without a proxy lets any caller rotate its
+	// apparent address and evade every per-IP limit.
+	TrustProxyHeaders bool
 
 	// Authorization
 	AdminEmails []string // emails granted the admin role on register/login
@@ -169,7 +186,13 @@ func Load() Config {
 		Queue:    env("PHEME_QUEUE", "pheme.notifications"),
 		Exchange: env("PHEME_EXCHANGE", "pheme.events"),
 
-		JWTSecret:       env("PHEME_JWT_SECRET", "dev-insecure-change-me"),
+		// No default. A fixed default is a published signing key: this repository
+		// is where an attacker would look it up, and `env` treats an empty value
+		// as unset, so an operator who follows the documented advice to drop
+		// PHEME_JWT_SECRET after switching to a host key would have fallen back
+		// onto it. Empty means "the caller decides", and bootstrap does — either
+		// an ephemeral random secret for development or a refusal to start.
+		JWTSecret:       env("PHEME_JWT_SECRET", ""),
 		AccessTokenTTL:  envDuration("PHEME_ACCESS_TTL", 15*time.Minute),
 		RefreshTokenTTL: envDuration("PHEME_REFRESH_TTL", 720*time.Hour),
 
@@ -183,7 +206,7 @@ func Load() Config {
 
 		VAPIDPublicKey:  env("PHEME_VAPID_PUBLIC", ""),
 		VAPIDPrivateKey: env("PHEME_VAPID_PRIVATE", ""),
-		VAPIDSubject:    env("PHEME_VAPID_SUBJECT", "https://app.example.com"),
+		VAPIDSubject:    env("PHEME_VAPID_SUBJECT", "https://example.com"),
 
 		PublicAPIURL: env("PHEME_PUBLIC_API_URL", ""),
 
@@ -194,7 +217,7 @@ func Load() Config {
 		MailDriver:      env("PHEME_MAIL_DRIVER", "log"),
 		SMTPHost:        env("PHEME_SMTP_HOST", "localhost"),
 		SMTPPort:        envInt("PHEME_SMTP_PORT", 25),
-		SMTPFrom:        env("PHEME_SMTP_FROM", "Pheme <noreply@app.example.com>"),
+		SMTPFrom:        env("PHEME_SMTP_FROM", "Pheme <noreply@example.com>"),
 		SMTPUser:        env("PHEME_SMTP_USER", ""),
 		SMTPPass:        env("PHEME_SMTP_PASS", ""),
 		SMTPInsecureTLS: envBool("PHEME_SMTP_INSECURE_TLS", false),
@@ -207,8 +230,11 @@ func Load() Config {
 		// real deployment must set this to its web origin.
 		CORSOrigins: envListDefault("PHEME_CORS_ORIGINS", "http://localhost:5173"),
 
-		HostDomain: env("PHEME_HOST_DOMAIN", ""),
-		HostKey:    env("PHEME_HOST_KEY", ""),
+		HostDomain:       env("PHEME_HOST_DOMAIN", ""),
+		HostKey:          env("PHEME_HOST_KEY", ""),
+		LegacyHS256Until: envTime("PHEME_JWT_LEGACY_UNTIL"),
+
+		TrustProxyHeaders: envBool("PHEME_TRUST_PROXY_HEADERS", false),
 
 		NodelistCoordKey: env("PHEME_NODELIST_COORD_KEY", ""),
 		NodelistPath:     env("PHEME_NODELIST_PATH", ""),
@@ -233,6 +259,21 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envTime reads an RFC3339 instant. An unset or unparseable value yields the
+// zero time, which every caller reads as "no window" — the safe direction for a
+// setting whose only job is to relax a check.
+func envTime(key string) time.Time {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(v))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func envInt(key string, def int) int {

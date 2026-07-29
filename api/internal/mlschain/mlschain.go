@@ -1,11 +1,12 @@
 // Package mlschain is the signed ordering chain for a federated MLS group.
 //
 // A federated conversation has one hub that orders every commit (see
-// docs/federation.md and docs/adr-federation-hub-migration.md). A follower has
+// docs/development/federation.md and
+// docs/development/adr-federation-hub-migration.md). A follower has
 // to take the hub's word for that order — unless the order is made tamper-
 // evident. This package is what makes it so: each accepted commit gets a link
 //
-//	hash = H( prevHash ‖ seq ‖ groupID ‖ commit )
+//	hash = H( "pheme-mlschain-v1" ‖ prevHash ‖ seq ‖ groupID ‖ commit )
 //
 // binding its POSITION (seq, prevHash) to its CONTENT (the commit ciphertext)
 // and to the GROUP. Because the hash is a pure function of those inputs, the hub
@@ -24,6 +25,11 @@ import (
 	"encoding/binary"
 )
 
+// scheme labels what a chain hash is. Every host must use the identical value or
+// their hashes diverge and every relayed commit is refused as tampered — so
+// changing it is a coordinated upgrade across the network, not a rolling one.
+const scheme = "pheme-mlschain-v1"
+
 // Link computes the chain hash for a commit at position seq, following prevHash.
 //
 // prevHash is the previous link's hash — nil/empty for the first commit in a
@@ -33,6 +39,12 @@ import (
 // running their bytes together.
 func Link(prevHash []byte, seq int64, groupID string, commit []byte) []byte {
 	h := sha256.New()
+	// A context label first, so these bytes cannot be confused with anything else
+	// the host key signs. The key that signs a chain link also signs S2S requests;
+	// no practical confusion exists between them today (a canonical request string
+	// is far longer than a 32-byte digest), but two protocols sharing one key
+	// should say which is which rather than rely on their shapes never colliding.
+	writeField(h, []byte(scheme))
 	writeField(h, prevHash)
 	var s [8]byte
 	binary.BigEndian.PutUint64(s[:], uint64(seq))

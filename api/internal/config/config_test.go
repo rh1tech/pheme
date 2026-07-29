@@ -203,17 +203,34 @@ func TestLoadReadsTheEnvironment(t *testing.T) {
 	}
 }
 
-// The development JWT secret must be recognisable as one. A server that silently runs on the
-// default in production is signing tokens anybody can forge.
-func TestLoadDefaultJWTSecretIsObviouslyInsecure(t *testing.T) {
+// There must be NO default JWT secret. A fixed one is a published signing key —
+// this repository is where an attacker looks it up — and because `env` treats an
+// empty value as unset, an operator who dropped PHEME_JWT_SECRET (as the
+// federation notes once advised) fell straight back onto it. Empty here means
+// "the caller decides", and bootstrap decides: a random per-process secret for
+// development, or a refusal to start on a known placeholder.
+func TestLoadHasNoDefaultJWTSecret(t *testing.T) {
 	t.Setenv("PHEME_JWT_SECRET", "")
-	cfg := Load()
-	if cfg.JWTSecret == "" {
-		t.Fatal("JWTSecret is empty; tokens would be signed with nothing")
+	if got := Load().JWTSecret; got != "" {
+		t.Errorf("JWTSecret defaults to %q; any fixed default is a forgeable signing key", got)
 	}
-	if cfg.JWTSecret != "dev-insecure-change-me" {
-		t.Errorf("the default secret is %q — it must stay obviously unsafe so it cannot be mistaken "+
-			"for a configured one", cfg.JWTSecret)
+}
+
+// The legacy-HS256 window is a deadline, so it closes on its own. An unset or
+// unparseable value must read as "no window" — the safe direction for a setting
+// whose only effect is to relax a check.
+func TestLegacyHS256WindowDefaultsToClosed(t *testing.T) {
+	t.Setenv("PHEME_JWT_LEGACY_UNTIL", "")
+	if got := Load().LegacyHS256Until; !got.IsZero() {
+		t.Errorf("LegacyHS256Until = %v, want zero when unset", got)
+	}
+	t.Setenv("PHEME_JWT_LEGACY_UNTIL", "next tuesday")
+	if got := Load().LegacyHS256Until; !got.IsZero() {
+		t.Errorf("LegacyHS256Until = %v, want zero for an unparseable value", got)
+	}
+	t.Setenv("PHEME_JWT_LEGACY_UNTIL", "2026-09-01T00:00:00Z")
+	if got := Load().LegacyHS256Until; got.IsZero() {
+		t.Error("a valid RFC3339 deadline was not read")
 	}
 }
 

@@ -18,6 +18,20 @@ import (
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
+// seedLocalUser creates the account a mirror is provisioned FOR. A host now
+// refuses to stand up a conversation for an id it does not know — a peer that
+// could provision for arbitrary ids could put a conversation, with a title of its
+// choosing, in front of anybody.
+func seedLocalUser(t *testing.T, st store.Store, id string) {
+	t.Helper()
+	if _, err := st.CreateUser(context.Background(), domain.User{
+		ID: id, Email: id + "@example.test", Username: id,
+		Status: domain.UserActive, Role: domain.RoleUser,
+	}); err != nil {
+		t.Fatalf("seeding local user %q: %v", id, err)
+	}
+}
+
 // A cross-host conversation, end to end over the signed S2S transport: a group
 // on hub A with a member on host B. A relays messages to B's mirror; B forwards
 // its member's messages to A, which orders them and relays back. Nothing here is
@@ -33,6 +47,7 @@ func TestCrossHostConversationRoundTrip(t *testing.T) {
 
 	aStore := store.NewMemory(nil)
 	bStore := store.NewMemory(nil)
+	seedLocalUser(t, bStore, "bob")
 	aLive := live.NewMemoryBus()
 	bLive := live.NewMemoryBus()
 
@@ -147,6 +162,7 @@ func TestCrossHostCommitRoundTrip(t *testing.T) {
 	}
 	aStore := store.NewMemory(nil)
 	bStore := store.NewMemory(nil)
+	seedLocalUser(t, bStore, "bob")
 
 	var aURL, bURL string
 	aClient := federation.NewClient("a.example", "ak", aKey)
@@ -285,6 +301,7 @@ func TestCrossHostTurnCredentials(t *testing.T) {
 	}
 	aStore := store.NewMemory(nil)
 	bStore := store.NewMemory(nil)
+	seedLocalUser(t, bStore, "bob")
 
 	var aURL, bURL string
 	aClient := federation.NewClient("a.example", "ak", aKey)
@@ -347,6 +364,7 @@ func TestCrossHostCallSignalReachesCallee(t *testing.T) {
 	}
 	aStore := store.NewMemory(nil)
 	bStore := store.NewMemory(nil)
+	seedLocalUser(t, bStore, "bob")
 
 	var aURL, bURL string
 	aClient := federation.NewClient("a.example", "ak", aKey)
@@ -431,6 +449,7 @@ func TestCrossHostReceiptReachesHub(t *testing.T) {
 	}
 	aStore := store.NewMemory(nil)
 	bStore := store.NewMemory(nil)
+	seedLocalUser(t, bStore, "bob")
 
 	var aURL, bURL string
 	aClient := federation.NewClient("a.example", "ak", aKey)
@@ -498,6 +517,7 @@ func TestSignedOrderingChainConvergesAcrossHosts(t *testing.T) {
 	}
 	aStore := store.NewMemory(nil)
 	bStore := store.NewMemory(nil)
+	seedLocalUser(t, bStore, "bob")
 
 	var aURL, bURL string
 	aClient := federation.NewClient("a.example", "ak", aKey)
@@ -563,6 +583,7 @@ func TestMirrorRefusesTamperedOrderingLink(t *testing.T) {
 		"b.example": bKey.Public().(ed25519.PublicKey),
 	}
 	bStore := store.NewMemory(nil)
+	seedLocalUser(t, bStore, "bob")
 	bFed := &chat.ConvFederation{Store: bStore, Live: live.NewMemoryBus(), HostDomain: "b.example", Keys: roster}
 
 	// Stand up a fresh mirror whose hub is a.example (no commits yet).

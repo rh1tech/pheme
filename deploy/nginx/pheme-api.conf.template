@@ -27,6 +27,18 @@
 # and it should differ between deployments.
 
 server {
+
+    # Security headers for the API.
+    #
+    # `always`, so they are present on error responses too. An API serves JSON to
+    # a script, never a document, so the policy can be near-total: nothing is
+    # framed, nothing is a script, nothing sniffs.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
     server_name __PHEME_API_HOST__;
     client_max_body_size 100M;
 
@@ -48,7 +60,15 @@ server {
     location = /__PHEME_PATH_PREFIX__/v1/stream {
         proxy_pass http://127.0.0.1:__PHEME_APP_PORT__/v1/stream;
         proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # X-Forwarded-For is OVERWRITTEN here, not appended to.
+        #
+        # $proxy_add_x_forwarded_for, which this used to be, appends $remote_addr
+        # to whatever the client sent. That leaves the left-most entry — the one
+        # an application naturally reads as "the client" — under the caller's
+        # control. The API rate-limits per address, and an address the caller can
+        # choose is no limit at all. $remote_addr discards the claim and states
+        # the peer nginx actually accepted the connection from.
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
@@ -61,7 +81,7 @@ server {
     location /__PHEME_PATH_PREFIX__/v1/ingest/ {
         proxy_pass http://127.0.0.1:__PHEME_INGEST_PORT__/v1/ingest/;
         proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
     }
 
@@ -69,7 +89,7 @@ server {
     location /__PHEME_PATH_PREFIX__/ {
         proxy_pass http://127.0.0.1:__PHEME_APP_PORT__/;
         proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
     }
 
@@ -94,13 +114,13 @@ server {
     location = /.well-known/pheme-federation {
         proxy_pass http://127.0.0.1:__PHEME_APP_PORT__/.well-known/pheme-federation;
         proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
     }
     location /federation/ {
         proxy_pass http://127.0.0.1:__PHEME_APP_PORT__/federation/;
         proxy_set_header Host $http_host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
     }
     # __FEDERATION_END__

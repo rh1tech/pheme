@@ -25,23 +25,9 @@
          regenerates this file from the environment; in dev it falls back to
          VITE_API_BASE. -->
     <script src="/config.js"></script>
-    <script>
-      // Apply the saved Mantine color scheme before first paint to avoid a flash.
-      (function () {
-        try {
-          var v = localStorage.getItem('mantine-color-scheme-value') || 'auto';
-          var scheme =
-            v === 'auto'
-              ? window.matchMedia('(prefers-color-scheme: dark)').matches
-                ? 'dark'
-                : 'light'
-              : v;
-          document.documentElement.setAttribute('data-mantine-color-scheme', scheme);
-        } catch (e) {
-          /* ignore */
-        }
-      })();
-    </script>
+    <!-- Applies the saved color scheme before first paint. A separate file, not an
+         inline block, so the CSP can be `script-src 'self'` without 'unsafe-inline'. -->
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

@@ -375,61 +375,61 @@ func (h *Handler) convTurn(w http.ResponseWriter, r *http.Request) {
 
 // ProvisionRemoteMirror tells a peer host to stand up a mirror for one of its users.
 func (c *Client) ProvisionRemoteMirror(ctx context.Context, peerDomain string, spec MirrorSpec) error {
-	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-provision", spec, nil)
+	return c.PostJSON(ctx, peerDomain, "/federation/v1/conversation-provision", spec, nil)
 }
 
 // DeleteConversationOnPeer asks peerDomain to delete its copy of a conversation
 // this host has just deleted, so the deletion reaches both sides.
 func (c *Client) DeleteConversationOnPeer(ctx context.Context, peerDomain, conversationID string) error {
-	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-delete",
+	return c.PostJSON(ctx, peerDomain, "/federation/v1/conversation-delete",
 		map[string]string{"conversationId": conversationID}, nil)
 }
 
 // RelayToPeer relays accepted messages to a participant host's mirror.
 func (c *Client) RelayToPeer(ctx context.Context, peerDomain, conversationID string, msgs []RelayedMessage) error {
-	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-relay",
+	return c.PostJSON(ctx, peerDomain, "/federation/v1/conversation-relay",
 		map[string]any{"conversationId": conversationID, "messages": msgs}, nil)
 }
 
 // SubmitMessageToHub forwards a local device's message to the conversation's hub.
 func (c *Client) SubmitMessageToHub(ctx context.Context, hubDomain string, s SubmittedMessage) (RelayedMessage, error) {
 	var out RelayedMessage
-	err := c.PostJSON(ctx, c.PeerURL(hubDomain)+"/federation/v1/conversation-submit-message", s, &out)
+	err := c.PostJSON(ctx, hubDomain, "/federation/v1/conversation-submit-message", s, &out)
 	return out, err
 }
 
 // SubmitCommitToHub forwards a local device's commit to the conversation's hub.
 func (c *Client) SubmitCommitToHub(ctx context.Context, hubDomain string, s SubmittedCommit) (CommitResult, error) {
 	var out CommitResult
-	err := c.PostJSON(ctx, c.PeerURL(hubDomain)+"/federation/v1/conversation-submit-commit", s, &out)
+	err := c.PostJSON(ctx, hubDomain, "/federation/v1/conversation-submit-commit", s, &out)
 	return out, err
 }
 
 // SubmitReceiptToHub forwards a local member's receipt watermarks to the hub.
 func (c *Client) SubmitReceiptToHub(ctx context.Context, hubDomain string, s ReceiptUpdate) error {
-	return c.PostJSON(ctx, c.PeerURL(hubDomain)+"/federation/v1/conversation-submit-receipt", s, nil)
+	return c.PostJSON(ctx, hubDomain, "/federation/v1/conversation-submit-receipt", s, nil)
 }
 
 // RelayReceiptToPeer relays a member's advanced watermarks to a participant host.
 func (c *Client) RelayReceiptToPeer(ctx context.Context, peerDomain string, s ReceiptUpdate) error {
-	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-relay-receipt", s, nil)
+	return c.PostJSON(ctx, peerDomain, "/federation/v1/conversation-relay-receipt", s, nil)
 }
 
 // RelayCallSignalToPeer sends a local member's sealed call signal to a participant host.
 func (c *Client) RelayCallSignalToPeer(ctx context.Context, peerDomain string, s CallSignalRelay) error {
-	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-call-signal", s, nil)
+	return c.PostJSON(ctx, peerDomain, "/federation/v1/conversation-call-signal", s, nil)
 }
 
 // RelayCallNudgeToPeer re-nudges a participant host's members about a ringing call.
 func (c *Client) RelayCallNudgeToPeer(ctx context.Context, peerDomain string, s CallNudge) error {
-	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-call-nudge", s, nil)
+	return c.PostJSON(ctx, peerDomain, "/federation/v1/conversation-call-nudge", s, nil)
 }
 
 // RequestTurnFromPeer asks a participant host for a TURN credential so a cross-host
 // call can relay through it.
 func (c *Client) RequestTurnFromPeer(ctx context.Context, peerDomain, conversationID string) (TurnGrant, error) {
 	var out TurnGrant
-	err := c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/conversation-turn",
+	err := c.PostJSON(ctx, peerDomain, "/federation/v1/conversation-turn",
 		map[string]any{"conversationId": conversationID}, &out)
 	return out, err
 }

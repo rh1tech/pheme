@@ -133,6 +133,10 @@ PHEME_WEB_ORIGIN=$web_origin
 PHEME_DECOY_DIR=$decoy
 
 PHEME_JWT_SECRET=$jwt_secret
+
+# This instance sits behind the nginx vhost rendered by setup.sh, which overwrites
+# X-Forwarded-For — so the API can trust it to rate-limit per real client address.
+PHEME_TRUST_PROXY_HEADERS=true
 PHEME_ADMIN_EMAILS=$admin_email
 
 PHEME_VAPID_PUBLIC=$vapid_public

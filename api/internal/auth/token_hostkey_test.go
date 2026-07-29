@@ -100,9 +100,10 @@ func TestSameKeyButDifferentIssuerIsRefused(t *testing.T) {
 	}
 }
 
-// Turning on a host key must not sign everybody out: tokens issued under the
-// old shared secret keep working until they expire on their own.
-func TestLegacyHS256TokensStillVerifyAfterTheKeyIsTurnedOn(t *testing.T) {
+// Turning on a host key must not sign everybody out — but only for as long as
+// the operator asked. Inside the declared window, tokens issued under the old
+// shared secret keep working.
+func TestLegacyHS256TokensVerifyInsideTheDeclaredWindow(t *testing.T) {
 	legacy := NewTokenManager("legacy-secret", time.Minute, time.Hour)
 	tok, err := legacy.sign("user-1", "member", "sid-1", AccessToken, time.Minute)
 	if err != nil {
@@ -111,13 +112,68 @@ func TestLegacyHS256TokensStillVerifyAfterTheKeyIsTurnedOn(t *testing.T) {
 
 	upgraded := NewTokenManager("legacy-secret", time.Minute, time.Hour)
 	upgraded.UseHostKey(hostKey(t, 1), "a.example")
+	upgraded.AllowLegacyHS256Until(time.Now().Add(30 * 24 * time.Hour))
 
 	got, err := upgraded.Parse(tok, AccessToken)
 	if err != nil {
-		t.Fatalf("a token issued before the key was configured was rejected: %v", err)
+		t.Fatalf("a token issued before the key was configured was rejected inside the window: %v", err)
 	}
 	if got != "user-1" {
 		t.Errorf("subject = %q", got)
+	}
+}
+
+// The window has to close by itself. Past the deadline, a host with a key of its
+// own verifies only against that key.
+func TestLegacyHS256StopsVerifyingAfterTheWindow(t *testing.T) {
+	legacy := NewTokenManager("legacy-secret", time.Minute, time.Hour)
+	tok, err := legacy.sign("user-1", "member", "sid-1", AccessToken, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded := NewTokenManager("legacy-secret", time.Minute, time.Hour)
+	upgraded.UseHostKey(hostKey(t, 1), "a.example")
+	upgraded.AllowLegacyHS256Until(time.Now().Add(-time.Second)) // expired
+
+	if _, err := upgraded.Parse(tok, AccessToken); err == nil {
+		t.Fatal("a shared-secret token was accepted after the legacy window closed")
+	}
+}
+
+// The core finding this replaces: the algorithm is a field of the TOKEN, so a
+// host in asymmetric mode that still honours HMAC lets a forger choose the
+// weaker one — and the secret had a published default. With no window declared,
+// a key means only that key verifies.
+func TestHostKeyModeRefusesHS256ByDefault(t *testing.T) {
+	const published = "dev-insecure-change-me"
+
+	victim := NewTokenManager(published, time.Minute, time.Hour)
+	victim.UseHostKey(hostKey(t, 1), "victim.example")
+
+	// An attacker who has only read this repository mints an admin token.
+	forger := NewTokenManager(published, time.Minute, time.Hour)
+	forged, err := forger.sign("000000000000000000000000", "admin", "", AccessToken, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := victim.ParseClaims(forged, AccessToken); err == nil {
+		t.Fatal("a host with its own key accepted a token signed with the shared secret")
+	}
+}
+
+// An empty secret must never verify anything. Signing with a zero-length HMAC key
+// is not a weaker mode, it is no authentication at all.
+func TestAnEmptySecretVerifiesNothing(t *testing.T) {
+	forger := NewTokenManager("", time.Minute, time.Hour)
+	forged, err := forger.sign("user-1", "admin", "", AccessToken, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim := NewTokenManager("", time.Minute, time.Hour)
+	if _, err := victim.ParseClaims(forged, AccessToken); err == nil {
+		t.Fatal("a token signed with an empty secret was accepted")
 	}
 }
 

@@ -22,4 +22,14 @@ COPY --from=build /app/dist /usr/share/nginx/html
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY deploy/docker-entrypoint.sh /docker-entrypoint.d/40-pheme-config.sh
 RUN chmod +x /docker-entrypoint.d/40-pheme-config.sh
+# A restrictive fallback so the config always parses, even if the entrypoint is
+# bypassed. The entrypoint overwrites it at start with the policy that names this
+# deployment's API. Erring same-origin-only means a misconfigured container fails
+# visibly rather than serving with no policy at all.
+RUN printf '%s\n' \
+    "add_header Content-Security-Policy \"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'\" always;" \
+    "add_header X-Content-Type-Options \"nosniff\" always;" \
+    "add_header X-Frame-Options \"DENY\" always;" \
+    "add_header Referrer-Policy \"strict-origin-when-cross-origin\" always;" \
+    > /etc/nginx/conf.d/pheme-security-headers.conf
 EXPOSE 80

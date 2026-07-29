@@ -169,6 +169,30 @@ func (b *Builder) Limiter() ratelimit.Limiter {
 	}
 }
 
+// AuthLimiter builds the throttle for the credential endpoints.
+//
+// Its own instance, and far tighter than the ingest limiter (20/s): a person logs
+// in a handful of times a day, so a budget generous enough to never inconvenience
+// them is still a hard ceiling for a guesser. Eight attempts of burst absorbs a
+// forgotten password and a fumbled retype; the drip refill of one per two minutes
+// is what bounds the sustained rate.
+//
+// Redis when configured, for the same reason the ingest limiter is: a per-instance
+// budget is really N budgets, and an attacker only has to be unlucky enough to keep
+// landing on the same instance.
+func (b *Builder) AuthLimiter() ratelimit.Limiter {
+	const burst = 8.0
+	const perSecond = 1.0 / 120.0
+	switch b.cfg.RateLimitDriver {
+	case "redis":
+		b.logger.Info("auth ratelimit: redis")
+		return ratelimit.NewRedisLimiter(b.redisClient(), perSecond, burst, "pheme:rl:auth")
+	default:
+		b.logger.Info("auth ratelimit: in-memory (limits are per-instance)")
+		return ratelimit.NewTokenBucket(perSecond, burst)
+	}
+}
+
 // Dedup builds the store that makes a retried ingest request safe to send twice.
 //
 // It follows the rate limiter's driver setting rather than having its own: both answer the same
@@ -272,6 +296,63 @@ func (b *Builder) Mailer() (mailer.Sender, error) {
 	}
 }
 
+// knownPlaceholderSecrets are the values that appear in this repository's own
+// examples and defaults. A running host must never sign with one: they are
+// published, so a token signed under any of them can be forged by anyone who has
+// read the source — which is the point of the source being public.
+var knownPlaceholderSecrets = map[string]struct{}{
+	"dev-insecure-change-me": {},
+	"change-me":              {},
+	"change-me-32+chars":     {},
+	"changeme":               {},
+	"secret":                 {},
+}
+
+// minSecretLen is the shortest shared secret worth warning about. HS256 keys
+// shorter than the hash they feed add nothing to an offline attacker's cost.
+const minSecretLen = 32
+
+// jwtSecret resolves the shared signing secret, refusing the ones that are not
+// secret at all.
+//
+// Three cases, and the middle one is the finding this replaces. A configured
+// secret is used. A PUBLISHED PLACEHOLDER is refused outright — the previous
+// behaviour was to fall back to exactly such a string, so `PHEME_JWT_SECRET=`
+// in a compose file silently signed every token with a value printed in this
+// file. An absent secret gets a random one generated per process: development
+// keeps working with no configuration, and the cost — tokens do not survive a
+// restart — is the correct cost, because a secret nobody configured is not one
+// anybody should be able to predict either.
+func (b *Builder) jwtSecret() string {
+	secret := strings.TrimSpace(b.cfg.JWTSecret)
+
+	if _, published := knownPlaceholderSecrets[strings.ToLower(secret)]; published {
+		panic(fmt.Sprintf("PHEME_JWT_SECRET is %q, a placeholder published in this repository: "+
+			"anyone can forge a token for any user with it. Set a real one "+
+			"(`openssl rand -base64 32`), or unset it entirely to get a random per-process secret.", secret))
+	}
+
+	if secret == "" {
+		// No secret, and none needed if this host signs with a key of its own —
+		// but a random one still costs nothing and keeps the HS256 path from
+		// ever verifying against an empty key.
+		generated, err := auth.NewSharedSecret()
+		if err != nil {
+			panic(fmt.Sprintf("could not generate an ephemeral JWT secret: %v", err))
+		}
+		b.logger.Warn("PHEME_JWT_SECRET is not set; using a random per-process secret",
+			"consequence", "every session ends when this process restarts",
+			"fix", "set PHEME_JWT_SECRET to a persistent random value")
+		return generated
+	}
+
+	if len(secret) < minSecretLen {
+		b.logger.Warn("PHEME_JWT_SECRET is shorter than recommended",
+			"length", len(secret), "recommended", minSecretLen)
+	}
+	return secret
+}
+
 // Tokens builds the JWT token manager.
 func (b *Builder) Tokens() *auth.TokenManager {
 	// CACHED, like the blob store, and for a sharper reason than saving an allocation.
@@ -281,7 +362,11 @@ func (b *Builder) Tokens() *auth.TokenManager {
 	// revoker on it — accepting tokens that had been revoked, and undoing a security control
 	// silently. There is one caller today; this makes a second one safe rather than subtly wrong.
 	if b.tokens == nil {
-		b.tokens = auth.NewTokenManager(b.cfg.JWTSecret, b.cfg.AccessTokenTTL, b.cfg.RefreshTokenTTL)
+		secret := b.jwtSecret()
+		b.tokens = auth.NewTokenManager(secret, b.cfg.AccessTokenTTL, b.cfg.RefreshTokenTTL)
+		if !b.cfg.LegacyHS256Until.IsZero() {
+			b.tokens.AllowLegacyHS256Until(b.cfg.LegacyHS256Until)
+		}
 		if key, err := auth.ParseHostKey(b.cfg.HostKey); err != nil {
 			// Refuse to start rather than fall back to the shared secret. A host
 			// that silently ignored a malformed key would keep issuing tokens

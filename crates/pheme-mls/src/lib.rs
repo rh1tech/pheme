@@ -54,6 +54,37 @@ pub fn identity(domain: &str, user_id: &str, device_id: &str) -> Vec<u8> {
     format!("mimi://{domain}/d/{user_id}/{device_id}").into_bytes()
 }
 
+/// Rejects an identifier component that would make a credential ambiguous.
+///
+/// `identity` builds a four-segment path and `user_of` reads it back by splitting
+/// on `/`. That round trip is only sound while no component contains the
+/// separator — and until this check existed, the guarantee was a comment. A user
+/// id of `victim/junk` produced a credential that `user_of` resolved to
+/// `mimi://<domain>/u/victim`: a DIFFERENT user than the credential names, which
+/// is the identity that removal and roster comparison key on.
+///
+/// Not reachable today, since ids are server-issued — but this is the cross-host
+/// identity now (F5a), and the cost of enforcing it is three comparisons.
+fn check_component(what: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("a {what} is required"));
+    }
+    if value.contains('/') {
+        return Err(format!(
+            "a {what} may not contain '/': it is a path segment of the credential, \
+             and one that splits would name a different member than it appears to"
+        ));
+    }
+    // Control characters and whitespace would survive the split but make a
+    // credential unprintable and its equality surprising.
+    if value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(format!(
+            "a {what} may not contain whitespace or control characters"
+        ));
+    }
+    Ok(())
+}
+
 /// The qualified USER identifier a credential belongs to: `mimi://<domain>/u/<user>`.
 ///
 /// This is the key devices of one person are grouped under — for removal, for the
@@ -63,9 +94,13 @@ pub fn identity(domain: &str, user_id: &str, device_id: &str) -> Vec<u8> {
 pub fn user_of(identity: &[u8]) -> Vec<u8> {
     if let Ok(s) = std::str::from_utf8(identity) {
         if let Some(rest) = s.strip_prefix("mimi://") {
-            // rest = <domain>/d/<user>/<device>
-            let parts: Vec<&str> = rest.splitn(4, '/').collect();
-            if parts.len() == 4 && parts[1] == "d" {
+            // rest = <domain>/d/<user>/<device>, and EXACTLY that: a plain split
+            // rather than splitn, so a credential carrying extra segments (a
+            // foreign client, or one built before `check_component` existed)
+            // falls back to its whole self instead of resolving to a truncated
+            // user that happens to name somebody else.
+            let parts: Vec<&str> = rest.split('/').collect();
+            if parts.len() == 4 && parts[1] == "d" && !parts[2].is_empty() {
                 return format!("mimi://{}/u/{}", parts[0], parts[2]).into_bytes();
             }
         }
@@ -103,9 +138,9 @@ impl Client {
     /// client that knows only which user it belongs to cannot be told apart from that
     /// user's other devices, and the group ends up holding one of them at random.
     pub fn new(domain: &str, user_id: &str, device_id: &str) -> Result<Self, String> {
-        if domain.is_empty() || user_id.is_empty() || device_id.is_empty() {
-            return Err("a domain, a user id and a device id are all required".into());
-        }
+        check_component("domain", domain)?;
+        check_component("user id", user_id)?;
+        check_component("device id", device_id)?;
         let identity = identity(domain, user_id, device_id);
         let provider = OpenMlsRustCrypto::default();
         let signer =
@@ -209,7 +244,7 @@ impl Client {
             // stop serialising the group on a number the client merely claims.
             // Application messages are ALWAYS encrypted regardless of this — RFC
             // 9420 §6 requires it — so nothing a person types is exposed. See the
-            // server side in api/internal/chat and docs/federation.md (F4).
+            // server side in api/internal/chat and docs/development/federation.md (F4).
             //
             // MIXED, not pure plaintext: outgoing handshakes are plaintext, but
             // incoming ones are accepted in either framing, so a client that has
@@ -1876,6 +1911,60 @@ mod tests {
         assert_eq!(
             bob.decrypt(GID, &ct).unwrap().as_deref(),
             Some(&b"delivered twice"[..])
+        );
+    }
+}
+
+#[cfg(test)]
+mod credential_shape_tests {
+    use super::*;
+
+    // The credential is a four-segment path that `user_of` reads back by
+    // splitting on '/'. A component carrying the separator made a credential
+    // resolve to a DIFFERENT user than it names — the identity removal and
+    // roster comparison key on.
+    #[test]
+    fn a_slashed_component_is_refused() {
+        for (domain, user, device) in [
+            ("a.example", "victim/junk", "dev-1"),
+            ("a.example", "user-1", "dev/1"),
+            ("a.example/d/victim", "user-1", "dev-1"),
+        ] {
+            assert!(
+                Client::new(domain, user, device).is_err(),
+                "accepted a credential component containing '/': {domain} {user} {device}"
+            );
+        }
+    }
+
+    #[test]
+    fn blank_and_whitespace_components_are_refused() {
+        assert!(Client::new("", "u", "d").is_err());
+        assert!(Client::new("a.example", "", "d").is_err());
+        assert!(Client::new("a.example", "u", "").is_err());
+        assert!(Client::new("a.example", "u ser", "d").is_err());
+        assert!(Client::new("a.example", "u\nser", "d").is_err());
+    }
+
+    // A well-formed credential still resolves to its user.
+    #[test]
+    fn a_well_formed_credential_still_resolves() {
+        let id = identity("a.example", "507f1f77bcf86cd799439011", "a-b-c-uuid");
+        assert_eq!(
+            user_of(&id),
+            b"mimi://a.example/u/507f1f77bcf86cd799439011".to_vec()
+        );
+    }
+
+    // A credential with extra segments falls back to its whole self rather than
+    // resolving to a truncated user that may name somebody else.
+    #[test]
+    fn an_overlong_credential_does_not_resolve_to_a_truncated_user() {
+        let id = b"mimi://a.example/d/victim/junk/dev-1".to_vec();
+        assert_eq!(
+            user_of(&id),
+            id,
+            "an ambiguous credential resolved to a user"
         );
     }
 }

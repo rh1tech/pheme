@@ -32,7 +32,17 @@ type Handler struct {
 	Channels      ChannelService      // optional; channel routes mount only when set
 	KeyPackages   KeyPackageService   // optional; key-package routes mount only when set
 	Conversations ConversationService // optional; cross-host chat routes mount only when set
-	now           func() time.Time
+	// Replay makes each signed request single-use. Optional, but a host without
+	// one accepts a captured request for as long as its timestamp stays inside
+	// MaxSkew.
+	Replay ReplayGuard
+	now    func() time.Time
+}
+
+// WithReplayGuard enables single-use enforcement on inbound signed requests.
+func (h *Handler) WithReplayGuard(g ReplayGuard) *Handler {
+	h.Replay = g
+	return h
 }
 
 // NewHandler builds the federation handler.
@@ -100,7 +110,9 @@ func (h *Handler) verified(next http.Handler) http.Handler {
 			httpx.Error(w, http.StatusBadRequest, "unreadable body")
 			return
 		}
-		v, err := Verify(r, h.Lookup, body, h.now())
+		// h.Origin, not anything from the request: the destination binding is only
+		// worth having if the receiver supplies it.
+		v, err := Verify(r, h.Lookup, body, h.now(), h.Origin, h.Replay)
 		if err != nil {
 			// One opaque status for every failure — a stranger, a forger, a
 			// stale request and a non-peer all learn the same thing.

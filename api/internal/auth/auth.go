@@ -37,3 +37,14 @@ func EqualAPIKey(presented, storedHash string) bool {
 	got := HashAPIKey(strings.TrimSpace(presented))
 	return subtle.ConstantTimeCompare([]byte(got), []byte(storedHash)) == 1
 }
+
+// NewSharedSecret returns a random HS256 signing secret, for a host that has not
+// been configured with one. 32 bytes: the key that feeds SHA-256 gains nothing
+// from being shorter than the hash.
+func NewSharedSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}

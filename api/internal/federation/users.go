@@ -24,7 +24,7 @@ type RemoteUser struct {
 // call is signed and only a nodelist peer will answer it.
 func (c *Client) ResolveRemoteUser(ctx context.Context, homeDomain, username string) (RemoteUser, error) {
 	var out RemoteUser
-	err := c.PostJSON(ctx, c.PeerURL(homeDomain)+"/federation/v1/resolve-user",
+	err := c.PostJSON(ctx, homeDomain, "/federation/v1/resolve-user",
 		map[string]string{"username": username}, &out)
 	if err != nil {
 		// Do maps every non-2xx to an error string carrying the status; a 404 is

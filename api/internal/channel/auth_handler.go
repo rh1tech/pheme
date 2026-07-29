@@ -13,6 +13,7 @@ import (
 	mailer "github.com/rh1tech/pheme/api/internal/email"
 	"github.com/rh1tech/pheme/api/internal/httpx"
 	"github.com/rh1tech/pheme/api/internal/otp"
+	"github.com/rh1tech/pheme/api/internal/ratelimit"
 	"github.com/rh1tech/pheme/api/internal/store"
 )
 
@@ -40,7 +41,26 @@ type AuthHandler struct {
 	// session is revoked (the prior behaviour, and what the auth tests exercise).
 	Revoker interface {
 		IsRevoked(sessionID string) bool
+		// IsUserRevoked covers the device IsRevoked cannot reach: one whose session id
+		// was never recorded has none to match, so only the per-user cutoff can end it.
+		// Refresh MUST consult this for the same reason the middleware does — a token
+		// re-issued from an unrevoked refresh token carries a fresh IssuedAt, which is
+		// after the cutoff, so skipping the check here undoes the revocation entirely
+		// rather than merely narrowing it.
+		IsUserRevoked(userID string, issuedAt time.Time) bool
 	}
+
+	// Limiter throttles the credential endpoints. These are the only unauthenticated,
+	// state-changing routes on the App API, and password verification is deliberately
+	// expensive (Argon2id) — so without a limit an attacker gets unlimited guesses AND
+	// a cheap way to saturate the hash-slot pool that keeps honest logins served.
+	//
+	// Optional: nil disables throttling, which is the right default for tests but not
+	// for a deployment.
+	Limiter ratelimit.Limiter
+	// TrustProxyHeaders decides whether X-Forwarded-For is believed when identifying a
+	// caller. See httpx.ClientIP — wrong in either direction weakens the per-IP limit.
+	TrustProxyHeaders bool
 
 	// CodeTTL is how long a pending signup / reset code stays valid.
 	CodeTTL time.Duration
@@ -56,6 +76,39 @@ func (h *AuthHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/refresh", h.refresh)
 	mux.HandleFunc("POST /v1/auth/forgot-password", h.forgotPassword)
 	mux.HandleFunc("POST /v1/auth/reset-password", h.resetPassword)
+}
+
+// allow applies the credential-endpoint rate limit.
+//
+// TWO keys, and both matter. The per-account key is the one that actually bounds
+// password guessing: an attacker with a botnet defeats any per-IP limit, but every
+// guess against one account still has to pass through that account's bucket. The
+// per-IP key bounds the other direction — one source spraying many accounts, which
+// a per-account limit never sees.
+//
+// Ordering note: the account bucket is consumed first so that a distributed attack
+// on one account is throttled even when no single IP stands out.
+func (h *AuthHandler) allow(w http.ResponseWriter, r *http.Request, action, account string) bool {
+	if h.Limiter == nil {
+		return true
+	}
+	if account != "" && !h.Limiter.Allow("auth:"+action+":acct:"+strings.ToLower(account)) {
+		tooMany(w)
+		return false
+	}
+	if !h.Limiter.Allow("auth:" + action + ":ip:" + httpx.ClientIP(r, h.TrustProxyHeaders)) {
+		tooMany(w)
+		return false
+	}
+	return true
+}
+
+// tooMany answers a throttled request. The message says nothing about which
+// bucket ran out — an attacker learning "this account is being limited" learns
+// that the account exists.
+func tooMany(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "60")
+	httpx.Error(w, http.StatusTooManyRequests, "too many attempts, try again later")
 }
 
 func (h *AuthHandler) logger() *slog.Logger {
@@ -121,6 +174,9 @@ func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email, ok := normalizeEmail(req.Email)
+	if !h.allow(w, r, "register", email) {
+		return
+	}
 	if !ok {
 		httpx.Error(w, http.StatusBadRequest, "a valid email is required")
 		return
@@ -184,6 +240,9 @@ func (h *AuthHandler) verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email, _ := normalizeEmail(req.Email)
+	if !h.allow(w, r, "verify", email) {
+		return
+	}
 	code := strings.TrimSpace(req.Code)
 
 	s, err := h.Codes.GetSignup(r.Context(), email)
@@ -246,6 +305,9 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	if !h.allow(w, r, "login", req.Email) {
+		return
+	}
 
 	u, err := h.Store.UserByEmail(r.Context(), req.Email)
 	if err != nil {
@@ -294,10 +356,19 @@ func (h *AuthHandler) refresh(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	}
-	// A terminated device must not be able to refresh its way back in.
-	if h.Revoker != nil && h.Revoker.IsRevoked(claims.SID) {
-		httpx.Error(w, http.StatusUnauthorized, "invalid refresh token")
-		return
+	// A terminated device must not be able to refresh its way back in — by EITHER
+	// route. Checking only the session id let a device with no session id (the
+	// exact case the per-user cutoff exists for) trade its still-valid refresh
+	// token for a freshly-stamped access token that outran the cutoff.
+	if h.Revoker != nil {
+		if h.Revoker.IsRevoked(claims.SID) {
+			httpx.Error(w, http.StatusUnauthorized, "invalid refresh token")
+			return
+		}
+		if claims.IssuedAt != nil && h.Revoker.IsUserRevoked(claims.Subject, claims.IssuedAt.Time) {
+			httpx.Error(w, http.StatusUnauthorized, "invalid refresh token")
+			return
+		}
 	}
 	h.issueForSession(w, claims.Subject, claims.Role, claims.SID, http.StatusOK)
 }
@@ -315,6 +386,9 @@ func (h *AuthHandler) forgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email, ok := normalizeEmail(req.Email)
+	if !h.allow(w, r, "forgot-password", email) {
+		return
+	}
 	respondOK := func() { httpx.JSON(w, http.StatusOK, map[string]any{"status": "code_sent"}) }
 	if !ok {
 		respondOK()
@@ -361,6 +435,9 @@ func (h *AuthHandler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email, _ := normalizeEmail(req.Email)
+	if !h.allow(w, r, "reset-password", email) {
+		return
+	}
 	code := strings.TrimSpace(req.Code)
 	if err := auth.ValidatePassword(req.NewPassword); err != nil {
 		httpx.Error(w, http.StatusBadRequest, err.Error())

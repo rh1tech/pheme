@@ -80,7 +80,7 @@ func (c *Client) ClaimRemoteKeyPackages(ctx context.Context, homeDomain, userID 
 	var out struct {
 		KeyPackages []ClaimedKeyPackage `json:"keyPackages"`
 	}
-	err := c.PostJSON(ctx, c.PeerURL(homeDomain)+"/federation/v1/claim-key-packages",
+	err := c.PostJSON(ctx, homeDomain, "/federation/v1/claim-key-packages",
 		map[string]string{"userId": userID}, &out)
 	return out.KeyPackages, err
 }

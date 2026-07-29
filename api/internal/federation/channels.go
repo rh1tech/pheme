@@ -110,7 +110,7 @@ func (c *Client) SubscribeToRemoteChannel(ctx context.Context, originDomain, cha
 	var out struct {
 		Name string `json:"name"`
 	}
-	err := c.PostJSON(ctx, c.PeerURL(originDomain)+"/federation/v1/channel-subscribe",
+	err := c.PostJSON(ctx, originDomain, "/federation/v1/channel-subscribe",
 		map[string]string{"channelPublicId": channelPublicID}, &out)
 	return out.Name, err
 }
@@ -119,5 +119,5 @@ func (c *Client) SubscribeToRemoteChannel(ctx context.Context, originDomain, cha
 // forget from the dispatcher's point of view: a peer that is down must not hold
 // up local delivery, so the caller logs a failure rather than retrying here.
 func (c *Client) DeliverToPeer(ctx context.Context, peerDomain string, msg RemoteMessage) error {
-	return c.PostJSON(ctx, c.PeerURL(peerDomain)+"/federation/v1/channel-delivery", msg, nil)
+	return c.PostJSON(ctx, peerDomain, "/federation/v1/channel-delivery", msg, nil)
 }

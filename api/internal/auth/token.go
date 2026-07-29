@@ -75,6 +75,40 @@ type TokenManager struct {
 	verifyKey ed25519.PublicKey
 	keyID     string
 	issuer    string
+
+	// legacyUntil is how long a host that has switched to a key keeps honouring
+	// tokens signed with the old shared secret. Zero means it does not: the
+	// moment a key is configured, HS256 stops verifying.
+	//
+	// This is the migration window made explicit. It has to be bounded, because
+	// an unbounded one is indistinguishable from the vulnerability it was
+	// introduced to avoid — the operator who never gets round to closing it is
+	// running a host that accepts the weaker algorithm forever.
+	legacyUntil time.Time
+	now         func() time.Time
+}
+
+// legacyHS256Allowed reports whether this host is still inside its configured
+// window for honouring shared-secret tokens.
+func (m *TokenManager) legacyHS256Allowed() bool {
+	return !m.legacyUntil.IsZero() && m.clock().Before(m.legacyUntil)
+}
+
+func (m *TokenManager) clock() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
+// AllowLegacyHS256Until keeps verifying shared-secret tokens until deadline, so
+// that turning on a host key does not sign out sessions issued before it. After
+// the deadline only this host's key verifies.
+//
+// Deliberately a deadline rather than a boolean: the window must close by
+// itself, whether or not anyone remembers to close it.
+func (m *TokenManager) AllowLegacyHS256Until(deadline time.Time) {
+	m.legacyUntil = deadline
 }
 
 // NewTokenManager creates a TokenManager with the given signing secret and TTLs.
@@ -198,9 +232,25 @@ func (m *TokenManager) ParseClaims(token string, want TokenType) (*Claims, error
 	parsed, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
 		switch t.Method.(type) {
 		case *jwt.SigningMethodHMAC:
-			// Legacy. Still honoured so that turning on a host key does not sign
-			// out every session; drop the secret once the longest refresh token
-			// issued under it has expired.
+			// Legacy, and ONLY while this host has no key of its own.
+			//
+			// The algorithm is a field of the token, so honouring HMAC in
+			// asymmetric mode would let a forger choose the weaker one: a host
+			// running EdDSA would still accept anything signed with the shared
+			// secret, and the secret has a published default. Asymmetric mode
+			// must mean asymmetric verification, not "asymmetric unless the
+			// token asks otherwise".
+			//
+			// The transition this once served is handled instead by
+			// LegacyHS256Until: a host key can be turned on without signing
+			// anyone out, but the window is an explicit date the operator sets,
+			// not an open-ended property of every token.
+			if m.signKey != nil && !m.legacyHS256Allowed() {
+				return nil, ErrInvalidToken
+			}
+			if len(m.secret) == 0 {
+				return nil, ErrInvalidToken
+			}
 			return m.secret, nil
 		case *jwt.SigningMethodEd25519:
 			if m.verifyKey == nil {

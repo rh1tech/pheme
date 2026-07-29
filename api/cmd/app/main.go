@@ -100,9 +100,13 @@ func main() {
 		Logger:      logger,
 		// The refresh endpoint is public, so it checks revocation itself — otherwise a
 		// terminated session could refresh its way back in past the middleware.
-		Revoker:      revoker,
-		CodeTTL:      cfg.CodeTTL,
-		CodeCooldown: cfg.CodeCooldown,
+		Revoker: revoker,
+		// Unauthenticated, state-changing, and expensive to serve: the credential
+		// endpoints get their own tight budget rather than the ingest limiter's.
+		Limiter:           b.AuthLimiter(),
+		TrustProxyHeaders: cfg.TrustProxyHeaders,
+		CodeTTL:           cfg.CodeTTL,
+		CodeCooldown:      cfg.CodeCooldown,
 	}).Routes(mux)
 	appHandler := &channel.AppHandler{
 		Store:     db,
@@ -152,6 +156,10 @@ func main() {
 		os.Exit(1)
 	} else if nodes != nil {
 		fedHandler := federation.NewHandler(cfg.HostDomain, nodes, userResolver{db})
+		// Single-use signatures. Shares the ingest idempotency store — same
+		// question, same need for every instance to answer it from one place, and
+		// the keys are namespaced so they cannot collide.
+		fedHandler.WithReplayGuard(b.Dedup())
 		// The channel service delivers an arriving message to local subscribers.
 		// It reuses a dispatcher purely for its local fan-out — this one never
 		// consumes the broker, it only runs DeliverLocally.

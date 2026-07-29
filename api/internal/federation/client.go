@@ -43,17 +43,24 @@ func NewClient(origin, keyID string, key ed25519.PrivateKey) *Client {
 	}
 }
 
-// Do sends a signed request to a peer and returns the response body, or an error
+// Do sends a signed request to peer and returns the response body, or an error
 // for any non-2xx. reqBody may be nil.
-func (c *Client) Do(ctx context.Context, method, url string, reqBody []byte) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(reqBody))
+//
+// peer is the domain as the NODELIST spells it, and path is the endpoint. Both
+// are signed, so neither the URL this resolves to (which may be a loopback
+// address in a test harness, or a proxy in production) nor a rewritten path
+// changes what the receiver verifies against.
+func (c *Client) Do(ctx context.Context, peer, method, path string, reqBody []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.PeerURL(peer)+path, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
 	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	Sign(req, c.origin, c.keyID, c.key, reqBody, c.now())
+	if err := Sign(req, c.origin, peer, c.keyID, c.key, reqBody, c.now()); err != nil {
+		return nil, err
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -68,27 +75,27 @@ func (c *Client) Do(ctx context.Context, method, url string, reqBody []byte) ([]
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("federation: %s %s: peer returned %d", method, url, resp.StatusCode)
+		return nil, fmt.Errorf("federation: %s %s%s: peer returned %d", method, peer, path, resp.StatusCode)
 	}
 	return body, nil
 }
 
-// GetJSON sends a signed GET and decodes a JSON response into out.
-func (c *Client) GetJSON(ctx context.Context, url string, out any) error {
-	body, err := c.Do(ctx, http.MethodGet, url, nil)
+// GetJSON sends a signed GET to peer and decodes a JSON response into out.
+func (c *Client) GetJSON(ctx context.Context, peer, path string, out any) error {
+	body, err := c.Do(ctx, peer, http.MethodGet, path, nil)
 	if err != nil {
 		return err
 	}
 	return json.Unmarshal(body, out)
 }
 
-// PostJSON sends a signed POST with a JSON body and decodes a JSON response.
-func (c *Client) PostJSON(ctx context.Context, url string, in, out any) error {
+// PostJSON sends a signed POST to peer with a JSON body and decodes a JSON response.
+func (c *Client) PostJSON(ctx context.Context, peer, path string, in, out any) error {
 	reqBody, err := json.Marshal(in)
 	if err != nil {
 		return err
 	}
-	respBody, err := c.Do(ctx, http.MethodPost, url, reqBody)
+	respBody, err := c.Do(ctx, peer, http.MethodPost, path, reqBody)
 	if err != nil {
 		return err
 	}

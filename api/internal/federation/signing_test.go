@@ -25,6 +25,15 @@ func (f fakeLookup) KeyFor(domain string) (ed25519.PublicKey, error) {
 	return f[domain], nil // nil means "not a peer", matching the Store contract
 }
 
+// sign is Sign with the error surfaced as a test failure: every call here uses a
+// good key, so a signing error means the test setup is wrong, not the subject.
+func sign(t *testing.T, req *http.Request, origin, destination, keyID string, key ed25519.PrivateKey, body []byte, now time.Time) {
+	t.Helper()
+	if err := Sign(req, origin, destination, keyID, key, body, now); err != nil {
+		t.Fatalf("signing failed: %v", err)
+	}
+}
+
 func request(t *testing.T, method, url string, body []byte) *http.Request {
 	t.Helper()
 	req, err := http.NewRequest(method, url, bytes.NewReader(body))
@@ -41,9 +50,9 @@ func TestSignedRequestVerifies(t *testing.T) {
 	body := []byte(`{"query":"alice"}`)
 
 	req := request(t, http.MethodPost, "https://b.example/federation/v1/user-exists", body)
-	Sign(req, "a.example", "key-1", key, body, now)
+	sign(t, req, "a.example", "b.example", "key-1", key, body, now)
 
-	got, err := Verify(req, fakeLookup{"a.example": pub}, body, now)
+	got, err := Verify(req, fakeLookup{"a.example": pub}, body, now, "b.example", nil)
 	if err != nil {
 		t.Fatalf("a validly signed request was refused: %v", err)
 	}
@@ -63,9 +72,9 @@ func TestForgedOriginIsRefused(t *testing.T) {
 
 	req := request(t, http.MethodPost, "https://b.example/f", body)
 	// Attacker signs with its own key but claims to be a.example.
-	Sign(req, "a.example", "key-1", attacker, body, now)
+	sign(t, req, "a.example", "b.example", "key-1", attacker, body, now)
 
-	if _, err := Verify(req, fakeLookup{"a.example": victimPub}, body, now); err != ErrBadSignature {
+	if _, err := Verify(req, fakeLookup{"a.example": victimPub}, body, now, "b.example", nil); err != ErrBadSignature {
 		t.Fatalf("err = %v, want ErrBadSignature — a host impersonated another", err)
 	}
 }
@@ -78,10 +87,10 @@ func TestNonPeerIsRefused(t *testing.T) {
 	body := []byte("x")
 
 	req := request(t, http.MethodPost, "https://b.example/f", body)
-	Sign(req, "stranger.example", "key-1", key, body, now)
+	sign(t, req, "stranger.example", "b.example", "key-1", key, body, now)
 
 	// Empty nodelist: nobody is a peer.
-	if _, err := Verify(req, fakeLookup{}, body, now); err != ErrBadSignature {
+	if _, err := Verify(req, fakeLookup{}, body, now, "b.example", nil); err != ErrBadSignature {
 		t.Fatalf("err = %v, want ErrBadSignature for a non-peer", err)
 	}
 }
@@ -94,10 +103,10 @@ func TestTamperedBodyIsRefused(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 
 	req := request(t, http.MethodPost, "https://b.example/f", []byte("original"))
-	Sign(req, "a.example", "key-1", key, []byte("original"), now)
+	sign(t, req, "a.example", "b.example", "key-1", key, []byte("original"), now)
 
 	// Verify against a different body than was signed.
-	if _, err := Verify(req, fakeLookup{"a.example": pub}, []byte("swapped!!"), now); err != ErrBadSignature {
+	if _, err := Verify(req, fakeLookup{"a.example": pub}, []byte("swapped!!"), now, "b.example", nil); err != ErrBadSignature {
 		t.Fatalf("err = %v, want ErrBadSignature for a swapped body", err)
 	}
 }
@@ -111,14 +120,14 @@ func TestReplayAgainstADifferentPathIsRefused(t *testing.T) {
 	body := []byte("x")
 
 	signed := request(t, http.MethodPost, "https://b.example/federation/v1/user-exists", body)
-	Sign(signed, "a.example", "key-1", key, body, now)
+	sign(t, signed, "a.example", "b.example", "key-1", key, body, now)
 
 	// Move the signed headers onto a request for a different path.
 	attack := request(t, http.MethodPost, "https://b.example/federation/v1/admin", body)
-	for _, h := range []string{HeaderOrigin, HeaderKeyID, HeaderTimestamp, HeaderSignature} {
+	for _, h := range []string{HeaderOrigin, HeaderKeyID, HeaderTimestamp, HeaderNonce, HeaderSignature} {
 		attack.Header.Set(h, signed.Header.Get(h))
 	}
-	if _, err := Verify(attack, fakeLookup{"a.example": pub}, body, now); err != ErrBadSignature {
+	if _, err := Verify(attack, fakeLookup{"a.example": pub}, body, now, "b.example", nil); err != ErrBadSignature {
 		t.Fatalf("err = %v, want ErrBadSignature when replayed against another path", err)
 	}
 }
@@ -132,15 +141,15 @@ func TestStaleTimestampIsRefused(t *testing.T) {
 	body := []byte("x")
 
 	req := request(t, http.MethodPost, "https://b.example/f", body)
-	Sign(req, "a.example", "key-1", key, body, signedAt)
+	sign(t, req, "a.example", "b.example", "key-1", key, body, signedAt)
 
 	late := signedAt.Add(MaxSkew + time.Second)
-	if _, err := Verify(req, fakeLookup{"a.example": pub}, body, late); err != ErrStale {
+	if _, err := Verify(req, fakeLookup{"a.example": pub}, body, late, "b.example", nil); err != ErrStale {
 		t.Fatalf("err = %v, want ErrStale past the skew window", err)
 	}
 	// A clock a little behind the sender must still accept it.
 	early := signedAt.Add(-MaxSkew + time.Second)
-	if _, err := Verify(req, fakeLookup{"a.example": pub}, body, early); err != nil {
+	if _, err := Verify(req, fakeLookup{"a.example": pub}, body, early, "b.example", nil); err != nil {
 		t.Fatalf("a request within skew was refused: %v", err)
 	}
 }
@@ -149,7 +158,7 @@ func TestMissingHeadersIsRefused(t *testing.T) {
 	pub := hostKey(t, 1).Public().(ed25519.PublicKey)
 	req := request(t, http.MethodPost, "https://b.example/f", []byte("x"))
 	// No signing headers at all.
-	if _, err := Verify(req, fakeLookup{"a.example": pub}, []byte("x"), time.Unix(1_700_000_000, 0)); err != ErrMissingHeaders {
+	if _, err := Verify(req, fakeLookup{"a.example": pub}, []byte("x"), time.Unix(1_700_000_000, 0), "b.example", nil); err != ErrMissingHeaders {
 		t.Fatalf("err = %v, want ErrMissingHeaders", err)
 	}
 }
@@ -160,10 +169,10 @@ func TestMalformedTimestampIsRefused(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	body := []byte("x")
 	req := request(t, http.MethodPost, "https://b.example/f", body)
-	Sign(req, "a.example", "key-1", key, body, now)
+	sign(t, req, "a.example", "b.example", "key-1", key, body, now)
 	req.Header.Set(HeaderTimestamp, "not-a-number")
 
-	if _, err := Verify(req, fakeLookup{"a.example": pub}, body, now); err != ErrBadTimestamp {
+	if _, err := Verify(req, fakeLookup{"a.example": pub}, body, now, "b.example", nil); err != ErrBadTimestamp {
 		t.Fatalf("err = %v, want ErrBadTimestamp", err)
 	}
 }
@@ -176,12 +185,12 @@ func TestEmptyBodyStillBinds(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 
 	req := request(t, http.MethodGet, "https://b.example/federation/v1/liveness", nil)
-	Sign(req, "a.example", "key-1", key, nil, now)
+	sign(t, req, "a.example", "b.example", "key-1", key, nil, now)
 
-	if _, err := Verify(req, fakeLookup{"a.example": pub}, nil, now); err != nil {
+	if _, err := Verify(req, fakeLookup{"a.example": pub}, nil, now, "b.example", nil); err != nil {
 		t.Fatalf("an empty-body request was refused: %v", err)
 	}
-	if _, err := Verify(req, fakeLookup{"a.example": pub}, []byte("added"), now); err != ErrBadSignature {
+	if _, err := Verify(req, fakeLookup{"a.example": pub}, []byte("added"), now, "b.example", nil); err != ErrBadSignature {
 		t.Fatal("a body added to an empty-body request was accepted")
 	}
 }
@@ -195,13 +204,13 @@ func TestRewritingTheTimestampBreaksTheSignature(t *testing.T) {
 	body := []byte("x")
 
 	req := request(t, http.MethodPost, "https://b.example/f", body)
-	Sign(req, "a.example", "key-1", key, body, now)
+	sign(t, req, "a.example", "b.example", "key-1", key, body, now)
 
 	// Push the timestamp forward to dodge the skew check…
 	future := now.Add(10 * time.Minute)
 	req.Header.Set(HeaderTimestamp, strconv.FormatInt(future.Unix(), 10))
 	// …and verify at that future time, so skew passes. The signature must still fail.
-	if _, err := Verify(req, fakeLookup{"a.example": pub}, body, future); err != ErrBadSignature {
+	if _, err := Verify(req, fakeLookup{"a.example": pub}, body, future, "b.example", nil); err != ErrBadSignature {
 		t.Fatalf("err = %v, want ErrBadSignature — the timestamp was rewritten", err)
 	}
 }
