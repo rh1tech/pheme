@@ -24,6 +24,7 @@
 		ABFC1E1DBD2CC4D8B276719E /* SharedKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 279F34B9BB27C4FE2C1BBC5F /* SharedKeychain.swift */; };
 		B047167D2BC88836950E09CC /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA0A150011F7B9237DF77F20 /* Pods_RunnerTests.framework */; };
 		C2E2641AFF0B14A016AB89A2 /* SharedKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 279F34B9BB27C4FE2C1BBC5F /* SharedKeychain.swift */; };
+		E43FE87ED9F229D0C30C4767 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 816850E4F79AF4294F1309F5 /* PrivacyInfo.xcprivacy */; };
 		FB1A0000000000000000AA02 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = FB1A0000000000000000AA01 /* GoogleService-Info.plist */; };
 /* End PBXBuildFile section */
 
@@ -86,6 +87,7 @@
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
 		792BFADE4D7B982D8A053986 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
+		816850E4F79AF4294F1309F5 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = Runner/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Flutter/Debug.xcconfig; sourceTree = "<group>"; };
 		9740EEB31CF90195004384FC /* Generated.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Generated.xcconfig; path = Flutter/Generated.xcconfig; sourceTree = "<group>"; };
 		97C146EE1CF9000F007C117D /* Runner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Runner.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -226,6 +228,7 @@
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 				FB1A0000000000000000AA01 /* GoogleService-Info.plist */,
 				279F34B9BB27C4FE2C1BBC5F /* SharedKeychain.swift */,
+				816850E4F79AF4294F1309F5 /* PrivacyInfo.xcprivacy */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
@@ -374,6 +377,7 @@
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,
 				97C146FC1CF9000F007C117D /* Main.storyboard in Resources */,
 				FB1A0000000000000000AA02 /* GoogleService-Info.plist in Resources */,
+				E43FE87ED9F229D0C30C4767 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -482,7 +486,6 @@
 			);
 			inputPaths = (
 			);
-			alwaysOutOfDate = 1;
 			name = "Build Rust library";
 			outputFileListPaths = (
 			);

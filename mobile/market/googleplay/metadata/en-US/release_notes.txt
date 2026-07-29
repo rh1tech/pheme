@@ -1,0 +1,1 @@
+First release. End-to-end encrypted chats and groups over MLS, voice calls, broadcast channels with push notifications and durable history, encrypted photos and files, multi-device with history handover and a recovery code, and a server you pick yourself.

@@ -1,0 +1,28 @@
+Pheme is a messenger you can run yourself.
+
+Conversations are end-to-end encrypted with MLS, the IETF standard for group messaging (RFC 9420). The server stores and forwards ciphertext and never holds the keys to read it — whether that server belongs to your company, your community, or you.
+
+WHAT YOU GET
+
+• Private chats and groups, encrypted end to end, on as many devices as you like
+• Voice calls, with the signalling encrypted under the same keys as your messages
+• Channels: a website or a script posts to a channel over a plain HTTP API, and every subscriber gets a push notification and a permanent history they can scroll back through
+• Photos and files in chats, encrypted like everything else
+• Read receipts, message history handed over to a new device, and a recovery code so losing a phone does not mean losing your conversations
+• English and Russian
+
+CHOOSE YOUR SERVER
+
+Pheme asks which server you are signing in to, the same way an email client asks. Point it at the instance you belong to. If you would rather run your own, the whole stack is a Docker Compose file.
+
+Servers can also federate: someone on one instance can message someone on another, and the encryption still runs end to end between the people, not between the servers. Federation is permissioned by a signed list of hosts rather than open to anyone who shows up.
+
+WHAT IT DOES NOT DO
+
+No ads. No trackers. No third-party analytics. Nothing is sold, because nothing is collected to sell. There is no algorithmic feed and nothing to scroll except your own messages.
+
+CHANNELS, IN PRACTICE
+
+A channel is a durable notification feed with an HTTP endpoint. Build finished, order shipped, sensor tripped, rehearsal moved — anything that can make an HTTP request can post to one, and everyone subscribed gets it on their phone and keeps the history.
+
+Pheme is open source. If something here matters to you, you can read exactly how it works.
