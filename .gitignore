@@ -20,7 +20,15 @@ mobile/.flutter-plugins*
 /.dev/
 deploy/secrets/
 **/firebase-service-account.json
+**/*service-account*.json
 **/vapid*.json
+*.p8
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+*.keystore
 
 # OS / editor
 .DS_Store
@@ -29,3 +37,14 @@ deploy/secrets/
 
 # Deployment secrets (live on the server, never in git)
 deploy/**/stack.env
+
+# Runtime and test artifacts
+/test-results/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated store/marketing screenshots. The capture specs are committed, the
+# output is not: it is megabytes of PNG that regenerates from them on demand.
+/screenshots/
