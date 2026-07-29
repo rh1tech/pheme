@@ -25,8 +25,41 @@ case "$PLATFORM" in
   android) API="http://10.0.2.2:8099" ;;
 esac
 
+# Drop the account's server-side key backup before the run.
+#
+# RecoveryGate prompts to restore only when mls.session() raises
+# NeedsRestoreException, and that needs a backup on the server to restore from.
+# With no backup the device just starts fresh and the dialog never appears —
+# which beats trying to dismiss a modal that, on a Russian device, would not
+# take the tap.
+SHOT_USER="${SHOT_USER:-priya}"
+if command -v docker >/dev/null 2>&1; then
+  docker exec pheme-shots-mongo-1 mongosh -u pheme -p pheme \
+    --authenticationDatabase admin pheme --quiet --eval \
+    "const u = db.users.findOne({username: '$SHOT_USER'});
+     if (u) { print('cleared backups: ' + db.mlsKeyBackups.deleteMany({userId: u._id}).deletedCount); }" \
+    2>/dev/null || echo "note: could not clear key backups (is the shots stack up?)"
+fi
+
 # simctl refuses to write onto the external volume the repo lives on ("Operation
 # not permitted"), so capture into the scratchpad and move the file afterwards.
+# Android asks for POST_NOTIFICATIONS at runtime on 13+, and the dialog lands in
+# the frame. Granting it outright removes it — but the grant only works once the
+# package exists, and flutter drive installs it well after this script starts. So
+# keep trying in the background until it takes.
+if [ "$PLATFORM" = android ]; then
+  (
+    for _ in $(seq 1 120); do
+      if adb -s "$DEVICE" shell pm grant tech.rh1.pheme.pheme_mobile \
+           android.permission.POST_NOTIFICATIONS >/dev/null 2>&1; then
+        echo "granted POST_NOTIFICATIONS"
+        break
+      fi
+      sleep 2
+    done
+  ) &
+fi
+
 grab() {
   # SEEDNOW is not a screenshot: it is the app telling us it is signed in and has
   # published its key packages, which is the one moment conversations can be
@@ -82,6 +115,20 @@ grab() {
 WATCHER=$!
 
 cd "$REPO/mobile"
+
+# flutter drive will happily reuse a stale build.
+#
+# It does not always notice that the integration_test target changed, and when it
+# does not it installs an old binary and runs it — the driver connects, the test
+# passes, and every change you just made is absent. That failure is completely
+# silent and cost hours once. If the built Dart framework is older than the
+# target, throw the build away.
+BUILT="build/ios/iphonesimulator/Runner.app/Frameworks/App.framework/App"
+TARGET="integration_test/screenshots_test.dart"
+if [ "$PLATFORM" = ios ] && [ -f "$BUILT" ] && [ "$TARGET" -nt "$BUILT" ]; then
+  echo "build is older than the test target — clearing it so the change is actually compiled"
+  rm -rf build/ios/iphonesimulator
+fi
 # Under a pty, via script(1). Redirected straight to a file, flutter's stdout is
 # block-buffered, so every SHOT marker lands in the log at once when the run
 # ends — by which point flutter drive has already uninstalled the app and the
@@ -91,7 +138,8 @@ python3 -c 'import pty,sys; sys.exit(pty.spawn(sys.argv[1:]))' \
   flutter drive \
   --driver=test_driver/screenshot_driver.dart \
   --target=integration_test/screenshots_test.dart \
-  -d "$DEVICE" --dart-define=PHEME_API="$API" >> "$LOG" 2>&1
+  -d "$DEVICE" --dart-define=PHEME_API="$API" \
+  --dart-define=SHOT_LOCALE="${SHOT_LOCALE:-}" >> "$LOG" 2>&1
 
 wait $WATCHER 2>/dev/null
 echo "--- markers seen ---"

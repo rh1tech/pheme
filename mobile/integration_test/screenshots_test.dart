@@ -14,6 +14,7 @@
 // Runs against the seeded instance, so the app it photographs has other
 // people's conversations in it.
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
@@ -22,6 +23,10 @@ import 'package:pheme_mobile/main.dart' as app;
 const _email = String.fromEnvironment('SHOT_EMAIL', defaultValue: 'priya@pheme.test');
 const _password = String.fromEnvironment('SHOT_PASSWORD', defaultValue: 'orchard-lantern-97');
 const _server = String.fromEnvironment('PHEME_API', defaultValue: 'http://localhost:8099');
+
+/// Which language to photograph the app in: 'en', 'ru', or empty for whatever
+/// the device is set to.
+const _locale = String.fromEnvironment('SHOT_LOCALE');
 
 /// pumpAndSettle gives up on a screen with a perpetual animation, and this app
 /// has several (spinners, the live indicator). Pumping for a fixed spell is the
@@ -40,6 +45,20 @@ Future<void> shot(WidgetTester tester, String name) async {
   await rest(tester, seconds: 6);
 }
 
+/// The first of these labels that is actually on screen.
+///
+/// The driver has to work in both languages: the store package needs an English
+/// set and a Russian one, and the simulator's language decides which strings the
+/// app renders. Matching only the English ones silently skipped every step of
+/// the Russian run.
+Finder anyText(WidgetTester tester, List<String> labels) {
+  for (final l in labels) {
+    final f = find.text(l);
+    if (tester.any(f)) return f;
+  }
+  return find.text(labels.first);
+}
+
 Future<void> tapIfPresent(WidgetTester tester, Finder f, {int settle = 4}) async {
   if (!tester.any(f)) return;
   await tester.tap(f.first, warnIfMissed: false);
@@ -50,6 +69,16 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('drive the app for screenshots', (tester) async {
+    // Set the app's own language preference before it boots, rather than
+    // changing the simulator's language. The app reads this key at startup and
+    // it outranks the device locale, so one build photographs both languages
+    // without rebooting anything.
+    if (_locale.isNotEmpty) {
+      const storage = FlutterSecureStorage();
+      await storage.write(key: 'pheme.locale', value: _locale);
+      debugPrint('SHOT_LOCALE wrote=$_locale readback=${await storage.read(key: 'pheme.locale')}');
+    }
+
     app.main();
     await rest(tester, seconds: 8);
 
@@ -60,7 +89,7 @@ void main() {
     // The app keeps a session, so a second run of this file starts already
     // signed in. Both states are legitimate; only the first has a form to fill.
     final fields = find.byType(EditableText);
-    final signIn = find.text('Sign in');
+    final signIn = anyText(tester, const ['Sign in', 'Войти']);
     if (tester.any(fields) && tester.any(signIn)) {
       await shot(tester, '01-login');
 
@@ -80,10 +109,20 @@ void main() {
     // A device with no key store is offered a restore. This one is genuinely new,
     // so it starts fresh — and because it does that BEFORE the conversations are
     // seeded, it is a member of them from the first epoch and can read them.
-    final startFresh = find.text('Start fresh on this device');
-    if (tester.any(startFresh)) {
-      await tester.tap(startFresh.last, warnIfMissed: false);
-      await rest(tester, seconds: 8);
+    // The dialog should not appear at all: tools/shots.sh deletes the user's
+    // server-side key backup first, and RecoveryGate only prompts when
+    // mls.session() throws NeedsRestoreException, which needs a backup to
+    // restore from. This stays as a fallback, because a dialog nobody dismissed
+    // is a capture full of screenshots of a dialog.
+    const skipLabels = ['Start fresh on this device', 'Начать заново на этом устройстве'];
+    for (var attempt = 0; attempt < 15; attempt++) {
+      final skip = anyText(tester, skipLabels);
+      if (tester.any(skip)) {
+        await tester.tap(skip.last, warnIfMissed: false);
+        await rest(tester, seconds: 8);
+        break;
+      }
+      await rest(tester, seconds: 2);
     }
     // Hold here while the host seeds the conversations.
     //
@@ -96,12 +135,31 @@ void main() {
     debugPrint('SHOT:SEEDNOW');
     await rest(tester, seconds: 75);
 
+    // A device with no backup is asked to write its recovery code down before it
+    // will get out of the way. Tick the box, press the button.
+    for (var attempt = 0; attempt < 12; attempt++) {
+      final confirm = anyText(tester,
+          const ['I have saved my recovery code', 'Я сохранил код восстановления']);
+      if (!tester.any(confirm)) {
+        await rest(tester, seconds: 2);
+        continue;
+      }
+      await tester.tap(confirm.last, warnIfMissed: false);
+      await rest(tester, seconds: 2);
+      final done = anyText(tester, const ['Done', 'Готово']);
+      if (tester.any(done)) {
+        await tester.tap(done.last, warnIfMissed: false);
+      }
+      await rest(tester, seconds: 4);
+      break;
+    }
+
     await shot(tester, '02-chats');
 
     // --- the chat list --------------------------------------------------------
     // The app may open on either tab, so ask for Chats explicitly rather than
     // photographing whichever one it happened to restore.
-    final chatsTab = find.text('Chats');
+    final chatsTab = anyText(tester, const ['Chats', 'Чаты']);
     if (tester.any(chatsTab)) {
       await tester.tap(chatsTab.last, warnIfMissed: false);
       await rest(tester, seconds: 5);
@@ -125,7 +183,7 @@ void main() {
     }
 
     // --- channels -------------------------------------------------------------
-    final channelsTab = find.text('Channels');
+    final channelsTab = anyText(tester, const ['Channels', 'Каналы']);
     if (tester.any(channelsTab)) {
       await tester.tap(channelsTab.last, warnIfMissed: false);
       await rest(tester, seconds: 5);
