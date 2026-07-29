@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 description = "Dart FFI facade over pheme-mls. The mobile counterpart of crates/pheme-mls/src/wasm.rs, which is the same crate's binding for the web."
+license = "GPL-3.0-only"
 
 [lib]
 # cdylib -> Android .so; staticlib -> iOS/macOS .a; lib -> frb codegen and `cargo test`.

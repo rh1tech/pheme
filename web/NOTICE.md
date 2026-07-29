@@ -1,7 +1,8 @@
 # Licensing and attribution — Pheme web client
 
 The Pheme **web client** (this `web/` directory) is licensed under the
-**GNU General Public License v3** — see [LICENSE](./LICENSE).
+**GNU General Public License v3** — see [LICENSE](./LICENSE) and the repository
+licensing summary in [`../LICENSE`](../LICENSE).
 
 It is licensed this way because parts of its chat behaviour are derived from
 **Telegram Web K**, which is GPL v3:
@@ -33,5 +34,8 @@ treated as such:
 Everything else in `web/` — the Pheme-specific UI, the API client, the channel /
 message / comment model, the push-notification plumbing — is original work.
 
-The Pheme **API and services** (`api/`) share no code with Telegram and are not
-covered by this licence.
+The Pheme **API and services** (`api/`) share no code with Telegram. They are
+available under the repository's GPLv3 community license and may separately be
+eligible for commercial licensing by their copyright holder. The
+Telegram-derived web code is not eligible for that commercial license without
+permission from its copyright holders.
