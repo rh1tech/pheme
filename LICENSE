@@ -3,7 +3,8 @@ Pheme is available under the following licensing model:
 1. Community license
 
    The complete repository is licensed under the GNU General Public License,
-   version 3 only (GPL-3.0-only). The full license text is in web/LICENSE.
+   version 3 only (GPL-3.0-only). The full license text is in COPYING, and is
+   repeated in web/LICENSE for the web client that carries its own notice.
 
 2. Commercial license
 
