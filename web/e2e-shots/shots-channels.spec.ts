@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { login, gotoStable } from './helpers'
+import { login, gotoStable } from '../e2e/helpers'
 
 /**
  * Channel screenshots.

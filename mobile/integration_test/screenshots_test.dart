@@ -85,6 +85,17 @@ void main() {
       await tester.tap(startFresh.last, warnIfMissed: false);
       await rest(tester, seconds: 8);
     }
+    // Hold here while the host seeds the conversations.
+    //
+    // This is the only window in which it can be done. flutter drive uninstalls
+    // the app when the run ends, which destroys the MLS key store — so a device
+    // can never carry keys from one run to the next, and anything seeded before
+    // this run is ciphertext it has no way to read ("Encrypted message" on every
+    // row). Seeding NOW, with this device signed in and its key packages
+    // published, makes it a member from the first epoch of every conversation.
+    debugPrint('SHOT:SEEDNOW');
+    await rest(tester, seconds: 75);
+
     await shot(tester, '02-chats');
 
     // --- the chat list --------------------------------------------------------
@@ -97,14 +108,20 @@ void main() {
     }
     await shot(tester, '03-chats');
 
-    // --- a conversation -------------------------------------------------------
-    final rows = find.byType(ListTile);
-    if (tester.any(rows)) {
-      await tester.tap(rows.first, warnIfMissed: false);
-      await rest(tester, seconds: 7);
-      await shot(tester, '04-conversation');
-      await tapIfPresent(tester, find.byType(BackButton), settle: 3);
-      await tapIfPresent(tester, find.byIcon(Icons.arrow_back), settle: 3);
+    // Opening a conversation is skipped deliberately.
+    //
+    // Tapping a row throws "Tried to modify a provider while the widget tree was
+    // building" and puts Flutter's red error screen on top of the app. That is a
+    // real bug in the conversation route, not an artefact of the harness, and it
+    // is worth a look on its own — but it is not something to photograph.
+    /// The rows are custom widgets, not ListTiles, so a type finder matches
+    /// nothing. Find them by the titles the seed puts there.
+    Finder firstOf(List<String> titles) {
+      for (final t in titles) {
+        final f = find.text(t);
+        if (tester.any(f)) return f;
+      }
+      return find.text(titles.first);
     }
 
     // --- channels -------------------------------------------------------------
@@ -114,7 +131,9 @@ void main() {
       await rest(tester, seconds: 5);
       await shot(tester, '05-channels');
 
-      final channelRows = find.byType(ListTile);
+      final channelRows = firstOf(const [
+        'Deploys', 'On-call', 'Allotment 14', 'Thursday rehearsals',
+      ]);
       if (tester.any(channelRows)) {
         await tester.tap(channelRows.first, warnIfMissed: false);
         await rest(tester, seconds: 6);

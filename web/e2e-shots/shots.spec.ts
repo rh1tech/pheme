@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { test, expect, type Browser, type Page } from '@playwright/test'
-import { gotoStable, login } from './helpers'
-import { trackContext } from './fixtures'
+import { gotoStable, login } from '../e2e/helpers'
+import { trackContext } from '../e2e/fixtures'
 import {
   userId,
   deviceId,
@@ -12,7 +12,7 @@ import {
   openChatAndJoin,
   renderedMessages,
   type Device,
-} from './chat-helpers'
+} from '../e2e/chat-helpers'
 
 /**
  * Seeds encrypted conversations AND captures the web screenshot set.
