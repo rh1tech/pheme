@@ -37,6 +37,9 @@ RUN printf '%s\n' \
     "add_header X-Frame-Options \"DENY\" always;" \
     "add_header Referrer-Policy \"strict-origin-when-cross-origin\" always;" \
     > /etc/nginx/conf.d/pheme-security-headers.conf
+# 127.0.0.1, NOT localhost. nginx binds 0.0.0.0:80 — IPv4 only — while `localhost` inside this
+# image resolves to ::1 first, so the probe was refused on every run and the container reported
+# unhealthy from the moment this healthcheck was added, with nginx serving perfectly throughout.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget -qO- http://localhost/ || exit 1
+  CMD wget -qO- http://127.0.0.1/ || exit 1
 EXPOSE 80
