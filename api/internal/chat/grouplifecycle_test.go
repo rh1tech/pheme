@@ -508,3 +508,84 @@ func TestHistoryOffersAreMembersOnly(t *testing.T) {
 		t.Errorf("a non-member could list a conversation's history offers: %d", rec.Code)
 	}
 }
+
+// Deleting a group destroys the message log for EVERY member at once, so who may do it is a
+// question about other people's history, not about their own. Only an admin may, and the check
+// must not be satisfiable by merely being in the group.
+func TestAnOrdinaryMemberCannotDeleteAGroupOutFromUnderEveryoneElse(t *testing.T) {
+	f := newFixture(t)
+	alice, aliceTok := f.user(t, "alice@b.com")
+	bob, bobTok := f.user(t, "bob@b.com")
+	_ = alice
+
+	convID := newGroup(t, f, aliceTok, "the group", bob)
+	postCiphertext(t, f, convID, aliceTok, []byte("something worth keeping"))
+
+	// Bob is a member, not an admin.
+	if rec := f.do(http.MethodDelete, "/v1/conversations/"+convID, bobTok, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("an ordinary member deleted a group: status %d, want 403", rec.Code)
+	}
+
+	// Nothing was destroyed on the way to being refused.
+	if rec := f.do(http.MethodGet, "/v1/conversations/"+convID, aliceTok, nil); rec.Code != http.StatusOK {
+		t.Fatalf("the group is gone after a refused delete: status %d", rec.Code)
+	}
+	if n := messageCount(t, f, convID, aliceTok); n != 1 {
+		t.Fatalf("alice sees %d messages after a refused delete, want 1", n)
+	}
+}
+
+// Leaving is not deleting. A member who leaves takes themselves out and nobody else's history with
+// them — the two paths sit next to each other in the client and differ only in which endpoint they
+// call, so the server has to be the one keeping them apart.
+func TestLeavingAGroupLeavesEveryoneElsesHistoryAlone(t *testing.T) {
+	f := newFixture(t)
+	alice, aliceTok := f.user(t, "alice@b.com")
+	bob, bobTok := f.user(t, "bob@b.com")
+
+	convID := newGroup(t, f, aliceTok, "the group", bob)
+	postCiphertext(t, f, convID, aliceTok, []byte("one"))
+	postCiphertext(t, f, convID, bobTok, []byte("two"))
+
+	// Bob removes himself.
+	rec := f.do(http.MethodDelete, "/v1/conversations/"+convID+"/members/"+bob, bobTok, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("leave: status %d, body %s", rec.Code, rec.Body)
+	}
+
+	// The conversation and its messages are untouched for the member who stayed.
+	if rec := f.do(http.MethodGet, "/v1/conversations/"+convID, aliceTok, nil); rec.Code != http.StatusOK {
+		t.Fatalf("the group vanished when a member left: status %d", rec.Code)
+	}
+	// Three, not two: the two that were posted, plus the system line recording that Bob left.
+	// What matters is that nothing was taken away — a departure adds to the log, never subtracts.
+	if n := messageCount(t, f, convID, aliceTok); n != 3 {
+		t.Fatalf(
+			"alice sees %d messages after bob left, want 3 (the two posted, plus the system line)",
+			n,
+		)
+	}
+	_ = alice
+}
+
+// A refused delete must not take the attachments with it. The handler removes a conversation's
+// attachment blobs BEFORE the row, because the records are keyed on it — so an authorisation check
+// that ran after that point would destroy the photos of a conversation it then declined to delete.
+func TestARefusedDeleteKeepsTheAttachments(t *testing.T) {
+	f := newFixture(t)
+	alice, aliceTok := f.user(t, "alice@b.com")
+	bob, bobTok := f.user(t, "bob@b.com")
+	_ = alice
+
+	convID := newGroup(t, f, aliceTok, "the group", bob)
+	id := upload(t, f, convID, aliceTok, []byte("a sealed photo"))
+
+	if rec := f.do(http.MethodDelete, "/v1/conversations/"+convID, bobTok, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("delete by a non-admin: status %d, want 403", rec.Code)
+	}
+
+	rec := f.raw(http.MethodGet, "/v1/conversations/"+convID+"/attachments/"+id, aliceTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the attachment was destroyed by a refused delete: status %d", rec.Code)
+	}
+}
