@@ -205,9 +205,20 @@ func (m *Memory) MLSGroupInfo(_ context.Context, conversationID string) (domain.
 	if !ok || len(gi.GroupInfo) == 0 {
 		return domain.MLSGroupInfo{}, ErrNotFound
 	}
-	// If the group has since been retired, the stored info is stale and useless.
-	if c, ok := m.conversations[conversationID]; ok && c.MLS.GroupID != gi.GroupID {
-		return domain.MLSGroupInfo{}, ErrNotFound
+	// Stale in either of two ways, and only one of them used to be checked.
+	//
+	// A retired group is obvious. The other is a GroupInfo left BEHIND the epoch the group has since
+	// reached: MLS external-joins against the current epoch, so an older one cannot work — and a
+	// joiner handed it burns its attempts on something that can never succeed, then waits to be
+	// admitted by a member who may not be coming. Found in production with a group at epoch 5 and
+	// GroupInfo pinned at 1, on a device stuck at "setting up encryption" indefinitely.
+	//
+	// Answering "none" instead sends the joiner straight to announcing itself, which is the path
+	// that actually recovers.
+	if c, ok := m.conversations[conversationID]; ok {
+		if c.MLS.GroupID != gi.GroupID || gi.Epoch < c.MLS.Epoch {
+			return domain.MLSGroupInfo{}, ErrNotFound
+		}
 	}
 	return gi, nil
 }

@@ -758,3 +758,67 @@ func TestConformance_KeyBackupArchiveIsBoundedAndReportsPruned(t *testing.T) {
 		}
 	})
 }
+
+// GroupInfo that is behind the group's epoch must read as absent.
+//
+// A device with no key material for a conversation external-joins against GroupInfo, and MLS joins
+// at the CURRENT epoch — so GroupInfo from an older one cannot work. Serving it anyway is worse
+// than serving nothing: the joiner spends its attempts on a join that can never succeed and then
+// waits to be admitted by a member who may never come, showing "setting up encryption" the whole
+// time. Found in production: a group at epoch 5 with GroupInfo pinned at 1, and a device stuck
+// there indefinitely.
+//
+// Answering "none" sends the joiner straight to announcing itself, which is the path that recovers.
+func TestConformance_StaleGroupInfoReadsAsAbsent(t *testing.T) {
+	eachStore(t, func(t *testing.T, s storeUnderTest) {
+		ctx := context.Background()
+
+		alice, err := s.store.CreateUser(ctx, domain.User{Email: "gi-a@pheme.test"})
+		if err != nil {
+			t.Fatalf("create user: %v", err)
+		}
+		conv, err := s.store.CreateConversation(ctx,
+			domain.Conversation{Kind: domain.ConversationDirect, CreatedBy: alice.ID},
+			[]domain.ConversationMember{{UserID: alice.ID, Role: domain.RoleAdmin}},
+		)
+		if err != nil {
+			t.Fatalf("create conversation: %v", err)
+		}
+
+		// Establish the group and publish GroupInfo for epoch 1.
+		if _, _, err := s.store.CommitMLSGroup(ctx, conv.ID, "group-1", 0, nil); err != nil {
+			t.Fatalf("establish: %v", err)
+		}
+		if err := s.store.SetMLSGroupInfo(ctx, conv.ID, "group-1", 1, []byte("info-at-1")); err != nil {
+			t.Fatalf("set group info: %v", err)
+		}
+		if gi, err := s.store.MLSGroupInfo(ctx, conv.ID); err != nil || gi.Epoch != 1 {
+			t.Fatalf("current GroupInfo should be served: %v / %+v", err, gi)
+		}
+
+		// The group moves on without anyone republishing — exactly what happened in production.
+		if _, _, err := s.store.CommitMLSGroup(ctx, conv.ID, "group-1", 1, nil); err != nil {
+			t.Fatalf("advance: %v", err)
+		}
+
+		if _, err := s.store.MLSGroupInfo(ctx, conv.ID); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("GroupInfo behind the group's epoch was served: %v", err)
+		}
+
+		// Republishing at the current epoch makes it usable again.
+		state, err := s.store.MLSGroupState(ctx, conv.ID)
+		if err != nil {
+			t.Fatalf("state: %v", err)
+		}
+		if err := s.store.SetMLSGroupInfo(ctx, conv.ID, "group-1", state.Epoch, []byte("info-now")); err != nil {
+			t.Fatalf("republish: %v", err)
+		}
+		gi, err := s.store.MLSGroupInfo(ctx, conv.ID)
+		if err != nil {
+			t.Fatalf("republished GroupInfo not served: %v", err)
+		}
+		if string(gi.GroupInfo) != "info-now" || gi.Epoch != state.Epoch {
+			t.Fatalf("served %+v, want the freshly published one at epoch %d", gi, state.Epoch)
+		}
+	})
+}

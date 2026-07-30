@@ -217,9 +217,13 @@ func (m *Mongo) MLSGroupInfo(ctx context.Context, conversationID string) (domain
 	if err != nil {
 		return domain.MLSGroupInfo{}, err
 	}
-	// Stale if the group has since been retired.
-	if state, err := m.MLSGroupState(ctx, conversationID); err == nil && state.GroupID != doc.GroupID {
-		return domain.MLSGroupInfo{}, ErrNotFound
+	// Stale in either of two ways — see the memory store for the incident that added the second.
+	// A retired group, or a GroupInfo behind the epoch the group has reached: an external join goes
+	// against the CURRENT epoch, so an older one cannot work and only wastes the joiner's attempts.
+	if state, err := m.MLSGroupState(ctx, conversationID); err == nil {
+		if state.GroupID != doc.GroupID || doc.Epoch < state.Epoch {
+			return domain.MLSGroupInfo{}, ErrNotFound
+		}
 	}
 	return domain.MLSGroupInfo{GroupID: doc.GroupID, Epoch: doc.Epoch, GroupInfo: doc.GroupInfo}, nil
 }
