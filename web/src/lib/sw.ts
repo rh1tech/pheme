@@ -5,7 +5,7 @@
 // worker, so this URL is never edge-cached again. Bump the number only if a CDN
 // edge ever caches it despite no-store. The query does not affect the worker's
 // scope (still "/").
-export const SERVICE_WORKER_URL = '/sw.js?v=5'
+export const SERVICE_WORKER_URL = '/sw.js?v=7'
 
 // Registers the Pheme service worker on every app load and checks for updates.
 // Without this, the worker was only registered when a user enabled push, so

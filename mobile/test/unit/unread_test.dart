@@ -214,4 +214,59 @@ void _baselineGroup() {
       );
     });
   });
+
+  // The chat list cannot decrypt anything — the message key is spent on first read — so its only
+  // source for "who wrote the newest message" is what the open conversation recorded in the body
+  // cache. Where that exists it is the AUTHENTICATED sender, and it wins: the envelope's senderId
+  // is written by the server, which would otherwise get to decide whether a chat looks unread.
+  group('isConversationUnread and the authenticated sender', () {
+    test('the signature wins over the envelope when they disagree', () {
+      // The server claims WE sent it — which would silence the dot for a message somebody else
+      // actually wrote.
+      expect(
+        isConversationUnread(
+          last: msg(senderId: 'me'),
+          myUserId: 'me',
+          seenAt: null,
+          authenticatedSender: 'them',
+        ),
+        isTrue,
+      );
+    });
+
+    test('our own message stays read even if the envelope says otherwise', () {
+      expect(
+        isConversationUnread(
+          last: msg(senderId: 'them'),
+          myUserId: 'me',
+          seenAt: null,
+          authenticatedSender: 'me',
+        ),
+        isFalse,
+      );
+    });
+
+    test('falls back to the envelope when this device authenticated nobody', () {
+      // A legacy cache entry, or a message this device has never read. The envelope is genuinely
+      // all that exists, and a chat list still has to decide.
+      expect(
+        isConversationUnread(
+          last: msg(senderId: 'them'),
+          myUserId: 'me',
+          seenAt: null,
+          authenticatedSender: '',
+        ),
+        isTrue,
+      );
+      expect(
+        isConversationUnread(
+          last: msg(senderId: 'me'),
+          myUserId: 'me',
+          seenAt: null,
+          authenticatedSender: '',
+        ),
+        isFalse,
+      );
+    });
+  });
 }

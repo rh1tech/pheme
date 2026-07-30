@@ -43,6 +43,17 @@ import {
   userKey,
 } from './roster'
 import { cacheContent, clearPreviews, exportAllContents, importContents } from './chatCache'
+import { authenticated } from './attribution'
+import {
+  HISTORY_VERSION,
+  posterMatchesClaim,
+  readHistoryOffer,
+  sameAccount,
+  type HistoryOfferBody,
+  type HistoryRequestBody,
+} from './historyHandoff'
+// Re-exported so the hooks keep one import site for the whole MLS surface.
+export { readHistoryOffer, readHistoryRequest } from './historyHandoff'
 import { clearSafetyPins } from './safety'
 import { loadMlsDeviceId, saveMlsDeviceId } from './device'
 import { serializeContent } from './chatContent'
@@ -144,9 +155,9 @@ export const MLS_DEVICE = 'application/mls-device'
 /**
  * "I just joined and hold none of this conversation's past — can a device that has it send it?"
  *
- * Posted by a freshly-joined device with no local transcript. A co-member that holds the history
- * seals it and answers with MLS_HISTORY_OFFER. Carries the requester's identity and epoch, never
- * key material or content.
+ * Posted by a freshly-joined device with no local transcript. Another device of the same account
+ * that holds the history seals it and answers with MLS_HISTORY_OFFER. Carries the requester's
+ * identity and epoch, never key material or content.
  */
 export const MLS_HISTORY_REQUEST = 'application/mls-history-request'
 /**
@@ -200,7 +211,7 @@ export const MLS_CONTROL_TYPES: ReadonlySet<string> = new Set([
 ])
 
 /** The exporter label for the history-sync key. Versioned, since changing it changes the key. */
-const HISTORY_SYNC_LABEL = 'pheme/history-sync/v1'
+const HISTORY_SYNC_LABEL = 'pheme/history-sync/v2'
 
 let ready: Promise<Session> | null = null
 let readyUserId = ''
@@ -312,6 +323,23 @@ function withMlsLock<T>(fn: () => Promise<T>): Promise<T> {
 /** The MLS group id as bytes. The server hands it out as an opaque string. */
 function groupBytes(groupId: string): Uint8Array {
   return new TextEncoder().encode(groupId)
+}
+
+/**
+ * A decrypted application message together with the identity **MLS authenticated** as its signer.
+ *
+ * The whole point is `sender`. Before it existed, `decrypt` handed back bare bytes and every caller
+ * above it had exactly one answer to "who wrote this?" — the `senderId` the SERVER put on the
+ * envelope. The server is the untrusted Delivery Service: it can put any user id it likes on a
+ * ciphertext it relayed from anyone, and the receiving client would render it under that name with
+ * no way to tell.
+ */
+export interface Decrypted {
+  plaintext: Uint8Array
+  /** The signing leaf's credential: `mimi://<domain>/d/<user>/<device>`. Never server-supplied. */
+  sender: string
+  /** The epoch the message was framed in — which membership the sender was authenticated against. */
+  epoch: number
 }
 
 /** One device's MLS identity, as it appears in a group's leaf: `userId:deviceId`. */
@@ -862,12 +890,26 @@ class Session {
     })
   }
 
-  /** Decrypts an application message, or returns null for a control message. */
-  async decrypt(groupId: string, ciphertextBase64: string): Promise<Uint8Array | null> {
+  /**
+   * Decrypts an application message, or returns null for a control message.
+   *
+   * The result carries the sender **MLS itself authenticated** — the credential of the leaf whose
+   * signature `process_message` verified against the group's ratchet tree. That is the only
+   * trustworthy answer to "who wrote this": the `senderId` on the envelope is written by the
+   * server, which relays these bytes and can put any name it likes there.
+   */
+  async decrypt(groupId: string, ciphertextBase64: string): Promise<Decrypted | null> {
     return this.exclusive(async () => {
       const out = this.client.decrypt(groupBytes(groupId), base64ToBytes(ciphertextBase64))
       await this.persist()
-      return out ?? null
+      if (!out) return null
+      const decrypted: Decrypted = {
+        plaintext: out.plaintext,
+        sender: out.sender,
+        epoch: Number(out.epoch),
+      }
+      out.free()
+      return decrypted
     })
   }
 
@@ -882,7 +924,7 @@ class Session {
    *
    * Tries the current group first, since that is where all but the oldest messages live.
    */
-  async decryptAny(groupIds: string[], ciphertextBase64: string): Promise<Uint8Array | null> {
+  async decryptAny(groupIds: string[], ciphertextBase64: string): Promise<Decrypted | null> {
     for (const groupId of groupIds) {
       try {
         const out = await this.decrypt(groupId, ciphertextBase64)
@@ -892,6 +934,118 @@ class Session {
       }
     }
     return null
+  }
+
+  // --- signed history handoff ------------------------------------------------------------
+  //
+  // Pure reads: signing uses the leaf key already in memory and touches neither the ratchet nor
+  // the stored state. The canonical transcript is built inside the crate, so the browser and the
+  // phone sign byte-identical bytes without either of them owning an encoder.
+
+  /** Signs this device's request for a conversation's pre-join history. */
+  async signHistoryRequest(
+    groupId: string,
+    conversationId: string,
+    epoch: number,
+    nonce: Uint8Array,
+  ): Promise<Uint8Array> {
+    return this.exclusive(async () =>
+      this.client.signHistoryRequest(groupBytes(groupId), conversationId, BigInt(epoch), nonce),
+    )
+  }
+
+  /**
+   * Verifies a request against the claimed requester's leaf key in the group's own ratchet tree.
+   * Resolves false — never throws — for a signature that is not theirs, or an identity that holds
+   * no leaf at all.
+   */
+  async verifyHistoryRequest(
+    groupId: string,
+    conversationId: string,
+    epoch: number,
+    requester: string,
+    nonce: Uint8Array,
+    signature: Uint8Array,
+  ): Promise<boolean> {
+    return this.exclusive(async () => {
+      try {
+        this.client.verifyHistoryRequest(
+          groupBytes(groupId),
+          conversationId,
+          BigInt(epoch),
+          requester,
+          nonce,
+          signature,
+        )
+        return true
+      } catch {
+        return false
+      }
+    })
+  }
+
+  /** Signs an offer. The digest of `ciphertext` goes into the signature, so the server — which
+   * stores the blob — cannot swap its bytes behind an otherwise valid offer. */
+  async signHistoryOffer(
+    groupId: string,
+    conversationId: string,
+    epoch: number,
+    requester: string,
+    historyId: string,
+    salt: Uint8Array,
+    nonce: Uint8Array,
+    requestNonce: Uint8Array,
+    ciphertext: Uint8Array,
+  ): Promise<Uint8Array> {
+    return this.exclusive(async () =>
+      this.client.signHistoryOffer(
+        groupBytes(groupId),
+        conversationId,
+        BigInt(epoch),
+        requester,
+        historyId,
+        salt,
+        nonce,
+        requestNonce,
+        ciphertext,
+      ),
+    )
+  }
+
+  /** Verifies an offer against the claimed offerer's leaf key AND the blob's own bytes. The
+   * requester bound into the transcript is THIS device, so an offer addressed elsewhere never
+   * verifies here. */
+  async verifyHistoryOffer(
+    groupId: string,
+    conversationId: string,
+    epoch: number,
+    offerer: string,
+    historyId: string,
+    salt: Uint8Array,
+    nonce: Uint8Array,
+    requestNonce: Uint8Array,
+    ciphertext: Uint8Array,
+    signature: Uint8Array,
+  ): Promise<boolean> {
+    return this.exclusive(async () => {
+      try {
+        this.client.verifyHistoryOffer(
+          groupBytes(groupId),
+          conversationId,
+          BigInt(epoch),
+          offerer,
+          historyId,
+          salt,
+          nonce,
+          requestNonce,
+          ciphertext,
+          signature,
+        )
+        return true
+      } catch {
+        return false
+      }
+    })
   }
 
   /**
@@ -1551,28 +1705,23 @@ export async function admitAnnouncedDevice(
 // The key is the group's exporter secret at a specific epoch, bound to the requester's identity, so
 // a blob offered to one device at one epoch cannot be replayed to another or at another epoch.
 
-interface HistoryRequestBody {
-  id: string // the requester's leaf identity
-  epoch: number
-}
-interface HistoryOfferBody {
-  to: string // the requester this offer is for
-  epoch: number // the epoch the key was derived at
-  historyId: string
-  salt: string
-  nonce: string
-}
+// The body SHAPES live in ./historyHandoff, which is pure and therefore testable without WASM.
+// Everything that decides whether a transfer may happen is there; the signing and verification
+// themselves are in the crate, reached through the session.
 
 function encodeControl(obj: unknown): string {
   return bytesToBase64(new TextEncoder().encode(JSON.stringify(obj)))
 }
-function decodeControl<T>(ciphertextBase64: string): T | null {
-  try {
-    return JSON.parse(new TextDecoder().decode(base64ToBytes(ciphertextBase64))) as T
-  } catch {
-    return null
-  }
-}
+/**
+ * The nonce this device put in its own history request, per conversation.
+ *
+ * In memory only, and deliberately. An offer quotes the nonce back, which is what ties an answer to
+ * the question that was asked; a nonce that did not survive the reload cannot verify an offer, and
+ * the correct response to that is to ask again — which `historyRequested` (also in memory) makes
+ * happen on the next settle. Persisting it would buy one saved round trip in exchange for keeping
+ * replay-protection state on disk.
+ */
+const historyNonces = new Map<string, Uint8Array>()
 
 /** Conversations this device has already asked history for this session — so it asks once, not on every settle. */
 const historyRequested = new Set<string>()
@@ -1592,66 +1741,143 @@ export async function requestHistory(conversationId: string, myUserId: string): 
   if (existing && Object.keys(existing).length > 0) return
   historyRequested.add(conversationId)
   const epoch = await session.epoch(state.groupId)
-  const body: HistoryRequestBody = { id: session.identity, epoch }
+  const nonce = crypto.getRandomValues(new Uint8Array(16))
+  historyNonces.set(conversationId, nonce)
+  // Signed with this device's own MLS leaf key. A co-member verifies it against the leaf key the
+  // group's ratchet tree holds for this identity before sealing anything — so a member cannot make
+  // another member hand a conversation over on somebody else's behalf.
+  const sig = await session.signHistoryRequest(state.groupId, conversationId, epoch, nonce)
+  const body: HistoryRequestBody = {
+    v: HISTORY_VERSION,
+    id: session.identity,
+    epoch,
+    nonce: bytesToBase64(nonce),
+    sig: bytesToBase64(sig),
+  }
   await api
     .sendChatMessage(conversationId, encodeControl(body), MLS_HISTORY_REQUEST)
     .catch(() => historyRequested.delete(conversationId))
 }
 
 /**
- * Responds to a history request: seal this conversation's transcript under a group-derived key bound
- * to the requester, upload it, and point the requester at it. No-op if we hold nothing, or the
- * request is our own. Callers elect a single responder before calling this (see useHistorySync).
+ * Responds to a history request: verify it, seal this conversation's transcript under a
+ * group-derived key bound to the requester, upload it, and point the requester at it — with a
+ * signature over what is being offered.
+ *
+ * `posterId` is the user id the SERVER authenticated as having posted the request. Checked against
+ * the identity the body claims, in addition to the MLS signature: an insider forging a request in
+ * somebody else's name then has to post it from that person's account as well.
+ *
+ * No-op if we hold nothing, the request is our own, or it does not verify. Callers elect a single
+ * responder before calling this (see useHistorySync).
  */
 export async function offerHistory(
   conversationId: string,
   myUserId: string,
-  requesterIdentity: string,
+  request: HistoryRequestBody,
+  posterId = '',
 ): Promise<void> {
   const session = await mlsSession(myUserId)
-  if (requesterIdentity === session.identity) return
+  if (request.id === session.identity) return
+  // A leaf signature identifies a group member, not a trusted historian. Any participant can sign
+  // arbitrary plaintext as themselves, so only another device of the requester's own account may
+  // provide its history.
+  if (!sameAccount(request.id, session.identity)) return
+  if (!posterMatchesClaim(request.id, posterId)) return
   const state = await api.mlsGroupState(conversationId)
   if (!state.groupId || !(await session.hasGroup(state.groupId))) return
+
+  const requestNonce = base64ToBytes(request.nonce)
+  // Against the requester's leaf key in OUR copy of the ratchet tree. Nothing else in this function
+  // may run until it holds: everything after it derives a key for, and seals a transcript to, the
+  // identity this proves asked for it.
+  const ok = await session.verifyHistoryRequest(
+    state.groupId,
+    conversationId,
+    request.epoch,
+    request.id,
+    requestNonce,
+    base64ToBytes(request.sig),
+  )
+  if (!ok) return
+
   const bodies = (await exportAllContents())[conversationId]
   if (!bodies || Object.keys(bodies).length === 0) return
 
   const derived = await session.exportSecret(
     state.groupId,
     HISTORY_SYNC_LABEL,
-    new TextEncoder().encode(requesterIdentity),
+    new TextEncoder().encode(request.id),
     32,
   )
   if (!derived) return
+  // v2 of the sealed payload: every body carries the sender MLS authenticated when this device read
+  // it (see attribution.encodeCacheEntry), so the receiving device imports authorship rather than
+  // re-deriving it from whatever the server says. That is what stops an offerer handing over
+  // attacker-chosen plaintext under someone else's envelope id.
   const sealed = encryptBackup(
     derived.secret,
-    new TextEncoder().encode(JSON.stringify({ v: 1, bodies })),
+    new TextEncoder().encode(JSON.stringify({ v: 2, from: session.identity, bodies })),
   )
   const historyId = await api.uploadHistory(conversationId, sealed.ciphertext)
+  // Signed over the CIPHERTEXT's digest, not over the id pointing at it: the server stores the blob
+  // and could otherwise swap its contents behind a perfectly valid offer.
+  const sig = await session.signHistoryOffer(
+    state.groupId,
+    conversationId,
+    derived.epoch,
+    request.id,
+    historyId,
+    sealed.salt,
+    sealed.nonce,
+    requestNonce,
+    sealed.ciphertext,
+  )
   const offer: HistoryOfferBody = {
-    to: requesterIdentity,
+    v: HISTORY_VERSION,
+    from: session.identity,
+    to: request.id,
     epoch: derived.epoch,
     historyId,
     salt: bytesToBase64(sealed.salt),
     nonce: bytesToBase64(sealed.nonce),
+    reqNonce: request.nonce,
+    sig: bytesToBase64(sig),
   }
   await api.sendChatMessage(conversationId, encodeControl(offer), MLS_HISTORY_OFFER).catch(() => {})
 }
 
 /**
- * Receives an offer addressed to this device: derive the same group key, fetch the blob, open it,
- * and import the history into the local cache. Returns whether it imported anything.
+ * Receives an offer addressed to this device: verify the offerer's signature over the blob's own
+ * bytes, derive the same group key, fetch it, open it, and import the history into the local cache.
+ * Returns whether it imported anything.
  *
- * The epoch must match: the exporter secret is per-epoch, so a drift between the offer and now means
- * the keys differ — we bail and let a re-request settle it.
+ * Every refusal below is silent and returns false. A refused offer is not an error state — the
+ * requester simply re-asks on its next settle, and a device with no history is a device that shows
+ * what it can and says so about the rest. What it must NEVER do is import an unverified transcript:
+ * that is somebody else's idea of what was said in this conversation, landing on a fresh device
+ * with nothing to compare it against.
  */
 export async function receiveHistoryOffer(
   conversationId: string,
   myUserId: string,
   offerCiphertext: string,
+  posterId = '',
 ): Promise<boolean> {
   const session = await mlsSession(myUserId)
-  const offer = decodeControl<HistoryOfferBody>(offerCiphertext)
+  // v1 offers — unsigned — parse to null and are refused here. No silent fallback: accepting one
+  // would reopen exactly the forgery the signature exists to close.
+  const offer = readHistoryOffer(offerCiphertext)
   if (!offer || offer.to !== session.identity) return false
+  if (!sameAccount(offer.from, session.identity)) return false
+  if (!posterMatchesClaim(offer.from, posterId)) return false
+  if (offer.from === session.identity) return false // our own offer echoed back
+
+  // The nonce we put in our own request. An offer that does not quote it back is answering a
+  // question this device did not ask — a replay of an older handoff, or one minted from nothing.
+  const expected = historyNonces.get(conversationId)
+  if (!expected || bytesToBase64(expected) !== offer.reqNonce) return false
+
   const state = await api.mlsGroupState(conversationId)
   if (!state.groupId || !(await session.hasGroup(state.groupId))) return false
 
@@ -1663,19 +1889,57 @@ export async function receiveHistoryOffer(
   )
   if (!derived || derived.epoch !== offer.epoch) return false
 
+  let blob: Uint8Array
+  try {
+    blob = await api.getHistory(conversationId, offer.historyId)
+  } catch {
+    return false
+  }
+
+  // Against the OFFERER's leaf key in the ratchet tree, over the bytes actually fetched. This is
+  // both halves at once: the wrong member cannot have signed it, and the right member's signature
+  // does not cover a blob the server swapped.
+  const ok = await session.verifyHistoryOffer(
+    state.groupId,
+    conversationId,
+    offer.epoch,
+    offer.from,
+    offer.historyId,
+    base64ToBytes(offer.salt),
+    base64ToBytes(offer.nonce),
+    base64ToBytes(offer.reqNonce),
+    blob,
+    base64ToBytes(offer.sig),
+  )
+  if (!ok) return false
+
   let plaintext: Uint8Array
   try {
-    const blob = await api.getHistory(conversationId, offer.historyId)
-    plaintext = decryptBackup(derived.secret, base64ToBytes(offer.salt), base64ToBytes(offer.nonce), blob)
+    plaintext = decryptBackup(
+      derived.secret,
+      base64ToBytes(offer.salt),
+      base64ToBytes(offer.nonce),
+      blob,
+    )
   } catch {
     return false
   }
   try {
     const parsed = JSON.parse(new TextDecoder().decode(plaintext)) as {
+      v?: number
+      from?: string
       bodies?: Record<string, string>
     }
-    if (parsed.bodies && Object.keys(parsed.bodies).length > 0) {
-      await importContents({ [conversationId]: parsed.bodies })
+    if (
+      parsed.v === HISTORY_VERSION &&
+      parsed.from === offer.from &&
+      parsed.bodies &&
+      Object.keys(parsed.bodies).length > 0
+    ) {
+      // Stamped with the offerer's identity, so an imported message is never mistaken later for one
+      // this device authenticated itself.
+      await importContents({ [conversationId]: parsed.bodies }, offer.from)
+      historyNonces.delete(conversationId)
       return true
     }
   } catch {
@@ -1993,7 +2257,7 @@ export async function decryptChatMessage(
   conversationId: string,
   myUserId: string,
   ciphertextBase64: string,
-): Promise<Uint8Array | null> {
+): Promise<Decrypted | null> {
   const groups = readableGroups.get(conversationId)
   if (!groups || groups.length === 0) return null
   const session = await mlsSession(myUserId)
@@ -2055,7 +2319,10 @@ export async function postCallEvent(
   // Write it into the local cache, because we will never be able to decrypt it: MLS destroys the
   // message key on encrypt, so a sender cannot read what it sent. Without this the caller — the
   // one person who knows the call went unanswered — would see its own record of it sealed.
-  await cacheContent(conversationId, msg.id, { body })
+  //
+  // Attributed to THIS device's own credential — the same identity MLS would have authenticated
+  // had anybody else read it. We wrote it, so this is not a claim, it is a fact.
+  await cacheContent(conversationId, msg.id, { body }, authenticated(session.identity))
 }
 
 /**

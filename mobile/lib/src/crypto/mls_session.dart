@@ -39,6 +39,29 @@ class ExportedSecret {
   final int epoch;
 }
 
+/// A decrypted application message together with the identity **MLS authenticated** as its signer.
+///
+/// The whole point is [sender]. Before it existed, `decrypt` handed back bare bytes and every caller
+/// above it had exactly one answer to "who wrote this?" — the `senderId` the SERVER put on the
+/// envelope. The server is the untrusted Delivery Service: it can put any user id it likes on a
+/// ciphertext it relayed from anyone, and the receiving client would render it under that name with
+/// no way to tell.
+class DecryptedMessage {
+  const DecryptedMessage({
+    required this.plaintext,
+    required this.sender,
+    required this.epoch,
+  });
+
+  final Uint8List plaintext;
+
+  /// The signing leaf's credential: `mimi://<domain>/d/<user>/<device>`. Never server-supplied.
+  final String sender;
+
+  /// The epoch the message was framed in — which membership the sender was authenticated against.
+  final int epoch;
+}
+
 /// THE ONE RUST CLIENT, AND THE ONE QUEUE THAT GUARDS IT.
 ///
 /// There is exactly one MLS client per process — the Rust side makes that structural, and it is right,
@@ -559,14 +582,25 @@ class MlsSession {
   }
 
   /// Decrypts an application message, or null for a control message.
-  Future<Uint8List?> decrypt(String groupId, Uint8List ciphertext) {
+  ///
+  /// The result carries the sender **MLS itself authenticated** — the credential of the leaf whose
+  /// signature the core verified against the group's own ratchet tree. That is the only trustworthy
+  /// answer to "who wrote this": the `senderId` on the envelope is written by the server, which
+  /// relays these bytes and can put any name it likes there.
+  Future<DecryptedMessage?> decrypt(String groupId, Uint8List ciphertext) {
     return _exclusive(() async {
       final out = await rust.mlsDecrypt(
         groupId: _gid(groupId),
         ciphertext: ciphertext,
       );
       await _persist(out.state);
-      return out.plaintext;
+      final plaintext = out.plaintext;
+      if (plaintext == null) return null;
+      return DecryptedMessage(
+        plaintext: plaintext,
+        sender: out.sender ?? '',
+        epoch: out.epoch?.toInt() ?? 0,
+      );
     });
   }
 
@@ -575,7 +609,7 @@ class MlsSession {
   /// A conversation can have had more than one group: when every device holding one lost its key
   /// material, the only way to talk again was to start fresh. The old group is retired, not deleted,
   /// and a message from before the reset is still perfectly readable by a device that still holds it.
-  Future<Uint8List?> decryptAny(
+  Future<DecryptedMessage?> decryptAny(
     List<String> groupIds,
     Uint8List ciphertext,
   ) async {
@@ -616,6 +650,120 @@ class MlsSession {
         secret: secret,
         epoch: await _epochUnlocked(groupId),
       );
+    });
+  }
+
+  // --- signed history handoff -----------------------------------------------------------------
+  //
+  // Pure reads: signing uses the leaf key already in memory and touches neither the ratchet nor the
+  // stored state. The canonical transcript is built inside the Rust core, so this app and the
+  // browser sign byte-identical bytes without either of them owning an encoder.
+
+  /// Signs this device's request for a conversation's pre-join history.
+  Future<Uint8List> signHistoryRequest(
+    String groupId,
+    String conversationId,
+    int epoch,
+    Uint8List nonce,
+  ) {
+    return _exclusive(
+      () => rust.mlsSignHistoryRequest(
+        groupId: _gid(groupId),
+        conversationId: conversationId,
+        epoch: BigInt.from(epoch),
+        nonce: nonce,
+      ),
+    );
+  }
+
+  /// Verifies a request against the claimed requester's leaf key in the group's own ratchet tree.
+  /// False — never a throw — for a signature that is not theirs, or an identity that holds no leaf.
+  Future<bool> verifyHistoryRequest(
+    String groupId,
+    String conversationId,
+    int epoch,
+    String requester,
+    Uint8List nonce,
+    Uint8List signature,
+  ) {
+    return _exclusive(() async {
+      try {
+        await rust.mlsVerifyHistoryRequest(
+          groupId: _gid(groupId),
+          conversationId: conversationId,
+          epoch: BigInt.from(epoch),
+          requester: requester,
+          nonce: nonce,
+          signature: signature,
+        );
+        return true;
+      } on Object {
+        return false;
+      }
+    });
+  }
+
+  /// Signs an offer. The digest of [ciphertext] goes into the signature, so the server — which
+  /// stores the blob — cannot swap its bytes behind an otherwise valid offer.
+  Future<Uint8List> signHistoryOffer({
+    required String groupId,
+    required String conversationId,
+    required int epoch,
+    required String requester,
+    required String historyId,
+    required Uint8List salt,
+    required Uint8List nonce,
+    required Uint8List requestNonce,
+    required Uint8List ciphertext,
+  }) {
+    return _exclusive(
+      () => rust.mlsSignHistoryOffer(
+        groupId: _gid(groupId),
+        conversationId: conversationId,
+        epoch: BigInt.from(epoch),
+        requester: requester,
+        historyId: historyId,
+        salt: salt,
+        nonce: nonce,
+        requestNonce: requestNonce,
+        ciphertext: ciphertext,
+      ),
+    );
+  }
+
+  /// Verifies an offer against the claimed offerer's leaf key AND the blob's own bytes. The
+  /// requester bound into the transcript is THIS device, so an offer addressed elsewhere never
+  /// verifies here.
+  Future<bool> verifyHistoryOffer({
+    required String groupId,
+    required String conversationId,
+    required int epoch,
+    required String offerer,
+    required String historyId,
+    required Uint8List salt,
+    required Uint8List nonce,
+    required Uint8List requestNonce,
+    required Uint8List ciphertext,
+    required Uint8List signature,
+  }) {
+    return _exclusive(() async {
+      try {
+        await rust.mlsVerifyHistoryOffer(
+          groupId: _gid(groupId),
+          conversationId: conversationId,
+          epoch: BigInt.from(epoch),
+          offerer: offerer,
+          historyId: historyId,
+          salt: salt,
+          nonce: nonce,
+          requestNonce: requestNonce,
+          ciphertext: ciphertext,
+          signature: signature,
+        );
+        return true;
+      } on Object {
+        return false;
+      }
     });
   }
 

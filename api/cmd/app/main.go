@@ -70,6 +70,9 @@ func main() {
 		os.Exit(1)
 	}
 	tokens.UseRevoker(revoker)
+	// A signed token can race an administrative block, deletion, or demotion.
+	// The store remains authoritative for account status and role on every use.
+	tokens.UseAccountChecker(db)
 	codes := b.Codes()
 	sender, err := b.Mailer()
 	if err != nil {
@@ -114,7 +117,11 @@ func main() {
 		Tokens:    tokens,
 		Publisher: pub,
 		Blob:      blobs,
-		Admin:     &channel.AdminHandler{Store: db},
+		Admin: &channel.AdminHandler{
+			Store:      db,
+			Revoker:    revoker,
+			SessionTTL: cfg.RefreshTokenTTL,
+		},
 		Chat: &chat.Handler{
 			Store:      db,
 			Live:       bus,

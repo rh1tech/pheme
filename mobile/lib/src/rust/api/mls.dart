@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `applied`, `bytes`, `mutate`, `read`
+// These functions are ignored because they are not marked as `pub`: `applied`, `bytes`, `mutate`, `opened_from`, `read`
 
 /// Mints a fresh identity for one DEVICE of one user and installs it as the live client.
 ///
@@ -161,6 +161,10 @@ Future<Bytes> mlsEncrypt({
 /// plaintext must be cached on first sight.
 ///
 /// `plaintext == None` means this was a control message, not a failure.
+///
+/// The result also carries the MLS-authenticated `sender` — the credential of the leaf that signed
+/// the message. Everything above this must attribute by that and never by the envelope's
+/// `senderId`, which the untrusted server writes.
 Future<Opened> mlsDecrypt({
   required List<int> groupId,
   required List<int> ciphertext,
@@ -177,6 +181,87 @@ Future<MlsPreviewOutcome> mlsDecryptPreview({
   state: state,
   groupIds: groupIds,
   ciphertext: ciphertext,
+);
+
+/// Signs this device's request for a conversation's pre-join history.
+Future<Uint8List> mlsSignHistoryRequest({
+  required List<int> groupId,
+  required String conversationId,
+  required BigInt epoch,
+  required List<int> nonce,
+}) => RustLib.instance.api.crateApiMlsMlsSignHistoryRequest(
+  groupId: groupId,
+  conversationId: conversationId,
+  epoch: epoch,
+  nonce: nonce,
+);
+
+/// Verifies a request against the claimed requester's leaf key in the group's ratchet tree.
+/// Errors when the identity holds no leaf, or the signature is not theirs.
+Future<void> mlsVerifyHistoryRequest({
+  required List<int> groupId,
+  required String conversationId,
+  required BigInt epoch,
+  required String requester,
+  required List<int> nonce,
+  required List<int> signature,
+}) => RustLib.instance.api.crateApiMlsMlsVerifyHistoryRequest(
+  groupId: groupId,
+  conversationId: conversationId,
+  epoch: epoch,
+  requester: requester,
+  nonce: nonce,
+  signature: signature,
+);
+
+/// Signs an offer of a sealed transcript. The digest of `ciphertext` goes into the signature, so
+/// the server — which stores the blob — cannot swap its bytes behind an otherwise valid offer.
+Future<Uint8List> mlsSignHistoryOffer({
+  required List<int> groupId,
+  required String conversationId,
+  required BigInt epoch,
+  required String requester,
+  required String historyId,
+  required List<int> salt,
+  required List<int> nonce,
+  required List<int> requestNonce,
+  required List<int> ciphertext,
+}) => RustLib.instance.api.crateApiMlsMlsSignHistoryOffer(
+  groupId: groupId,
+  conversationId: conversationId,
+  epoch: epoch,
+  requester: requester,
+  historyId: historyId,
+  salt: salt,
+  nonce: nonce,
+  requestNonce: requestNonce,
+  ciphertext: ciphertext,
+);
+
+/// Verifies an offer against the claimed offerer's leaf key and the blob's own bytes. The requester
+/// bound into the transcript is THIS device, so an offer addressed elsewhere never verifies here.
+Future<void> mlsVerifyHistoryOffer({
+  required List<int> groupId,
+  required String conversationId,
+  required BigInt epoch,
+  required String offerer,
+  required String historyId,
+  required List<int> salt,
+  required List<int> nonce,
+  required List<int> requestNonce,
+  required List<int> ciphertext,
+  required List<int> signature,
+}) => RustLib.instance.api.crateApiMlsMlsVerifyHistoryOffer(
+  groupId: groupId,
+  conversationId: conversationId,
+  epoch: epoch,
+  offerer: offerer,
+  historyId: historyId,
+  salt: salt,
+  nonce: nonce,
+  requestNonce: requestNonce,
+  ciphertext: ciphertext,
+  signature: signature,
 );
 
 /// Derives a secret from the group for a purpose outside MLS's own messaging — Pheme keys voice-call
@@ -326,6 +411,17 @@ class MlsPreviewOutcome {
   /// The message text, when it could be read.
   final Uint8List? plaintext;
 
+  /// The credential identity of the leaf that SIGNED the message, when it could be read.
+  ///
+  /// A notification is titled with a name, and the only other source for that name is the push
+  /// payload — which the untrusted server writes. Titling a lock-screen banner from it means the
+  /// server (or anyone who can inject a push) chooses whose name a message appears under, in the
+  /// one place nobody looks twice.
+  final String? sender;
+
+  /// The epoch the message was framed in — which membership `sender` was authenticated against.
+  final BigInt? epoch;
+
   /// How many of the offered groups this device actually holds.
   final int groupsHeld;
 
@@ -334,13 +430,19 @@ class MlsPreviewOutcome {
 
   const MlsPreviewOutcome({
     this.plaintext,
+    this.sender,
+    this.epoch,
     required this.groupsHeld,
     required this.groupsOffered,
   });
 
   @override
   int get hashCode =>
-      plaintext.hashCode ^ groupsHeld.hashCode ^ groupsOffered.hashCode;
+      plaintext.hashCode ^
+      sender.hashCode ^
+      epoch.hashCode ^
+      groupsHeld.hashCode ^
+      groupsOffered.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -348,20 +450,35 @@ class MlsPreviewOutcome {
       other is MlsPreviewOutcome &&
           runtimeType == other.runtimeType &&
           plaintext == other.plaintext &&
+          sender == other.sender &&
+          epoch == other.epoch &&
           groupsHeld == other.groupsHeld &&
           groupsOffered == other.groupsOffered;
 }
 
 /// A decrypted message. `plaintext` is `None` for a control message — which is a success, not a
 /// failure, and must not be treated as one.
+///
+/// `sender` is the credential identity of the leaf MLS itself authenticated as having signed the
+/// message — `mimi://<domain>/d/<user>/<device>`. It is the ONLY trustworthy answer to "who wrote
+/// this". The `senderId` on the message envelope is written by the server, which is the untrusted
+/// Delivery Service in MLS: it relays these bytes and can put any name it likes on them, and a
+/// client that renders that name has end-to-end confidentiality with no sender authentication at
+/// all. `None` alongside a `None` plaintext (control traffic).
+///
+/// `epoch` is the epoch the message was framed in, so a caller can say which membership the sender
+/// was authenticated against.
 class Opened {
   final Uint8List? plaintext;
+  final String? sender;
+  final BigInt? epoch;
   final Uint8List state;
 
-  const Opened({this.plaintext, required this.state});
+  const Opened({this.plaintext, this.sender, this.epoch, required this.state});
 
   @override
-  int get hashCode => plaintext.hashCode ^ state.hashCode;
+  int get hashCode =>
+      plaintext.hashCode ^ sender.hashCode ^ epoch.hashCode ^ state.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -369,6 +486,8 @@ class Opened {
       other is Opened &&
           runtimeType == other.runtimeType &&
           plaintext == other.plaintext &&
+          sender == other.sender &&
+          epoch == other.epoch &&
           state == other.state;
 }
 

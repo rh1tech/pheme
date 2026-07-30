@@ -48,9 +48,16 @@ import {
   cacheContent,
   clearPreview,
   forgetBodies,
-  loadCachedContents,
+  loadCachedEntries,
   setPreview,
 } from '../../lib/chatCache'
+import {
+  authenticated,
+  isOwnMessage,
+  resolveAuthor,
+  type Attribution,
+  type CachedEntry,
+} from '../../lib/attribution'
 import { forgetEnvelope, loadEnvelope, saveEnvelope } from '../../lib/chatEnvelope'
 import { forgetPhotos } from '../../lib/photoCache'
 import { forgetSeen } from '../../lib/lastSeen'
@@ -186,7 +193,10 @@ export function ConversationChatRoute() {
    * instant before its body landed. The mobile app has always had the third state (contents is a
    * Map<String, ChatContent?>), which is why it never flashed.
    */
-  const [bodies, setBodies] = useState<Record<string, ChatContent | null>>({})
+  // messageId -> what this device holds for it: the content AND how its author was established.
+  // Attribution travels WITH the body deliberately — reading a message here and then asking the
+  // envelope who wrote it is the hole this closes. See lib/attribution.
+  const [bodies, setBodies] = useState<Record<string, CachedEntry | null>>({})
   // The conversation id whose local body cache has finished loading; message
   // processing waits for this so cached messages are never re-decrypted.
   const [readyId, setReadyId] = useState('')
@@ -251,7 +261,7 @@ export function ConversationChatRoute() {
   const atBottomRef = useRef(true)
   // The decrypted-body cache mirrored into a ref, plus the set of message ids we
   // have already handled — so the one-shot decrypt never runs twice for a message.
-  const bodiesRef = useRef<Record<string, ChatContent | null>>({})
+  const bodiesRef = useRef<Record<string, CachedEntry | null>>({})
   const processedRef = useRef<Set<string>>(new Set())
   // Whether the network reconcile has landed for the current chat. The cache hydrate
   // and the network fetch race; if the network wins, the cache must not clobber its
@@ -279,7 +289,7 @@ export function ConversationChatRoute() {
       sealedTimers.current.delete(messageId)
       // It arrived after all: an epoch caught up and the decrypt succeeded. Nothing to say.
       if (bodiesRef.current[messageId] != null) return
-      void loadCachedContents(id).then((cached) => {
+      void loadCachedEntries(id).then((cached) => {
         // The chat switched, or the body landed, while the cache was being read.
         if (liveIdRef.current !== id || bodiesRef.current[messageId] != null) return
         bodiesRef.current = { ...bodiesRef.current, [messageId]: cached[messageId] ?? null }
@@ -509,7 +519,7 @@ export function ConversationChatRoute() {
     // conversation we just left, against a bodies map that no longer holds it.
     for (const timer of sealedTimers.current.values()) clearTimeout(timer)
     sealedTimers.current.clear()
-    void Promise.all([loadCachedContents(id), loadEnvelope(id)]).then(([cached, envelope]) => {
+    void Promise.all([loadCachedEntries(id), loadEnvelope(id)]).then(([cached, envelope]) => {
       if (!active) return
       bodiesRef.current = cached
       for (const messageId of Object.keys(cached)) processedRef.current.add(messageId)
@@ -538,7 +548,7 @@ export function ConversationChatRoute() {
     const onImported = (e: Event) => {
       const detail = (e as CustomEvent<{ conversationId: string }>).detail
       if (!detail || detail.conversationId !== id) return
-      void loadCachedContents(id).then((cached) => {
+      void loadCachedEntries(id).then((cached) => {
         if (liveIdRef.current !== id) return
         let changed = false
         const next = { ...bodiesRef.current }
@@ -593,9 +603,9 @@ export function ConversationChatRoute() {
       // still be readable from here: it is our own (a sender can never decrypt what it sent), it
       // predates this device joining the group, or another tab won the race for its one-shot key —
       // MLS lets exactly one succeed — and cached the plaintext for both of them.
-      let disk: Record<string, ChatContent> | null = null
-      const fromDisk = async (messageId: string): Promise<ChatContent | null> => {
-        disk ??= await loadCachedContents(id)
+      let disk: Record<string, CachedEntry> | null = null
+      const fromDisk = async (messageId: string): Promise<CachedEntry | null> => {
+        disk ??= await loadCachedEntries(id)
         return disk[messageId] ?? null
       }
       for (const m of messages) {
@@ -612,17 +622,22 @@ export function ConversationChatRoute() {
         // message is not duplicated work but destruction: the first decrypt destroys the key, the
         // second comes back empty, and whichever result is kept had better be the full one.
         processedRef.current.add(m.id)
-        let content: ChatContent | null
+        let entry: CachedEntry | null
         try {
           if (m.contentType === CALL_EVENT || m.contentType === MLS_APPLICATION) {
             // Against whichever of the conversation's groups this message belongs to. A
             // conversation can have had more than one — if every device holding a group lost
             // its keys, the only way to talk again was to start a fresh one — and the old
             // groups are kept, so what was said to them is still readable here.
-            const bytes = await decryptChatMessage(id, userId, m.ciphertext)
-            content = (bytes && deserializeContent(bytes)) || null
-            if (content) {
-              void cacheContent(id, m.id, content)
+            //
+            // The decrypt hands back the credential MLS AUTHENTICATED as the signer alongside the
+            // bytes. That is the only trustworthy answer to who wrote this message, and it is
+            // stored with the body so nothing downstream has to go back to the envelope for it.
+            const opened = await decryptChatMessage(id, userId, m.ciphertext)
+            const content = (opened && deserializeContent(opened.plaintext)) || null
+            entry = content && opened ? { content, attribution: authenticated(opened.sender) } : null
+            if (entry) {
+              void cacheContent(id, m.id, entry.content, entry.attribution)
               // A call's record is encrypted exactly like a message, because it IS one — the
               // difference is only what the body means, which the bubble decides. The one thing
               // it must not do is become the chat list's preview: "{"outcome":"missed"}" is not
@@ -630,32 +645,42 @@ export function ConversationChatRoute() {
               // though, still has to say something there — an empty row reads as a bug rather
               // than as a picture.
               if (m.contentType === MLS_APPLICATION) {
-                setPreview(id, content.body || (content.photos?.length ? '__photo__' : ''))
+                setPreview(
+                  id,
+                  entry.content.body || (entry.content.photos?.length ? '__photo__' : ''),
+                  m.id,
+                  // The list's copy of the authenticated sender. Without it the sidebar would be
+                  // back to asking the server whether the newest message is yours.
+                  entry.attribution.kind === 'legacy' ? '' : entry.attribution.userId,
+                )
               }
             } else {
               // Empty-handed, not thrown: decryptChatMessage never throws for a message it
               // cannot read. This is the path an already-consumed key comes back on, so this —
               // not the catch below — is where the cached plaintext rescues it.
-              content = await fromDisk(m.id)
+              entry = await fromDisk(m.id)
             }
           } else {
-            // Legacy plaintext (pre-encryption messages on the wire).
-            content = deserializeContent(base64ToBytes(m.ciphertext)) || null
+            // Legacy plaintext (pre-encryption messages on the wire). There is no MLS signature
+            // over these and there never was, so the envelope is genuinely all there is — the
+            // compatibility fallback, never presented as verified.
+            const content = deserializeContent(base64ToBytes(m.ciphertext)) || null
+            entry = content ? { content, attribution: { kind: 'legacy' } } : null
           }
         } catch {
           // Something on the way to decrypting failed (the session died mid-pass). The cache may
           // still hold the body. Never retry the decrypt itself.
-          content = await fromDisk(m.id)
+          entry = await fromDisk(m.id)
         }
         // The chat switched under this pass. Nothing decrypted is lost — it was cached above —
         // but it must not be written into another conversation's state.
         if (liveIdRef.current !== id) return
-        if (content) {
+        if (entry) {
           // Written through immediately, not batched to the end of the pass. A pass being
           // superseded is routine (a receipt landing re-runs the effect), and a decrypted body
           // dropped on the floor can never be decrypted again — only the disk cache would hold
           // it, and only a reload would look there.
-          bodiesRef.current = { ...bodiesRef.current, [m.id]: content }
+          bodiesRef.current = { ...bodiesRef.current, [m.id]: entry }
           setBodies(bodiesRef.current)
           failedRef.current.delete(m.id)
           // Now cache-only (the MLS key is spent); keep the backup current so a new device
@@ -911,11 +936,30 @@ export function ConversationChatRoute() {
   const meMember = header?.members.find((m) => m.userId === userId)
   const iAmAdmin = meMember?.role === 'admin'
 
-  /** Who wrote the quoted message. Undefined when we do not hold it. */
+  /**
+   * The user id a message is attributed to — from MLS wherever this device has read the message,
+   * from the envelope only when it has not (and so has no signature to go on either).
+   */
+  function authorOf(message: { id: string; senderId: string }): ReturnType<typeof resolveAuthor> {
+    return resolveAuthor(bodies[message.id]?.attribution ?? { kind: 'legacy' }, message.senderId)
+  }
+
+  /**
+   * Who wrote the quoted message. Undefined when we do not hold it.
+   *
+   * Named from the AUTHENTICATED sender of the quoted message wherever this device has decrypted
+   * it. A quote is a claim about what somebody else said, so attributing it from the envelope —
+   * the server's word — would let the server put words in a member's mouth in the one place a
+   * reader is least likely to check them against the original.
+   */
   function quoteAuthor(messageId: string): string | undefined {
     const quoted = messages.find((m) => m.id === messageId)
     if (!quoted) return undefined
-    const member = header?.members.find((mem) => mem.userId === quoted.senderId)?.user
+    const author = authorOf(quoted)
+    // The cryptography and the envelope disagree about this message. Naming either one would be
+    // picking a side; ReplyQuote renders its "unknown author" form instead.
+    if (author.tampered) return undefined
+    const member = header?.members.find((mem) => mem.userId === author.userId)?.user
     return member?.displayName || member?.username || undefined
   }
 
@@ -926,7 +970,7 @@ export function ConversationChatRoute() {
    * it can never be decrypted here. ReplyQuote says so rather than showing a blank.
    */
   function quoteText(messageId: string): string | undefined {
-    const quoted = bodies[messageId]
+    const quoted = bodies[messageId]?.content
     if (!quoted) return undefined
     if (quoted.body) return quoted.body
     return quoted.photos?.length ? t('chat.photo') : ''
@@ -1001,11 +1045,21 @@ export function ConversationChatRoute() {
 
       // We can never decrypt our own MLS message, so record its plaintext now and
       // mark it handled so the SSE echo does not try (and fail) to decrypt it.
+      //
+      // Attributed to this device's own credential — the same identity MLS authenticates for
+      // every other member reading it. We wrote it, so this is not a claim about a sender, it is
+      // the sender.
+      const mine: Attribution = authenticated(session.identity)
       processedRef.current.add(msg.id)
-      bodiesRef.current = { ...bodiesRef.current, [msg.id]: content }
+      bodiesRef.current = { ...bodiesRef.current, [msg.id]: { content, attribution: mine } }
       setBodies(bodiesRef.current)
-      void cacheContent(id, msg.id, content)
-      setPreview(id, body || (photos.length ? '__photo__' : ''))
+      void cacheContent(id, msg.id, content, mine)
+      setPreview(
+        id,
+        body || (photos.length ? '__photo__' : ''),
+        msg.id,
+        mine.kind === 'legacy' ? '' : mine.userId,
+      )
       // A new message this device will never decrypt again lives only in the cache now —
       // keep the backup current so it survives to a new device. No-op unless backup is
       // unlocked this session.
@@ -1242,11 +1296,20 @@ export function ConversationChatRoute() {
                 <section className="pheme-day" key={dayKey(day[0].createdAt)}>
                   <DateSeparator iso={day[0].createdAt} />
                   {day.map((m) => {
-                    const own = m.senderId === userId
-                    const content = bodies[m.id]
-                    const senderName = isGroup
-                      ? conversation?.members.find((mem) => mem.userId === m.senderId)?.user
-                      : undefined
+                    const entry = bodies[m.id]
+                    const content = entry?.content
+                    // Who MLS says wrote this, and whether the envelope agrees.
+                    //
+                    // `own` decides which side of the feed the bubble sits on, and it is answered
+                    // from the AUTHENTICATED sender for every message this device has read. Left to
+                    // the envelope only where there is no plaintext — and therefore no signature —
+                    // to go on, which is a message this device cannot read at all.
+                    const author = resolveAuthor(entry?.attribution ?? { kind: 'legacy' }, m.senderId)
+                    const own = isOwnMessage(entry?.attribution, m.senderId, userId ?? '')
+                    const senderName =
+                      isGroup && !author.tampered
+                        ? conversation?.members.find((mem) => mem.userId === author.userId)?.user
+                        : undefined
                     // Somebody joined or left: a line the conversation says about itself, centred
                     // and quiet, with no bubble and no sender — because nobody sent it.
                     if (m.contentType === MEMBERSHIP) {
@@ -1285,6 +1348,19 @@ export function ConversationChatRoute() {
                         {isGroup && !own && senderName && (
                           <Text size="xs" fw={600} c="iris">
                             {senderName.displayName || senderName.username || 'User'}
+                          </Text>
+                        )}
+
+                        {/*
+                          The signature and the envelope name DIFFERENT people.
+                          Nothing here picks one of them. MLS authenticated a leaf, the server
+                          claims somebody else posted it, and the honest rendering of that is to
+                          say so — attributing it either way is exactly the silent misattribution
+                          the authenticated sender exists to prevent.
+                        */}
+                        {author.tampered && (
+                          <Text size="xs" fw={600} c="red" data-testid="sender-mismatch">
+                            {t('chat.senderMismatch')}
                           </Text>
                         )}
 

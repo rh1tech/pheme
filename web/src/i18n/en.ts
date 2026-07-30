@@ -302,6 +302,7 @@ const en = {
     reply: 'Reply',
     replyUnknown: 'Someone',
     replyUnavailable: 'Not available on this device',
+    senderMismatch: 'Unverified sender — this message doesn’t match its signature',
     attachPhoto: 'Attach photo',
     photoUnavailable: 'Photo not available',
     photoFailed: 'Could not attach that photo',

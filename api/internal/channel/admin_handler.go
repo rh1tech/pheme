@@ -17,7 +17,9 @@ import (
 // caller to hold the admin role; they are mounted on the JWT-protected mux and
 // each verifies the role from the request context.
 type AdminHandler struct {
-	Store store.Store
+	Store      store.Store
+	Revoker    userSessionRevoker
+	SessionTTL time.Duration
 }
 
 // Register adds the admin endpoints to an already JWT-protected mux.
@@ -192,20 +194,45 @@ func (h *AdminHandler) updateUser(w http.ResponseWriter, r *http.Request) {
 			httpx.Error(w, http.StatusBadRequest, "invalid role")
 			return
 		}
-		if err := h.Store.UpdateUserRole(r.Context(), targetID, *req.Role); err != nil {
-			h.writeStoreErr(w, err, "could not update role")
-			return
-		}
 	}
 	if req.Status != nil {
 		if *req.Status != domain.UserActive && *req.Status != domain.UserBlocked {
 			httpx.Error(w, http.StatusBadRequest, "invalid status")
 			return
 		}
+	}
+	if req.Role == nil && req.Status == nil {
+		httpx.JSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
+	if _, err := h.Store.UserByID(r.Context(), targetID); err != nil {
+		h.writeStoreErr(w, err, "could not update user")
+		return
+	}
+	// Bracket the mutation so a concurrent refresh cannot mint a token between
+	// the account change and its revocation. A store failure therefore fails
+	// closed by signing the target out.
+	if _, err := revokeUserSessions(r.Context(), h.Revoker, targetID, h.SessionTTL); err != nil {
+		slog.Default().Error("admin: revoke user sessions before update", "user", targetID, "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not update user")
+		return
+	}
+	if req.Role != nil {
+		if err := h.Store.UpdateUserRole(r.Context(), targetID, *req.Role); err != nil {
+			h.writeStoreErr(w, err, "could not update role")
+			return
+		}
+	}
+	if req.Status != nil {
 		if err := h.Store.UpdateUserStatus(r.Context(), targetID, *req.Status); err != nil {
 			h.writeStoreErr(w, err, "could not update status")
 			return
 		}
+	}
+	if _, err := revokeUserSessions(r.Context(), h.Revoker, targetID, h.SessionTTL); err != nil {
+		slog.Default().Error("admin: finalize user session revocation", "user", targetID, "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not update user")
+		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
@@ -228,13 +255,28 @@ func (h *AdminHandler) resetUserPassword(w http.ResponseWriter, r *http.Request)
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	targetID := r.PathValue("id")
+	if _, err := h.Store.UserByID(r.Context(), targetID); err != nil {
+		h.writeStoreErr(w, err, "could not reset password")
+		return
+	}
 	hash, err := auth.HashPassword(req.NewPassword)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not reset password")
 		return
 	}
-	if err := h.Store.UpdateUserPassword(r.Context(), r.PathValue("id"), hash); err != nil {
+	if _, err := revokeUserSessions(r.Context(), h.Revoker, targetID, h.SessionTTL); err != nil {
+		slog.Default().Error("admin: revoke user sessions before password reset", "user", targetID, "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not reset password")
+		return
+	}
+	if err := h.Store.UpdateUserPassword(r.Context(), targetID, hash); err != nil {
 		h.writeStoreErr(w, err, "could not reset password")
+		return
+	}
+	if _, err := revokeUserSessions(r.Context(), h.Revoker, targetID, h.SessionTTL); err != nil {
+		slog.Default().Error("admin: finalize user session revocation", "user", targetID, "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not reset password")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"status": "ok"})
@@ -249,8 +291,22 @@ func (h *AdminHandler) deleteUser(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "cannot delete your own account")
 		return
 	}
+	if _, err := h.Store.UserByID(r.Context(), targetID); err != nil {
+		h.writeStoreErr(w, err, "could not delete user")
+		return
+	}
+	if _, err := revokeUserSessions(r.Context(), h.Revoker, targetID, h.SessionTTL); err != nil {
+		slog.Default().Error("admin: revoke user sessions before deletion", "user", targetID, "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not delete user")
+		return
+	}
 	if err := h.Store.DeleteUser(r.Context(), targetID); err != nil {
 		h.writeStoreErr(w, err, "could not delete user")
+		return
+	}
+	if _, err := revokeUserSessions(r.Context(), h.Revoker, targetID, h.SessionTTL); err != nil {
+		slog.Default().Error("admin: finalize user session revocation", "user", targetID, "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not delete user")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

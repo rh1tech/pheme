@@ -193,9 +193,8 @@ test('the conversation creator signing in on a second device does not fork the g
 
 /**
  * A device added to a conversation that is already running gets let in, reads new messages, AND —
- * because a co-member holding the history is online — receives the pre-join history device-to-device
- * (Phase 2 sync). MLS itself gives a new member no access to the past; the sync is what hands it over
- * anyway, sealed under a group-derived key. The existing devices, of course, keep everything.
+ * because another device of the same account is online — receives the pre-join history
+ * device-to-device. MLS itself gives a new member no access to the past.
  */
 test('a device that joins late reads new messages and syncs the old ones from a co-member', async ({
   browser,
@@ -239,7 +238,7 @@ test('a device that joins late reads new messages and syncs the old ones from a 
   )
 
   // The message that predates the laptop — which it could never MLS-decrypt — is SYNCED to it from
-  // a co-member that holds it (Bob's phone, or Alice). No "not available" placeholder, no divider.
+  // Bob's same-account phone. Alice is not eligible to vouch for Bob's historical plaintext.
   await expect(
     bobLaptop.page.getByTestId('chat-message').filter({ hasText: 'said before the laptop existed' }),
   ).toHaveCount(1, { timeout: 40_000 })

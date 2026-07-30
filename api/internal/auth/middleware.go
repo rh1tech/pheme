@@ -70,21 +70,13 @@ func (m *TokenManager) Middleware(next http.Handler) http.Handler {
 			unauthorized(w)
 			return
 		}
-		// A validly-signed, unexpired token still loses if its session was terminated.
-		if m.revoker != nil && m.revoker.IsRevoked(claims.SID) {
-			unauthorized(w)
-			return
-		}
-		// ...or if every token this user holds from before a cutoff was refused. That is the only
-		// thing that reaches a device whose session id was never recorded, which no per-session
-		// revocation can match.
-		if m.revoker != nil && claims.IssuedAt != nil &&
-			m.revoker.IsUserRevoked(claims.Subject, claims.IssuedAt.Time) {
+		role, err := m.AuthorizeClaims(r.Context(), claims)
+		if err != nil {
 			unauthorized(w)
 			return
 		}
 		ctx := WithUserID(r.Context(), claims.Subject)
-		ctx = WithRole(ctx, claims.Role)
+		ctx = WithRole(ctx, role)
 		ctx = WithSessionID(ctx, claims.SID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

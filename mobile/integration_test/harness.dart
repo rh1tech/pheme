@@ -165,7 +165,7 @@ class Device {
     for (final message in page.messages.reversed) {
       if (message.isControl) continue;
       final content = await mls.decryptMessage(conversationId, userId, message);
-      out[message.id] = content?.body;
+      out[message.id] = content?.content.body;
     }
     return out;
   }

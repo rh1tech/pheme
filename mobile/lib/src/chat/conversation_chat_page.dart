@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../crypto/attribution.dart';
 import '../crypto/chat_content.dart';
 
 import '../core/api_exception.dart';
@@ -340,8 +341,16 @@ class _ChatViewState extends ConsumerState<_ChatView> {
           : previous!.messages.last;
       if (newest == null || newest.id == wasNewest?.id) return;
 
-      // Our own message is already handled by _send, which always follows it down.
-      if (newest.senderId == myUserId) return;
+      // Our own message is already handled by _send, which always follows it down. From the
+      // AUTHENTICATED sender where the feed has one: otherwise the server could suppress the
+      // "new message" nudge for anything it liked simply by stamping our id on it.
+      if (isOwnMessage(
+        next.contents[newest.id]?.attribution,
+        newest.senderId,
+        myUserId,
+      )) {
+        return;
+      }
       _onNewMessage();
     });
 
@@ -496,7 +505,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
                   photos: _photos,
                   onRemovePhoto: (i) => setState(() => _photos.removeAt(i)),
                   replyingTo: _replyingTo,
-                  replyAuthor: _replyAuthor(conversation),
+                  replyAuthor: _replyAuthor(conversation, feed),
                   replyText: _replyText(feed, l10n),
                   onCancelReply: () => setState(() => _replyingTo = null),
                 ),
@@ -509,10 +518,20 @@ class _ChatViewState extends ConsumerState<_ChatView> {
   }
 
   /// Who wrote the message being replied to.
-  String? _replyAuthor(Conversation conversation) {
+  ///
+  /// From the AUTHENTICATED sender where this device has read the message. Naming a reply's target
+  /// from the envelope would let the server decide whose words you appear to be answering — and the
+  /// quote that goes out carries only the message id, so the recipient renders it from their own
+  /// copy and would see a different name than the one shown here.
+  String? _replyAuthor(Conversation conversation, MessageFeedState feed) {
     final replyingTo = _replyingTo;
     if (replyingTo == null) return null;
-    final member = conversation.memberOf(replyingTo.senderId);
+    final view = resolveAuthor(
+      feed.contents[replyingTo.id]?.attribution,
+      replyingTo.senderId,
+    );
+    if (view.tampered) return null;
+    final member = conversation.memberOf(view.userId);
     return member == null ? null : userLabel(member.user);
   }
 
@@ -522,7 +541,7 @@ class _ChatViewState extends ConsumerState<_ChatView> {
     final replyingTo = _replyingTo;
     if (replyingTo == null) return null;
 
-    final content = feed.contents[replyingTo.id];
+    final content = feed.contents[replyingTo.id]?.content;
     if (content == null) return null;
     if (content.body.isNotEmpty) return content.body;
     return content.hasPhotos ? l10n.t('chat.photo') : '';
@@ -797,12 +816,12 @@ class _Feed extends ConsumerWidget {
               message: message,
               conversation: conversation,
               myUserId: myUserId,
-              content: feed.contents[message.id],
+              entry: feed.contents[message.id],
               feed: feed,
               onReply: onReply,
               // A new day always begins a new run, whatever the clock says.
-              startsRun: startsDay || !_sameRun(older, message),
-              endsRun: !_sameRun(message, newer),
+              startsRun: startsDay || !_sameRun(feed, older, message),
+              endsRun: !_sameRun(feed, message, newer),
             ),
           ],
         );
@@ -813,9 +832,19 @@ class _Feed extends ConsumerWidget {
   /// Whether [next] continues [previous]'s run: same sender, both ordinary messages, close in time.
   ///
   /// A call event is never part of a run — it is a system aside, not something anybody said.
-  static bool _sameRun(ChatMessage? previous, ChatMessage? next) {
+  ///
+  /// SAME SENDER MEANS THE AUTHENTICATED ONE, and that is not a nicety. A run shows its author's
+  /// name ONCE, at the top. Group by the envelope's `senderId` and the untrusted server can stamp
+  /// one member's id on another member's ciphertext: the two messages join into a single run, the
+  /// second renders with no name of its own, and it is read as the first person's words. The name
+  /// was never wrong — it simply was not shown, which is worse, because nothing looks off.
+  static bool _sameRun(
+    MessageFeedState feed,
+    ChatMessage? previous,
+    ChatMessage? next,
+  ) {
     if (previous == null || next == null) return false;
-    if (previous.senderId != next.senderId) return false;
+    if (_senderKey(feed, previous) != _senderKey(feed, next)) return false;
     if (previous.contentType == ContentType.callEvent) return false;
     if (next.contentType == ContentType.callEvent) return false;
 
@@ -824,6 +853,18 @@ class _Feed extends ConsumerWidget {
     if (a == null || b == null) return false;
 
     return b.difference(a).abs() <= _runGap;
+  }
+
+  /// Who a message is grouped under: the MLS-authenticated sender where this device has one, the
+  /// envelope otherwise (a message it cannot read has no signature to go on).
+  ///
+  /// A message whose signature and envelope DISAGREE gets a key of its own, so it can never be
+  /// folded into anybody's run — it has to carry its own unverified marker.
+  static String _senderKey(MessageFeedState feed, ChatMessage message) {
+    final attribution = feed.contents[message.id]?.attribution;
+    final view = resolveAuthor(attribution, message.senderId);
+    if (view.tampered) return 'unverified:${message.id}';
+    return view.userId;
   }
 }
 
@@ -874,7 +915,7 @@ class _Message extends ConsumerWidget {
     required this.message,
     required this.conversation,
     required this.myUserId,
-    required this.content,
+    required this.entry,
     required this.feed,
     required this.onReply,
     required this.startsRun,
@@ -886,7 +927,11 @@ class _Message extends ConsumerWidget {
   final String myUserId;
 
   /// Null when this device cannot read the message at all.
-  final ChatContent? content;
+  /// What this device holds for the message: the content AND how its author was established.
+  /// Null when it could not be read at all.
+  final CachedEntry? entry;
+
+  ChatContent? get content => entry?.content;
 
   /// Needed to resolve a reply's quote from a message we already hold.
   final MessageFeedState feed;
@@ -897,7 +942,14 @@ class _Message extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isOwn = message.senderId == myUserId;
+    // Who MLS says wrote this, and whether the envelope agrees.
+    //
+    // `isOwn` decides which side of the feed the bubble sits on, and it is answered from the
+    // AUTHENTICATED sender for every message this device has read. Left to the envelope only where
+    // there is no plaintext — and therefore no signature — to go on, which is a message this device
+    // cannot read at all.
+    final author = resolveAuthor(entry?.attribution, message.senderId);
+    final isOwn = isOwnMessage(entry?.attribution, message.senderId, myUserId);
 
     // Somebody joined or left: a line the conversation says about itself, centred and quiet, with
     // no bubble and no sender — because nobody sent it.
@@ -921,9 +973,14 @@ class _Message extends ConsumerWidget {
     }
 
     // In a group, other people's messages carry a name — there is more than one "them".
+    //
+    // The name comes from the identity MLS authenticated, never from the envelope. When the two
+    // disagree the bubble says so instead (see MessageBubble.senderUnverified): naming either one
+    // would be picking a side, and that is exactly the silent misattribution the authenticated
+    // sender exists to prevent.
     String? senderName;
-    if (conversation.isGroup && !isOwn) {
-      final member = conversation.memberOf(message.senderId);
+    if (conversation.isGroup && !isOwn && !author.tampered) {
+      final member = conversation.memberOf(author.userId);
       senderName = member == null ? null : userLabel(member.user);
     }
 
@@ -938,6 +995,7 @@ class _Message extends ConsumerWidget {
           ? messageReceipt(message.seq, feed.members, myUserId)
           : null,
       senderName: senderName,
+      senderUnverified: author.tampered,
       startsRun: startsRun,
       endsRun: endsRun,
       onLongPress: content == null
@@ -966,12 +1024,21 @@ class _Message extends ConsumerWidget {
 
     // We do not hold it: it was sent before this device joined the group, and no amount of waiting
     // will change that. ReplyQuote says so rather than pretending to load.
-    final quotedContent = quoted == null ? null : feed.contents[quoted.id];
+    final quotedEntry = quoted == null ? null : feed.contents[quoted.id];
+    final quotedContent = quotedEntry?.content;
 
+    // Named from the AUTHENTICATED sender of the quoted message wherever this device has decrypted
+    // it. A quote is a claim about what somebody else said, so attributing it from the envelope —
+    // the server's word — would let the server put words in a member's mouth in the one place a
+    // reader is least likely to check them against the original. When the two disagree, name
+    // nobody: ReplyQuote renders its unknown-author form.
     String? author;
     if (quoted != null) {
-      final member = conversation.memberOf(quoted.senderId);
-      author = member == null ? null : userLabel(member.user);
+      final view = resolveAuthor(quotedEntry?.attribution, quoted.senderId);
+      if (!view.tampered) {
+        final member = conversation.memberOf(view.userId);
+        author = member == null ? null : userLabel(member.user);
+      }
     }
 
     return ReplyQuote(author: author, text: _quoteText(context, quotedContent));

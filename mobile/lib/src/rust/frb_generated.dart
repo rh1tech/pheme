@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 674733525;
+  int get rustContentHash => -2121155566;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -165,6 +165,25 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiMlsMlsSafetyNumber({required List<int> groupId});
 
+  Future<Uint8List> crateApiMlsMlsSignHistoryOffer({
+    required List<int> groupId,
+    required String conversationId,
+    required BigInt epoch,
+    required String requester,
+    required String historyId,
+    required List<int> salt,
+    required List<int> nonce,
+    required List<int> requestNonce,
+    required List<int> ciphertext,
+  });
+
+  Future<Uint8List> crateApiMlsMlsSignHistoryRequest({
+    required List<int> groupId,
+    required String conversationId,
+    required BigInt epoch,
+    required List<int> nonce,
+  });
+
   Future<Staged> crateApiMlsMlsStageAdd({
     required List<int> groupId,
     required List<Uint8List> keyPackages,
@@ -181,6 +200,28 @@ abstract class RustLibApi extends BaseApi {
   });
 
   Future<void> crateApiMlsMlsUnload();
+
+  Future<void> crateApiMlsMlsVerifyHistoryOffer({
+    required List<int> groupId,
+    required String conversationId,
+    required BigInt epoch,
+    required String offerer,
+    required String historyId,
+    required List<int> salt,
+    required List<int> nonce,
+    required List<int> requestNonce,
+    required List<int> ciphertext,
+    required List<int> signature,
+  });
+
+  Future<void> crateApiMlsMlsVerifyHistoryRequest({
+    required List<int> groupId,
+    required String conversationId,
+    required BigInt epoch,
+    required String requester,
+    required List<int> nonce,
+    required List<int> signature,
+  });
 
   Future<Uint8List> crateApiVaultRandomBytes({required BigInt length});
 
@@ -1020,6 +1061,114 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<Uint8List> crateApiMlsMlsSignHistoryOffer({
+    required List<int> groupId,
+    required String conversationId,
+    required BigInt epoch,
+    required String requester,
+    required String historyId,
+    required List<int> salt,
+    required List<int> nonce,
+    required List<int> requestNonce,
+    required List<int> ciphertext,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(groupId, serializer);
+          sse_encode_String(conversationId, serializer);
+          sse_encode_u_64(epoch, serializer);
+          sse_encode_String(requester, serializer);
+          sse_encode_String(historyId, serializer);
+          sse_encode_list_prim_u_8_loose(salt, serializer);
+          sse_encode_list_prim_u_8_loose(nonce, serializer);
+          sse_encode_list_prim_u_8_loose(requestNonce, serializer);
+          sse_encode_list_prim_u_8_loose(ciphertext, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 27,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMlsMlsSignHistoryOfferConstMeta,
+        argValues: [
+          groupId,
+          conversationId,
+          epoch,
+          requester,
+          historyId,
+          salt,
+          nonce,
+          requestNonce,
+          ciphertext,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMlsMlsSignHistoryOfferConstMeta =>
+      const TaskConstMeta(
+        debugName: "mls_sign_history_offer",
+        argNames: [
+          "groupId",
+          "conversationId",
+          "epoch",
+          "requester",
+          "historyId",
+          "salt",
+          "nonce",
+          "requestNonce",
+          "ciphertext",
+        ],
+      );
+
+  @override
+  Future<Uint8List> crateApiMlsMlsSignHistoryRequest({
+    required List<int> groupId,
+    required String conversationId,
+    required BigInt epoch,
+    required List<int> nonce,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(groupId, serializer);
+          sse_encode_String(conversationId, serializer);
+          sse_encode_u_64(epoch, serializer);
+          sse_encode_list_prim_u_8_loose(nonce, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 28,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMlsMlsSignHistoryRequestConstMeta,
+        argValues: [groupId, conversationId, epoch, nonce],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMlsMlsSignHistoryRequestConstMeta =>
+      const TaskConstMeta(
+        debugName: "mls_sign_history_request",
+        argNames: ["groupId", "conversationId", "epoch", "nonce"],
+      );
+
+  @override
   Future<Staged> crateApiMlsMlsStageAdd({
     required List<int> groupId,
     required List<Uint8List> keyPackages,
@@ -1033,7 +1182,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1067,7 +1216,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1102,7 +1251,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1132,7 +1281,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1151,6 +1300,136 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "mls_unload", argNames: []);
 
   @override
+  Future<void> crateApiMlsMlsVerifyHistoryOffer({
+    required List<int> groupId,
+    required String conversationId,
+    required BigInt epoch,
+    required String offerer,
+    required String historyId,
+    required List<int> salt,
+    required List<int> nonce,
+    required List<int> requestNonce,
+    required List<int> ciphertext,
+    required List<int> signature,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(groupId, serializer);
+          sse_encode_String(conversationId, serializer);
+          sse_encode_u_64(epoch, serializer);
+          sse_encode_String(offerer, serializer);
+          sse_encode_String(historyId, serializer);
+          sse_encode_list_prim_u_8_loose(salt, serializer);
+          sse_encode_list_prim_u_8_loose(nonce, serializer);
+          sse_encode_list_prim_u_8_loose(requestNonce, serializer);
+          sse_encode_list_prim_u_8_loose(ciphertext, serializer);
+          sse_encode_list_prim_u_8_loose(signature, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 33,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMlsMlsVerifyHistoryOfferConstMeta,
+        argValues: [
+          groupId,
+          conversationId,
+          epoch,
+          offerer,
+          historyId,
+          salt,
+          nonce,
+          requestNonce,
+          ciphertext,
+          signature,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMlsMlsVerifyHistoryOfferConstMeta =>
+      const TaskConstMeta(
+        debugName: "mls_verify_history_offer",
+        argNames: [
+          "groupId",
+          "conversationId",
+          "epoch",
+          "offerer",
+          "historyId",
+          "salt",
+          "nonce",
+          "requestNonce",
+          "ciphertext",
+          "signature",
+        ],
+      );
+
+  @override
+  Future<void> crateApiMlsMlsVerifyHistoryRequest({
+    required List<int> groupId,
+    required String conversationId,
+    required BigInt epoch,
+    required String requester,
+    required List<int> nonce,
+    required List<int> signature,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(groupId, serializer);
+          sse_encode_String(conversationId, serializer);
+          sse_encode_u_64(epoch, serializer);
+          sse_encode_String(requester, serializer);
+          sse_encode_list_prim_u_8_loose(nonce, serializer);
+          sse_encode_list_prim_u_8_loose(signature, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 34,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiMlsMlsVerifyHistoryRequestConstMeta,
+        argValues: [
+          groupId,
+          conversationId,
+          epoch,
+          requester,
+          nonce,
+          signature,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMlsMlsVerifyHistoryRequestConstMeta =>
+      const TaskConstMeta(
+        debugName: "mls_verify_history_request",
+        argNames: [
+          "groupId",
+          "conversationId",
+          "epoch",
+          "requester",
+          "nonce",
+          "signature",
+        ],
+      );
+
+  @override
   Future<Uint8List> crateApiVaultRandomBytes({required BigInt length}) {
     return handler.executeNormal(
       NormalTask(
@@ -1160,7 +1439,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1194,7 +1473,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1230,7 +1509,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1291,6 +1570,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt dco_decode_box_autoadd_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_u_64(raw);
+  }
+
+  @protected
   Bytes dco_decode_bytes(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1330,12 +1615,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MlsPreviewOutcome dco_decode_mls_preview_outcome(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return MlsPreviewOutcome(
       plaintext: dco_decode_opt_list_prim_u_8_strict(arr[0]),
-      groupsHeld: dco_decode_u_32(arr[1]),
-      groupsOffered: dco_decode_u_32(arr[2]),
+      sender: dco_decode_opt_String(arr[1]),
+      epoch: dco_decode_opt_box_autoadd_u_64(arr[2]),
+      groupsHeld: dco_decode_u_32(arr[3]),
+      groupsOffered: dco_decode_u_32(arr[4]),
     );
   }
 
@@ -1343,12 +1630,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Opened dco_decode_opened(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return Opened(
       plaintext: dco_decode_opt_list_prim_u_8_strict(arr[0]),
-      state: dco_decode_list_prim_u_8_strict(arr[1]),
+      sender: dco_decode_opt_String(arr[1]),
+      epoch: dco_decode_opt_box_autoadd_u_64(arr[2]),
+      state: dco_decode_list_prim_u_8_strict(arr[3]),
     );
+  }
+
+  @protected
+  String? dco_decode_opt_String(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_String(raw);
+  }
+
+  @protected
+  BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_u_64(raw);
   }
 
   @protected
@@ -1441,6 +1742,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_u_64(deserializer));
+  }
+
+  @protected
   Bytes sse_decode_bytes(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_bytes = sse_decode_list_prim_u_8_strict(deserializer);
@@ -1494,10 +1801,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_plaintext = sse_decode_opt_list_prim_u_8_strict(deserializer);
+    var var_sender = sse_decode_opt_String(deserializer);
+    var var_epoch = sse_decode_opt_box_autoadd_u_64(deserializer);
     var var_groupsHeld = sse_decode_u_32(deserializer);
     var var_groupsOffered = sse_decode_u_32(deserializer);
     return MlsPreviewOutcome(
       plaintext: var_plaintext,
+      sender: var_sender,
+      epoch: var_epoch,
       groupsHeld: var_groupsHeld,
       groupsOffered: var_groupsOffered,
     );
@@ -1507,8 +1818,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Opened sse_decode_opened(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_plaintext = sse_decode_opt_list_prim_u_8_strict(deserializer);
+    var var_sender = sse_decode_opt_String(deserializer);
+    var var_epoch = sse_decode_opt_box_autoadd_u_64(deserializer);
     var var_state = sse_decode_list_prim_u_8_strict(deserializer);
-    return Opened(plaintext: var_plaintext, state: var_state);
+    return Opened(
+      plaintext: var_plaintext,
+      sender: var_sender,
+      epoch: var_epoch,
+      state: var_state,
+    );
+  }
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_String(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_u_64(deserializer));
+    } else {
+      return null;
+    }
   }
 
   @protected
@@ -1602,6 +1942,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_64(self, serializer);
+  }
+
+  @protected
   void sse_encode_bytes(Bytes self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(self.bytes, serializer);
@@ -1658,6 +2004,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_opt_list_prim_u_8_strict(self.plaintext, serializer);
+    sse_encode_opt_String(self.sender, serializer);
+    sse_encode_opt_box_autoadd_u_64(self.epoch, serializer);
     sse_encode_u_32(self.groupsHeld, serializer);
     sse_encode_u_32(self.groupsOffered, serializer);
   }
@@ -1666,7 +2014,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_opened(Opened self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_opt_list_prim_u_8_strict(self.plaintext, serializer);
+    sse_encode_opt_String(self.sender, serializer);
+    sse_encode_opt_box_autoadd_u_64(self.epoch, serializer);
     sse_encode_list_prim_u_8_strict(self.state, serializer);
+  }
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_String(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_u_64(self, serializer);
+    }
   }
 
   @protected

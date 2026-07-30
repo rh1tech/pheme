@@ -106,6 +106,18 @@ Membership changes are staged on a client:
 Handshake commits use a server-inspectable MLS wire form so the hub can verify
 the declared base epoch. Application messages remain opaque.
 
+### Sender authentication
+
+Decrypting an application message yields the plaintext **and** the credential
+MLS authenticated as its signer (`mimi://<domain>/d/<user>/<device>`), plus the
+epoch it was framed in. Clients attribute messages by that credential — for the
+author name, own-message placement, quoted-message authors, conversation-list
+previews and notification previews — never by the `senderId` on the envelope,
+which the untrusted delivery service writes. Where the two disagree the client
+renders an explicit unverified state rather than picking a name. Cached messages
+decrypted before sender attribution existed keep an unverified compatibility
+fallback to the envelope, and are never presented as verified.
+
 ### New devices and history
 
 A roster member whose new device has no group leaf can join through an MLS
@@ -115,6 +127,27 @@ prevents concurrent commits from forking the group.
 The server stores ciphertext history but cannot decrypt it for a new device.
 Existing devices can upload an encrypted history handoff. Encrypted key backups
 support device recovery without giving the server the plaintext keys.
+
+The handoff is sealed under the group's exporter secret, which proves only that
+the sender is *a* member — every member derives the same secret. So requests and
+offers are additionally **signed with the member's MLS leaf key** over a
+canonical, domain-separated transcript (`pheme/mls/history-{request,offer}/v2`)
+and verified against the leaf key the group's ratchet tree holds for the claimed
+identity. The request transcript binds the conversation, group, epoch, requester
+and a fresh nonce; the offer transcript additionally binds the offerer, the
+history id, the AEAD salt and nonce, the request nonce, and a SHA-256 digest of
+the encrypted blob — so the server cannot swap the blob behind a valid offer.
+Unsigned v1 bodies are refused with no fallback. Clients also check the claimed
+identity against the poster the server authenticated on the control message.
+
+A leaf signature proves which group member offered the bytes, but any participant
+can sign fabricated history as themselves. Clients therefore provide and accept
+history only between devices of the same domain-qualified account. Other group
+members are never eligible history providers.
+
+Transferred message bodies carry the MLS-authenticated sender of each original
+message, and are marked as relayed on import, so a new device never adopts
+attacker-chosen plaintext under someone else's server-supplied `senderId`.
 
 ### Messages, attachments, and receipts
 

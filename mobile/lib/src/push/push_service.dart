@@ -121,7 +121,7 @@ Future<void> _showDecryptedInBackground(RemoteMessage message) async {
   final fallbackBody = (data['body'] as String?) ?? 'New message';
   final conversationId = (data['conversationId'] as String?) ?? '';
 
-  String? preview;
+  NotificationPreview? preview;
   try {
     preview = await decryptNotificationPreview(
       conversationId: conversationId,
@@ -132,6 +132,23 @@ Future<void> _showDecryptedInBackground(RemoteMessage message) async {
   } on Object catch (e) {
     // Never fatal: a notification that says "New message" is a working notification.
     debugPrint('Pheme: background preview failed: $e');
+  }
+
+  // THE ONE CHECK THAT MATTERS ON THIS PATH.
+  //
+  // The banner's title, avatar and avatar colour all come from the push payload, which the server
+  // composes — and the server is the untrusted Delivery Service. If the identity MLS authenticated
+  // as having signed the ciphertext is not the sender the payload names, the two disagree about who
+  // is messaging you, and showing the payload's name over the real message would put an attacker's
+  // chosen name on a real person's words.
+  //
+  // Keep the message, drop everything the payload said about WHO.
+  final mismatched = preview?.contradicts(data['senderId'] as String?) ?? false;
+  if (mismatched) {
+    debugPrint(
+      'Pheme: the push claims a sender the MLS signature does not; '
+      'showing the message without an identity',
+    );
   }
 
   final local = FlutterLocalNotificationsPlugin();
@@ -150,13 +167,15 @@ Future<void> _showDecryptedInBackground(RemoteMessage message) async {
   await _showChatNotification(
     local,
     id: _notificationIdFor(message),
-    title: title,
-    body: preview ?? fallbackBody,
-    avatarUrl: data['senderAvatar'] as String?,
+    title: mismatched ? 'Pheme' : title,
+    body: preview?.body ?? fallbackBody,
+    avatarUrl: mismatched ? null : data['senderAvatar'] as String?,
     conversationId: conversationId,
     // senderId where the server sends one, so the drawn circle is the colour this person already
     // has in the chat list; the conversation otherwise, which is exactly right for a group.
-    avatarColorId: (data['senderId'] as String?) ?? conversationId,
+    avatarColorId: mismatched
+        ? conversationId
+        : (data['senderId'] as String?) ?? conversationId,
   );
 }
 
@@ -612,6 +631,11 @@ class PushService {
       messageId: message.data['messageId'] as String?,
     );
 
+    // See the background handler: when the MLS signature and the payload name different people,
+    // the message is real and everything the payload said about WHO is not.
+    final mismatched =
+        preview?.contradicts(message.data['senderId'] as String?) ?? false;
+
     await _showChatNotification(
       _local,
       // Keyed on the MESSAGE, not the notification object. n.hashCode is derived from the payload,
@@ -620,18 +644,21 @@ class PushService {
       id: _notificationIdFor(message),
       // The data copies are the ONLY source when the push came data-only, which is every push
       // carrying a preview. The server sends both for exactly this reason.
-      title: n?.title ?? message.data['title'] as String?,
+      title: mismatched
+          ? 'Pheme'
+          : n?.title ?? message.data['title'] as String?,
       // The server's generic body when there is no preview: no key material here, previews turned
       // off, or a decrypt that did not land. All of them still deserve a notification.
       body:
-          preview ??
+          preview?.body ??
           n?.body ??
           message.data['body'] as String? ??
           'New message',
-      avatarUrl: message.data['senderAvatar'] as String?,
-      avatarColorId:
-          (message.data['senderId'] as String?) ??
-          message.data['conversationId'] as String?,
+      avatarUrl: mismatched ? null : message.data['senderAvatar'] as String?,
+      avatarColorId: mismatched
+          ? message.data['conversationId'] as String?
+          : (message.data['senderId'] as String?) ??
+                message.data['conversationId'] as String?,
       conversationId: groupKey,
     );
   }

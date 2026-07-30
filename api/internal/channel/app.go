@@ -745,6 +745,10 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	if _, err := h.Tokens.AuthorizeClaims(r.Context(), claims); err != nil {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 	uid := claims.Subject
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -788,11 +792,17 @@ func (h *AppHandler) stream(w http.ResponseWriter, r *http.Request) {
 		case <-expiry:
 			return
 		case <-beat.C:
+			if _, err := h.Tokens.AuthorizeClaims(r.Context(), claims); err != nil {
+				return
+			}
 			fmt.Fprintf(w, "%s\n\n", heartbeatComment())
 			flusher.Flush()
 			beat.Reset(nextHeartbeat())
 		case e, ok := <-events:
 			if !ok {
+				return
+			}
+			if _, err := h.Tokens.AuthorizeClaims(r.Context(), claims); err != nil {
 				return
 			}
 			// Two event shapes on one stream. A conversation event is authorised

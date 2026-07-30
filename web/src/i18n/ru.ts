@@ -304,6 +304,7 @@ const ru: Resources = {
     reply: 'Ответить',
     replyUnknown: 'Кто-то',
     replyUnavailable: 'Недоступно на этом устройстве',
+    senderMismatch: 'Отправитель не подтверждён — подпись сообщения не совпадает',
     attachPhoto: 'Прикрепить фото',
     photoUnavailable: 'Фото недоступно',
     photoFailed: 'Не удалось прикрепить фото',

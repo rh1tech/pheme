@@ -13,4 +13,13 @@ uint8_t *pheme_preview_decrypt(const uint8_t *sealed_state, size_t sealed_state_
                                const char *group_ids, const uint8_t *ciphertext,
                                size_t ciphertext_len, size_t *out_len);
 
+// The attributed variant also returns the credential identity MLS authenticated as the sender.
+// Both returned buffers must be freed independently with pheme_preview_free.
+uint8_t *pheme_preview_decrypt_attributed(
+    const uint8_t *sealed_state, size_t sealed_state_len,
+    const uint8_t *data_key, size_t data_key_len,
+    const char *group_ids, const uint8_t *ciphertext,
+    size_t ciphertext_len, size_t *out_len,
+    uint8_t **out_sender, size_t *out_sender_len);
+
 void pheme_preview_free(uint8_t *ptr, size_t len);

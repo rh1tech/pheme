@@ -163,4 +163,51 @@ void main() {
     expect(find.text('Not available on this device'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
+
+  // The signature and the envelope name different people. The bubble must not quietly pick one:
+  // that is the misattribution the authenticated sender exists to prevent, and it is exactly the
+  // case a reader has no other way to notice.
+  group('an unverified sender', () {
+    Future<void> pump(
+      WidgetTester tester, {
+      required bool unverified,
+      String? senderName,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: const [AppLocalizations.delegate],
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: MessageBubble(
+              body: 'hello',
+              createdAt: '2026-07-14T10:00:00Z',
+              isOwn: false,
+              senderName: senderName,
+              senderUnverified: unverified,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets('is said out loud, not silently resolved', (tester) async {
+      await pump(tester, unverified: true);
+      expect(
+        find.textContaining('Unverified sender'),
+        findsOneWidget,
+        reason:
+            'a message whose signature contradicts its envelope must say so — rendering it '
+            'under either name is the attack succeeding',
+      );
+      // The message itself is real: MLS decrypted it. Only the attribution is in doubt.
+      expect(find.text('hello'), findsOneWidget);
+    });
+
+    testWidgets('says nothing when the two agree', (tester) async {
+      await pump(tester, unverified: false, senderName: 'Alice');
+      expect(find.textContaining('Unverified sender'), findsNothing);
+      expect(find.text('Alice'), findsOneWidget);
+    });
+  });
 }

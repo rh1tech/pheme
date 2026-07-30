@@ -30,6 +30,7 @@ class MessageBubble extends StatelessWidget {
     required this.isOwn,
     this.receipt,
     this.senderName,
+    this.senderUnverified = false,
     this.startsRun = true,
     this.endsRun = true,
     this.onLongPress,
@@ -51,6 +52,14 @@ class MessageBubble extends StatelessWidget {
   /// Shown above other people's messages in a group. Null in a direct chat — there is only one other
   /// person and their name is in the header.
   final String? senderName;
+
+  /// The MLS signature and the server's envelope name DIFFERENT people.
+  ///
+  /// Not a rendering detail — it is an attack, caught. MLS authenticated one leaf as having signed
+  /// this message and the server claims somebody else posted it. Nothing here picks a side:
+  /// attributing it either way is precisely the silent misattribution the authenticated sender
+  /// exists to prevent, so the bubble says the sender could not be verified instead.
+  final bool senderUnverified;
 
   /// Whether this message begins a run from the same sender, and whether it ends one.
   ///
@@ -133,6 +142,19 @@ class MessageBubble extends StatelessWidget {
                       senderName!,
                       style: theme.textTheme.labelMedium?.copyWith(
                         color: dark ? const Color(0xFFA888F5) : kIris,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                // On EVERY message it applies to, not once per run: a run is grouped by the
+                // envelope's sender, and this is the case where the envelope is not to be trusted.
+                if (senderUnverified)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(
+                      l10n.t('chat.senderMismatch'),
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: theme.colorScheme.error,
                         fontWeight: FontWeight.w600,
                       ),
                     ),

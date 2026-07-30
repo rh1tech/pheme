@@ -129,11 +129,17 @@ test('the service worker decrypts a push into the notification body', async ({ p
     ([conversationId, ciphertext]) =>
       (
         self as never as {
-          phemeDecryptPreview: (c: string, ct: string) => Promise<string | null>
+          phemeDecryptPreview: (
+            c: string,
+            ct: string,
+          ) => Promise<{ body: string; senderUserId: string } | null>
         }
       ).phemeDecryptPreview(conversationId, ciphertext),
     [CONVERSATION_ID, fixture] as const,
   )
 
-  expect(decrypted).toBe(MESSAGE)
+  expect(decrypted?.body).toBe(MESSAGE)
+  // And the worker knows WHO signed it, from the credential MLS authenticated — not from the push
+  // payload, which the untrusted server composes.
+  expect(decrypted?.senderUserId).toBe('alice')
 })

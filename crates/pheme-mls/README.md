@@ -44,7 +44,23 @@ group never accepted is forked off the conversation — permanently, and silentl
   live devices.
   `commit_accepted(id)` / `commit_rejected(id)` — the server's verdict.
 - `epoch(id)`, `member_identities(id)` — what a caller diffs to find missing devices.
-- `encrypt(id, plaintext)`, `decrypt(id, ciphertext)`.
+- `encrypt(id, plaintext)`, `decrypt(id, ciphertext) -> Option<Decrypted>`. A decrypt
+  returns the plaintext **together with the sender MLS authenticated** — the credential
+  of the leaf whose signature `process_message` verified against the group's own ratchet
+  tree — and the epoch the message was framed in. An application message that does not
+  come from a member leaf is refused rather than returned unattributed. This is the only
+  trustworthy answer to "who wrote this": the `senderId` on the message envelope is
+  written by the server, which relays these bytes and can put any name on them.
+- `sign_history_request` / `verify_history_request` / `sign_history_offer` /
+  `verify_history_offer` — the sender-authenticated device-to-device history handoff.
+  The exporter secret that seals a transferred transcript proves only that the sender is
+  *a* member, because every member derives it; these sign a canonical, domain-separated
+  transcript (see `src/history.rs`) with the member's own leaf key and verify it against
+  the leaf key the ratchet tree holds for the claimed identity. The transcript is built
+  in the crate, so the browser and the phone canonicalise identically by construction.
+  Because any group member can sign invented history as themselves, clients additionally
+  accept a provider only when it is another device of the requester's domain-qualified
+  account.
 - `export_secret(id, label, context, len)` — RFC 9420's exporter. Every member of the
   group derives the same bytes for the same (label, context); nobody else can. Used to
   key voice-call signalling, so the server cannot read the SDP and therefore cannot

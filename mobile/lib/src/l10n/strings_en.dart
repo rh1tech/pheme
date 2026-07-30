@@ -310,6 +310,8 @@ const Map<String, String> enStrings = {
   'chat.reply': 'Reply',
   'chat.replyUnknown': 'Someone',
   'chat.replyUnavailable': 'Not available on this device',
+  'chat.senderMismatch':
+      'Unverified sender — this message doesn’t match its signature',
   'chat.attachPhoto': 'Attach photo',
   'chat.photo': 'Photo',
   'chat.photoFailed': 'Could not attach that photo',

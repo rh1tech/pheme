@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/rh1tech/pheme/api/internal/domain"
 )
 
 // TokenType distinguishes access tokens from refresh tokens.
@@ -46,6 +48,13 @@ type sessionChecker interface {
 	IsUserRevoked(userID string, issuedAt time.Time) bool
 }
 
+// accountChecker supplies the live account state for authorization. Tokens are
+// authentication artifacts, not an authoritative role/status cache: an admin
+// can block, delete, or demote an account while a token is being issued.
+type accountChecker interface {
+	UserByID(ctx context.Context, userID string) (domain.User, error)
+}
+
 // TokenManager issues and verifies signed JWTs.
 //
 // Two signing modes. With a host key configured it signs EdDSA and stamps the
@@ -69,6 +78,7 @@ type TokenManager struct {
 	accessTTL  time.Duration
 	refreshTTL time.Duration
 	revoker    sessionChecker
+	accounts   accountChecker
 
 	// Optional; nil means legacy HS256 signing.
 	signKey   ed25519.PrivateKey
@@ -143,6 +153,46 @@ func (m *TokenManager) UseRevoker(r sessionChecker) {
 	m.revoker = r
 }
 
+// UseAccountChecker makes authorization consult the current account record on
+// every protected request. This closes races where a security-sensitive account
+// mutation overlaps token issuance.
+func (m *TokenManager) UseAccountChecker(checker accountChecker) {
+	m.accounts = checker
+}
+
+// Revoked reports whether already-validated claims have been invalidated by a
+// session revocation or a per-user cutoff.
+func (m *TokenManager) Revoked(claims *Claims) bool {
+	if claims == nil || m.revoker == nil {
+		return false
+	}
+	if m.revoker.IsRevoked(claims.SID) {
+		return true
+	}
+	return claims.IssuedAt != nil &&
+		m.revoker.IsUserRevoked(claims.Subject, claims.IssuedAt.Time)
+}
+
+// AuthorizeClaims applies revocation and live account state to already parsed
+// claims and returns the role that downstream handlers must use.
+func (m *TokenManager) AuthorizeClaims(ctx context.Context, claims *Claims) (string, error) {
+	if claims == nil || m.Revoked(claims) {
+		return "", ErrInvalidToken
+	}
+	role := claims.Role
+	if m.accounts == nil {
+		return role, nil
+	}
+	user, err := m.accounts.UserByID(ctx, claims.Subject)
+	if err != nil || user.Status == domain.UserBlocked {
+		return "", ErrInvalidToken
+	}
+	if user.Role == "" {
+		return string(domain.RoleUser), nil
+	}
+	return string(user.Role), nil
+}
+
 // RefreshTTL is how long a refresh token lives — the horizon past which a revoked
 // session's entry can be reaped, since the token is rejected on expiry anyway.
 func (m *TokenManager) RefreshTTL() time.Duration {
@@ -153,11 +203,18 @@ func (m *TokenManager) RefreshTTL() time.Duration {
 // for it, embedding the user's role and the new session id. The session id is also
 // returned so the caller can record it.
 func (m *TokenManager) Issue(userID, role string) (access, refresh, sessionID string, err error) {
+	return m.IssueAt(userID, role, m.clock())
+}
+
+// IssueAt starts a new session with an explicit issued-at time. Password reset
+// uses it to mint the replacement session at the per-user revocation cutoff,
+// after every older session has been invalidated.
+func (m *TokenManager) IssueAt(userID, role string, issuedAt time.Time) (access, refresh, sessionID string, err error) {
 	sid, err := newSessionID()
 	if err != nil {
 		return "", "", "", err
 	}
-	access, refresh, err = m.IssueWithSession(userID, role, sid)
+	access, refresh, err = m.issueWithSessionAt(userID, role, sid, issuedAt)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -169,11 +226,18 @@ func (m *TokenManager) Issue(userID, role string) (access, refresh, sessionID st
 // refresh would mint a new session id and "terminate this device" could only ever revoke
 // a login the device had already rotated away from.
 func (m *TokenManager) IssueWithSession(userID, role, sessionID string) (access, refresh string, err error) {
-	access, err = m.sign(userID, role, sessionID, AccessToken, m.accessTTL)
+	return m.issueWithSessionAt(userID, role, sessionID, m.clock())
+}
+
+func (m *TokenManager) issueWithSessionAt(
+	userID, role, sessionID string,
+	issuedAt time.Time,
+) (access, refresh string, err error) {
+	access, err = m.signAt(userID, role, sessionID, AccessToken, m.accessTTL, issuedAt)
 	if err != nil {
 		return "", "", err
 	}
-	refresh, err = m.sign(userID, role, sessionID, RefreshToken, m.refreshTTL)
+	refresh, err = m.signAt(userID, role, sessionID, RefreshToken, m.refreshTTL, issuedAt)
 	if err != nil {
 		return "", "", err
 	}
@@ -190,7 +254,15 @@ func newSessionID() (string, error) {
 }
 
 func (m *TokenManager) sign(userID, role, sessionID string, typ TokenType, ttl time.Duration) (string, error) {
-	now := time.Now()
+	return m.signAt(userID, role, sessionID, typ, ttl, m.clock())
+}
+
+func (m *TokenManager) signAt(
+	userID, role, sessionID string,
+	typ TokenType,
+	ttl time.Duration,
+	now time.Time,
+) (string, error) {
 	claims := Claims{
 		Type: typ,
 		Role: role,

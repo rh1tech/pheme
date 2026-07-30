@@ -10,7 +10,15 @@
 // a weakening of E2EE: the plaintext is only ever on the devices that legitimately
 // hold it, exactly as the messages themselves are.
 
-import { contentJson, deserializeContent, type ChatContent } from './chatContent'
+import { type ChatContent } from './chatContent'
+import {
+  LEGACY,
+  decodeCacheEntry,
+  encodeCacheEntry,
+  markRelayed,
+  type Attribution,
+  type CachedEntry,
+} from './attribution'
 import { idbDelete, idbGet, idbKeys, idbSet } from './idb'
 
 // One IndexedDB entry holds the whole per-conversation body map, which keeps
@@ -43,18 +51,24 @@ async function loadMap(conversationId: string): Promise<ContentMap> {
   }
 }
 
-/** Everything this device has managed to read in a conversation, keyed by message id. */
-export async function loadCachedContents(
+/**
+ * Everything this device has managed to read in a conversation, keyed by message id — each with the
+ * attribution it was stored under.
+ *
+ * The attribution comes back WITH the body deliberately. Reading a cached message and then asking
+ * the envelope who wrote it is exactly the hole this closes: the envelope is the server's word, and
+ * the server is the untrusted Delivery Service. See lib/attribution.
+ */
+export async function loadCachedEntries(
   conversationId: string,
-): Promise<Record<string, ChatContent>> {
+): Promise<Record<string, CachedEntry>> {
   const map = await loadMap(conversationId)
-  const out: Record<string, ChatContent> = {}
+  const out: Record<string, CachedEntry> = {}
 
   for (const [id, serialised] of Object.entries(map)) {
-    const content = deserializeContent(encoder.encode(serialised))
     // A cached entry from an older build is a bare body string rather than a JSON object. Reading it
     // as one keeps every message anybody has already decrypted, which is the only copy there is.
-    out[id] = content ?? { body: serialised }
+    out[id] = decodeCacheEntry(serialised) ?? { content: { body: serialised }, attribution: LEGACY }
   }
   return out
 }
@@ -77,30 +91,58 @@ export async function exportAllContents(): Promise<Record<string, ContentMap>> {
 }
 
 /**
- * Imports a backup's transcripts — a restored device adopting what its predecessor had read.
+ * Imports transcripts — a restored device adopting what its predecessor had read, or a newly-joined
+ * one adopting a same-account device's history handoff.
  *
  * Merged UNDER what this device already holds: anything decrypted here was decrypted more
  * recently than the backup was taken, so on a collision the local copy wins.
+ *
+ * `offerer` is the device that handed these over, and it is what tells the two cases apart. A
+ * HISTORY HANDOFF comes from another device of this account, so every entry is marked as relayed:
+ * that device signed the transfer, but the author inside each message is still its claim, not
+ * something this device authenticated. A KEY BACKUP passes no offerer, because it is
+ * this account's own earlier transcript — the attributions in it were made by a device of ours,
+ * from decrypts it performed itself, and re-labelling them as relayed would be false.
  */
-export async function importContents(all: Record<string, ContentMap>): Promise<void> {
+export async function importContents(
+  all: Record<string, ContentMap>,
+  offerer = '',
+): Promise<void> {
   for (const [conversationId, imported] of Object.entries(all)) {
     if (typeof imported !== 'object' || imported === null) continue
     const existing = await loadMap(conversationId)
-    const merged = { ...imported, ...existing }
+    // Stamped with WHO handed each entry over, before it is merged. An offerer signed the transfer
+    // with its leaf key, so the claim is attributable to a real member — but it is that member's
+    // word about who wrote each message, not something this device authenticated, and the two must
+    // never become indistinguishable in the cache. See attribution.markRelayed.
+    const stamped: ContentMap = {}
+    for (const [id, serialised] of Object.entries(imported)) {
+      if (typeof serialised !== 'string') continue
+      stamped[id] = offerer ? markRelayed(serialised, offerer) : serialised
+    }
+    const merged = { ...stamped, ...existing }
     await idbSet(cacheKey(conversationId), encoder.encode(JSON.stringify(merged)))
   }
 }
 
-/** Records a message's content, once, at decryption time. */
+/**
+ * Records a message's content, once, at decryption time, together with the sender MLS
+ * authenticated.
+ *
+ * `attribution` is not optional and has no default, on purpose: every call site has an answer (the
+ * decrypt's, or "we wrote it"), and a default would let a new one quietly store a message with no
+ * author at all — which is indistinguishable, later, from a legacy entry.
+ */
 export async function cacheContent(
   conversationId: string,
   messageId: string,
   content: ChatContent,
+  attribution: Attribution,
 ): Promise<void> {
   // The UNPADDED form. Padding exists to hide a message's length from anything
   // watching the wire; nothing here reaches the wire, and padding the cache would
   // cost up to a bucket per message on disk for no privacy at all.
-  const serialised = contentJson(content)
+  const serialised = encodeCacheEntry(content, attribution)
 
   const map = await loadMap(conversationId)
   if (map[messageId] === serialised) return
@@ -123,19 +165,64 @@ export async function forgetBodies(conversationId: string): Promise<void> {
 // synchronously while rendering the list, and updated whenever a newer message is
 // decrypted. Without it the list could not show a preview at all, since the last
 // message cannot be re-decrypted.
-export function setPreview(conversationId: string, body: string): void {
+
+/**
+ * The newest message a conversation row can show, and who MLS says wrote it.
+ *
+ * The sender is stored with the body because the chat list has the same attribution problem the
+ * chat itself does — "is the newest message mine?" decides whether the row counts as unread — and
+ * the list cannot decrypt anything to find out. It can only read what the open conversation wrote
+ * here. `id` pins the answer to one message, so a stale preview cannot be read as an answer about
+ * a newer one.
+ */
+export interface ChatPreview {
+  body: string
+  /** The message the body and sender belong to. Empty on an entry from before this was stored. */
+  id: string
+  /** Bare user id from the AUTHENTICATED MLS credential. Empty when unknown (legacy entry). */
+  senderUserId: string
+}
+
+const EMPTY_PREVIEW: ChatPreview = { body: '', id: '', senderUserId: '' }
+
+export function setPreview(
+  conversationId: string,
+  body: string,
+  messageId = '',
+  senderUserId = '',
+): void {
   try {
-    localStorage.setItem(previewKey(conversationId), body)
+    localStorage.setItem(
+      previewKey(conversationId),
+      JSON.stringify({ body, id: messageId, senderUserId }),
+    )
   } catch {
     // Storage full/blocked: the list just shows the encrypted placeholder.
   }
 }
 
-export function getPreview(conversationId: string): string {
+/**
+ * Reads a conversation's preview.
+ *
+ * Tolerates the OLD format, which was the bare body string: those entries are real previews of real
+ * messages and throwing them away would blank every existing user's chat list. They come back with
+ * no id and no sender, which every caller treats as "unknown, fall back".
+ */
+export function getPreview(conversationId: string): ChatPreview {
   try {
-    return localStorage.getItem(previewKey(conversationId)) ?? ''
+    const raw = localStorage.getItem(previewKey(conversationId))
+    if (!raw) return EMPTY_PREVIEW
+    if (!raw.startsWith('{')) return { body: raw, id: '', senderUserId: '' }
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return EMPTY_PREVIEW
+    const p = parsed as Record<string, unknown>
+    return {
+      body: typeof p.body === 'string' ? p.body : '',
+      id: typeof p.id === 'string' ? p.id : '',
+      senderUserId: typeof p.senderUserId === 'string' ? p.senderUserId : '',
+    }
   } catch {
-    return ''
+    return EMPTY_PREVIEW
   }
 }
 

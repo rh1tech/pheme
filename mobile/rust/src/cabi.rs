@@ -47,6 +47,11 @@ const STATE_DOMAIN: &str = "pheme.mls.state.v1";
 ///
 /// The returned buffer must be handed back to [`pheme_preview_free`] with the same length.
 ///
+/// Prefer [`pheme_preview_decrypt_attributed`], which also hands back the identity MLS
+/// authenticated as the sender. This one is kept unchanged so the existing Swift caller keeps
+/// linking; it discards the attribution, which means a caller using it has no source for a sender
+/// name except the push payload the untrusted server wrote.
+///
 /// # Safety
 ///
 /// Every pointer must either be null or point to at least the stated number of readable bytes.
@@ -63,10 +68,68 @@ pub unsafe extern "C" fn pheme_preview_decrypt(
     ciphertext_len: usize,
     out_len: *mut usize,
 ) -> *mut u8 {
+    pheme_preview_decrypt_attributed(
+        sealed_state,
+        sealed_state_len,
+        data_key,
+        data_key_len,
+        group_ids,
+        ciphertext,
+        ciphertext_len,
+        out_len,
+        ptr::null_mut(),
+        ptr::null_mut(),
+    )
+}
+
+/// The same preview decrypt, plus the **authenticated** sender.
+///
+/// `out_sender` receives a freshly allocated UTF-8 buffer holding the credential identity of the
+/// leaf that signed the message — `mimi://<domain>/d/<user>/<device>` — and `out_sender_len` its
+/// length. Both may be null, in which case the attribution is simply dropped.
+///
+/// This exists because a notification is titled with a NAME, and the only other source for that
+/// name is the push payload. The push is composed by the server, which in MLS is the untrusted
+/// Delivery Service: it can attach any name to any ciphertext it relays, and a lock screen is
+/// exactly where nobody checks. A caller that has this identity can compare it against whatever the
+/// payload claims and refuse to name a sender the cryptography does not agree with.
+///
+/// The sender buffer must be handed back to [`pheme_preview_free`] with the length written here,
+/// exactly like the plaintext buffer.
+///
+/// The EPOCH the message was framed in is deliberately not exposed. The core returns it (see
+/// `pheme_mls::Decrypted`) and the Dart bridge carries it, but a notification extension has nothing
+/// to do with it — and every extra out-parameter here is another pointer an unsafe caller can get
+/// wrong for no gain.
+///
+/// # Safety
+///
+/// As [`pheme_preview_decrypt`], and additionally: `out_sender`/`out_sender_len` must either both
+/// be null or both point to writable storage.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn pheme_preview_decrypt_attributed(
+    sealed_state: *const u8,
+    sealed_state_len: usize,
+    data_key: *const u8,
+    data_key_len: usize,
+    group_ids: *const c_char,
+    ciphertext: *const u8,
+    ciphertext_len: usize,
+    out_len: *mut usize,
+    out_sender: *mut *mut u8,
+    out_sender_len: *mut usize,
+) -> *mut u8 {
     if out_len.is_null() {
         return ptr::null_mut();
     }
     *out_len = 0;
+    if !out_sender.is_null() {
+        *out_sender = ptr::null_mut();
+    }
+    if !out_sender_len.is_null() {
+        *out_sender_len = 0;
+    }
 
     let Some(sealed) = as_slice(sealed_state, sealed_state_len) else {
         return ptr::null_mut();
@@ -94,16 +157,23 @@ pub unsafe extern "C" fn pheme_preview_decrypt(
             if !client.has_group(gid) {
                 continue;
             }
-            if let Ok(Some(plaintext)) = client.decrypt(gid, ct) {
-                return Some(plaintext);
+            if let Ok(Some(opened)) = client.decrypt(gid, ct) {
+                return Some((opened.plaintext, opened.sender));
             }
         }
         None
     });
 
-    let Ok(Some(plaintext)) = result else {
+    let Ok(Some((plaintext, sender))) = result else {
         return ptr::null_mut();
     };
+
+    if !out_sender.is_null() && !out_sender_len.is_null() && !sender.is_empty() {
+        let mut boxed = sender.into_boxed_slice();
+        *out_sender = boxed.as_mut_ptr();
+        *out_sender_len = boxed.len();
+        std::mem::forget(boxed);
+    }
 
     let mut boxed = plaintext.into_boxed_slice();
     let ptr = boxed.as_mut_ptr();
@@ -203,11 +273,47 @@ mod tests {
 
         // The whole safety property, at the FFI boundary: the app still reads it for real.
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct)
+                .unwrap()
+                .map(|d| d.plaintext)
+                .as_deref(),
             Some(&b"{\"body\":\"hello from the lock screen\"}"[..]),
             "the extension consumed the key the app needed — every previewed message would render \
              blank in the app, permanently",
         );
+    }
+
+    /// The attributed variant hands back the identity MLS authenticated, so a notification can be
+    /// titled by the leaf that signed the message rather than by whatever name the push claims.
+    #[test]
+    fn the_attributed_variant_reports_the_authenticated_sender() {
+        let (alice, _bob, key, sealed) = fixture();
+        let ct = alice.encrypt(GID, br#"{"body":"who said this"}"#).unwrap();
+
+        let cgroups = std::ffi::CString::new("grp-cabi-test").unwrap();
+        let mut out_len: usize = 0;
+        let mut sender_ptr: *mut u8 = ptr::null_mut();
+        let mut sender_len: usize = 0;
+        unsafe {
+            let p = pheme_preview_decrypt_attributed(
+                sealed.as_ptr(),
+                sealed.len(),
+                key.as_ptr(),
+                key.len(),
+                cgroups.as_ptr(),
+                ct.as_ptr(),
+                ct.len(),
+                &mut out_len,
+                &mut sender_ptr,
+                &mut sender_len,
+            );
+            assert!(!p.is_null());
+            assert!(!sender_ptr.is_null(), "the sender must come back with it");
+            let sender = slice::from_raw_parts(sender_ptr, sender_len).to_vec();
+            assert_eq!(sender, b"mimi://test.example/d/alice/dev-a");
+            pheme_preview_free(sender_ptr, sender_len);
+            pheme_preview_free(p, out_len);
+        }
     }
 
     #[test]

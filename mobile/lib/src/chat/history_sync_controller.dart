@@ -1,21 +1,19 @@
 // Device-to-device history sync, driven off the app-wide live stream.
 //
 // A device that joins a conversation it holds no transcript for posts a history REQUEST (see
-// MlsService.requestHistory). Every co-member that holds the group hears it here; ONE of them
-// answers with a sealed blob, and the requester opens it. All of it is sealed under a key derived
-// from the group — the server relays pointers, never content.
+// MlsService.requestHistory). Its other same-account devices hear it here; ONE of them answers with
+// a sealed blob, and the requester opens it. All of it is sealed under a group-derived key.
 //
-// ELECTION. Every co-member could answer; we want ~one. Each candidate waits a short delay keyed by
-// its RANK among the group's members (lowest identity answers soonest), and stands down if an offer
-// for this conversation has meanwhile appeared. First writer wins; the rest suppress. This tolerates
-// the lossy stream without needing to know who else is online.
+// ELECTION. Only same-account devices are eligible: a different participant can sign with a valid
+// leaf but cannot vouch for the requester's history. Candidates wait a rank-based delay and stand
+// down when an offer has already appeared.
 
 import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../crypto/history_handoff.dart';
+import '../crypto/attribution.dart';
 import '../data/app_providers.dart';
 import '../models/chat_models.dart';
 import '../models/models.dart';
@@ -60,7 +58,15 @@ class HistorySyncController extends Notifier<void> {
       final mls = ref.read(mlsServiceProvider);
       unawaited(
         mls
-            .receiveHistoryOffer(conversationId, userId, message.ciphertext)
+            .receiveHistoryOffer(
+              conversationId,
+              userId,
+              message.ciphertext,
+              // The server authenticates the POSTER of a control message. That is a second,
+              // independent witness alongside the MLS signature: an insider forging an offer in
+              // another member's name has to post it from that member's account as well.
+              posterId: message.senderId,
+            )
             .then((imported) {
               // A fresh cache write does not repaint an open conversation on its own; nudge it.
               if (imported) {
@@ -73,8 +79,6 @@ class HistorySyncController extends Notifier<void> {
     }
 
     if (message.contentType != ContentType.mlsHistoryRequest) return;
-    // Our own user's request (this device, or another of ours) — a co-member of another user answers.
-    if (message.senderId == userId) return;
     final key = '$conversationId:${message.id}';
     if (_answering.containsKey(key)) return;
     unawaited(_electAndAnswer(conversationId, userId, key, message));
@@ -86,43 +90,50 @@ class HistorySyncController extends Notifier<void> {
     String key,
     ChatMessage message,
   ) async {
+    // v1 requests — unsigned — parse to null and are never answered. Answering one means sealing a
+    // whole conversation to a key derived for an identity that may never have asked for it.
+    final request = parseRequestBody(message.ciphertext);
+    if (request == null) return;
+
     final mls = ref.read(mlsServiceProvider);
     final identity = await mls.myIdentity(userId).catchError((_) => '');
     final members = await mls
         .groupMemberIdentities(conversationId, userId)
         .catchError((_) => <String>[]);
-    // We do not hold the group, so we cannot help.
-    if (members.isEmpty || identity.isEmpty) return;
+    final eligible = members
+        .where((member) => sameAccountIdentities(member, request.id))
+        .toList();
+    // Only another device of the requester account may answer. Every group participant owns a
+    // valid leaf key, so accepting arbitrary members would let one sign invented history as itself.
+    if (identity.isEmpty ||
+        identity == request.id ||
+        !sameAccountIdentities(identity, request.id) ||
+        eligible.isEmpty) {
+      return;
+    }
 
-    // Rank among the current members sets our election delay. Lower identity → sooner.
-    final sorted = [...members]..sort();
+    // Rank among this account's eligible devices sets our election delay.
+    final sorted = [...eligible]..sort();
     final rank = sorted.indexOf(identity);
     final delay = Duration(
-      milliseconds: _electionStepMs * (rank < 0 ? members.length : rank),
+      milliseconds: _electionStepMs * (rank < 0 ? eligible.length : rank),
     );
-    final requester = _requesterOf(message.ciphertext);
     final timer = Timer(delay, () {
       _answering.remove(key);
       // Someone already answered this conversation's request — stand down.
       if (_offered.any((seen) => seen.startsWith('$conversationId:'))) return;
       unawaited(
-        mls.offerHistory(conversationId, userId, requester).catchError((_) {}),
+        mls
+            .offerHistory(
+              conversationId,
+              userId,
+              request,
+              posterId: message.senderId,
+            )
+            .catchError((_) {}),
       );
     });
     _answering[key] = timer;
-  }
-
-  /// Pulls the requester's identity out of a history-request control body. Empty on a malformed one.
-  String _requesterOf(Uint8List ciphertext) {
-    try {
-      final parsed = jsonDecode(utf8.decode(ciphertext));
-      if (parsed is Map && parsed['id'] is String) {
-        return parsed['id'] as String;
-      }
-      return '';
-    } on Object {
-      return '';
-    }
   }
 }
 

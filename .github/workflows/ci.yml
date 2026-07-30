@@ -30,14 +30,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# The `ci` label keeps test jobs off the runner reserved for releases. Without it a deploy waits
-# behind whatever the test suite happens to be doing, which is how a four-minute release became a
-# twenty-minute one — the work was never the slow part, the queue was.
+# Pull requests always use disposable GitHub-hosted runners: contributor code must never reach
+# the persistent host that also runs production services. Trusted pushes to protected main keep
+# using the `ci` runner label so tests do not queue behind releases.
 
 jobs:
   api:
     name: API (Go)
-    runs-on: [self-hosted, linux, ci]
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","linux","ci"]') }}
     env:
       MONGO_CONTAINER: pheme-ci-mongo-${{ github.run_id }}-${{ github.run_attempt }}
       REDIS_CONTAINER: pheme-ci-redis-${{ github.run_id }}-${{ github.run_attempt }}
@@ -46,10 +46,10 @@ jobs:
       run:
         working-directory: api
     steps:
-      - uses: actions/checkout@v7
-      # NO `cache:`. Every job here runs on a self-hosted runner whose disk persists
-      # between runs, so the module cache (~/go/pkg/mod) and the build cache
-      # (~/.cache/go-build) are already sitting on this box — 820 MB and 8 GB of them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # NO `cache:`. Trusted main pushes run on a self-hosted runner whose disk persists,
+      # so the module cache (~/go/pkg/mod) and build cache (~/.cache/go-build) are already
+      # sitting on that box — 820 MB and 8 GB of them.
       # GitHub's cache was uploading half a gigabyte of that over the internet and
       # downloading it back on every run, to populate directories that were never empty.
       #
@@ -59,7 +59,7 @@ jobs:
       #
       # deploy.yml reached the same conclusion about Docker layers; this is that fix,
       # applied to the toolchains.
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: api/go.mod
           cache: false
@@ -195,15 +195,15 @@ jobs:
 
   web:
     name: Web (Vite)
-    runs-on: [self-hosted, linux, ci]
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","linux","ci"]') }}
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v7
-      # No `cache: npm` — see the API job. npm's own cache (~/.npm) persists on this
-      # runner, which is what `npm ci` actually installs from.
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # No `cache: npm` — see the API job. On trusted main pushes npm's own cache
+      # (~/.npm) persists on the runner, which is what `npm ci` installs from.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
       - run: npm ci
@@ -216,7 +216,7 @@ jobs:
 
   crypto:
     name: Crypto (Rust)
-    runs-on: [self-hosted, linux, ci]
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","linux","ci"]') }}
     # Build artefacts go OUTSIDE the workspace, because checkout cleans the workspace
     # and would take them with it. ~/.cargo (the registry) already survives on its own;
     # this is the part that did not, and it is why the run was recompiling the whole
@@ -225,8 +225,8 @@ jobs:
     # Both manifests share one directory deliberately: they share most of their
     # dependencies, so the second cargo invocation gets them already built.
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       # Set here rather than in `env:`, which takes its values literally — `$HOME`
       # there would reach cargo as the four characters, not as a path.
       #
@@ -266,13 +266,13 @@ jobs:
 
   mobile:
     name: Mobile (Flutter)
-    runs-on: [self-hosted, linux, ci]
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","linux","ci"]') }}
     defaults:
       run:
         working-directory: mobile
     steps:
-      - uses: actions/checkout@v7
-      # `cache: false`, and it costs nothing. The action downloads the SDK only when
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # `cache: false`, and it costs nothing on the persistent main-branch runner. The action downloads the SDK only when
       # $RUNNER_TOOL_CACHE/flutter/<channel>-<version>-<arch>/flutter/bin/flutter is
       # missing — that check does not consult the `cache` input at all — and the SDK is
       # already unpacked there on both runners.
@@ -281,7 +281,7 @@ jobs:
       # GitHub's cache, 4.8 GB of the repo's 5.75 GB. Cache entries are scoped per branch,
       # so every PR branch that ran this job stored its own copy of an identical SDK.
       # ~/.pub-cache persists locally for the package cache.
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version-file: mobile/pubspec.yaml
           cache: false

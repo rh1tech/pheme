@@ -51,8 +51,20 @@ pub struct Staged {
 
 /// A decrypted message. `plaintext` is `None` for a control message — which is a success, not a
 /// failure, and must not be treated as one.
+///
+/// `sender` is the credential identity of the leaf MLS itself authenticated as having signed the
+/// message — `mimi://<domain>/d/<user>/<device>`. It is the ONLY trustworthy answer to "who wrote
+/// this". The `senderId` on the message envelope is written by the server, which is the untrusted
+/// Delivery Service in MLS: it relays these bytes and can put any name it likes on them, and a
+/// client that renders that name has end-to-end confidentiality with no sender authentication at
+/// all. `None` alongside a `None` plaintext (control traffic).
+///
+/// `epoch` is the epoch the message was framed in, so a caller can say which membership the sender
+/// was authenticated against.
 pub struct Opened {
     pub plaintext: Option<Vec<u8>>,
+    pub sender: Option<String>,
+    pub epoch: Option<u64>,
     pub state: Vec<u8>,
 }
 
@@ -273,9 +285,30 @@ pub fn mls_encrypt(group_id: Vec<u8>, plaintext: Vec<u8>) -> Result<Bytes> {
 /// plaintext must be cached on first sight.
 ///
 /// `plaintext == None` means this was a control message, not a failure.
+///
+/// The result also carries the MLS-authenticated `sender` — the credential of the leaf that signed
+/// the message. Everything above this must attribute by that and never by the envelope's
+/// `senderId`, which the untrusted server writes.
 pub fn mls_decrypt(group_id: Vec<u8>, ciphertext: Vec<u8>) -> Result<Opened> {
-    mutate(|c| c.decrypt(&group_id, &ciphertext))
-        .map(|(plaintext, state)| Opened { plaintext, state })
+    mutate(|c| c.decrypt(&group_id, &ciphertext)).map(|(opened, state)| opened_from(opened, state))
+}
+
+/// Splits a `Decrypted` into the flat shape the bridge carries.
+fn opened_from(decrypted: Option<pheme_mls::Decrypted>, state: Vec<u8>) -> Opened {
+    match decrypted {
+        Some(d) => Opened {
+            plaintext: Some(d.plaintext),
+            sender: Some(String::from_utf8_lossy(&d.sender).into_owned()),
+            epoch: Some(d.epoch),
+            state,
+        },
+        None => Opened {
+            plaintext: None,
+            sender: None,
+            epoch: None,
+            state,
+        },
+    }
 }
 
 /// Decrypts one message for a NOTIFICATION PREVIEW, and touches nothing else.
@@ -315,6 +348,15 @@ pub fn mls_decrypt(group_id: Vec<u8>, ciphertext: Vec<u8>) -> Result<Opened> {
 pub struct MlsPreviewOutcome {
     /// The message text, when it could be read.
     pub plaintext: Option<Vec<u8>>,
+    /// The credential identity of the leaf that SIGNED the message, when it could be read.
+    ///
+    /// A notification is titled with a name, and the only other source for that name is the push
+    /// payload — which the untrusted server writes. Titling a lock-screen banner from it means the
+    /// server (or anyone who can inject a push) chooses whose name a message appears under, in the
+    /// one place nobody looks twice.
+    pub sender: Option<String>,
+    /// The epoch the message was framed in — which membership `sender` was authenticated against.
+    pub epoch: Option<u64>,
     /// How many of the offered groups this device actually holds.
     pub groups_held: u32,
     /// How many were offered.
@@ -335,9 +377,11 @@ pub fn mls_decrypt_preview(
             continue;
         }
         held += 1;
-        if let Ok(Some(plaintext)) = client.decrypt(group_id, &ciphertext) {
+        if let Ok(Some(opened)) = client.decrypt(group_id, &ciphertext) {
             return Ok(MlsPreviewOutcome {
-                plaintext: Some(plaintext),
+                plaintext: Some(opened.plaintext),
+                sender: Some(String::from_utf8_lossy(&opened.sender).into_owned()),
+                epoch: Some(opened.epoch),
                 groups_held: held,
                 groups_offered: group_ids.len() as u32,
             });
@@ -345,8 +389,111 @@ pub fn mls_decrypt_preview(
     }
     Ok(MlsPreviewOutcome {
         plaintext: None,
+        sender: None,
+        epoch: None,
         groups_held: held,
         groups_offered: group_ids.len() as u32,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Signed history handoff.
+//
+// The canonical transcript lives in `pheme_mls::history`, so the phone and the browser sign and
+// verify byte-identical bytes without either of them owning an encoder. Everything crossing this
+// boundary is a typed field. Pure reads: signing uses the leaf key already in memory and touches
+// neither the ratchet nor the stored state.
+// ---------------------------------------------------------------------------
+
+/// Signs this device's request for a conversation's pre-join history.
+pub fn mls_sign_history_request(
+    group_id: Vec<u8>,
+    conversation_id: String,
+    epoch: u64,
+    nonce: Vec<u8>,
+) -> Result<Vec<u8>> {
+    read(|c| c.sign_history_request(&group_id, &conversation_id, epoch, &nonce))
+}
+
+/// Verifies a request against the claimed requester's leaf key in the group's ratchet tree.
+/// Errors when the identity holds no leaf, or the signature is not theirs.
+pub fn mls_verify_history_request(
+    group_id: Vec<u8>,
+    conversation_id: String,
+    epoch: u64,
+    requester: String,
+    nonce: Vec<u8>,
+    signature: Vec<u8>,
+) -> Result<()> {
+    read(|c| {
+        c.verify_history_request(
+            &group_id,
+            &conversation_id,
+            epoch,
+            &requester,
+            &nonce,
+            &signature,
+        )
+    })
+}
+
+/// Signs an offer of a sealed transcript. The digest of `ciphertext` goes into the signature, so
+/// the server — which stores the blob — cannot swap its bytes behind an otherwise valid offer.
+#[allow(clippy::too_many_arguments)]
+pub fn mls_sign_history_offer(
+    group_id: Vec<u8>,
+    conversation_id: String,
+    epoch: u64,
+    requester: String,
+    history_id: String,
+    salt: Vec<u8>,
+    nonce: Vec<u8>,
+    request_nonce: Vec<u8>,
+    ciphertext: Vec<u8>,
+) -> Result<Vec<u8>> {
+    read(|c| {
+        c.sign_history_offer(
+            &group_id,
+            &conversation_id,
+            epoch,
+            &requester,
+            &history_id,
+            &salt,
+            &nonce,
+            &request_nonce,
+            &ciphertext,
+        )
+    })
+}
+
+/// Verifies an offer against the claimed offerer's leaf key and the blob's own bytes. The requester
+/// bound into the transcript is THIS device, so an offer addressed elsewhere never verifies here.
+#[allow(clippy::too_many_arguments)]
+pub fn mls_verify_history_offer(
+    group_id: Vec<u8>,
+    conversation_id: String,
+    epoch: u64,
+    offerer: String,
+    history_id: String,
+    salt: Vec<u8>,
+    nonce: Vec<u8>,
+    request_nonce: Vec<u8>,
+    ciphertext: Vec<u8>,
+    signature: Vec<u8>,
+) -> Result<()> {
+    read(|c| {
+        c.verify_history_offer(
+            &group_id,
+            &conversation_id,
+            epoch,
+            &offerer,
+            &history_id,
+            &salt,
+            &nonce,
+            &request_nonce,
+            &ciphertext,
+            &signature,
+        )
     })
 }
 
@@ -451,6 +598,13 @@ mod tests {
         mls_join_from_welcome(staged.welcome).unwrap();
         let opened = mls_decrypt(gid.clone(), ciphertext.clone()).unwrap();
         assert_eq!(opened.plaintext.unwrap(), b"hello");
+        // And it says WHO said it, from the credential MLS authenticated — not from anything the
+        // server put on the envelope.
+        assert_eq!(
+            opened.sender.as_deref(),
+            Some("mimi://test.example/d/alice/phone")
+        );
+        assert_eq!(opened.epoch, Some(1));
 
         // Bob cannot read it a second time. A message decrypts exactly once, which is why the Dart
         // side must cache the plaintext on first sight.
@@ -460,6 +614,127 @@ mod tests {
         // body straight into the cache instead of round-tripping it through the group.
         mls_load(alice_state).unwrap();
         assert!(mls_decrypt(gid, ciphertext).is_err());
+    }
+
+    /// A history request is signed by the requesting leaf and verified against the leaf key the
+    /// group's own ratchet tree holds — so a member cannot ask on another member's behalf.
+    #[test]
+    fn a_history_request_verifies_only_under_its_real_signer() {
+        let _guard = TEST.lock();
+
+        fresh("bob", "laptop");
+        let bob_kp = mls_key_package().unwrap();
+        let (bob_state, bob_key_package) = (bob_kp.state, bob_kp.bytes);
+
+        fresh("carol", "phone");
+        let carol_kp = mls_key_package().unwrap();
+        let (carol_state, carol_key_package) = (carol_kp.state, carol_kp.bytes);
+
+        fresh("alice", "phone");
+        let gid = b"group-hist".to_vec();
+        mls_create_group(gid.clone()).unwrap();
+        let staged = mls_stage_add(gid.clone(), vec![bob_key_package, carol_key_package]).unwrap();
+        // AFTER the accept, not from `staged`: the state a stage hands back still has the Commit
+        // pending, so a client reloaded from it holds a group Bob and Carol are not in yet — and
+        // every verification against their leaf keys would fail for a reason that is not the one
+        // under test.
+        let alice_state = mls_commit_accepted(gid.clone()).unwrap().state;
+
+        mls_load(bob_state).unwrap();
+        mls_join_from_welcome(staged.welcome.clone()).unwrap();
+        let nonce = b"nonce-0123456789".to_vec();
+        let bobs =
+            mls_sign_history_request(gid.clone(), "conv-1".into(), 1, nonce.clone()).unwrap();
+
+        mls_load(carol_state).unwrap();
+        mls_join_from_welcome(staged.welcome).unwrap();
+        let carols =
+            mls_sign_history_request(gid.clone(), "conv-1".into(), 1, nonce.clone()).unwrap();
+
+        mls_load(alice_state).unwrap();
+        let bob_id = "mimi://test.example/d/bob/laptop".to_string();
+        mls_verify_history_request(
+            gid.clone(),
+            "conv-1".into(),
+            1,
+            bob_id.clone(),
+            nonce.clone(),
+            bobs,
+        )
+        .expect("Bob's own signature must verify");
+
+        assert!(
+            mls_verify_history_request(gid.clone(), "conv-1".into(), 1, bob_id, nonce, carols)
+                .is_err(),
+            "Carol signing a request that claims to be Bob's must be refused",
+        );
+    }
+
+    /// An offer commits to the bytes of the sealed blob, not just to the id pointing at it — so
+    /// the server cannot swap the history behind a valid signature.
+    #[test]
+    fn a_history_offer_is_refused_when_the_blob_changes() {
+        let _guard = TEST.lock();
+
+        fresh("bob", "laptop");
+        let bob_kp = mls_key_package().unwrap();
+        let (bob_state, bob_key_package) = (bob_kp.state, bob_kp.bytes);
+
+        fresh("alice", "phone");
+        let gid = b"group-hist-2".to_vec();
+        mls_create_group(gid.clone()).unwrap();
+        let staged = mls_stage_add(gid.clone(), vec![bob_key_package]).unwrap();
+        mls_commit_accepted(gid.clone()).unwrap();
+
+        let bob_id = "mimi://test.example/d/bob/laptop".to_string();
+        let alice_id = "mimi://test.example/d/alice/phone".to_string();
+        let sealed = b"sealed-history".to_vec();
+        let req_nonce = b"nonce-0123456789".to_vec();
+        let sig = mls_sign_history_offer(
+            gid.clone(),
+            "conv-1".into(),
+            1,
+            bob_id,
+            "hist-1".into(),
+            b"salt".to_vec(),
+            b"nonce".to_vec(),
+            req_nonce.clone(),
+            sealed.clone(),
+        )
+        .unwrap();
+
+        mls_load(bob_state).unwrap();
+        mls_join_from_welcome(staged.welcome).unwrap();
+        mls_verify_history_offer(
+            gid.clone(),
+            "conv-1".into(),
+            1,
+            alice_id.clone(),
+            "hist-1".into(),
+            b"salt".to_vec(),
+            b"nonce".to_vec(),
+            req_nonce.clone(),
+            sealed,
+            sig.clone(),
+        )
+        .expect("the offer Alice signed, opened by the device it names");
+
+        assert!(
+            mls_verify_history_offer(
+                gid,
+                "conv-1".into(),
+                1,
+                alice_id,
+                "hist-1".into(),
+                b"salt".to_vec(),
+                b"nonce".to_vec(),
+                req_nonce,
+                b"tampered-history".to_vec(),
+                sig,
+            )
+            .is_err(),
+            "a blob swapped behind the offer must break the signature",
+        );
     }
 
     #[test]
@@ -474,7 +749,10 @@ mod tests {
 
         mls_load(state).unwrap();
         assert!(mls_has_group(gid).unwrap());
-        assert_eq!(mls_identity().unwrap(), "mimi://test.example/d/carol/laptop");
+        assert_eq!(
+            mls_identity().unwrap(),
+            "mimi://test.example/d/carol/laptop"
+        );
     }
 
     #[test]

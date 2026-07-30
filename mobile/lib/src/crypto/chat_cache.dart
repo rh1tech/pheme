@@ -25,6 +25,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../rust/api/vault.dart';
+import 'attribution.dart';
 import 'chat_content.dart';
 
 class ChatCache {
@@ -56,6 +57,11 @@ class ChatCache {
   /// The newest body per conversation, for the conversation-list preview. The list cannot decrypt
   /// anything — it only ever sees ciphertext — so a preview can only come from here.
   final _previews = <String, String>{};
+
+  /// The AUTHENTICATED sender (bare user id) of the message each preview came from, and the id of
+  /// that message. Both empty for a preview restored from disk, where only the body was stored.
+  final _previewSenders = <String, String>{};
+  final _previewIds = <String, String>{};
 
   Future<Directory> _dir() async {
     final support = await getApplicationSupportDirectory();
@@ -113,30 +119,48 @@ class ChatCache {
     return bodies;
   }
 
-  /// Records a message's content on first sight. Also becomes the conversation's preview.
+  /// Records a message's content on first sight, together with the sender MLS authenticated. Also
+  /// becomes the conversation's preview.
+  ///
+  /// [attribution] is required and has no default, on purpose: every call site has an answer (the
+  /// decrypt's, or "we wrote it"), and a default would let a new one quietly store a message with
+  /// no author at all — which is indistinguishable, later, from a legacy entry.
   Future<void> cacheContent(
     String conversationId,
     String messageId,
     ChatContent content,
+    Attribution attribution,
   ) async {
     // The UNPADDED form. Padding exists to hide a message's length from anything
     // watching the wire; nothing here reaches the wire, and padding the cache would
     // cost up to a bucket per message in secure storage for no privacy at all.
-    final serialised = contentJson(content);
+    final serialised = encodeCacheEntry(content, attribution);
 
     final contents = await load(conversationId);
     if (contents[messageId] == serialised) return;
 
     contents[messageId] = serialised;
     _previews[conversationId] = _previewOf(serialised);
+    _previewSenders[conversationId] = attribution.isLegacy
+        ? ''
+        : attribution.userId;
+    _previewIds[conversationId] = messageId;
     await _flush(conversationId, contents);
   }
 
   /// A message's content, if this device ever managed to read it.
-  ChatContent? content(String conversationId, String messageId) {
+  ChatContent? content(String conversationId, String messageId) =>
+      entry(conversationId, messageId)?.content;
+
+  /// A message's content AND how its author was established.
+  ///
+  /// The attribution comes back with the body deliberately. Reading a cached message and then
+  /// asking the envelope who wrote it is exactly the hole this closes: the envelope is the server's
+  /// word, and the server is the untrusted Delivery Service. See attribution.dart.
+  CachedEntry? entry(String conversationId, String messageId) {
     final serialised = _contents[conversationId]?[messageId];
     if (serialised == null) return null;
-    return parseContent(Uint8List.fromList(utf8.encode(serialised)));
+    return decodeCacheEntry(serialised);
   }
 
   /// What a conversation-list row shows: the caption, or a note that it was a photo.
@@ -149,6 +173,19 @@ class ChatCache {
 
   /// The newest body seen for a conversation — the list preview.
   String? preview(String conversationId) => _previews[conversationId];
+
+  /// The AUTHENTICATED sender of the message the preview came from, or '' when unknown.
+  ///
+  /// The conversation list has the same attribution problem the chat does — "is the newest message
+  /// mine?" decides whether the row counts as unread — and it cannot decrypt anything to find out.
+  /// It can only read what the open conversation wrote here.
+  String previewSender(String conversationId) =>
+      _previewSenders[conversationId] ?? '';
+
+  /// The message the preview belongs to, so a stale preview cannot be read as an answer about a
+  /// newer message.
+  String previewMessageId(String conversationId) =>
+      _previewIds[conversationId] ?? '';
 
   Future<void> _flush(String conversationId, Map<String, String> bodies) async {
     final key = await _dataKey();
@@ -189,14 +226,31 @@ class ChatCache {
   /// Imports transcripts from a backup or a history offer — a device adopting bodies it holds none
   /// of. Merged UNDER what this device already has: anything decrypted here was read more recently
   /// than the snapshot was taken, so on a collision the local copy wins and is never overwritten.
-  Future<void> importContents(Map<String, Map<String, String>> all) async {
+  ///
+  /// [offerer] is the device that handed these over, and it is what tells the two cases apart. A
+  /// HISTORY HANDOFF comes from another device of this account, so every entry is marked as
+  /// relayed: that device signed the transfer, but the author inside each message is still its
+  /// claim, not something this device authenticated. A KEY BACKUP passes no offerer,
+  /// because it is this account's own earlier transcript — the attributions in it were made by a
+  /// device of ours, from decrypts it performed itself, and re-labelling them as relayed would be
+  /// false.
+  Future<void> importContents(
+    Map<String, Map<String, String>> all, {
+    String offerer = '',
+  }) async {
     for (final entry in all.entries) {
       final conversationId = entry.key;
       final contents = await load(conversationId);
       var changed = false;
       entry.value.forEach((id, serialised) {
         if (!contents.containsKey(id)) {
-          contents[id] = serialised;
+          // Stamped with WHO handed it over. An offerer signed the transfer with its leaf key, so
+          // the claim is attributable to our other device — but it is that device's word about who
+          // wrote each message, not something this device authenticated, and the two must never
+          // become indistinguishable in the cache.
+          contents[id] = offerer.isEmpty
+              ? serialised
+              : markRelayed(serialised, offerer);
           changed = true;
         }
       });
@@ -211,6 +265,8 @@ class ChatCache {
   Future<void> forget(String conversationId) async {
     _contents.remove(conversationId);
     _previews.remove(conversationId);
+    _previewSenders.remove(conversationId);
+    _previewIds.remove(conversationId);
     final file = await _file(conversationId);
     if (await file.exists()) await file.delete();
   }
@@ -220,6 +276,8 @@ class ChatCache {
   Future<void> wipe() async {
     _contents.clear();
     _previews.clear();
+    _previewSenders.clear();
+    _previewIds.clear();
     final dir = await _dir();
     if (await dir.exists()) await dir.delete(recursive: true);
   }

@@ -137,6 +137,91 @@ let wasm_bindgen = (function(exports) {
     if (Symbol.dispose) BackupBlob.prototype[Symbol.dispose] = BackupBlob.prototype.free;
     exports.BackupBlob = BackupBlob;
 
+    /**
+     * A decrypted application message with the sender **MLS authenticated**.
+     *
+     * `sender` is the credential identity of the leaf that signed the message —
+     * `mimi://<domain>/d/<user>/<device>` — verified against the group's own ratchet tree during
+     * decryption. It is the only trustworthy answer to "who wrote this": the `senderId` on the message
+     * envelope is written by the server, which relays these bytes and can put any name it likes there.
+     *
+     * `epoch` is the epoch the message was framed in, so a caller can say which membership the sender
+     * was authenticated against.
+     */
+    class DecryptedMessage {
+        static __wrap(ptr) {
+            const obj = Object.create(DecryptedMessage.prototype);
+            obj.__wbg_ptr = ptr;
+            DecryptedMessageFinalization.register(obj, obj.__wbg_ptr, obj);
+            return obj;
+        }
+        __destroy_into_raw() {
+            const ptr = this.__wbg_ptr;
+            this.__wbg_ptr = 0;
+            DecryptedMessageFinalization.unregister(this);
+            return ptr;
+        }
+        free() {
+            const ptr = this.__destroy_into_raw();
+            wasm.__wbg_decryptedmessage_free(ptr, 0);
+        }
+        /**
+         * @returns {bigint}
+         */
+        get epoch() {
+            const ret = wasm.__wbg_get_decryptedmessage_epoch(this.__wbg_ptr);
+            return BigInt.asUintN(64, ret);
+        }
+        /**
+         * @returns {Uint8Array}
+         */
+        get plaintext() {
+            const ret = wasm.__wbg_get_decryptedmessage_plaintext(this.__wbg_ptr);
+            var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+            return v1;
+        }
+        /**
+         * @returns {string}
+         */
+        get sender() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.__wbg_get_decryptedmessage_sender(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * @param {bigint} arg0
+         */
+        set epoch(arg0) {
+            wasm.__wbg_set_decryptedmessage_epoch(this.__wbg_ptr, arg0);
+        }
+        /**
+         * @param {Uint8Array} arg0
+         */
+        set plaintext(arg0) {
+            const ptr0 = passArray8ToWasm0(arg0, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.__wbg_set_decryptedmessage_plaintext(this.__wbg_ptr, ptr0, len0);
+        }
+        /**
+         * @param {string} arg0
+         */
+        set sender(arg0) {
+            const ptr0 = passStringToWasm0(arg0, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.__wbg_set_decryptedmessage_sender(this.__wbg_ptr, ptr0, len0);
+        }
+    }
+    if (Symbol.dispose) DecryptedMessage.prototype[Symbol.dispose] = DecryptedMessage.prototype.free;
+    exports.DecryptedMessage = DecryptedMessage;
+
     class MlsClient {
         static __wrap(ptr) {
             const obj = Object.create(MlsClient.prototype);
@@ -206,9 +291,13 @@ let wasm_bindgen = (function(exports) {
         }
         /**
          * Decrypts an application message; returns undefined for a control message.
+         *
+         * The result carries the sender MLS itself authenticated — see `DecryptedMessage`. The old
+         * signature returned bare bytes, which left the app with nothing to attribute a message by
+         * except the `senderId` the untrusted server wrote on the envelope.
          * @param {Uint8Array} group_id
          * @param {Uint8Array} ciphertext
-         * @returns {Uint8Array | undefined}
+         * @returns {DecryptedMessage | undefined}
          */
         decrypt(group_id, ciphertext) {
             const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
@@ -216,15 +305,10 @@ let wasm_bindgen = (function(exports) {
             const ptr1 = passArray8ToWasm0(ciphertext, wasm.__wbindgen_malloc);
             const len1 = WASM_VECTOR_LEN;
             const ret = wasm.mlsclient_decrypt(this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            if (ret[3]) {
-                throw takeFromExternrefTable0(ret[2]);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
             }
-            let v3;
-            if (ret[0] !== 0) {
-                v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-                wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-            }
-            return v3;
+            return ret[0] === 0 ? undefined : DecryptedMessage.__wrap(ret[0]);
         }
         /**
          * Discards a group so it can be rebuilt (repairing a member who could never join).
@@ -511,6 +595,68 @@ let wasm_bindgen = (function(exports) {
             }
         }
         /**
+         * Signs an offer of a sealed transcript. The digest of `ciphertext` goes into the
+         * signature, so the server cannot swap the blob behind it.
+         * @param {Uint8Array} group_id
+         * @param {string} conversation_id
+         * @param {bigint} epoch
+         * @param {string} requester
+         * @param {string} history_id
+         * @param {Uint8Array} salt
+         * @param {Uint8Array} nonce
+         * @param {Uint8Array} request_nonce
+         * @param {Uint8Array} ciphertext
+         * @returns {Uint8Array}
+         */
+        signHistoryOffer(group_id, conversation_id, epoch, requester, history_id, salt, nonce, request_nonce, ciphertext) {
+            const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(conversation_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(requester, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(history_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len3 = WASM_VECTOR_LEN;
+            const ptr4 = passArray8ToWasm0(salt, wasm.__wbindgen_malloc);
+            const len4 = WASM_VECTOR_LEN;
+            const ptr5 = passArray8ToWasm0(nonce, wasm.__wbindgen_malloc);
+            const len5 = WASM_VECTOR_LEN;
+            const ptr6 = passArray8ToWasm0(request_nonce, wasm.__wbindgen_malloc);
+            const len6 = WASM_VECTOR_LEN;
+            const ptr7 = passArray8ToWasm0(ciphertext, wasm.__wbindgen_malloc);
+            const len7 = WASM_VECTOR_LEN;
+            const ret = wasm.mlsclient_signHistoryOffer(this.__wbg_ptr, ptr0, len0, ptr1, len1, epoch, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7);
+            if (ret[3]) {
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            var v9 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+            return v9;
+        }
+        /**
+         * Signs this device's request for a conversation's pre-join history.
+         * @param {Uint8Array} group_id
+         * @param {string} conversation_id
+         * @param {bigint} epoch
+         * @param {Uint8Array} nonce
+         * @returns {Uint8Array}
+         */
+        signHistoryRequest(group_id, conversation_id, epoch, nonce) {
+            const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(conversation_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passArray8ToWasm0(nonce, wasm.__wbindgen_malloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ret = wasm.mlsclient_signHistoryRequest(this.__wbg_ptr, ptr0, len0, ptr1, len1, epoch, ptr2, len2);
+            if (ret[3]) {
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+            return v4;
+        }
+        /**
          * STAGES the addition of several devices in one Commit (all newcomers land at the
          * same epoch). `key_packages` is a JS array of Uint8Array; one Welcome covers all.
          *
@@ -574,6 +720,70 @@ let wasm_bindgen = (function(exports) {
             wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
             return v2;
         }
+        /**
+         * Verifies an offer against the claimed offerer's leaf key and the blob's own bytes. The
+         * requester is THIS client, so an offer addressed to another device never verifies here.
+         * @param {Uint8Array} group_id
+         * @param {string} conversation_id
+         * @param {bigint} epoch
+         * @param {string} offerer
+         * @param {string} history_id
+         * @param {Uint8Array} salt
+         * @param {Uint8Array} nonce
+         * @param {Uint8Array} request_nonce
+         * @param {Uint8Array} ciphertext
+         * @param {Uint8Array} signature
+         */
+        verifyHistoryOffer(group_id, conversation_id, epoch, offerer, history_id, salt, nonce, request_nonce, ciphertext, signature) {
+            const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(conversation_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(offerer, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(history_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len3 = WASM_VECTOR_LEN;
+            const ptr4 = passArray8ToWasm0(salt, wasm.__wbindgen_malloc);
+            const len4 = WASM_VECTOR_LEN;
+            const ptr5 = passArray8ToWasm0(nonce, wasm.__wbindgen_malloc);
+            const len5 = WASM_VECTOR_LEN;
+            const ptr6 = passArray8ToWasm0(request_nonce, wasm.__wbindgen_malloc);
+            const len6 = WASM_VECTOR_LEN;
+            const ptr7 = passArray8ToWasm0(ciphertext, wasm.__wbindgen_malloc);
+            const len7 = WASM_VECTOR_LEN;
+            const ptr8 = passArray8ToWasm0(signature, wasm.__wbindgen_malloc);
+            const len8 = WASM_VECTOR_LEN;
+            const ret = wasm.mlsclient_verifyHistoryOffer(this.__wbg_ptr, ptr0, len0, ptr1, len1, epoch, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8);
+            if (ret[1]) {
+                throw takeFromExternrefTable0(ret[0]);
+            }
+        }
+        /**
+         * Verifies a request against the claimed requester's leaf key in the group's ratchet tree.
+         * Throws when the identity holds no leaf, or the signature is not theirs.
+         * @param {Uint8Array} group_id
+         * @param {string} conversation_id
+         * @param {bigint} epoch
+         * @param {string} requester
+         * @param {Uint8Array} nonce
+         * @param {Uint8Array} signature
+         */
+        verifyHistoryRequest(group_id, conversation_id, epoch, requester, nonce, signature) {
+            const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(conversation_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(requester, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passArray8ToWasm0(nonce, wasm.__wbindgen_malloc);
+            const len3 = WASM_VECTOR_LEN;
+            const ptr4 = passArray8ToWasm0(signature, wasm.__wbindgen_malloc);
+            const len4 = WASM_VECTOR_LEN;
+            const ret = wasm.mlsclient_verifyHistoryRequest(this.__wbg_ptr, ptr0, len0, ptr1, len1, epoch, ptr2, len2, ptr3, len3, ptr4, len4);
+            if (ret[1]) {
+                throw takeFromExternrefTable0(ret[0]);
+            }
+        }
     }
     if (Symbol.dispose) MlsClient.prototype[Symbol.dispose] = MlsClient.prototype.free;
     exports.MlsClient = MlsClient;
@@ -612,9 +822,12 @@ let wasm_bindgen = (function(exports) {
         /**
          * Decrypts one application message for display. `undefined` means there was nothing to
          * preview — control traffic, or a message this client cannot read.
+         *
+         * The result carries the authenticated sender, so a notification can be titled by the leaf
+         * that signed the message rather than by whatever name the push payload asserts.
          * @param {Uint8Array} group_id
          * @param {Uint8Array} ciphertext
-         * @returns {Uint8Array | undefined}
+         * @returns {DecryptedMessage | undefined}
          */
         decrypt(group_id, ciphertext) {
             const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_malloc);
@@ -622,15 +835,10 @@ let wasm_bindgen = (function(exports) {
             const ptr1 = passArray8ToWasm0(ciphertext, wasm.__wbindgen_malloc);
             const len1 = WASM_VECTOR_LEN;
             const ret = wasm.mlspreviewclient_decrypt(this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            if (ret[3]) {
-                throw takeFromExternrefTable0(ret[2]);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
             }
-            let v3;
-            if (ret[0] !== 0) {
-                v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-                wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-            }
-            return v3;
+            return ret[0] === 0 ? undefined : DecryptedMessage.__wrap(ret[0]);
         }
         /**
          * Loads a read-only client from a state blob read out of IndexedDB.
@@ -863,6 +1071,9 @@ let wasm_bindgen = (function(exports) {
     const BackupBlobFinalization = (typeof FinalizationRegistry === 'undefined')
         ? { register: () => {}, unregister: () => {} }
         : new FinalizationRegistry(ptr => wasm.__wbg_backupblob_free(ptr, 1));
+    const DecryptedMessageFinalization = (typeof FinalizationRegistry === 'undefined')
+        ? { register: () => {}, unregister: () => {} }
+        : new FinalizationRegistry(ptr => wasm.__wbg_decryptedmessage_free(ptr, 1));
     const MlsClientFinalization = (typeof FinalizationRegistry === 'undefined')
         ? { register: () => {}, unregister: () => {} }
         : new FinalizationRegistry(ptr => wasm.__wbg_mlsclient_free(ptr, 1));

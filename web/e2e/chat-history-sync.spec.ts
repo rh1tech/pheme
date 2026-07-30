@@ -11,9 +11,8 @@ test.skip(({ browserName }) => browserName !== 'chromium', 'crypto round-trip: c
 test.describe.configure({ timeout: 120_000 })
 
 /**
- * DEVICE-TO-DEVICE HISTORY SYNC. A new device gets the conversation's past from an online co-member,
- * with NO backup and NO recovery code — sealed under a key derived from the group, which the server
- * cannot read.
+ * DEVICE-TO-DEVICE HISTORY SYNC. A new device gets the conversation's past from an online device of
+ * the same account, with NO backup and NO recovery code — sealed under a group-derived key.
  *
  * The whole point: logging in on a new device "just works" — you see your history — as long as some
  * device that holds it is online, without anyone typing a recovery code.
@@ -47,11 +46,11 @@ test('a new device receives pre-join history from an online co-member', async ({
     { timeout: 25_000 },
   )
 
-  // Both devices that hold the history stay online (Alice, and Bob's first device). Either can serve
-  // the newcomer; the election picks one.
+  // Bob's first device stays online and is the only eligible provider. Alice is a group member but
+  // cannot vouch for Bob's imported plaintext merely because she owns a valid leaf key.
 
   // Bob signs in on a BRAND-NEW device. It starts fresh (no recovery code entered), external-joins,
-  // and — holding none of the past — asks a co-member for it.
+  // and — holding none of the past — asks its other account device for it.
   const bobB = await signInOnNewDevice(browser, bobEmail, PASSWORD)
   await openChatAndJoin(bobB.page, conv)
 
@@ -83,10 +82,9 @@ test('a new device receives pre-join history from an online co-member', async ({
  *
  * The test above leaves Alice online, so the newcomer could be served by the OTHER user. That hid a
  * real bug for a whole release: the responder stood down on any request carrying its own user id,
- * reasoning that "a co-member of another user answers". In a 1:1 chat that leaves exactly one
- * permitted responder — the other party — and if they are offline, or simply on another host in a
- * federated conversation, NOBODY answers. The new device then held the group and none of its past
- * and showed every message, both people's, as undecryptable. Indefinitely.
+ * reasoning that "a co-member of another user answers". Apart from being unreliable, another
+ * participant cannot be trusted to supply historical plaintext: a valid leaf authenticates that
+ * participant, not the message bodies they claim.
  *
  * So: Alice is closed before the new device ever appears. The only device left holding the history
  * belongs to Bob himself. It must be the one that hands it over — that is the commonest case there

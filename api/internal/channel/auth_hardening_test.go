@@ -100,9 +100,13 @@ func TestThrottleDoesNotRevealAccountExistence(t *testing.T) {
 // then admitted. Terminating such a device did nothing.
 func TestRefreshHonoursThePerUserRevocationCutoff(t *testing.T) {
 	h, _, mux := newTestAuth()
+	u, err := h.Store.CreateUser(context.Background(), activeUser(t, "cutoff@b.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// A device with NO session id — the only kind the per-user cutoff can reach.
-	_, refresh, err := h.Tokens.IssueWithSession("user-1", "user", "")
+	_, refresh, err := h.Tokens.IssueWithSession(u.ID, "user", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +125,12 @@ func TestRefreshHonoursThePerUserRevocationCutoff(t *testing.T) {
 func TestRefreshStillWorksAfterTheCutoffPasses(t *testing.T) {
 	h, _, mux := newTestAuth()
 	h.Revoker = &cutoffRevoker{cutoff: time.Now().Add(-time.Hour)}
+	u, err := h.Store.CreateUser(context.Background(), activeUser(t, "live-cutoff@b.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, refresh, err := h.Tokens.IssueWithSession("user-1", "user", "sid-1")
+	_, refresh, err := h.Tokens.IssueWithSession(u.ID, "user", "sid-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +145,14 @@ type cutoffRevoker struct{ cutoff time.Time }
 func (c *cutoffRevoker) IsRevoked(string) bool { return false }
 func (c *cutoffRevoker) IsUserRevoked(_ string, issuedAt time.Time) bool {
 	return issuedAt.Before(c.cutoff)
+}
+func (c *cutoffRevoker) RevokeUserBefore(
+	context.Context,
+	string,
+	time.Time,
+	time.Time,
+) error {
+	return nil
 }
 
 // --- helpers ---

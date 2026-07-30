@@ -130,11 +130,20 @@ final lastSeenProvider =
 /// A message from us is never unread, and control traffic is not a message at all — the user has
 /// nothing to read, so it must not light up a dot.
 final unreadProvider = Provider.family<bool, Conversation>((ref, conversation) {
+  final cache = ref.watch(chatCacheProvider);
+  final last = conversation.lastMessage;
+  // Pinned to the message id: a preview left over from an OLDER message says nothing about who
+  // wrote this one, and reading it as if it did would be the same misattribution in miniature.
+  final authenticated =
+      last != null && cache.previewMessageId(conversation.id) == last.id
+      ? cache.previewSender(conversation.id)
+      : '';
   return isConversationUnread(
-    last: conversation.lastMessage,
+    last: last,
     myUserId: ref.watch(myUserIdProvider),
     seenAt: ref.watch(lastSeenProvider).value?[conversation.id],
     baseline: ref.watch(readBaselineProvider).value,
+    authenticatedSender: authenticated,
   );
 });
 
@@ -168,6 +177,7 @@ bool isConversationUnread({
   required String myUserId,
   required String? seenAt,
   String? baseline,
+  String authenticatedSender = '',
 }) {
   if (last == null) return false;
   // Protocol traffic is not a message; nobody wrote it and there is nothing to read.
@@ -175,7 +185,15 @@ bool isConversationUnread({
   // Neither is a line the conversation says about itself — somebody joining or leaving is worth
   // seeing when you next look, and is not a message waiting for you.
   if (ContentType.system.contains(last.contentType)) return false;
-  if (last.senderId == myUserId) return false;
+  // Answered from the AUTHENTICATED sender where this device has one — the chat list cannot decrypt
+  // anything (the message key is spent on first read), so its only source is what the open
+  // conversation recorded in the body cache. The envelope's senderId is the fallback and only the
+  // fallback: it is written by the server, which would otherwise get to decide whether a chat looks
+  // unread.
+  final sender = authenticatedSender.isNotEmpty
+      ? authenticatedSender
+      : last.senderId;
+  if (sender == myUserId) return false;
 
   // Nothing recorded for this conversation. On a device that has been here a while that means
   // genuinely unseen; on a fresh install it means only that this phone was not present for it — so

@@ -37,7 +37,9 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
+import 'package:pheme_mobile/src/crypto/history_handoff.dart';
 import 'package:pheme_mobile/src/crypto/mls_errors.dart';
+import 'package:pheme_mobile/src/models/chat_models.dart';
 import 'package:pheme_mobile/src/rust/frb_generated.dart';
 
 import 'harness.dart';
@@ -341,12 +343,15 @@ void main() {
         page.messages.firstWhere((m) => m.id == sent.id),
       );
 
-      expect(content?.body, 'look at this');
-      expect(content?.photos, hasLength(1));
+      expect(content?.content.body, 'look at this');
+      expect(content?.content.photos, hasLength(1));
+      // And it says WHO wrote it, from the credential MLS authenticated — never from the senderId
+      // the server put on the envelope.
+      expect(content?.attribution.userId, alice.userId);
 
       final opened = await bob.mls.fetchPhoto(
         conversation.id,
-        content!.photos.first,
+        content!.content.photos.first,
       );
       expect(
         opened,
@@ -387,9 +392,9 @@ void main() {
         page.messages.firstWhere((m) => m.id == reply.id),
       );
 
-      expect(content?.body, 'six works');
+      expect(content?.content.body, 'six works');
       expect(
-        content?.replyTo,
+        content?.content.replyTo,
         original.id,
         reason:
             'a reply must point at a message id — a quote the sender supplied could say anything',
@@ -495,11 +500,11 @@ void main() {
   });
 
   group('history sync', () {
-    // A new device joins a conversation and gets its PRE-JOIN history from a co-member who is
-    // online — device to device, sealed under a group-derived key the server never has. This is
+    // A new device joins a conversation and gets its PRE-JOIN history from another device of its
+    // account — device to device, sealed under a group-derived key the server never has. This is
     // the request -> offer -> import handshake, driven here through the service directly (the app
     // wires the same calls to the live stream's responder election).
-    testWidgets('hands a fresh device its pre-join history from a co-member', (
+    testWidgets('hands a fresh device its pre-join history from its other device', (
       _,
     ) async {
       final bobEmail = email('bob');
@@ -532,11 +537,19 @@ void main() {
       // key it derives matches), then answers as the elected responder.
       await bobLaptop.mls.requestHistory(conversation.id, bobLaptop.userId);
       await bobPhone.read(conversation.id); // catch up to the laptop's leaf
-      final laptopIdentity = await bobLaptop.mls.myIdentity(bobLaptop.userId);
+      // The phone answers the SIGNED request the laptop actually posted, read off the wire the way
+      // the election does. Nothing here reconstructs it: an offer made against a request the phone
+      // has not verified is exactly what the signature exists to prevent.
+      final requests = await bobPhone.repo.listChatMessages(conversation.id);
+      final requestMessage = requests.messages.firstWhere(
+        (m) => m.contentType == ContentType.mlsHistoryRequest,
+      );
+      final request = parseRequestBody(requestMessage.ciphertext)!;
       await bobPhone.mls.offerHistory(
         conversation.id,
         bobPhone.userId,
-        laptopIdentity,
+        request,
+        posterId: requestMessage.senderId,
       );
 
       // The laptop collects the answer it asked for.

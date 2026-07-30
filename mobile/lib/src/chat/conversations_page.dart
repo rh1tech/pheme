@@ -316,11 +316,15 @@ class _ConversationRow extends ConsumerWidget {
   /// The list holds only ciphertext and cannot decrypt a thing, so a preview can only come from the
   /// local plaintext store. When it is not there — a message that arrived while the app was closed,
   /// or one from before this device joined — we say that rather than show nothing.
+  /// [authenticatedSender] is the AUTHENTICATED sender of the message the cached preview came from,
+  /// or '' when this device has none for it. Only the call-event label depends on who wrote the
+  /// message, and it must not take that from the envelope: the server writes it.
   String _preview(
     String? cached,
     LastChatMessage? last,
     AppLocalizations l10n,
     String myUserId,
+    String authenticatedSender,
   ) {
     if (last == null) return '';
     // Control traffic is not something a person said. It has no preview.
@@ -332,11 +336,10 @@ class _ConversationRow extends ConsumerWidget {
     if (last.contentType == ContentType.callEvent) {
       final outcome = CallOutcome.parse(cached);
       if (outcome == null) return l10n.t('call.statusEnded');
-      return callEventLabel(
-        outcome,
-        isOwn: last.senderId == myUserId,
-        l10n: l10n,
-      );
+      final sender = authenticatedSender.isNotEmpty
+          ? authenticatedSender
+          : last.senderId;
+      return callEventLabel(outcome, isOwn: sender == myUserId, l10n: l10n);
     }
     // A photo with no caption. The cache writes a marker rather than an empty string, because an empty
     // row reads as a bug rather than as a picture.
@@ -353,11 +356,19 @@ class _ConversationRow extends ConsumerWidget {
 
     final title = conversationTitle(conversation, myUserId, l10n);
     final last = conversation.lastMessage;
+    final cache = ref.watch(chatCacheProvider);
+    // Pinned to the message id: a preview left over from an older message says nothing about who
+    // wrote this one.
+    final previewSender =
+        last != null && cache.previewMessageId(conversation.id) == last.id
+        ? cache.previewSender(conversation.id)
+        : '';
     final preview = _preview(
-      ref.watch(chatCacheProvider).preview(conversation.id),
+      cache.preview(conversation.id),
       last,
       l10n,
       myUserId,
+      previewSender,
     );
     final unread = ref.watch(unreadProvider(conversation));
 

@@ -8,7 +8,7 @@ import { MLS_APPLICATION, MLS_CONTROL_TYPES, base64ToBytes } from '../lib/mls'
 import { loadLastSeen, markSeen } from '../lib/lastSeen'
 import { useAuth } from '../auth/context'
 import { useEventStream, useStreamReconnect } from './useEventStream'
-import type { ChatMessage, Conversation } from '../lib/types'
+import type { ChatMessage, Conversation, LastChatMessage } from '../lib/types'
 
 /** A conversation as the chat list renders it, next to channel rows. */
 export interface ChatConversation {
@@ -33,7 +33,7 @@ export interface ConversationListApi {
 // with an unread message you have not opened shows a generic placeholder until you
 // do — the plaintext genuinely is not available anywhere yet.
 function previewOf(conv: Conversation, encryptedLabel: string): string {
-  const cached = getPreview(conv.id)
+  const cached = getPreview(conv.id).body
   if (cached) return cached
   const msg = conv.lastMessage
   if (!msg) return ''
@@ -43,6 +43,31 @@ function previewOf(conv: Conversation, encryptedLabel: string): string {
   if (MLS_CONTROL_TYPES.has(msg.contentType)) return ''
   // Legacy plaintext content (pre-encryption) still decodes directly.
   return deserializeContent(base64ToBytes(msg.ciphertext))?.body ?? ''
+}
+
+/**
+ * Whether a conversation's newest message is ours — the question that decides whether the row
+ * counts as unread.
+ *
+ * Answered from the AUTHENTICATED sender wherever this device has one. The chat list cannot
+ * decrypt anything (the message key is spent on first read), so its only source is what the open
+ * conversation wrote into the preview cache — which now records the MLS credential the decrypt
+ * authenticated, pinned to the message it belongs to.
+ *
+ * The envelope's `senderId` is the fallback, and only the fallback. It is written by the server,
+ * which can therefore decide whether a chat looks unread — noise rather than a breach, but it is
+ * the same misplaced trust, and the fix costs one lookup.
+ */
+function isOwnLastMessage(
+  conversationId: string,
+  last: LastChatMessage,
+  userId: string | null,
+): boolean {
+  if (!userId) return false
+  const cached = getPreview(conversationId)
+  // Pinned to the message id: a preview left over from an older message says nothing about this one.
+  if (cached.id === last.id && cached.senderUserId) return cached.senderUserId === userId
+  return last.senderId === userId
 }
 
 /** Merges a live chat message into its conversation's lastMessage. */
@@ -194,7 +219,7 @@ export function useConversationList(): ConversationListApi {
         // cleared: opening the chat marks read up to the newest real message, which is older
         // than the announcement that lit it.
         const last = c.lastMessage
-        const fromOther = last ? last.senderId !== userId : false
+        const fromOther = last ? !isOwnLastMessage(c.id, last, userId) : false
         const readable = last ? !MLS_CONTROL_TYPES.has(last.contentType) : false
         const unread = fromOther && readable && lastActivity > (seen[c.id] ?? '')
         return {

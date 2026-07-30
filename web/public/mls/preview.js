@@ -25,8 +25,8 @@
 
 // Version-queried for the same reason sw.js versions this file: a cached copy of either would
 // otherwise outlive the worker that needs the new one. Bump when the crypto is rebuilt.
-const WASM_GLUE = '/mls/pheme_mls_nomodules.js?v=4'
-const WASM_BINARY = '/mls/pheme_mls_bg.wasm?v=4'
+const WASM_GLUE = '/mls/pheme_mls_nomodules.js?v=5'
+const WASM_BINARY = '/mls/pheme_mls_bg.wasm?v=5'
 
 const DB_NAME = 'pheme'
 const DB_STORE = 'mls'
@@ -131,17 +131,32 @@ function bodyOf(bytes) {
   }
 }
 
+// The bare user id inside an MLS credential (`mimi://<domain>/d/<user>/<device>`), or '' if it is
+// not that form. Mirrors userOf in web/src/lib/roster.ts — the worker is a classic script and
+// cannot import it.
+function userOf(identity) {
+  if (typeof identity !== 'string' || !identity.startsWith('mimi://')) return ''
+  const parts = identity.slice('mimi://'.length).split('/')
+  if (parts.length !== 4 || parts[1] !== 'd') return ''
+  return parts[2]
+}
+
 /**
- * Decrypts a push's ciphertext for display, or returns null.
+ * Decrypts a push's ciphertext for display.
  *
- * Null is an ordinary outcome, not an error: no key material in this browser, a message for a group
- * this device cannot read, control traffic, a state blob written by a newer build. Every one of
- * those falls back to the server's generic body, which is why nothing here throws.
+ * Returns `{ body, senderUserId }` when a message was read, or null. Null is an ordinary outcome,
+ * not an error: no key material in this browser, a message for a group this device cannot read,
+ * control traffic, a state blob written by a newer build. Every one of those falls back to the
+ * server's generic body, which is why nothing here throws.
+ *
+ * `senderUserId` is the user half of the credential MLS AUTHENTICATED as the signer. The worker
+ * hands it back so the notification can be checked against the `senderId` the push claims — the
+ * push is composed by the server, and a lock screen is exactly where nobody looks twice at a name.
  *
  * @param {string} conversationId
  * @param {string} ciphertextBase64
  * @param {string} [groupIdsCsv] groups named by the push, tried before the locally learned map
- * @returns {Promise<string|null>} the message text, or null if it could not be read
+ * @returns {Promise<{body: string, senderUserId: string}|null>}
  */
 async function decryptPreview(conversationId, ciphertextBase64, groupIdsCsv) {
   try {
@@ -172,15 +187,17 @@ async function decryptPreview(conversationId, ciphertextBase64, groupIdsCsv) {
       for (const groupId of groups) {
         const gid = encoder.encode(groupId)
         if (!client.hasGroup(gid)) continue
-        let plaintext
+        let opened
         try {
-          plaintext = client.decrypt(gid, ciphertext)
+          opened = client.decrypt(gid, ciphertext)
         } catch {
           continue // wrong group of the candidates, or undecryptable here; try the next
         }
-        if (!plaintext) continue // control traffic: nothing to preview
-        const body = bodyOf(plaintext)
-        if (body) return body
+        if (!opened) continue // control traffic: nothing to preview
+        const body = bodyOf(opened.plaintext)
+        const senderUserId = userOf(opened.sender)
+        opened.free()
+        if (body) return { body, senderUserId }
       }
       return null
     } finally {

@@ -283,3 +283,62 @@ func TestRefreshRefusesARevokedSession(t *testing.T) {
 		t.Errorf("a revoked session refreshed successfully: %d", rec.Code)
 	}
 }
+
+func TestRefreshRefusesABlockedUser(t *testing.T) {
+	h, mux, u := seedLogin(t, "blocked-refresh@pheme.test", "Correct12345")
+	rec := post(mux, "/v1/auth/login", map[string]any{
+		"email": u.Email, "password": "Correct12345",
+	})
+	_, refresh := decodeTokens(t, rec.Body.Bytes())
+	if err := h.Store.UpdateUserStatus(context.Background(), u.ID, domain.UserBlocked); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+
+	rec = post(mux, "/v1/auth/refresh", map[string]any{"refreshToken": refresh})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("blocked refresh = %d, want 403; body=%s", rec.Code, rec.Body)
+	}
+}
+
+func TestRefreshRefusesADeletedUser(t *testing.T) {
+	h, mux, u := seedLogin(t, "deleted-refresh@pheme.test", "Correct12345")
+	rec := post(mux, "/v1/auth/login", map[string]any{
+		"email": u.Email, "password": "Correct12345",
+	})
+	_, refresh := decodeTokens(t, rec.Body.Bytes())
+	if err := h.Store.DeleteUser(context.Background(), u.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	rec = post(mux, "/v1/auth/refresh", map[string]any{"refreshToken": refresh})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("deleted-user refresh = %d, want 401; body=%s", rec.Code, rec.Body)
+	}
+}
+
+func TestRefreshDropsAStaleAdminRole(t *testing.T) {
+	h, mux, u := seedLogin(t, "demoted-refresh@pheme.test", "Correct12345")
+	if err := h.Store.UpdateUserRole(context.Background(), u.ID, domain.RoleAdmin); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	rec := post(mux, "/v1/auth/login", map[string]any{
+		"email": u.Email, "password": "Correct12345",
+	})
+	_, refresh := decodeTokens(t, rec.Body.Bytes())
+	if err := h.Store.UpdateUserRole(context.Background(), u.ID, domain.RoleUser); err != nil {
+		t.Fatalf("demote: %v", err)
+	}
+
+	rec = post(mux, "/v1/auth/refresh", map[string]any{"refreshToken": refresh})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	access, _ := decodeTokens(t, rec.Body.Bytes())
+	claims, err := h.Tokens.ParseClaims(access, auth.AccessToken)
+	if err != nil {
+		t.Fatalf("parse refreshed token: %v", err)
+	}
+	if claims.Role != string(domain.RoleUser) {
+		t.Fatalf("refreshed role = %q, want user", claims.Role)
+	}
+}

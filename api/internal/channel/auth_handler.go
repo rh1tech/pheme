@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -35,11 +36,10 @@ type AuthHandler struct {
 	AdminEmails map[string]bool
 	Logger      *slog.Logger
 
-	// Revoker rejects a refresh whose session has been terminated. The /v1/auth/* routes
-	// are public — outside the JWT middleware that guards everything else — so a revoked
-	// session would otherwise mint fresh tokens here forever. Optional: without one, no
-	// session is revoked (the prior behaviour, and what the auth tests exercise).
+	// Revoker protects the public refresh and password-reset routes, which sit
+	// outside the JWT middleware. It is required in every serving configuration.
 	Revoker interface {
+		userSessionRevoker
 		IsRevoked(sessionID string) bool
 		// IsUserRevoked covers the device IsRevoked cannot reach: one whose session id
 		// was never recorded has none to match, so only the per-user cutoff can end it.
@@ -147,6 +147,20 @@ func (h *AuthHandler) roleForEmail(email string) domain.Role {
 		return domain.RoleAdmin
 	}
 	return domain.RoleUser
+}
+
+func (h *AuthHandler) currentRole(ctx context.Context, u domain.User) (domain.Role, error) {
+	role := u.Role
+	if role == "" {
+		role = domain.RoleUser
+	}
+	if h.roleForEmail(u.Email) == domain.RoleAdmin && role != domain.RoleAdmin {
+		role = domain.RoleAdmin
+		if err := h.Store.UpdateUserRole(ctx, u.ID, role); err != nil {
+			return "", err
+		}
+	}
+	return role, nil
 }
 
 type credentials struct {
@@ -334,19 +348,10 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "account is blocked")
 		return
 	}
-	// Determine the effective role. Stored role is authoritative (so admins can
-	// manually promote/demote users), but the PHEME_ADMIN_EMAILS allowlist always
-	// guarantees its emails are admins. We never auto-demote here.
-	role := u.Role
-	if role == "" {
-		role = domain.RoleUser
-	}
-	if h.roleForEmail(u.Email) == domain.RoleAdmin && role != domain.RoleAdmin {
-		role = domain.RoleAdmin
-		if err := h.Store.UpdateUserRole(r.Context(), u.ID, role); err != nil {
-			httpx.Error(w, http.StatusInternalServerError, "login failed")
-			return
-		}
+	role, err := h.currentRole(r.Context(), u)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "login failed")
+		return
 	}
 	h.issue(w, u.ID, string(role), http.StatusOK)
 }
@@ -379,7 +384,24 @@ func (h *AuthHandler) refresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.issueForSession(w, claims.Subject, claims.Role, claims.SID, http.StatusOK)
+	u, err := h.Store.UserByID(r.Context(), claims.Subject)
+	if errors.Is(err, store.ErrNotFound) {
+		httpx.Error(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	} else if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "refresh failed")
+		return
+	}
+	if u.Status == domain.UserBlocked {
+		httpx.Error(w, http.StatusForbidden, "account is blocked")
+		return
+	}
+	role, err := h.currentRole(r.Context(), u)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "refresh failed")
+		return
+	}
+	h.issueForSession(w, u.ID, string(role), claims.SID, http.StatusOK)
 }
 
 type forgotRequest struct {
@@ -477,8 +499,34 @@ func (h *AuthHandler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	u, err := h.Store.UserByID(r.Context(), rst.UserID)
+	if errors.Is(err, store.ErrNotFound) {
+		httpx.Error(w, http.StatusBadRequest, "no pending reset; please request a new code")
+		return
+	} else if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "password reset failed")
+		return
+	}
+	if u.Status == domain.UserBlocked {
+		httpx.Error(w, http.StatusForbidden, "account is blocked")
+		return
+	}
+
 	hash, err := auth.HashPassword(req.NewPassword)
 	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "password reset failed")
+		return
+	}
+	if err := h.Codes.DelReset(r.Context(), email); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "password reset failed")
+		return
+	}
+	// Bracket the password write with cutoffs. The first closes the race with a
+	// concurrent refresh; the second catches any token minted while the write ran.
+	if _, err := revokeUserSessions(
+		r.Context(), h.Revoker, u.ID, h.Tokens.RefreshTTL(),
+	); err != nil {
+		h.logger().Error("password reset: revoke existing sessions", "user", u.ID, "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
@@ -490,21 +538,53 @@ func (h *AuthHandler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
-	_ = h.Codes.DelReset(r.Context(), email)
-
-	role := domain.RoleUser
-	if u, err := h.Store.UserByEmail(r.Context(), email); err == nil && u.Role != "" {
-		role = u.Role
+	// Re-read after the password write. This avoids returning a stale role or a
+	// session for an account an administrator blocked while hashing ran.
+	u, err = h.Store.UserByID(r.Context(), rst.UserID)
+	if errors.Is(err, store.ErrNotFound) {
+		httpx.Error(w, http.StatusUnauthorized, "account is no longer available")
+		return
+	} else if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "password reset failed")
+		return
 	}
-	if h.roleForEmail(email) == domain.RoleAdmin {
-		role = domain.RoleAdmin
+	if u.Status == domain.UserBlocked {
+		httpx.Error(w, http.StatusForbidden, "account is blocked")
+		return
 	}
-	h.issue(w, rst.UserID, string(role), http.StatusOK)
+	role, err := h.currentRole(r.Context(), u)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "password reset failed")
+		return
+	}
+	cutoff, err := revokeUserSessions(
+		r.Context(), h.Revoker, u.ID, h.Tokens.RefreshTTL(),
+	)
+	if err != nil {
+		h.logger().Error("password reset: finalize session revocation", "user", u.ID, "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "password reset failed")
+		return
+	}
+	h.issueAt(w, rst.UserID, string(role), cutoff, http.StatusOK)
 }
 
-// issue starts a NEW session (login, register, password reset) and writes its tokens.
+// issue starts a new login or registration session and writes its tokens.
 func (h *AuthHandler) issue(w http.ResponseWriter, userID, role string, status int) {
 	access, refresh, _, err := h.Tokens.Issue(userID, role)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not issue tokens")
+		return
+	}
+	httpx.JSON(w, status, tokenResponse{AccessToken: access, RefreshToken: refresh, UserID: userID, Role: role})
+}
+
+func (h *AuthHandler) issueAt(
+	w http.ResponseWriter,
+	userID, role string,
+	issuedAt time.Time,
+	status int,
+) {
+	access, refresh, _, err := h.Tokens.IssueAt(userID, role, issuedAt)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not issue tokens")
 		return

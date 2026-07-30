@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { beforeAll, describe, expect, it } from 'vitest'
-import init, { MlsClient, MlsPreviewClient } from '../src/crypto/pkg/pheme_mls.js'
+import init, { MlsClient, MlsPreviewClient, type DecryptedMessage } from '../src/crypto/pkg/pheme_mls.js'
 
 const GROUP = 'grp-preview-test'
 const enc = new TextEncoder()
@@ -36,8 +36,8 @@ function establishPair(): { alice: MlsClient; bob: MlsClient } {
   return { alice, bob }
 }
 
-function bodyOf(bytes: Uint8Array): string {
-  return JSON.parse(new TextDecoder().decode(bytes)).body
+function bodyOf(opened: DecryptedMessage): string {
+  return JSON.parse(new TextDecoder().decode(opened.plaintext)).body
 }
 
 describe('MlsPreviewClient', () => {
@@ -51,6 +51,9 @@ describe('MlsPreviewClient', () => {
     const previewed = preview.decrypt(enc.encode(GROUP), ciphertext)
     expect(previewed).toBeTruthy()
     expect(bodyOf(previewed!)).toBe('hello there')
+    // And the preview says WHO wrote it, from the credential MLS authenticated — not from the push
+    // payload, which the untrusted server composes.
+    expect(previewed!.sender).toBe('mimi://test.example/d/alice/dev-a')
     preview.free() // the notification is shown; the worker dies
 
     // The tab opens. The message must still decrypt, for real, into the transcript.

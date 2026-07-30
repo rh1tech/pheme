@@ -32,27 +32,30 @@ try {
   // back and invalidate a response a browser has already stored — and every device that loaded the
   // app during the four-hour window has the old copy. Changing the URL is the only thing that
   // bypasses it. Bump this whenever preview.js changes in a way the worker depends on.
-  importScripts('/mls/preview.js?v=5')
+  importScripts('/mls/preview.js?v=6')
   previewLoaded = true
 } catch (e) {
   // An old deploy, a 404, a cache miss. Notifications carry on without previews.
   console.warn('pheme sw: previews unavailable', e)
 }
 
-// The message text for a push, or null to fall back to the server's generic body.
+// What a push may show, decrypted here: `{ body, senderUserId }`, or null to fall back to the
+// server's generic body.
 //
 // Every failure here is silent and ends in that fallback: no key material, a group this device
 // cannot read, a browser that cannot run the WASM. A notification that says "New message" is a
 // working notification; one that says nothing because a decrypt threw is not.
-async function previewBody(data) {
+async function previewMessage(data) {
   if (!data.ciphertext || !data.conversationId) return null
   if (!previewLoaded || typeof self.phemeDecryptPreview !== 'function') return null
   try {
-    return await self.phemeDecryptPreview(
+    const preview = await self.phemeDecryptPreview(
       data.conversationId,
       data.ciphertext,
       data.groupIds,
     )
+    if (!preview || typeof preview.body !== 'string') return null
+    return preview
   } catch {
     return null
   }
@@ -146,11 +149,33 @@ self.addEventListener('push', (event) => {
       // no notification, so decrypting for them would be work done to throw away — and it would
       // mean touching key material on every message of an open conversation rather than only on
       // the ones that actually raise a banner.
+      let shownTitle = title
       if (!isCall) {
-        const decrypted = await previewBody(data)
-        if (decrypted) options.body = decrypted
+        const preview = await previewMessage(data)
+        if (preview) {
+          // THE ONE CHECK THAT MATTERS HERE.
+          //
+          // The banner's title, icon and avatar colour all come from the push payload, which the
+          // server composes — and the server is the untrusted Delivery Service. If the identity MLS
+          // authenticated as having signed the ciphertext is not the sender the payload names, the
+          // two disagree about who is messaging you, and showing the payload's name over the real
+          // message would put the attacker's chosen name on a real person's words.
+          //
+          // So: keep the message, drop everything the payload said about WHO. A neutral banner is
+          // not a great notification; a confidently mislabelled one is a lie.
+          const claimed = typeof data.senderId === 'string' ? data.senderId : ''
+          const senderVerified =
+            preview.senderUserId !== '' && claimed !== '' && preview.senderUserId === claimed
+          if (!senderVerified) {
+            shownTitle = 'Pheme'
+            options.icon = undefined
+            options.image = undefined
+            options.data = { ...data, senderId: '', senderUnverified: true }
+          }
+          options.body = preview.body
+        }
       }
-      await self.registration.showNotification(title, options)
+      await self.registration.showNotification(shownTitle, options)
     })(),
   )
 })

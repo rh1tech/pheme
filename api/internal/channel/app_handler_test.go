@@ -20,12 +20,13 @@ import (
 // appFixture wires the AppHandler with in-memory dependencies and a real token
 // manager so tests exercise the full route + JWT-middleware path.
 type appFixture struct {
-	mux    *http.ServeMux
-	tokens *auth.TokenManager
-	store  store.Store
-	pub    *broker.Memory
-	blob   blob.Store
-	h      *AppHandler
+	mux     *http.ServeMux
+	tokens  *auth.TokenManager
+	store   store.Store
+	pub     *broker.Memory
+	blob    blob.Store
+	h       *AppHandler
+	revoker *auth.SessionRevoker
 }
 
 func newAppFixture(t *testing.T) *appFixture {
@@ -33,6 +34,9 @@ func newAppFixture(t *testing.T) *appFixture {
 	blobs := blob.NewMemory()
 	db := store.NewMemory(blobs)
 	tokens := auth.NewTokenManager("test-secret", 15*time.Minute, 24*time.Hour)
+	revoker := auth.NewSessionRevoker(db)
+	tokens.UseRevoker(revoker)
+	tokens.UseAccountChecker(db)
 	pub := broker.NewMemory(8)
 	h := &AppHandler{
 		Store:     db,
@@ -40,11 +44,13 @@ func newAppFixture(t *testing.T) *appFixture {
 		Tokens:    tokens,
 		Publisher: pub,
 		Blob:      blobs,
-		Admin:     &AdminHandler{Store: db},
+		Admin:     &AdminHandler{Store: db, Revoker: revoker, SessionTTL: 24 * time.Hour},
 	}
 	mux := http.NewServeMux()
 	h.Routes(mux)
-	return &appFixture{mux: mux, tokens: tokens, store: db, pub: pub, blob: blobs, h: h}
+	return &appFixture{
+		mux: mux, tokens: tokens, store: db, pub: pub, blob: blobs, h: h, revoker: revoker,
+	}
 }
 
 // tokenFor issues an access token for a freshly created user and returns it.

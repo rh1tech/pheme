@@ -309,6 +309,8 @@ const Map<String, String> ruStrings = {
   'chat.reply': 'Ответить',
   'chat.replyUnknown': 'Кто-то',
   'chat.replyUnavailable': 'Недоступно на этом устройстве',
+  'chat.senderMismatch':
+      'Отправитель не подтверждён — подпись сообщения не совпадает',
   'chat.attachPhoto': 'Прикрепить фото',
   'chat.photo': 'Фото',
   'chat.photoFailed': 'Не удалось прикрепить фото',

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/providers.dart';
 
+import '../crypto/attribution.dart';
 import '../crypto/chat_content.dart';
 import '../crypto/mls_errors.dart';
 import '../data/app_providers.dart';
@@ -31,9 +32,14 @@ class MessageFeedState {
   /// Oldest first. The view reverses this for display.
   final List<ChatMessage> messages;
 
-  /// messageId -> the decrypted content. Absent means this device cannot read it, which is a real
-  /// answer, not a failure — MLS gives a device no access to what was said before it joined.
-  final Map<String, ChatContent?> contents;
+  /// messageId -> the decrypted content AND how its author was established. Absent means this device
+  /// cannot read it, which is a real answer, not a failure — MLS gives a device no access to what was
+  /// said before it joined.
+  ///
+  /// Attribution travels WITH the body deliberately. Reading a message here and then asking the
+  /// envelope who wrote it is the hole this closes: the envelope is the server's word, and the
+  /// server is the untrusted Delivery Service. See crypto/attribution.dart.
+  final Map<String, CachedEntry?> contents;
 
   /// The conversation's members, carrying how far each has got (deliveredSeq/readSeq). Held here, not
   /// read off the page's Conversation, because the ticks have to move as receipts arrive — and that
@@ -63,7 +69,7 @@ class MessageFeedState {
 
   MessageFeedState copyWith({
     List<ChatMessage>? messages,
-    Map<String, ChatContent?>? contents,
+    Map<String, CachedEntry?>? contents,
     List<ConversationMember>? members,
     bool? loading,
     bool? loadingOlder,
@@ -455,6 +461,10 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       myUserId,
       message,
     );
+    // The envelope is the only source here, and unavoidably so: an unreadable message has no
+    // plaintext and therefore no signature to attribute it by. The worst a lying server achieves is
+    // hiding a message it relayed from the live feed — which a reopen undoes, since the cache and
+    // the fetched page do not go through this path.
     if (content == null && message.senderId == myUserId) return;
 
     state = state.copyWith(
@@ -489,7 +499,7 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       // decrypt path would consume a lookup and render it as "not available on this device".
       if (message.isSystem) continue;
 
-      ChatContent? content;
+      CachedEntry? content;
       try {
         content = await mls.decryptMessage(_conversationId, myUserId, message);
       } on Object {
@@ -585,10 +595,20 @@ class MessageFeedController extends Notifier<MessageFeedState> {
         );
 
     // Read back what the service actually cached, so the photo references carry the blob ids the
-    // message really has rather than a hopeful reconstruction of them.
+    // message really has rather than a hopeful reconstruction of them — and, with them, the
+    // attribution the send path recorded: our own MLS credential. We wrote it, so that is not a
+    // claim about a sender, it is the sender.
     final content =
-        ref.read(chatCacheProvider).content(conversation.id, message.id) ??
-        ChatContent(body: body, replyTo: replyTo);
+        ref.read(chatCacheProvider).entry(conversation.id, message.id) ??
+        CachedEntry(
+          ChatContent(body: body, replyTo: replyTo),
+          Attribution.authenticated(
+            await ref
+                .read(mlsServiceProvider)
+                .myIdentity(ref.read(myUserIdProvider))
+                .catchError((_) => ''),
+          ),
+        );
 
     // The live echo of this very message can arrive — and append it — BEFORE sendMessage returns here,
     // because the server round-trips faster than the local await resolves. So dedup: if it is already

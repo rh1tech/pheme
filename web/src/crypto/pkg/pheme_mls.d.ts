@@ -24,6 +24,26 @@ export class BackupBlob {
     salt: Uint8Array;
 }
 
+/**
+ * A decrypted application message with the sender **MLS authenticated**.
+ *
+ * `sender` is the credential identity of the leaf that signed the message —
+ * `mimi://<domain>/d/<user>/<device>` — verified against the group's own ratchet tree during
+ * decryption. It is the only trustworthy answer to "who wrote this": the `senderId` on the message
+ * envelope is written by the server, which relays these bytes and can put any name it likes there.
+ *
+ * `epoch` is the epoch the message was framed in, so a caller can say which membership the sender
+ * was authenticated against.
+ */
+export class DecryptedMessage {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    epoch: bigint;
+    plaintext: Uint8Array;
+    sender: string;
+}
+
 export class MlsClient {
     free(): void;
     [Symbol.dispose](): void;
@@ -40,8 +60,12 @@ export class MlsClient {
     createGroup(group_id: Uint8Array): void;
     /**
      * Decrypts an application message; returns undefined for a control message.
+     *
+     * The result carries the sender MLS itself authenticated — see `DecryptedMessage`. The old
+     * signature returned bare bytes, which left the app with nothing to attribute a message by
+     * except the `senderId` the untrusted server wrote on the envelope.
      */
-    decrypt(group_id: Uint8Array, ciphertext: Uint8Array): Uint8Array | undefined;
+    decrypt(group_id: Uint8Array, ciphertext: Uint8Array): DecryptedMessage | undefined;
     /**
      * Discards a group so it can be rebuilt (repairing a member who could never join).
      */
@@ -120,6 +144,15 @@ export class MlsClient {
      */
     safetyNumber(group_id: Uint8Array): string;
     /**
+     * Signs an offer of a sealed transcript. The digest of `ciphertext` goes into the
+     * signature, so the server cannot swap the blob behind it.
+     */
+    signHistoryOffer(group_id: Uint8Array, conversation_id: string, epoch: bigint, requester: string, history_id: string, salt: Uint8Array, nonce: Uint8Array, request_nonce: Uint8Array, ciphertext: Uint8Array): Uint8Array;
+    /**
+     * Signs this device's request for a conversation's pre-join history.
+     */
+    signHistoryRequest(group_id: Uint8Array, conversation_id: string, epoch: bigint, nonce: Uint8Array): Uint8Array;
+    /**
      * STAGES the addition of several devices in one Commit (all newcomers land at the
      * same epoch). `key_packages` is a JS array of Uint8Array; one Welcome covers all.
      *
@@ -146,6 +179,16 @@ export class MlsClient {
      * removal, so leaving is not a Commit — see the crate docs.
      */
     stageRemoveUsers(group_id: Uint8Array, user_ids: Array<any>): Uint8Array;
+    /**
+     * Verifies an offer against the claimed offerer's leaf key and the blob's own bytes. The
+     * requester is THIS client, so an offer addressed to another device never verifies here.
+     */
+    verifyHistoryOffer(group_id: Uint8Array, conversation_id: string, epoch: bigint, offerer: string, history_id: string, salt: Uint8Array, nonce: Uint8Array, request_nonce: Uint8Array, ciphertext: Uint8Array, signature: Uint8Array): void;
+    /**
+     * Verifies a request against the claimed requester's leaf key in the group's ratchet tree.
+     * Throws when the identity holds no leaf, or the signature is not theirs.
+     */
+    verifyHistoryRequest(group_id: Uint8Array, conversation_id: string, epoch: bigint, requester: string, nonce: Uint8Array, signature: Uint8Array): void;
     /**
      * This client's credential identity, `userId:deviceId`.
      *
@@ -178,8 +221,11 @@ export class MlsPreviewClient {
     /**
      * Decrypts one application message for display. `undefined` means there was nothing to
      * preview — control traffic, or a message this client cannot read.
+     *
+     * The result carries the authenticated sender, so a notification can be titled by the leaf
+     * that signed the message rather than by whatever name the push payload asserts.
      */
-    decrypt(group_id: Uint8Array, ciphertext: Uint8Array): Uint8Array | undefined;
+    decrypt(group_id: Uint8Array, ciphertext: Uint8Array): DecryptedMessage | undefined;
     /**
      * Loads a read-only client from a state blob read out of IndexedDB.
      */
@@ -207,20 +253,25 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_addoutput_free: (a: number, b: number) => void;
     readonly __wbg_backupblob_free: (a: number, b: number) => void;
+    readonly __wbg_decryptedmessage_free: (a: number, b: number) => void;
     readonly __wbg_get_addoutput_commit: (a: number) => [number, number];
     readonly __wbg_get_addoutput_welcome: (a: number) => [number, number];
     readonly __wbg_get_backupblob_ciphertext: (a: number) => [number, number];
+    readonly __wbg_get_decryptedmessage_epoch: (a: number) => bigint;
+    readonly __wbg_get_decryptedmessage_sender: (a: number) => [number, number];
     readonly __wbg_mlsclient_free: (a: number, b: number) => void;
     readonly __wbg_set_addoutput_commit: (a: number, b: number, c: number) => void;
     readonly __wbg_set_addoutput_welcome: (a: number, b: number, c: number) => void;
     readonly __wbg_set_backupblob_ciphertext: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_decryptedmessage_epoch: (a: number, b: bigint) => void;
+    readonly __wbg_set_decryptedmessage_plaintext: (a: number, b: number, c: number) => void;
     readonly decryptBackup: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly encryptBackup: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly mlsclient_applyCommit: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly mlsclient_commitAccepted: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_commitRejected: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_createGroup: (a: number, b: number, c: number) => [number, number];
-    readonly mlsclient_decrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly mlsclient_decrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly mlsclient_deleteGroup: (a: number, b: number, c: number) => [number, number];
     readonly mlsclient_encrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly mlsclient_epoch: (a: number, b: number, c: number) => [bigint, number, number];
@@ -238,15 +289,21 @@ export interface InitOutput {
     readonly mlsclient_memberIdentities: (a: number, b: number, c: number) => [number, number, number];
     readonly mlsclient_new: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly mlsclient_safetyNumber: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly mlsclient_signHistoryOffer: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
+    readonly mlsclient_signHistoryRequest: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: number, h: number) => [number, number, number, number];
     readonly mlsclient_stageAdd: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly mlsclient_stageRemoveDevices: (a: number, b: number, c: number, d: any) => [number, number, number, number];
     readonly mlsclient_stageRemoveUsers: (a: number, b: number, c: number, d: any) => [number, number, number, number];
-    readonly mlspreviewclient_decrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly mlsclient_verifyHistoryOffer: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number) => [number, number];
+    readonly mlsclient_verifyHistoryRequest: (a: number, b: number, c: number, d: number, e: number, f: bigint, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
+    readonly mlspreviewclient_decrypt: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly mlspreviewclient_fromState: (a: number, b: number) => [number, number, number];
     readonly __wbg_get_backupblob_nonce: (a: number) => [number, number];
     readonly __wbg_get_backupblob_salt: (a: number) => [number, number];
+    readonly __wbg_get_decryptedmessage_plaintext: (a: number) => [number, number];
     readonly __wbg_set_backupblob_nonce: (a: number, b: number, c: number) => void;
     readonly __wbg_set_backupblob_salt: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_decryptedmessage_sender: (a: number, b: number, c: number) => void;
     readonly __wbg_mlspreviewclient_free: (a: number, b: number) => void;
     readonly mlspreviewclient_hasGroup: (a: number, b: number, c: number) => number;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

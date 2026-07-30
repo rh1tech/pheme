@@ -58,16 +58,16 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # No `cache:` on either — same reasoning as ci.yml. These are self-hosted runners
       # whose ~/go, ~/.cache/go-build and ~/.npm are already on the disk this job runs on,
       # so GitHub's cache round-trips them over the internet for nothing and counts
       # against a limit that has real work queued behind it.
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: api/go.mod
           cache: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
       - run: npm ci
@@ -82,16 +82,20 @@ jobs:
       # runners share a host, so without it the shards' App APIs collide on one port.
       - name: Run the suite
         run: |
-          ARGS="--shard=${{ matrix.shard }}/2"
-          if [ -n "${{ inputs.grep }}" ]; then
-            ARGS="$ARGS --grep='${{ inputs.grep }}'"
+          args=("--shard=${{ matrix.shard }}/2")
+          if [ -n "$INPUT_GREP" ]; then
+            args+=(--grep "$INPUT_GREP")
           fi
-          if [ "${{ inputs.project }}" != "all" ] && [ -n "${{ inputs.project }}" ]; then
-            ARGS="$ARGS --project=${{ inputs.project }}"
+          if [ "$INPUT_PROJECT" != "all" ] && [ -n "$INPUT_PROJECT" ]; then
+            args+=(--project "$INPUT_PROJECT")
           fi
-          echo "npx playwright test $ARGS"
-          eval "npx playwright test $ARGS"
+          printf 'npx playwright test'
+          printf ' %q' "${args[@]}"
+          printf '\n'
+          npx playwright test "${args[@]}"
         env:
+          INPUT_GREP: ${{ inputs.grep }}
+          INPUT_PROJECT: ${{ inputs.project }}
           PW_PORT_OFFSET: ${{ matrix.shard }}
 
       # The report stays on the runner rather than going to GitHub.

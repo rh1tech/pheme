@@ -14,8 +14,8 @@ import os
 /// seconds and then calls `serviceExtensionTimeWillExpire`, after which it displays whatever the
 /// content is at that moment — so the fallback is prepared FIRST and only overwritten on success.
 ///
-/// What it deliberately does NOT do: advance any MLS state. `pheme_preview_decrypt` opens a COPY
-/// via PreviewClient, which has no `export_state` and refuses Commits, so it cannot move the epoch.
+/// What it deliberately does NOT do: advance any MLS state. `pheme_preview_decrypt_attributed`
+/// opens a COPY via PreviewClient, which has no `export_state` and refuses Commits.
 /// The app keeps its own unconsumed key and reads the message again, for real, later. "A message
 /// decrypts exactly once" is a property of a copy — see crates/pheme-mls and mobile/rust/src/cabi.rs,
 /// where tests pin exactly this.
@@ -59,8 +59,19 @@ final class NotificationService: UNNotificationServiceExtension {
       return
     }
 
-    if let body = Self.preview(from: content.userInfo) {
-      content.body = body
+    if let preview = Self.preview(from: content.userInfo) {
+      content.body = preview.body
+      let claimed = (content.userInfo["senderId"] as? String) ?? ""
+      // Retain a server-supplied name/avatar only when it exactly agrees with the credential MLS
+      // authenticated. Missing metadata is not agreement: a server could omit senderId while still
+      // putting an attacker's chosen title and avatar over somebody else's real words.
+      if preview.senderUserId.isEmpty || claimed.isEmpty || claimed != preview.senderUserId {
+        Self.neutralizeSender(in: content)
+        // A neutral notification must not be promoted to a communication notification: doing so
+        // would manufacture a sender avatar/identity after the real one was deliberately removed.
+        deliver(content)
+        return
+      }
     }
 
     // The avatar needs the network, so it is the only part of this that waits. The decrypt above
@@ -202,13 +213,28 @@ final class NotificationService: UNNotificationServiceExtension {
     }
   }
 
-  /// The decrypted body, or nil to keep whatever the server sent.
+  private struct Preview {
+    let body: String
+    let senderUserId: String
+  }
+
+  /// Removes every payload-controlled claim about who wrote a successfully decrypted message.
+  private static func neutralizeSender(in content: UNMutableNotificationContent) {
+    content.title = "Pheme"
+    var info = content.userInfo
+    info.removeValue(forKey: "senderId")
+    info.removeValue(forKey: "senderAvatar")
+    info["senderUnverified"] = true
+    content.userInfo = info
+  }
+
+  /// The decrypted body and MLS-authenticated sender, or nil to keep the generic fallback.
   ///
   /// Every failure is nil and none of them is exceptional: a push with no ciphertext (the ordinary
   /// case for anyone who has not asked for previews), a device with no key material yet, a message
   /// for a group this device never joined, control traffic, or a state blob written by a newer
   /// build. The C ABI returns null for all of them and so does this.
-  private static func preview(from userInfo: [AnyHashable: Any]) -> String? {
+  private static func preview(from userInfo: [AnyHashable: Any]) -> Preview? {
     guard
       let ciphertextB64 = userInfo["ciphertext"] as? String,
       let ciphertext = Data(base64Encoded: ciphertextB64),
@@ -225,19 +251,35 @@ final class NotificationService: UNNotificationServiceExtension {
       .joined(separator: "\n")
     guard !groupIds.isEmpty else { return nil }
 
-    guard let plaintext = decrypt(state: state, key: dataKey, groups: groupIds, ciphertext: ciphertext)
+    guard
+      let opened = decrypt(state: state, key: dataKey, groups: groupIds, ciphertext: ciphertext)
     else { return nil }
 
     // Matches _bodyOf in notification_preview.dart: the plaintext is a JSON object and the preview
     // is its `body`. An empty body is nil on purpose — a photo with no caption has nothing to show,
     // and inventing the word "Photo" would be a claim about content this path should not make.
     guard
-      let object = try? JSONSerialization.jsonObject(with: plaintext) as? [String: Any],
+      let object = try? JSONSerialization.jsonObject(with: opened.plaintext) as? [String: Any],
       let body = object["body"] as? String,
       !body.isEmpty
     else { return nil }
 
-    return body
+    return Preview(body: body, senderUserId: userId(from: opened.senderIdentity) ?? "")
+  }
+
+  /// The bare user id inside `mimi://<domain>/d/<user>/<device>`.
+  private static func userId(from identity: String) -> String? {
+    guard identity.hasPrefix("mimi://") else { return nil }
+    let parts = identity.dropFirst("mimi://".count).split(
+      separator: "/", omittingEmptySubsequences: false)
+    guard
+      parts.count == 4,
+      !parts[0].isEmpty,
+      parts[1] == "d",
+      !parts[2].isEmpty,
+      !parts[3].isEmpty
+    else { return nil }
+    return String(parts[2])
   }
 
   /// The sealed MLS state, read from the App Group container the app writes it to.
@@ -256,27 +298,41 @@ final class NotificationService: UNNotificationServiceExtension {
   /// The FFI call, with every pointer confined to this function.
   private static func decrypt(
     state: Data, key: Data, groups: String, ciphertext: Data
-  ) -> Data? {
+  ) -> (plaintext: Data, senderIdentity: String)? {
     var outLen = 0
+    var senderRaw: UnsafeMutablePointer<UInt8>?
+    var senderLen = 0
     let raw: UnsafeMutablePointer<UInt8>? = state.withUnsafeBytes { statePtr in
       key.withUnsafeBytes { keyPtr in
         ciphertext.withUnsafeBytes { ctPtr in
           groups.withCString { groupsPtr in
-            pheme_preview_decrypt(
+            pheme_preview_decrypt_attributed(
               statePtr.bindMemory(to: UInt8.self).baseAddress, state.count,
               keyPtr.bindMemory(to: UInt8.self).baseAddress, key.count,
               groupsPtr,
               ctPtr.bindMemory(to: UInt8.self).baseAddress, ciphertext.count,
-              &outLen
+              &outLen,
+              &senderRaw,
+              &senderLen
             )
           }
         }
       }
     }
 
-    guard let raw, outLen > 0 else { return nil }
-    // Copy before freeing: the buffer belongs to Rust and must go back with the same length.
-    defer { pheme_preview_free(raw, outLen) }
-    return Data(bytes: raw, count: outLen)
+    guard let raw, outLen > 0 else {
+      if let senderRaw, senderLen > 0 { pheme_preview_free(senderRaw, senderLen) }
+      return nil
+    }
+    // Copy both buffers before returning them to Rust.
+    let plaintext = Data(bytes: raw, count: outLen)
+    pheme_preview_free(raw, outLen)
+    var senderIdentity = ""
+    if let senderRaw, senderLen > 0 {
+      let sender = Data(bytes: senderRaw, count: senderLen)
+      pheme_preview_free(senderRaw, senderLen)
+      senderIdentity = String(data: sender, encoding: .utf8) ?? ""
+    }
+    return (plaintext, senderIdentity)
   }
 }

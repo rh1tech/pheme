@@ -199,3 +199,105 @@ func TestStreamEndsWhenItsTokenExpires(t *testing.T) {
 		t.Fatal("the stream outlived its access token; it must end so the client reconnects with a fresh one")
 	}
 }
+
+func TestStreamRefusesARevokedSession(t *testing.T) {
+	f := newAppFixture(t)
+	token, _ := f.tokenFor(t, "revoked-stream@pheme.test")
+	claims, err := f.tokens.ParseClaims(token, auth.AccessToken)
+	if err != nil {
+		t.Fatalf("parse token: %v", err)
+	}
+	if err := f.revoker.Revoke(context.Background(), claims.SID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("revoke session: %v", err)
+	}
+
+	srv := httptest.NewServer(f.mux)
+	defer srv.Close()
+	res, err := http.Get(srv.URL + "/v1/stream?token=" + token)
+	if err != nil {
+		t.Fatalf("request stream: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked stream status = %d, want 401", res.StatusCode)
+	}
+}
+
+func TestStreamRefusesBlockedAccountEvenWithFreshToken(t *testing.T) {
+	f := newAppFixture(t)
+	_, u := f.tokenFor(t, "blocked-stream@pheme.test")
+	if err := f.store.UpdateUserStatus(context.Background(), u.ID, domain.UserBlocked); err != nil {
+		t.Fatalf("block account: %v", err)
+	}
+	// Issue after the block to model the password-reset/admin race: cutoff
+	// ordering alone cannot reject this token, so live account state must.
+	token, _, _, err := f.tokens.Issue(u.ID, string(domain.RoleUser))
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	srv := httptest.NewServer(f.mux)
+	defer srv.Close()
+	res, err := http.Get(srv.URL + "/v1/stream?token=" + token)
+	if err != nil {
+		t.Fatalf("request stream: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("blocked stream status = %d, want 401", res.StatusCode)
+	}
+}
+
+func TestStreamRefusesAPerUserRevocation(t *testing.T) {
+	f := newAppFixture(t)
+	token, u := f.tokenFor(t, "revoked-user-stream@pheme.test")
+	if err := f.revoker.RevokeUserBefore(
+		context.Background(), u.ID, time.Now().Add(time.Second), time.Now().Add(time.Hour),
+	); err != nil {
+		t.Fatalf("revoke user: %v", err)
+	}
+
+	srv := httptest.NewServer(f.mux)
+	defer srv.Close()
+	res, err := http.Get(srv.URL + "/v1/stream?token=" + token)
+	if err != nil {
+		t.Fatalf("request stream: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked stream status = %d, want 401", res.StatusCode)
+	}
+}
+
+func TestOpenStreamClosesWhenItsSessionIsRevoked(t *testing.T) {
+	f := newAppFixture(t)
+	bus := live.NewMemoryBus()
+	f.h.Live = bus
+	token, _ := f.tokenFor(t, "live-revoked-stream@pheme.test")
+	claims, err := f.tokens.ParseClaims(token, auth.AccessToken)
+	if err != nil {
+		t.Fatalf("parse token: %v", err)
+	}
+
+	srv := httptest.NewServer(f.mux)
+	defer srv.Close()
+	conn := openStream(t, srv.URL, token)
+	defer conn.close()
+
+	if err := f.revoker.Revoke(context.Background(), claims.SID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("revoke session: %v", err)
+	}
+	bus.Publish(live.Event{ChannelID: "revocation-probe"})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for conn.sc.Scan() {
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the open stream continued after its session was revoked")
+	}
+}

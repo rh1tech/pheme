@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "Cross-platform golden vectors for the signed history handoff (v2).",
+    "",
+    "Read by three test suites, so the three clients cannot drift apart:",
+    "  * crates/pheme-mls/tests/history_vectors.rs asserts the canonical TRANSCRIPT bytes,",
+    "    which is the one implementation both bindings reach.",
+    "  * web/test/mlsHistory.test.ts and mobile/test/unit/history_handoff_test.dart assert the",
+    "    control-message BODY each client writes and reads, which is the part each owns.",
+    "",
+    "Updating any value here means already-deployed clients can no longer verify the new ones'",
+    "signatures. That is a protocol break, and the way to make one is to bump the label to /v3 \u2014",
+    "never to edit these strings."
+  ],
+  "version": 2,
+  "requestLabel": "pheme/mls/history-request/v2",
+  "offerLabel": "pheme/mls/history-offer/v2",
+  "request": {
+    "conversationId": "conv-1",
+    "groupId": "grp-1",
+    "epoch": 7,
+    "requester": "mimi://test.example/d/alice/phone",
+    "nonceHex": "01020304",
+    "nonceBase64": "AQIDBA==",
+    "transcriptHex": "0000001c7068656d652f6d6c732f686973746f72792d726571756573742f76320000000500000006636f6e762d31000000056772702d31000000080000000000000007000000216d696d693a2f2f746573742e6578616d706c652f642f616c6963652f70686f6e650000000401020304",
+    "body": {
+      "v": 2,
+      "id": "mimi://test.example/d/alice/phone",
+      "epoch": 7,
+      "nonce": "AQIDBA==",
+      "sig": "c2lnbmF0dXJl"
+    }
+  },
+  "offer": {
+    "conversationId": "conv-1",
+    "groupId": "grp-1",
+    "epoch": 7,
+    "offerer": "mimi://test.example/d/bob/laptop",
+    "requester": "mimi://test.example/d/alice/phone",
+    "historyId": "hist-1",
+    "saltHex": "aa",
+    "nonceHex": "bb",
+    "requestNonceHex": "01020304",
+    "ciphertextUtf8": "sealed",
+    "ciphertextDigestHex": "c9d0036bed6744bcdf692fc980d8717d7e5f5a4f4e8266b4a84982602fb1cd09",
+    "transcriptHex": "0000001a7068656d652f6d6c732f686973746f72792d6f666665722f76320000000a00000006636f6e762d31000000056772702d31000000080000000000000007000000206d696d693a2f2f746573742e6578616d706c652f642f626f622f6c6170746f70000000216d696d693a2f2f746573742e6578616d706c652f642f616c6963652f70686f6e6500000006686973742d3100000001aa00000001bb000000040102030400000020c9d0036bed6744bcdf692fc980d8717d7e5f5a4f4e8266b4a84982602fb1cd09",
+    "body": {
+      "v": 2,
+      "from": "mimi://test.example/d/bob/laptop",
+      "to": "mimi://test.example/d/alice/phone",
+      "epoch": 7,
+      "historyId": "hist-1",
+      "salt": "qg==",
+      "nonce": "uw==",
+      "reqNonce": "AQIDBA==",
+      "sig": "c2lnbmF0dXJl"
+    }
+  }
+}

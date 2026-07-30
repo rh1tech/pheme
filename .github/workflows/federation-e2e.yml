@@ -5,9 +5,9 @@ name: Federation E2E
 # client API — the proof that F5d (relay/forward/mirror) and F5b (signed ordering
 # chain, verified by the follower) work between real servers, not just in-process.
 #
-# Runs on a self-hosted runner with the `fed` label, sized to hold two
-# whole stacks plus a TLS-terminating fedproxy at once. Everything is inside
-# Docker: no host nginx, no DNS, no Cloudflare, nothing to clean up by hand.
+# Pull requests use a disposable GitHub-hosted runner. Trusted main pushes use
+# the self-hosted `fed` runner sized for two whole stacks plus a TLS-terminating
+# fedproxy. Everything is inside Docker: no host nginx or external DNS.
 
 on:
   workflow_dispatch:
@@ -25,6 +25,9 @@ on:
       - "api/internal/store/**mlschain*"
       - "test/federation-e2e/**"
 
+permissions:
+  contents: read
+
 # One at a time: the test binds fixed loopback ports and a fixed compose project,
 # so overlapping runs would collide. Queue rather than cancel — a fed run is short.
 concurrency:
@@ -33,10 +36,10 @@ concurrency:
 
 jobs:
   cross-host:
-    runs-on: [self-hosted, linux, fed]
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","linux","fed"]') }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Cross-host relay + signed ordering chain
         run: |

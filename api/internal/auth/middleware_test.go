@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rh1tech/pheme/api/internal/domain"
 )
 
 // The gate every protected request in this API passes through, and it had no tests.
@@ -78,6 +80,54 @@ func TestMiddlewarePassesTheIdentityThrough(t *testing.T) {
 	if p.sessionID == "" {
 		t.Error("the handler saw no session id; nothing can record which device a request came from")
 	}
+}
+
+type stubAccounts struct {
+	user domain.User
+	err  error
+}
+
+func (s stubAccounts) UserByID(context.Context, string) (domain.User, error) {
+	return s.user, s.err
+}
+
+// A token can be issued concurrently with an administrative account mutation.
+// Its signature remains valid, but the current account record must win.
+func TestMiddlewareUsesLiveAccountAuthorization(t *testing.T) {
+	t.Run("blocked after token issuance", func(t *testing.T) {
+		m := newManager()
+		access, _, _, err := m.Issue("user-1", "admin")
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		m.UseAccountChecker(stubAccounts{user: domain.User{
+			ID: "user-1", Role: domain.RoleAdmin, Status: domain.UserBlocked,
+		}})
+
+		rec, p := call(m, "Bearer "+access)
+		if rec.Code != http.StatusUnauthorized || p.called {
+			t.Fatalf("blocked account authenticated with a freshly issued token (status %d)", rec.Code)
+		}
+	})
+
+	t.Run("demoted after token issuance", func(t *testing.T) {
+		m := newManager()
+		access, _, _, err := m.Issue("user-1", "admin")
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		m.UseAccountChecker(stubAccounts{user: domain.User{
+			ID: "user-1", Role: domain.RoleUser, Status: domain.UserActive,
+		}})
+
+		rec, p := call(m, "Bearer "+access)
+		if rec.Code != http.StatusOK || !p.called {
+			t.Fatalf("active demoted account was rejected (status %d)", rec.Code)
+		}
+		if p.role != string(domain.RoleUser) {
+			t.Fatalf("handler saw stale token role %q, want current role user", p.role)
+		}
+	})
 }
 
 // Every shape of missing or malformed credential is a 401, and the handler must never run.

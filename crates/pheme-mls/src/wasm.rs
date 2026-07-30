@@ -212,8 +212,128 @@ impl MlsClient {
     }
 
     /// Decrypts an application message; returns undefined for a control message.
-    pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Vec<u8>>, JsError> {
-        self.inner.decrypt(group_id, ciphertext).map_err(js)
+    ///
+    /// The result carries the sender MLS itself authenticated — see `DecryptedMessage`. The old
+    /// signature returned bare bytes, which left the app with nothing to attribute a message by
+    /// except the `senderId` the untrusted server wrote on the envelope.
+    pub fn decrypt(
+        &self,
+        group_id: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Option<DecryptedMessage>, JsError> {
+        Ok(self
+            .inner
+            .decrypt(group_id, ciphertext)
+            .map_err(js)?
+            .map(DecryptedMessage::from))
+    }
+
+    // --- signed history handoff ---------------------------------------------------------
+    //
+    // The canonical transcript is built inside the crate (see `pheme_mls::history`), so the
+    // browser and the phone sign and verify byte-identical bytes without either of them
+    // owning an encoder. Everything crossing this boundary is a typed field.
+
+    /// Signs this device's request for a conversation's pre-join history.
+    #[wasm_bindgen(js_name = signHistoryRequest)]
+    pub fn sign_history_request(
+        &self,
+        group_id: &[u8],
+        conversation_id: &str,
+        epoch: u64,
+        nonce: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        self.inner
+            .sign_history_request(group_id, conversation_id, epoch, nonce)
+            .map_err(js)
+    }
+
+    /// Verifies a request against the claimed requester's leaf key in the group's ratchet tree.
+    /// Throws when the identity holds no leaf, or the signature is not theirs.
+    #[wasm_bindgen(js_name = verifyHistoryRequest)]
+    pub fn verify_history_request(
+        &self,
+        group_id: &[u8],
+        conversation_id: &str,
+        epoch: u64,
+        requester: &str,
+        nonce: &[u8],
+        signature: &[u8],
+    ) -> Result<(), JsError> {
+        self.inner
+            .verify_history_request(
+                group_id,
+                conversation_id,
+                epoch,
+                requester,
+                nonce,
+                signature,
+            )
+            .map_err(js)
+    }
+
+    /// Signs an offer of a sealed transcript. The digest of `ciphertext` goes into the
+    /// signature, so the server cannot swap the blob behind it.
+    #[wasm_bindgen(js_name = signHistoryOffer)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_history_offer(
+        &self,
+        group_id: &[u8],
+        conversation_id: &str,
+        epoch: u64,
+        requester: &str,
+        history_id: &str,
+        salt: &[u8],
+        nonce: &[u8],
+        request_nonce: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        self.inner
+            .sign_history_offer(
+                group_id,
+                conversation_id,
+                epoch,
+                requester,
+                history_id,
+                salt,
+                nonce,
+                request_nonce,
+                ciphertext,
+            )
+            .map_err(js)
+    }
+
+    /// Verifies an offer against the claimed offerer's leaf key and the blob's own bytes. The
+    /// requester is THIS client, so an offer addressed to another device never verifies here.
+    #[wasm_bindgen(js_name = verifyHistoryOffer)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_history_offer(
+        &self,
+        group_id: &[u8],
+        conversation_id: &str,
+        epoch: u64,
+        offerer: &str,
+        history_id: &str,
+        salt: &[u8],
+        nonce: &[u8],
+        request_nonce: &[u8],
+        ciphertext: &[u8],
+        signature: &[u8],
+    ) -> Result<(), JsError> {
+        self.inner
+            .verify_history_offer(
+                group_id,
+                conversation_id,
+                epoch,
+                offerer,
+                history_id,
+                salt,
+                nonce,
+                request_nonce,
+                ciphertext,
+                signature,
+            )
+            .map_err(js)
     }
 
     /// The full client state to persist (IndexedDB).
@@ -243,6 +363,32 @@ impl MlsClient {
 pub struct AddOutput {
     pub welcome: Vec<u8>,
     pub commit: Vec<u8>,
+}
+
+/// A decrypted application message with the sender **MLS authenticated**.
+///
+/// `sender` is the credential identity of the leaf that signed the message —
+/// `mimi://<domain>/d/<user>/<device>` — verified against the group's own ratchet tree during
+/// decryption. It is the only trustworthy answer to "who wrote this": the `senderId` on the message
+/// envelope is written by the server, which relays these bytes and can put any name it likes there.
+///
+/// `epoch` is the epoch the message was framed in, so a caller can say which membership the sender
+/// was authenticated against.
+#[wasm_bindgen(getter_with_clone)]
+pub struct DecryptedMessage {
+    pub plaintext: Vec<u8>,
+    pub sender: String,
+    pub epoch: u64,
+}
+
+impl From<crate::Decrypted> for DecryptedMessage {
+    fn from(d: crate::Decrypted) -> Self {
+        DecryptedMessage {
+            plaintext: d.plaintext,
+            sender: String::from_utf8_lossy(&d.sender).into_owned(),
+            epoch: d.epoch,
+        }
+    }
 }
 
 /// A sealed key backup: salt, nonce and ciphertext, all stored server-side.
@@ -289,8 +435,19 @@ impl MlsPreviewClient {
 
     /// Decrypts one application message for display. `undefined` means there was nothing to
     /// preview — control traffic, or a message this client cannot read.
-    pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Vec<u8>>, JsError> {
-        self.inner.decrypt(group_id, ciphertext).map_err(js)
+    ///
+    /// The result carries the authenticated sender, so a notification can be titled by the leaf
+    /// that signed the message rather than by whatever name the push payload asserts.
+    pub fn decrypt(
+        &self,
+        group_id: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Option<DecryptedMessage>, JsError> {
+        Ok(self
+            .inner
+            .decrypt(group_id, ciphertext)
+            .map_err(js)?
+            .map(DecryptedMessage::from))
     }
 }
 

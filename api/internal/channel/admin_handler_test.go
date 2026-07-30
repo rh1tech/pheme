@@ -18,9 +18,15 @@ import (
 // adminMux registers the admin routes on a bare mux (no JWT middleware) so tests
 // drive the handlers directly while still exercising routing and path values.
 func adminMux(db store.Store) *http.ServeMux {
-	mux := http.NewServeMux()
-	(&AdminHandler{Store: db}).Register(mux)
+	mux, _ := adminMuxWithRevoker(db)
 	return mux
+}
+
+func adminMuxWithRevoker(db store.Store) (*http.ServeMux, *auth.SessionRevoker) {
+	revoker := auth.NewSessionRevoker(db)
+	mux := http.NewServeMux()
+	(&AdminHandler{Store: db, Revoker: revoker, SessionTTL: 24 * time.Hour}).Register(mux)
+	return mux, revoker
 }
 
 // adminReq sends a request through the admin mux with the caller's id and role
@@ -263,6 +269,61 @@ func TestAdminDeleteUser(t *testing.T) {
 	}
 	if _, err := db.UserByEmail(context.Background(), "target@b.com"); err != store.ErrNotFound {
 		t.Fatalf("user still present, err=%v", err)
+	}
+}
+
+func TestAdminSecurityChangesRevokeExistingSessions(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		path   func(string) string
+		body   any
+	}{
+		{
+			name: "role change", method: http.MethodPatch,
+			path: func(id string) string { return "/v1/admin/users/" + id },
+			body: map[string]any{"role": domain.RoleAdmin},
+		},
+		{
+			name: "status change", method: http.MethodPatch,
+			path: func(id string) string { return "/v1/admin/users/" + id },
+			body: map[string]any{"status": domain.UserBlocked},
+		},
+		{
+			name: "password reset", method: http.MethodPost,
+			path: func(id string) string { return "/v1/admin/users/" + id + "/reset-password" },
+			body: map[string]any{"newPassword": "Newpass99"},
+		},
+		{
+			name: "deletion", method: http.MethodDelete,
+			path: func(id string) string { return "/v1/admin/users/" + id },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := store.NewMemory(nil)
+			mux, revoker := adminMuxWithRevoker(db)
+			admin := seedUser(t, db, "admin@b.com", domain.RoleAdmin)
+			target := seedUser(t, db, "target@b.com", domain.RoleUser)
+			tokens := auth.NewTokenManager("test-secret", 15*time.Minute, 24*time.Hour)
+			access, _, _, err := tokens.Issue(target.ID, string(target.Role))
+			if err != nil {
+				t.Fatalf("issue target session: %v", err)
+			}
+			claims, err := tokens.ParseClaims(access, auth.AccessToken)
+			if err != nil {
+				t.Fatalf("parse target session: %v", err)
+			}
+
+			rec := adminReq(mux, tc.method, tc.path(target.ID), admin.ID, "admin", tc.body)
+			if rec.Code < 200 || rec.Code >= 300 {
+				t.Fatalf("mutation status = %d; body=%s", rec.Code, rec.Body)
+			}
+			if !revoker.IsUserRevoked(target.ID, claims.IssuedAt.Time) {
+				t.Fatal("the account mutation left the target's existing session active")
+			}
+		})
 	}
 }
 

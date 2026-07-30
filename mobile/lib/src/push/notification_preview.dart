@@ -27,8 +27,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../crypto/attribution.dart';
 import '../crypto/chat_cache.dart';
-import '../crypto/chat_content.dart';
 import '../crypto/mls_store.dart';
 import '../rust/api/mls.dart' as rust;
 import '../rust/frb_generated.dart';
@@ -54,12 +54,37 @@ Future<bool> _ensureRust() async {
   return _rustReady;
 }
 
-/// The message text carried by a push, or null when there is nothing to show.
+/// What a push may show: the decrypted line and the identity **MLS authenticated** as its signer.
+///
+/// The sender is here because a notification is titled with a NAME, and the only other source for
+/// that name is the push payload — which the server composes, and the server is the untrusted
+/// Delivery Service. It can attach any name to any ciphertext it relays, and a lock screen is
+/// exactly where nobody looks twice.
+class NotificationPreview {
+  const NotificationPreview({required this.body, required this.senderUserId});
+
+  final String body;
+
+  /// The bare user id from the authenticated credential. Empty when it could not be established —
+  /// a body served from the legacy cache, where no sender was ever recorded.
+  final String senderUserId;
+
+  /// Whether the preview must discard the payload's sender identity.
+  ///
+  /// A name/avatar is retained only when both sides are non-empty and exactly agree. The decrypted
+  /// body is still worth showing when either identity is absent, but only under a neutral title.
+  bool contradicts(String? claimedSenderId) {
+    final claimed = claimedSenderId ?? '';
+    return claimed.isEmpty || senderUserId.isEmpty || claimed != senderUserId;
+  }
+}
+
+/// The message carried by a push, or null when there is nothing to show.
 ///
 /// [conversationId] and [ciphertextBase64] come from the push's data payload; the ciphertext is
 /// absent unless the recipient asked for previews, so a null return here is the ordinary case for
 /// everybody else.
-Future<String?> decryptNotificationPreview({
+Future<NotificationPreview?> decryptNotificationPreview({
   required String conversationId,
   required String? ciphertextBase64,
   String? groupIdsCsv,
@@ -140,7 +165,14 @@ Future<String?> decryptNotificationPreview({
       return null;
     }
 
-    return _bodyOf(plaintext);
+    final body = _bodyOf(plaintext);
+    if (body == null) return null;
+    return NotificationPreview(
+      body: body,
+      // The credential MLS authenticated as the signer, reduced to the user id the payload's
+      // claimed senderId can be compared against.
+      senderUserId: userOfIdentity(outcome.sender ?? ''),
+    );
   } on Object catch (e) {
     // Deliberately broad. Anything at all here — no key material, a state blob from a newer build,
     // a malformed payload — must degrade to the generic notification rather than lose it.
@@ -154,7 +186,10 @@ Future<String?> decryptNotificationPreview({
 /// Returns null for a photo with no caption, for the same reason _bodyOf does: a preview is one
 /// line on a lock screen, and inventing the word "Photo" is a claim about content this path should
 /// not be making.
-Future<String?> _cachedBody(String conversationId, String? messageId) async {
+Future<NotificationPreview?> _cachedBody(
+  String conversationId,
+  String? messageId,
+) async {
   if (messageId == null || messageId.isEmpty) return null;
   try {
     final cache = ChatCache(const FlutterSecureStorage());
@@ -166,10 +201,17 @@ Future<String?> _cachedBody(String conversationId, String? messageId) async {
       );
       return null;
     }
-    final body = parseContent(Uint8List.fromList(utf8.encode(serialised))).body;
-    if (body.isEmpty) return null;
+    // The cache carries the sender the app authenticated when it read this message, so a preview
+    // served from it is attributed exactly as well as one decrypted here. An entry written before
+    // senders were stored yields '', which the caller treats as "nothing to compare" rather than as
+    // agreement with whatever the payload claims.
+    final entry = decodeCacheEntry(serialised);
+    if (entry.content.body.isEmpty) return null;
     debugPrint('Pheme: preview served from the body the app already decrypted');
-    return body;
+    return NotificationPreview(
+      body: entry.content.body,
+      senderUserId: entry.attribution.isLegacy ? '' : entry.attribution.userId,
+    );
   } on Object catch (e) {
     debugPrint('Pheme: cached body unavailable: $e');
     return null;

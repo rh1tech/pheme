@@ -14,6 +14,7 @@ use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
+use openmls_traits::signatures::Signer as _;
 use sha2::{Digest, Sha256};
 
 const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -129,6 +130,34 @@ pub struct Client {
 pub struct AddResult {
     pub welcome: Vec<u8>,
     pub commit: Vec<u8>,
+}
+
+/// A decrypted application message, together with the identity **MLS itself authenticated**.
+///
+/// The whole point of this type is the `sender` field, and it exists because the thing it replaces
+/// was a lie. `decrypt` used to return bare plaintext, so every client above it had exactly one
+/// answer to "who wrote this?" — the `senderId` the SERVER put on the message envelope. The server
+/// is the untrusted Delivery Service. It can put any user id it likes there, on a ciphertext it
+/// relayed from anyone, and the receiving client would render it under that name with no way to
+/// tell. End-to-end encryption without sender authentication buys confidentiality and nothing else:
+/// nobody can read your conversation, and anybody who runs the server can write to it as you.
+///
+/// MLS already knows the answer. Every application message is signed by the sending leaf's
+/// signature key, `process_message` verifies that signature against the leaf's key in the group's
+/// own ratchet tree, and the credential it hands back is the authenticated one. It was simply being
+/// dropped on the floor. This carries it out.
+///
+/// `sender` is the credential's identity bytes — `mimi://<domain>/d/<user>/<device>` — of the leaf
+/// that actually signed the message. `pheme_mls::user_of` reduces it to the qualified user, which
+/// is what a UI compares against a membership roster.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Decrypted {
+    pub plaintext: Vec<u8>,
+    /// The authenticated credential identity of the sending leaf. Never server-supplied.
+    pub sender: Vec<u8>,
+    /// The epoch the message was framed in — what a caller pins when it needs to know which
+    /// membership the sender was authenticated against.
+    pub epoch: u64,
 }
 
 impl Client {
@@ -691,25 +720,12 @@ impl Client {
 
     /// Decrypts an application message. Returns None for a control message
     /// (Commit) — the caller routes those to apply_commit.
-    pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    ///
+    /// The plaintext comes back with the **authenticated** sender credential; see [`Decrypted`] for
+    /// why that is the whole point of the return type.
+    pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Decrypted>, String> {
         let mut group = self.load_group(group_id)?;
-        let msg = MlsMessageIn::tls_deserialize(&mut &*ciphertext).map_err(err("parse msg"))?;
-        let protocol = msg
-            .try_into_protocol_message()
-            .map_err(err("not protocol"))?;
-        let processed = group
-            .process_message(&self.provider, protocol)
-            .map_err(err("decrypt"))?;
-        match processed.into_content() {
-            ProcessedMessageContent::ApplicationMessage(app) => Ok(Some(app.into_bytes())),
-            ProcessedMessageContent::StagedCommitMessage(staged) => {
-                group
-                    .merge_staged_commit(&self.provider, *staged)
-                    .map_err(err("merge staged"))?;
-                Ok(None)
-            }
-            _ => Ok(None),
-        }
+        self.open(&mut group, ciphertext, true)
     }
 
     /// Decrypts an application message WITHOUT merging anything.
@@ -726,8 +742,22 @@ impl Client {
         &self,
         group_id: &[u8],
         ciphertext: &[u8],
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<Decrypted>, String> {
         let mut group = self.load_group(group_id)?;
+        self.open(&mut group, ciphertext, false)
+    }
+
+    /// The shared body of both decrypts: process the message, keep what MLS authenticated about
+    /// its sender, and refuse anything that is not an application message from a member.
+    ///
+    /// `merge_commits` is the only difference between the two callers. A preview must never move
+    /// the epoch (see [`PreviewClient`]), so it passes false and a Commit is simply dropped.
+    fn open(
+        &self,
+        group: &mut MlsGroup,
+        ciphertext: &[u8],
+        merge_commits: bool,
+    ) -> Result<Option<Decrypted>, String> {
         let msg = MlsMessageIn::tls_deserialize(&mut &*ciphertext).map_err(err("parse msg"))?;
         let protocol = msg
             .try_into_protocol_message()
@@ -735,12 +765,217 @@ impl Client {
         let processed = group
             .process_message(&self.provider, protocol)
             .map_err(err("decrypt"))?;
+
+        // Read BEFORE into_content consumes the message. This is the authenticated triple:
+        // process_message verified the content's signature against the leaf key in the ratchet
+        // tree, and `credential` is the credential that key belongs to.
+        let epoch = processed.epoch().as_u64();
+        let sender_leaf = match processed.sender() {
+            Sender::Member(index) => Some(*index),
+            _ => None,
+        };
+        let credential = processed.credential().serialized_content().to_vec();
+
         match processed.into_content() {
-            ProcessedMessageContent::ApplicationMessage(app) => Ok(Some(app.into_bytes())),
-            // Deliberately NOT merged. A preview that advanced the epoch in a copy of the state
-            // it then threw away would leave the real client behind by a commit it never saw.
+            ProcessedMessageContent::ApplicationMessage(app) => {
+                // RFC 9420 §6 only ever frames application messages as PrivateMessage from a
+                // member, and OpenMLS enforces it — but "an upstream enforces it" is not the sort
+                // of thing to leave implicit when the consequence is an unattributed message
+                // rendered as though it were attributed. An external sender has no leaf, and so no
+                // identity a UI could show; refuse rather than invent one.
+                let leaf = sender_leaf
+                    .ok_or("application message from a sender with no leaf in the group")?;
+                // Belt and braces: the credential process_message authenticated must be the
+                // credential the tree holds for that leaf. They are read from the same place today;
+                // asserting it means a future divergence is a failed decrypt rather than a
+                // misattributed message.
+                let in_tree = group
+                    .member(leaf)
+                    .ok_or("the sending leaf is not in the group")?
+                    .serialized_content()
+                    .to_vec();
+                if in_tree != credential {
+                    return Err("the sender credential does not match the group's leaf".into());
+                }
+                Ok(Some(Decrypted {
+                    plaintext: app.into_bytes(),
+                    sender: credential,
+                    epoch,
+                }))
+            }
+            ProcessedMessageContent::StagedCommitMessage(staged) if merge_commits => {
+                group
+                    .merge_staged_commit(&self.provider, *staged)
+                    .map_err(err("merge staged"))?;
+                Ok(None)
+            }
+            // Deliberately NOT merged on the preview path. A preview that advanced the epoch in a
+            // copy of the state it then threw away would leave the real client behind by a commit
+            // it never saw.
             _ => Ok(None),
         }
+    }
+
+    // --- signed history handoff ---------------------------------------------------------------
+    //
+    // See `crate::history` for why the exporter secret alone is not enough, and what the canonical
+    // transcript looks like. These four methods are the only way in: the transcript is built here,
+    // from typed fields, so neither binding can assemble a different one.
+
+    /// The leaf signature key the group's own ratchet tree holds for `identity`.
+    ///
+    /// From the tree, never from anything a message claims — that is the entire basis of the
+    /// verification. An identity nobody holds a leaf under is refused rather than defaulted.
+    fn member_signature_key(&self, group_id: &[u8], identity: &str) -> Result<Vec<u8>, String> {
+        let group = self.load_group(group_id)?;
+        let mut found: Option<Vec<u8>> = None;
+        for member in group.members() {
+            if member.credential.serialized_content() == identity.as_bytes() {
+                if found.is_some() {
+                    // Two leaves under one credential is not a state this code can resolve, and
+                    // guessing would mean accepting a signature from whichever it happened to see
+                    // first. Credentials carry a device id precisely so this cannot happen.
+                    return Err("two leaves claim that identity".into());
+                }
+                found = Some(member.signature_key.as_slice().to_vec());
+            }
+        }
+        found.ok_or_else(|| format!("{identity} is not a member of this group"))
+    }
+
+    fn verify_history(
+        &self,
+        group_id: &[u8],
+        signer_identity: &str,
+        transcript: &[u8],
+        signature: &[u8],
+    ) -> Result<(), String> {
+        let key = self.member_signature_key(group_id, signer_identity)?;
+        self.provider
+            .crypto()
+            .verify_signature(
+                CIPHERSUITE.signature_algorithm(),
+                transcript,
+                &key,
+                signature,
+            )
+            .map_err(err("history signature"))
+    }
+
+    /// Signs this device's request for a conversation's pre-join history.
+    ///
+    /// The requester is always *this* client — it signs with its own leaf key and the transcript
+    /// names its own credential — so there is no way for a caller to sign a request on somebody
+    /// else's behalf, by mistake or otherwise.
+    pub fn sign_history_request(
+        &self,
+        group_id: &[u8],
+        conversation_id: &str,
+        epoch: u64,
+        nonce: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        if !self.has_group(group_id) {
+            return Err("not a member of this group".into());
+        }
+        let identity = String::from_utf8_lossy(&self.identity).into_owned();
+        let transcript =
+            history::request_transcript(conversation_id, group_id, epoch, &identity, nonce);
+        self.signer
+            .sign(&transcript)
+            .map_err(err("sign history request"))
+    }
+
+    /// Verifies a history request against the claimed requester's leaf key.
+    ///
+    /// A member that answers an unverified request seals its whole transcript to a key derived for
+    /// an identity that never asked for it — which is how an insider makes a co-member hand over a
+    /// conversation on somebody else's behalf.
+    pub fn verify_history_request(
+        &self,
+        group_id: &[u8],
+        conversation_id: &str,
+        epoch: u64,
+        requester: &str,
+        nonce: &[u8],
+        signature: &[u8],
+    ) -> Result<(), String> {
+        let transcript =
+            history::request_transcript(conversation_id, group_id, epoch, requester, nonce);
+        self.verify_history(group_id, requester, &transcript, signature)
+    }
+
+    /// Signs this device's offer of a sealed transcript to `requester`.
+    ///
+    /// The digest is computed HERE, over the ciphertext that will actually be uploaded, so the
+    /// signature commits to the bytes rather than to the `history_id` pointing at them. Without
+    /// that, the server — which stores the blob — could swap its contents behind an otherwise
+    /// perfectly valid signature.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_history_offer(
+        &self,
+        group_id: &[u8],
+        conversation_id: &str,
+        epoch: u64,
+        requester: &str,
+        history_id: &str,
+        salt: &[u8],
+        nonce: &[u8],
+        request_nonce: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        if !self.has_group(group_id) {
+            return Err("not a member of this group".into());
+        }
+        let identity = String::from_utf8_lossy(&self.identity).into_owned();
+        let transcript = history::offer_transcript(
+            conversation_id,
+            group_id,
+            epoch,
+            &identity,
+            requester,
+            history_id,
+            salt,
+            nonce,
+            request_nonce,
+            &history::digest(ciphertext),
+        );
+        self.signer
+            .sign(&transcript)
+            .map_err(err("sign history offer"))
+    }
+
+    /// Verifies an offer against the claimed offerer's leaf key AND against the blob's own bytes.
+    ///
+    /// `requester` is bound to this client's own identity, not taken from the offer: an offer
+    /// addressed to another device must not verify here, however well it is signed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_history_offer(
+        &self,
+        group_id: &[u8],
+        conversation_id: &str,
+        epoch: u64,
+        offerer: &str,
+        history_id: &str,
+        salt: &[u8],
+        nonce: &[u8],
+        request_nonce: &[u8],
+        ciphertext: &[u8],
+        signature: &[u8],
+    ) -> Result<(), String> {
+        let requester = String::from_utf8_lossy(&self.identity).into_owned();
+        let transcript = history::offer_transcript(
+            conversation_id,
+            group_id,
+            epoch,
+            offerer,
+            &requester,
+            history_id,
+            salt,
+            nonce,
+            request_nonce,
+            &history::digest(ciphertext),
+        );
+        self.verify_history(group_id, offerer, &transcript, signature)
     }
 
     /// Serialises the entire client state — the MLS key store (identity keypair +
@@ -834,9 +1069,15 @@ impl PreviewClient {
         })
     }
 
-    /// Decrypts one application message for display. `None` means it was not an application
-    /// message — a Commit or other control traffic — and there is nothing to preview.
-    pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    /// Decrypts one application message for display, with the sender MLS authenticated. `None`
+    /// means it was not an application message — a Commit or other control traffic — and there is
+    /// nothing to preview.
+    ///
+    /// The sender comes back so a notification can be titled with the identity that actually signed
+    /// the message rather than the one the push payload claims. The push is delivered BY the
+    /// untrusted server; taking a name from it is taking the attacker's word for who is messaging
+    /// you, on the lock screen, where nobody checks.
+    pub fn decrypt(&self, group_id: &[u8], ciphertext: &[u8]) -> Result<Option<Decrypted>, String> {
         self.inner.decrypt_no_merge(group_id, ciphertext)
     }
 
@@ -862,6 +1103,10 @@ fn err<E: std::fmt::Debug>(context: &'static str) -> impl Fn(E) -> String {
 
 /// Encrypted key backup (passphrase-derived, server-stored ciphertext).
 pub mod backup;
+
+/// Sender-authenticated device-to-device history handoff: the canonical, domain-separated
+/// transcripts a requester and an offerer sign with their MLS leaf keys.
+pub mod history;
 
 /// Turns a group's member signature keys into a safety number: the digits two
 /// people read to each other to prove no one is in the middle.
@@ -935,6 +1180,18 @@ mod tests {
         add
     }
 
+    /// Just the plaintext of a decrypt, for the many assertions that are only about what was
+    /// said. The tests that are about WHO said it read `Decrypted::sender` directly — see
+    /// `a_decrypt_carries_the_authenticated_sender`.
+    trait Body {
+        fn body(self) -> Option<Vec<u8>>;
+    }
+    impl Body for Result<Option<Decrypted>, String> {
+        fn body(self) -> Option<Vec<u8>> {
+            self.unwrap().map(|d| d.plaintext)
+        }
+    }
+
     // F4: handshake Commits are PublicMessage now, so the delivery service can read
     // the epoch a Commit is built on rather than trusting a number the client sends
     // alongside it. This asserts the framing, and prints a fixture the Go epoch parser
@@ -975,13 +1232,13 @@ mod tests {
 
         let ct = alice.encrypt(GID, b"the eagle lands at dawn").unwrap();
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"the eagle lands at dawn"[..])
         );
 
         let ct2 = bob.encrypt(GID, b"acknowledged").unwrap();
         assert_eq!(
-            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            alice.decrypt(GID, &ct2).body().as_deref(),
             Some(&b"acknowledged"[..])
         );
     }
@@ -1003,11 +1260,11 @@ mod tests {
         // Alice speaks: BOTH of Bob's devices read it.
         let ct = alice.encrypt(GID, b"hello bob").unwrap();
         assert_eq!(
-            bob_phone.decrypt(GID, &ct).unwrap().as_deref(),
+            bob_phone.decrypt(GID, &ct).body().as_deref(),
             Some(&b"hello bob"[..])
         );
         assert_eq!(
-            bob_laptop.decrypt(GID, &ct).unwrap().as_deref(),
+            bob_laptop.decrypt(GID, &ct).body().as_deref(),
             Some(&b"hello bob"[..])
         );
 
@@ -1016,11 +1273,11 @@ mod tests {
         // same person is a different leaf, so it can.
         let ct2 = bob_phone.encrypt(GID, b"sent from my phone").unwrap();
         assert_eq!(
-            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            alice.decrypt(GID, &ct2).body().as_deref(),
             Some(&b"sent from my phone"[..])
         );
         assert_eq!(
-            bob_laptop.decrypt(GID, &ct2).unwrap().as_deref(),
+            bob_laptop.decrypt(GID, &ct2).body().as_deref(),
             Some(&b"sent from my phone"[..]),
             "a user's second device must read what their first device sent",
         );
@@ -1037,7 +1294,7 @@ mod tests {
 
         let early = alice.encrypt(GID, b"before the laptop existed").unwrap();
         assert_eq!(
-            bob_phone.decrypt(GID, &early).unwrap().as_deref(),
+            bob_phone.decrypt(GID, &early).body().as_deref(),
             Some(&b"before the laptop existed"[..])
         );
 
@@ -1054,22 +1311,22 @@ mod tests {
         // Everyone — old devices and new — reads what comes next.
         let ct = alice.encrypt(GID, b"now you both see this").unwrap();
         assert_eq!(
-            bob_phone.decrypt(GID, &ct).unwrap().as_deref(),
+            bob_phone.decrypt(GID, &ct).body().as_deref(),
             Some(&b"now you both see this"[..])
         );
         assert_eq!(
-            bob_laptop.decrypt(GID, &ct).unwrap().as_deref(),
+            bob_laptop.decrypt(GID, &ct).body().as_deref(),
             Some(&b"now you both see this"[..])
         );
 
         // And the laptop can speak; the phone and Alice both hear it.
         let ct2 = bob_laptop.encrypt(GID, b"laptop here").unwrap();
         assert_eq!(
-            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            alice.decrypt(GID, &ct2).body().as_deref(),
             Some(&b"laptop here"[..])
         );
         assert_eq!(
-            bob_phone.decrypt(GID, &ct2).unwrap().as_deref(),
+            bob_phone.decrypt(GID, &ct2).body().as_deref(),
             Some(&b"laptop here"[..])
         );
     }
@@ -1098,7 +1355,7 @@ mod tests {
 
         let ct = alice.encrypt(GID, b"bob is gone").unwrap();
         assert_eq!(
-            carol.decrypt(GID, &ct).unwrap().as_deref(),
+            carol.decrypt(GID, &ct).body().as_deref(),
             Some(&b"bob is gone"[..])
         );
         assert!(
@@ -1147,11 +1404,11 @@ mod tests {
 
         let ct = alice.encrypt(GID, b"still one group").unwrap();
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"still one group"[..])
         );
         assert_eq!(
-            carol.decrypt(GID, &ct).unwrap().as_deref(),
+            carol.decrypt(GID, &ct).body().as_deref(),
             Some(&b"still one group"[..])
         );
 
@@ -1164,11 +1421,11 @@ mod tests {
 
         let ct2 = dave.encrypt(GID, b"dave made it in").unwrap();
         assert_eq!(
-            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            alice.decrypt(GID, &ct2).body().as_deref(),
             Some(&b"dave made it in"[..])
         );
         assert_eq!(
-            bob.decrypt(GID, &ct2).unwrap().as_deref(),
+            bob.decrypt(GID, &ct2).body().as_deref(),
             Some(&b"dave made it in"[..])
         );
     }
@@ -1207,16 +1464,16 @@ mod tests {
         // Carol reads what comes after, and the others read Carol.
         let after = alice.encrypt(GID, b"after carol").unwrap();
         assert_eq!(
-            carol.decrypt(GID, &after).unwrap().as_deref(),
+            carol.decrypt(GID, &after).body().as_deref(),
             Some(&b"after carol"[..])
         );
         let from_carol = carol.encrypt(GID, b"carol is in").unwrap();
         assert_eq!(
-            alice.decrypt(GID, &from_carol).unwrap().as_deref(),
+            alice.decrypt(GID, &from_carol).body().as_deref(),
             Some(&b"carol is in"[..])
         );
         assert_eq!(
-            bob.decrypt(GID, &from_carol).unwrap().as_deref(),
+            bob.decrypt(GID, &from_carol).body().as_deref(),
             Some(&b"carol is in"[..])
         );
 
@@ -1263,11 +1520,11 @@ mod tests {
         assert_eq!(alice.member_identities(GID).unwrap().len(), 4);
         let ct = dave.encrypt(GID, b"dave made it in too").unwrap();
         assert_eq!(
-            alice.decrypt(GID, &ct).unwrap().as_deref(),
+            alice.decrypt(GID, &ct).body().as_deref(),
             Some(&b"dave made it in too"[..])
         );
         assert_eq!(
-            carol.decrypt(GID, &ct).unwrap().as_deref(),
+            carol.decrypt(GID, &ct).body().as_deref(),
             Some(&b"dave made it in too"[..])
         );
     }
@@ -1299,7 +1556,7 @@ mod tests {
         // Only NOW does the older message reach Bob. He is an epoch past it, and must
         // still be able to read it.
         assert_eq!(
-            bob.decrypt(GID, &in_flight).unwrap().as_deref(),
+            bob.decrypt(GID, &in_flight).body().as_deref(),
             Some(&b"sent before carol joined"[..]),
             "a message from the previous epoch must survive a membership change",
         );
@@ -1319,13 +1576,13 @@ mod tests {
 
         let ct = alice.encrypt(GID, b"still works after reload").unwrap();
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"still works after reload"[..])
         );
 
         let ct2 = bob.encrypt(GID, b"reply from restored bob").unwrap();
         assert_eq!(
-            alice.decrypt(GID, &ct2).unwrap().as_deref(),
+            alice.decrypt(GID, &ct2).body().as_deref(),
             Some(&b"reply from restored bob"[..])
         );
     }
@@ -1341,7 +1598,7 @@ mod tests {
 
         let ct = alice.encrypt(GID, b"before the replay").unwrap();
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"before the replay"[..])
         );
 
@@ -1349,7 +1606,7 @@ mod tests {
 
         let ct2 = alice.encrypt(GID, b"after the replay").unwrap();
         assert_eq!(
-            bob.decrypt(GID, &ct2).unwrap().as_deref(),
+            bob.decrypt(GID, &ct2).body().as_deref(),
             Some(&b"after the replay"[..])
         );
     }
@@ -1428,14 +1685,14 @@ mod tests {
 
         let ct = carol.encrypt(b"group-c", b"second group works").unwrap();
         assert_eq!(
-            bob.decrypt(b"group-c", &ct).unwrap().as_deref(),
+            bob.decrypt(b"group-c", &ct).body().as_deref(),
             Some(&b"second group works"[..])
         );
         let ct2 = alice
             .encrypt(b"group-a", b"first group still works")
             .unwrap();
         assert_eq!(
-            bob.decrypt(b"group-a", &ct2).unwrap().as_deref(),
+            bob.decrypt(b"group-a", &ct2).body().as_deref(),
             Some(&b"first group still works"[..])
         );
     }
@@ -1492,7 +1749,7 @@ mod tests {
 
         let ct = alice.encrypt(b"group-a", b"still reachable").unwrap();
         assert_eq!(
-            bob.decrypt(b"group-a", &ct).unwrap().as_deref(),
+            bob.decrypt(b"group-a", &ct).body().as_deref(),
             Some(&b"still reachable"[..])
         );
     }
@@ -1558,7 +1815,7 @@ mod tests {
         // And the group is untouched — Alice can still talk to Bob.
         let ct = alice.encrypt(GID, b"unharmed").unwrap();
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"unharmed"[..])
         );
     }
@@ -1592,7 +1849,7 @@ mod tests {
         // Bob's phone is untouched and still reads the group.
         let ct = alice.encrypt(GID, b"your phone still works").unwrap();
         assert_eq!(
-            bob_phone.decrypt(GID, &ct).unwrap().as_deref(),
+            bob_phone.decrypt(GID, &ct).body().as_deref(),
             Some(&b"your phone still works"[..]),
             "pruning a ghost device must not cut off the same person's live device",
         );
@@ -1620,7 +1877,7 @@ mod tests {
         // Still a healthy two-member group.
         let ct = alice.encrypt(GID, b"intact").unwrap();
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"intact"[..])
         );
     }
@@ -1702,6 +1959,413 @@ mod tests {
         assert_ne!(one, two);
     }
 
+    // --- authenticated sender attribution ------------------------------------------------
+    //
+    // The server is the untrusted Delivery Service, and until this existed it was also the
+    // only source of "who sent this". These pin the replacement.
+
+    /// A decrypt names the leaf that actually signed the message — not whoever relayed it.
+    #[test]
+    fn a_decrypt_carries_the_authenticated_sender() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let ct = alice.encrypt(GID, b"it was me").unwrap();
+        let opened = bob
+            .decrypt(GID, &ct)
+            .unwrap()
+            .expect("an application message");
+        assert_eq!(opened.plaintext, b"it was me");
+        assert_eq!(opened.sender, b"mimi://test.example/d/alice/phone");
+        assert_eq!(user_of(&opened.sender), b"mimi://test.example/u/alice");
+    }
+
+    /// Two devices of one person are two leaves, and the attribution says WHICH — a person's
+    /// laptop and their phone are distinguishable, and both reduce to the same user.
+    #[test]
+    fn the_sender_names_the_device_and_reduces_to_the_user() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob_phone = Client::new(DOM, "bob", "phone").unwrap();
+        let bob_laptop = Client::new(DOM, "bob", "laptop").unwrap();
+        establish(&alice, GID, &[&bob_phone, &bob_laptop]);
+
+        let ct = bob_laptop.encrypt(GID, b"from the laptop").unwrap();
+        let at_alice = alice.decrypt(GID, &ct).unwrap().unwrap();
+        let at_phone = bob_phone.decrypt(GID, &ct).unwrap().unwrap();
+
+        assert_eq!(at_alice.sender, b"mimi://test.example/d/bob/laptop");
+        assert_eq!(at_alice.sender, at_phone.sender, "every reader agrees");
+        assert_eq!(user_of(&at_alice.sender), b"mimi://test.example/u/bob");
+    }
+
+    /// The epoch comes back with the sender, so a caller can say WHICH membership the sender
+    /// was authenticated against.
+    #[test]
+    fn a_decrypt_carries_the_epoch_it_was_framed_in() {
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let first = alice.encrypt(GID, b"epoch one").unwrap();
+        assert_eq!(bob.decrypt(GID, &first).unwrap().unwrap().epoch, 1);
+
+        // A membership change moves the epoch, and the next message is framed in the new one.
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
+        let add = alice
+            .stage_add(GID, &[carol.key_package().unwrap()])
+            .unwrap();
+        alice.commit_accepted(GID).unwrap();
+        bob.apply_commit(GID, &add.commit).unwrap();
+
+        let second = alice.encrypt(GID, b"epoch two").unwrap();
+        assert_eq!(bob.decrypt(GID, &second).unwrap().unwrap().epoch, 2);
+    }
+
+    /// A message read LATE — after the group has moved on — is still attributed to the leaf that
+    /// signed it, and still reports the epoch it was framed in rather than the current one.
+    ///
+    /// This is the ordinary case in a chat, not a corner: an SSE Commit overtakes a page of older
+    /// messages, or a user scrolls back. If attribution came from "who is at this leaf index now"
+    /// it would drift every time somebody joined or left, and a message would end up rendered under
+    /// a member who was not even in the group when it was written.
+    #[test]
+    fn a_past_epoch_decrypt_still_names_the_leaf_that_signed_it() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        // Written at epoch 1 and deliberately NOT read yet.
+        let old = alice.encrypt(GID, b"said before the change").unwrap();
+
+        // The group moves on. Two commits, so the message is genuinely behind the head.
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
+        let add = alice
+            .stage_add(GID, &[carol.key_package().unwrap()])
+            .unwrap();
+        alice.commit_accepted(GID).unwrap();
+        bob.apply_commit(GID, &add.commit).unwrap();
+        let dave = Client::new(DOM, "dave", "dev-d").unwrap();
+        let add2 = alice
+            .stage_add(GID, &[dave.key_package().unwrap()])
+            .unwrap();
+        alice.commit_accepted(GID).unwrap();
+        bob.apply_commit(GID, &add2.commit).unwrap();
+        assert_eq!(bob.epoch(GID).unwrap(), 3);
+
+        let opened = bob
+            .decrypt(GID, &old)
+            .unwrap()
+            .expect("a past-epoch application message is still readable");
+        assert_eq!(opened.plaintext, b"said before the change");
+        assert_eq!(opened.sender, b"mimi://test.example/d/alice/phone");
+        assert_eq!(
+            opened.epoch, 1,
+            "the epoch it was FRAMED in, not the current one"
+        );
+    }
+
+    /// The same, on the preview path: a notification for a message that arrived while the app was
+    /// catching up must not be titled by whoever happens to hold that leaf index now.
+    #[test]
+    fn a_past_epoch_preview_still_names_the_leaf_that_signed_it() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let old = alice.encrypt(GID, b"before the join").unwrap();
+        let carol = Client::new(DOM, "carol", "dev-c").unwrap();
+        let add = alice
+            .stage_add(GID, &[carol.key_package().unwrap()])
+            .unwrap();
+        alice.commit_accepted(GID).unwrap();
+        bob.apply_commit(GID, &add.commit).unwrap();
+
+        let preview = PreviewClient::import_state(&bob.export_state().unwrap()).unwrap();
+        let opened = preview.decrypt(GID, &old).unwrap().unwrap();
+        assert_eq!(opened.sender, b"mimi://test.example/d/alice/phone");
+        assert_eq!(opened.epoch, 1);
+    }
+
+    /// A preview attributes too. A notification titled with the name the PUSH claims is a
+    /// notification titled by the server; the lock screen is exactly where nobody checks.
+    #[test]
+    fn a_preview_decrypt_carries_the_authenticated_sender() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let ct = alice.encrypt(GID, b"ping").unwrap();
+        let preview = PreviewClient::import_state(&bob.export_state().unwrap()).unwrap();
+        let opened = preview.decrypt(GID, &ct).unwrap().unwrap();
+        assert_eq!(opened.plaintext, b"ping");
+        assert_eq!(opened.sender, b"mimi://test.example/d/alice/phone");
+    }
+
+    // --- signed history handoff ------------------------------------------------------------
+
+    /// The happy path: a member signs a request, a co-member verifies it against the leaf key
+    /// the ratchet tree holds.
+    #[test]
+    fn a_history_request_verifies_against_the_requester_leaf() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let nonce = b"nonce-0123456789";
+        let sig = bob.sign_history_request(GID, "conv-1", 1, nonce).unwrap();
+        alice
+            .verify_history_request(
+                GID,
+                "conv-1",
+                1,
+                "mimi://test.example/d/bob/laptop",
+                nonce,
+                &sig,
+            )
+            .expect("a co-member's signature must verify");
+    }
+
+    /// THE FORGERY. Carol is a perfectly legitimate member — she derives the same exporter
+    /// secret as everyone else, so under exporter-AEAD alone she could mint a request in
+    /// Bob's name and have Alice seal the entire conversation to a key bound to him.
+    ///
+    /// She does not hold Bob's leaf signature key, so the signature does not verify.
+    #[test]
+    fn a_member_cannot_sign_a_history_request_as_another_member() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        let carol = Client::new(DOM, "carol", "phone").unwrap();
+        establish(&alice, GID, &[&bob, &carol]);
+
+        let nonce = b"nonce-0123456789";
+        let carols_signature = carol.sign_history_request(GID, "conv-1", 1, nonce).unwrap();
+
+        assert!(
+            alice
+                .verify_history_request(
+                    GID,
+                    "conv-1",
+                    1,
+                    "mimi://test.example/d/bob/laptop", // ...but claiming to be Bob
+                    nonce,
+                    &carols_signature,
+                )
+                .is_err(),
+            "a member signing under another member's identity must be refused",
+        );
+    }
+
+    /// Every bound field is actually bound: change any one of them after signing and the
+    /// signature stops verifying.
+    #[test]
+    fn a_history_request_is_bound_to_every_field() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let nonce = b"nonce-0123456789";
+        let sig = bob.sign_history_request(GID, "conv-1", 1, nonce).unwrap();
+        let bob_id = "mimi://test.example/d/bob/laptop";
+
+        assert!(
+            alice
+                .verify_history_request(GID, "conv-2", 1, bob_id, nonce, &sig)
+                .is_err(),
+            "another conversation",
+        );
+        assert!(
+            alice
+                .verify_history_request(GID, "conv-1", 2, bob_id, nonce, &sig)
+                .is_err(),
+            "another epoch",
+        );
+        assert!(
+            alice
+                .verify_history_request(GID, "conv-1", 1, bob_id, b"different-nonce!", &sig)
+                .is_err(),
+            "another nonce",
+        );
+        let mut tampered = sig.clone();
+        tampered[0] ^= 0x01;
+        assert!(
+            alice
+                .verify_history_request(GID, "conv-1", 1, bob_id, nonce, &tampered)
+                .is_err(),
+            "a flipped bit in the signature",
+        );
+    }
+
+    /// An identity nobody holds a leaf under is refused, rather than falling back to some
+    /// default key.
+    #[test]
+    fn a_history_request_from_a_non_member_is_refused() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        let mallory = Client::new(DOM, "mallory", "phone").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        // Mallory cannot even sign: she does not hold the group.
+        assert!(mallory
+            .sign_history_request(GID, "conv-1", 1, b"nonce-0123456789")
+            .is_err());
+        // And a signature purporting to be from her is refused: no leaf, no key.
+        assert!(alice
+            .verify_history_request(
+                GID,
+                "conv-1",
+                1,
+                "mimi://test.example/d/mallory/phone",
+                b"nonce-0123456789",
+                &[0u8; 64],
+            )
+            .is_err());
+    }
+
+    /// An offer verifies for the device it names, carries the blob's digest, and is refused
+    /// the moment either the blob or the claimed offerer changes.
+    #[test]
+    fn a_history_offer_is_bound_to_its_blob_and_its_offerer() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        let carol = Client::new(DOM, "carol", "phone").unwrap();
+        establish(&alice, GID, &[&bob, &carol]);
+
+        let bob_id = "mimi://test.example/d/bob/laptop";
+        let alice_id = "mimi://test.example/d/alice/phone";
+        let sealed = b"sealed-history-ciphertext";
+        let req_nonce = b"nonce-0123456789";
+
+        let sig = alice
+            .sign_history_offer(
+                GID, "conv-1", 1, bob_id, "hist-1", b"salt", b"nonce", req_nonce, sealed,
+            )
+            .unwrap();
+
+        bob.verify_history_offer(
+            GID, "conv-1", 1, alice_id, "hist-1", b"salt", b"nonce", req_nonce, sealed, &sig,
+        )
+        .expect("the offer Alice actually signed, opened by the device it names");
+
+        // The server stores the blob. Swapping its bytes must break the signature, or the
+        // signature would be over a pointer rather than over the history.
+        assert!(
+            bob.verify_history_offer(
+                GID,
+                "conv-1",
+                1,
+                alice_id,
+                "hist-1",
+                b"salt",
+                b"nonce",
+                req_nonce,
+                b"tampered-history-ciphertext",
+                &sig,
+            )
+            .is_err(),
+            "a blob swapped behind the offer",
+        );
+
+        // Carol re-signing Alice's offer under her own identity does not make it Alice's.
+        let carols = carol
+            .sign_history_offer(
+                GID, "conv-1", 1, bob_id, "hist-1", b"salt", b"nonce", req_nonce, sealed,
+            )
+            .unwrap();
+        assert!(
+            bob.verify_history_offer(
+                GID, "conv-1", 1, alice_id, "hist-1", b"salt", b"nonce", req_nonce, sealed,
+                &carols,
+            )
+            .is_err(),
+            "one member's signature under another member's name",
+        );
+        // Under her OWN name it verifies — she is a member, and this is a legitimate offer.
+        bob.verify_history_offer(
+            GID,
+            "conv-1",
+            1,
+            "mimi://test.example/d/carol/phone",
+            "hist-1",
+            b"salt",
+            b"nonce",
+            req_nonce,
+            sealed,
+            &carols,
+        )
+        .expect("a member offering under their own identity");
+    }
+
+    /// An offer addressed to one device must not verify on another, however well it is
+    /// signed: the requester is bound into the transcript, and each verifier supplies its own.
+    #[test]
+    fn a_history_offer_addressed_elsewhere_does_not_verify_here() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        let carol = Client::new(DOM, "carol", "phone").unwrap();
+        establish(&alice, GID, &[&bob, &carol]);
+
+        let sig = alice
+            .sign_history_offer(
+                GID,
+                "conv-1",
+                1,
+                "mimi://test.example/d/bob/laptop",
+                "hist-1",
+                b"salt",
+                b"nonce",
+                b"nonce-0123456789",
+                b"sealed",
+            )
+            .unwrap();
+
+        assert!(
+            carol
+                .verify_history_offer(
+                    GID,
+                    "conv-1",
+                    1,
+                    "mimi://test.example/d/alice/phone",
+                    "hist-1",
+                    b"salt",
+                    b"nonce",
+                    b"nonce-0123456789",
+                    b"sealed",
+                    &sig,
+                )
+                .is_err(),
+            "Carol opening an offer sealed and signed for Bob",
+        );
+    }
+
+    /// A request signature can never be replayed as an offer signature. The labels differ, so
+    /// the transcripts differ, so the signature does not carry across.
+    #[test]
+    fn request_and_offer_signatures_are_not_interchangeable() {
+        let alice = Client::new(DOM, "alice", "phone").unwrap();
+        let bob = Client::new(DOM, "bob", "laptop").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let nonce = b"nonce-0123456789";
+        let request_sig = bob.sign_history_request(GID, "conv-1", 1, nonce).unwrap();
+        assert!(
+            bob.verify_history_offer(
+                GID,
+                "conv-1",
+                1,
+                "mimi://test.example/d/bob/laptop",
+                "hist-1",
+                b"salt",
+                b"nonce",
+                nonce,
+                b"sealed",
+                &request_sig,
+            )
+            .is_err(),
+            "a request signature accepted as an offer would defeat the domain separation",
+        );
+    }
+
     // An outsider cannot derive the call key — they do not have the group at all. This is
     // the property that keeps the SERVER out of the call: it relays the signalling and
     // cannot read a byte of it.
@@ -1772,7 +2436,7 @@ mod tests {
         // Chat still works in both directions afterwards.
         let ct = alice.encrypt(GID, b"still fine").unwrap();
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"still fine"[..])
         );
     }
@@ -1835,7 +2499,7 @@ mod tests {
         let snapshot = bob.export_state().unwrap();
         let preview = PreviewClient::import_state(&snapshot).unwrap();
         assert_eq!(
-            preview.decrypt(GID, &ct).unwrap().as_deref(),
+            preview.decrypt(GID, &ct).body().as_deref(),
             Some(&b"the quick brown fox"[..]),
             "the preview must be able to read the message it is previewing",
         );
@@ -1844,7 +2508,7 @@ mod tests {
 
         // Bob opens the app. The message must still decrypt, for real, into the transcript.
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"the quick brown fox"[..]),
             "the real client lost the message: previewing consumed the key it needed, which \
              means every previewed message would render blank in the app",
@@ -1885,7 +2549,7 @@ mod tests {
         // And a message in the NEW epoch decrypts, proving the ratchet is where it should be.
         let ct = alice.encrypt(GID, b"after carol joined").unwrap();
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"after carol joined"[..])
         );
     }
@@ -1903,13 +2567,13 @@ mod tests {
         for _ in 0..3 {
             let preview = PreviewClient::import_state(&snapshot).unwrap();
             assert_eq!(
-                preview.decrypt(GID, &ct).unwrap().as_deref(),
+                preview.decrypt(GID, &ct).body().as_deref(),
                 Some(&b"delivered twice"[..]),
             );
         }
 
         assert_eq!(
-            bob.decrypt(GID, &ct).unwrap().as_deref(),
+            bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"delivered twice"[..])
         );
     }

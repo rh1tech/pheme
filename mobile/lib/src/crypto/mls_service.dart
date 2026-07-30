@@ -21,6 +21,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'dart:io' show Platform;
@@ -31,8 +32,10 @@ import '../core/api_exception.dart';
 import '../data/pheme_repository.dart';
 import '../models/chat_models.dart';
 import '../rust/api/mls.dart' as rust;
+import 'attribution.dart';
 import 'chat_cache.dart';
 import 'chat_content.dart';
+import 'history_handoff.dart';
 import 'image_size.dart';
 import 'photo_crypto.dart';
 import 'catch_up_gate.dart';
@@ -68,7 +71,7 @@ const callKeyLabel = 'pheme-call-v1';
 
 /// The exporter label for history-sync keys. Versioned like the call label, and identical to the
 /// web client's so a sealed transcript is readable across platforms.
-const _historySyncLabel = 'pheme/history-sync/v1';
+const _historySyncLabel = 'pheme/history-sync/v2';
 
 /// A human label for THIS device, for the user's "your devices" list. Best effort — a device is
 /// perfectly usable if the label is vague. Nothing identifying beyond the OS family.
@@ -1190,7 +1193,14 @@ class MlsService {
       ContentType.application,
     );
 
-    await _cache.cacheContent(conversation.id, message.id, content);
+    // Attributed to THIS device's own credential — the same identity MLS authenticates for every
+    // other member reading it. We wrote it, so this is not a claim about a sender, it is the sender.
+    await _cache.cacheContent(
+      conversation.id,
+      message.id,
+      content,
+      Attribution.authenticated(session.identity),
+    );
     // A newly-sent body is only on this device until it is backed up; carry it into the backup.
     autoBackupSoon(_sessionUserId);
     return message;
@@ -1238,12 +1248,12 @@ class MlsService {
   /// Returns the cached body when we have already read it, and null when this device cannot read it at
   /// all. Null is a real answer, not a failure: MLS gives a device no access to what was said before
   /// it joined.
-  Future<ChatContent?> decryptMessage(
+  Future<CachedEntry?> decryptMessage(
     String conversationId,
     String myUserId,
     ChatMessage message,
   ) async {
-    final cached = _cache.content(conversationId, message.id);
+    final cached = _cache.entry(conversationId, message.id);
     if (cached != null) return cached;
 
     final groups = _readableGroups[conversationId];
@@ -1275,11 +1285,15 @@ class MlsService {
     }
     if (plaintext == null) return null;
 
-    final content = parseContent(plaintext);
-    await _cache.cacheContent(conversationId, message.id, content);
+    // The decrypt hands back the credential MLS AUTHENTICATED as the signer alongside the bytes.
+    // That is the only trustworthy answer to who wrote this message, and it is stored with the body
+    // so nothing downstream has to go back to the envelope for it.
+    final content = parseContent(plaintext.plaintext);
+    final attribution = Attribution.authenticated(plaintext.sender);
+    await _cache.cacheContent(conversationId, message.id, content, attribution);
     // The decrypted body now lives only here (the message key is gone); back it up.
     autoBackupSoon(_sessionUserId);
-    return content;
+    return CachedEntry(content, attribution);
   }
 
   /// Posts the record of a call into the conversation, encrypted like anything else.
@@ -1309,7 +1323,12 @@ class MlsService {
 
     // Straight into the cache: we will never be able to decrypt it. Without this the caller — the one
     // person who knows the call went unanswered — would see its own record of it sealed.
-    await _cache.cacheContent(conversationId, message.id, content);
+    await _cache.cacheContent(
+      conversationId,
+      message.id,
+      content,
+      Attribution.authenticated(session.identity),
+    );
     autoBackupSoon(_sessionUserId);
   }
 
@@ -1737,11 +1756,10 @@ class MlsService {
 
   // --- history sync ----------------------------------------------------------------------------
   //
-  // A device that joins a conversation it holds no transcript for asks a co-member for the history,
-  // over the conversation's own MLS group. Any co-member can answer (all members already see all
-  // messages, so this leaks nothing): it seals this conversation's bodies under a group-derived key
-  // bound to the requester, uploads the blob, and points the requester at it. Degrades to the backup
-  // (Phase 3) when nobody is online, and to new-messages-only when there is no backup either.
+  // A device that joins a conversation it holds no transcript for asks another device of its own
+  // account for the history. Other participants are not trusted historians: each owns a valid leaf
+  // key and could sign invented plaintext as themselves. The handoff degrades to backup when no
+  // same-account device is online, and to new-messages-only when there is no backup either.
 
   /// The current group's member identities, or empty when this device does not hold the group — the
   /// input to the responder election.
@@ -1774,7 +1792,25 @@ class MlsService {
 
     _historyRequested.add(conversationId);
     final epoch = await session.epoch(state.groupId);
-    final body = _encodeControl({'id': session.identity, 'epoch': epoch});
+    final nonce = _freshNonce();
+    _historyNonces[conversationId] = nonce;
+    // Signed with this device's own MLS leaf key. A co-member verifies it against the leaf key the
+    // group's ratchet tree holds for this identity before sealing anything — so a member cannot make
+    // another member hand a conversation over on somebody else's behalf.
+    final sig = await session.signHistoryRequest(
+      state.groupId,
+      conversationId,
+      epoch,
+      nonce,
+    );
+    final body = _encodeControl(
+      HistoryRequestBody(
+        id: session.identity,
+        epoch: epoch,
+        nonce: base64Encode(nonce),
+        sig: base64Encode(sig),
+      ).toJson(),
+    );
     try {
       await _repo.sendChatMessage(
         conversationId,
@@ -1786,17 +1822,54 @@ class MlsService {
     }
   }
 
-  /// Responds to a history request: seal this conversation's transcript under a group-derived key
-  /// bound to the requester, upload it, and point the requester at it. No-op if we hold nothing, or
-  /// the request is our own device's. Callers elect a single responder before calling this.
+  /// The nonce this device put in its own history request, per conversation.
+  ///
+  /// In memory only, and deliberately. An offer quotes the nonce back, which is what ties an answer
+  /// to the question that was asked; a nonce that did not survive a restart cannot verify an offer,
+  /// and the correct response to that is to ask again — which `_historyRequested` (also in memory)
+  /// makes happen on the next settle. Persisting it would buy one saved round trip in exchange for
+  /// keeping replay-protection state on disk.
+  final _historyNonces = <String, Uint8List>{};
+
+  Uint8List _freshNonce() {
+    final random = Random.secure();
+    return Uint8List.fromList(
+      List<int>.generate(16, (_) => random.nextInt(256)),
+    );
+  }
+
+  /// Responds to a history request: verify it, seal this conversation's transcript under a
+  /// group-derived key bound to the requester, upload it, and point the requester at it — with a
+  /// signature over what is being offered.
+  ///
+  /// [posterId] is the user id the SERVER authenticated as having posted the request. Checked
+  /// against the identity the body claims, in addition to the MLS signature: an insider forging a
+  /// request in somebody else's name then has to post it from that person's account as well.
+  ///
+  /// No-op if we hold nothing, the request is our own, or it does not verify. Callers elect a single
+  /// responder before calling this.
   Future<void> offerHistory(
     String conversationId,
     String userId,
-    String requesterIdentity,
-  ) async {
+    HistoryRequestBody request, {
+    String posterId = '',
+  }) async {
     final session = await this.session(userId);
-    if (requesterIdentity.isEmpty || requesterIdentity == session.identity) {
+    if (request.id.isEmpty || request.id == session.identity) {
       debugPrint('Pheme: no history offer — the request is our own device');
+      return;
+    }
+    if (!sameAccountIdentities(request.id, session.identity)) {
+      debugPrint(
+        'Pheme: no history offer — only another device of the requester account may provide it',
+      );
+      return;
+    }
+    if (!posterMatchesClaim(request.id, posterId)) {
+      debugPrint(
+        'Pheme: no history offer — the request claims an identity the server '
+        'did not authenticate as its poster',
+      );
       return;
     }
     final state = await _repo.mlsGroupState(conversationId);
@@ -1807,6 +1880,27 @@ class MlsService {
       );
       return;
     }
+
+    final requestNonce = base64Decode(request.nonce);
+    // Against the requester's leaf key in OUR copy of the ratchet tree. Nothing below may run until
+    // it holds: everything after it derives a key for, and seals a transcript to, the identity this
+    // proves asked for it.
+    final verified = await session.verifyHistoryRequest(
+      state.groupId,
+      conversationId,
+      request.epoch,
+      request.id,
+      requestNonce,
+      base64Decode(request.sig),
+    );
+    if (!verified) {
+      debugPrint(
+        'Pheme: no history offer — the request signature does not verify '
+        'against ${request.id}\'s leaf key',
+      );
+      return;
+    }
+
     final bodies = (await _cache.exportAllContents())[conversationId];
     if (bodies == null || bodies.isEmpty) {
       debugPrint(
@@ -1818,7 +1912,7 @@ class MlsService {
     final derived = await session.exportSecret(
       state.groupId,
       _historySyncLabel,
-      Uint8List.fromList(utf8.encode(requesterIdentity)),
+      Uint8List.fromList(utf8.encode(request.id)),
       32,
     );
     if (derived == null) {
@@ -1828,8 +1922,14 @@ class MlsService {
       return;
     }
 
+    // v2 of the sealed payload: every body carries the sender MLS authenticated when this device
+    // read it (see attribution.encodeCacheEntry), so the receiving device imports authorship rather
+    // than re-deriving it from whatever the server says. That is what stops an offerer handing over
+    // attacker-chosen plaintext under someone else's envelope id.
     final plaintext = Uint8List.fromList(
-      utf8.encode(jsonEncode({'v': 1, 'bodies': bodies})),
+      utf8.encode(
+        jsonEncode({'v': 2, 'from': session.identity, 'bodies': bodies}),
+      ),
     );
     final sealed = await rust.mlsBackupEncrypt(
       passphrase: derived.secret,
@@ -1844,20 +1944,38 @@ class MlsService {
       );
       return;
     }
-    final offer = _encodeControl({
-      'to': requesterIdentity,
-      'epoch': derived.epoch,
-      'historyId': historyId,
-      'salt': base64Encode(sealed.salt),
-      'nonce': base64Encode(sealed.nonce),
-    });
+    // Signed over the CIPHERTEXT's digest, not over the id pointing at it: the server stores the
+    // blob and could otherwise swap its contents behind a perfectly valid offer.
+    final sig = await session.signHistoryOffer(
+      groupId: state.groupId,
+      conversationId: conversationId,
+      epoch: derived.epoch,
+      requester: request.id,
+      historyId: historyId,
+      salt: sealed.salt,
+      nonce: sealed.nonce,
+      requestNonce: requestNonce,
+      ciphertext: sealed.ciphertext,
+    );
+    final offer = _encodeControl(
+      HistoryOfferBody(
+        from: session.identity,
+        to: request.id,
+        epoch: derived.epoch,
+        historyId: historyId,
+        salt: base64Encode(sealed.salt),
+        nonce: base64Encode(sealed.nonce),
+        reqNonce: request.nonce,
+        sig: base64Encode(sig),
+      ).toJson(),
+    );
     try {
       await _repo.sendChatMessage(
         conversationId,
         offer,
         ContentType.mlsHistoryOffer,
       );
-      debugPrint('Pheme: history offer delivered to $requesterIdentity');
+      debugPrint('Pheme: history offer delivered to ${request.id}');
     } on Object catch (e) {
       // The requester will re-ask on its next settle if this never lands.
       debugPrint('Pheme: the history offer was sealed but not delivered: $e');
@@ -1887,10 +2005,13 @@ class MlsService {
     }
     for (final offer in offers) {
       try {
+        // The envelope's senderId goes with it: the server authenticates the POSTER of a control
+        // message, which is a second, independent witness alongside the MLS signature.
         if (await receiveHistoryOffer(
           conversationId,
           userId,
           offer.ciphertext,
+          posterId: offer.senderId,
         )) {
           return true;
         }
@@ -1901,17 +2022,38 @@ class MlsService {
     return false;
   }
 
-  /// Opens a history offer addressed to this device: derive the same group-bound key, fetch the
-  /// sealed blob, open it and merge the bodies under what we already hold. Returns whether any
-  /// history was imported. Ignores offers not addressed to this device.
+  /// Opens a history offer addressed to this device: verify the offerer's signature over the blob's
+  /// own bytes, derive the same group-bound key, fetch it, open it and merge the bodies under what
+  /// we already hold. Returns whether any history was imported.
+  ///
+  /// Every refusal below is silent and returns false. A refused offer is not an error state — the
+  /// requester simply re-asks on its next settle, and a device with no history is a device that
+  /// shows what it can and says so about the rest. What it must NEVER do is import an unverified
+  /// transcript: that is somebody else's idea of what was said in this conversation, landing on a
+  /// fresh device with nothing to compare it against.
   Future<bool> receiveHistoryOffer(
     String conversationId,
     String userId,
-    Uint8List offerCiphertext,
-  ) async {
+    Uint8List offerCiphertext, {
+    String posterId = '',
+  }) async {
     final session = await this.session(userId);
-    final offer = _decodeControl(offerCiphertext);
-    if (offer == null || offer['to'] != session.identity) return false;
+    // v1 offers — unsigned — parse to null and are refused here. No silent fallback: accepting one
+    // would reopen exactly the forgery the signature exists to close.
+    final offer = parseOfferBody(offerCiphertext);
+    if (offer == null || offer.to != session.identity) return false;
+    if (!sameAccountIdentities(offer.from, session.identity)) return false;
+    if (!posterMatchesClaim(offer.from, posterId)) return false;
+    // Our own offer echoed back off the stream.
+    if (offer.from == session.identity) return false;
+
+    // The nonce we put in our own request. An offer that does not quote it back is answering a
+    // question this device did not ask — a replay of an older handoff, or one minted from nothing.
+    final expected = _historyNonces[conversationId];
+    if (expected == null || base64Encode(expected) != offer.reqNonce) {
+      return false;
+    }
+
     final state = await _repo.mlsGroupState(conversationId);
     if (!state.isEstablished || !await session.hasGroup(state.groupId)) {
       return false;
@@ -1925,20 +2067,44 @@ class MlsService {
     );
     // Bound to the epoch the offer was sealed at; if we have since moved, re-request rather than
     // open with a key that will not match.
-    if (derived == null || derived.epoch != (offer['epoch'] as num?)?.toInt()) {
+    if (derived == null || derived.epoch != offer.epoch) return false;
+
+    final Uint8List blob;
+    try {
+      blob = await _repo.getHistory(conversationId, offer.historyId);
+    } on Object {
+      return false;
+    }
+
+    // Against the OFFERER's leaf key in the ratchet tree, over the bytes actually fetched. This is
+    // both halves at once: the wrong member cannot have signed it, and the right member's signature
+    // does not cover a blob the server swapped.
+    final verified = await session.verifyHistoryOffer(
+      groupId: state.groupId,
+      conversationId: conversationId,
+      epoch: offer.epoch,
+      offerer: offer.from,
+      historyId: offer.historyId,
+      salt: base64Decode(offer.salt),
+      nonce: base64Decode(offer.nonce),
+      requestNonce: base64Decode(offer.reqNonce),
+      ciphertext: blob,
+      signature: base64Decode(offer.sig),
+    );
+    if (!verified) {
+      debugPrint(
+        'Pheme: history offer refused — the signature does not verify against '
+        '${offer.from}\'s leaf key, or the blob was swapped',
+      );
       return false;
     }
 
     final Uint8List plaintext;
     try {
-      final blob = await _repo.getHistory(
-        conversationId,
-        offer['historyId'] as String? ?? '',
-      );
       plaintext = await rust.mlsBackupDecrypt(
         passphrase: derived.secret,
-        salt: base64Decode(offer['salt'] as String? ?? ''),
-        nonce: base64Decode(offer['nonce'] as String? ?? ''),
+        salt: base64Decode(offer.salt),
+        nonce: base64Decode(offer.nonce),
         ciphertext: blob,
       );
     } on Object {
@@ -1947,12 +2113,20 @@ class MlsService {
 
     try {
       final parsed = jsonDecode(utf8.decode(plaintext));
-      if (parsed is Map && parsed['bodies'] is Map) {
+      if (parsed is Map &&
+          parsed['v'] == historyVersion &&
+          parsed['from'] == offer.from &&
+          parsed['bodies'] is Map) {
         final bodies = (parsed['bodies'] as Map).map(
           (id, body) => MapEntry(id as String, body as String),
         );
         if (bodies.isNotEmpty) {
-          await _cache.importContents({conversationId: bodies});
+          // Stamped with the offerer's identity, so an imported message is never mistaken later for
+          // one this device authenticated itself.
+          await _cache.importContents({
+            conversationId: bodies,
+          }, offerer: offer.from);
+          _historyNonces.remove(conversationId);
           return true;
         }
       }
@@ -1967,15 +2141,6 @@ class MlsService {
   /// across platforms.
   Uint8List _encodeControl(Map<String, dynamic> obj) =>
       Uint8List.fromList(utf8.encode(jsonEncode(obj)));
-
-  Map<String, dynamic>? _decodeControl(Uint8List bytes) {
-    try {
-      final parsed = jsonDecode(utf8.decode(bytes));
-      return parsed is Map<String, dynamic> ? parsed : null;
-    } on Object {
-      return null;
-    }
-  }
 
   /// Schedules a debounced re-seal of this device's backup, if auto-backup is armed (a secret is
   /// held). Fire-and-forget: a failed auto-backup is not worth surfacing — the next change schedules
