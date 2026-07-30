@@ -88,6 +88,29 @@ String deviceLabel() {
 ///
 /// One per session. Held by a provider so the group state, the in-flight settles and the call freeze
 /// are shared by everything that touches a conversation.
+/// What became of a history offer this device was handed.
+///
+/// It matters that these are told apart, because fetching an offer CONSUMES it: the server deletes
+/// the blob as it is read, so an offer that arrives and is then dropped is gone from the wire. The
+/// history still exists on the device that offered it, so the answer to a failure is to ask again —
+/// but only if the failure is the kind another attempt could survive. A refused signature is not.
+enum HistoryOfferResult {
+  /// Imported. The transcript is on this device.
+  accepted,
+
+  /// Not addressed to us, or not something we act on. Nothing was consumed.
+  ignored,
+
+  /// Refused on its merits — a bad signature, a wrong epoch, a forged sender. Asking again would
+  /// fetch the same answer, and a caller that retried would be retrying a forgery.
+  refused,
+
+  /// CONSUMED AND LOST. The blob was fetched and then could not be kept: it would not decrypt, or
+  /// it would not go into the cache. The offer is gone from the server and this device still has no
+  /// history — so somebody must be asked to offer again, or the transfer simply never happens.
+  lost,
+}
+
 /// The state of the off-device copy, as far as this session knows.
 ///
 /// It exists because the failure mode of a backup is silence. Nothing about a device whose backups
@@ -1625,15 +1648,19 @@ class MlsService {
   /// normalised form (the code with dashes/spaces stripped and ambiguous letters folded). restoreKeys
   /// validates before any side effect, so a first attempt that fails on the GCM tag leaves nothing to
   /// undo. A wrong secret throws; [IdentityAlreadySetUpException] propagates unchanged.
-  Future<bool> restoreWithSecret(String userId, String input) async {
+  Future<bool> restoreWithSecret(
+    String userId,
+    String input, {
+    bool replaceExisting = false,
+  }) async {
     try {
-      return await restoreKeys(userId, input);
+      return await restoreKeys(userId, input, replaceExisting: replaceExisting);
     } on IdentityAlreadySetUpException {
       rethrow;
     } on Object {
       final normalized = normalizeRecoveryCode(input);
       if (normalized == input) rethrow; // nothing new to try
-      return restoreKeys(userId, normalized);
+      return restoreKeys(userId, normalized, replaceExisting: replaceExisting);
     }
   }
 
@@ -1721,13 +1748,27 @@ class MlsService {
   /// The passphrase's real job here is to open the transcript so the new device shows the old
   /// history; the key-state blob is opened only to VALIDATE the passphrase (a wrong one fails the
   /// GCM tag) and is then discarded, since this device gets its own keys, not the backup's.
-  Future<bool> restoreKeys(String userId, String passphrase) async {
+  /// [replaceExisting] restores onto a device that ALREADY has an identity — the Settings entry
+  /// point, for somebody who declined the restore at first launch and has changed their mind, which
+  /// until now was a decision with no way back.
+  ///
+  /// The guard it lifts exists to stop an identity minted while the prompt sat open from being
+  /// stranded, so it is only ever lifted by an explicit human action. It is safe to lift where the
+  /// order below is: the passphrase is proven against the state blob BEFORE anything is destroyed,
+  /// so a wrong code leaves the existing identity exactly as it was.
+  Future<bool> restoreKeys(
+    String userId,
+    String passphrase, {
+    bool replaceExisting = false,
+  }) async {
     final backup = await _repo.getKeyBackup();
     if (backup == null) return false;
 
     // Another session may have set up an identity while the prompt sat open. Coming up fresh now
     // would strand it and whatever was said in between.
-    if (await _store.readState() != null && await _store.owner() == userId) {
+    final hasIdentity =
+        await _store.readState() != null && await _store.owner() == userId;
+    if (hasIdentity && !replaceExisting) {
       throw const IdentityAlreadySetUpException();
     }
 
@@ -1791,6 +1832,15 @@ class MlsService {
     _sessionUserId = '';
     _settling.clear();
     _readableGroups.clear();
+    // Replacing an identity means the old key state has to go, or session() below loads it back
+    // instead of minting. Deliberately AFTER the passphrase was proven and the transcript opened:
+    // everything destructive in this method happens past the point where a wrong code has already
+    // thrown. The body cache is NOT wiped — importContents merges, so bodies this device decrypted
+    // itself and the backup never saw are kept rather than thrown away.
+    if (hasIdentity && replaceExisting) {
+      await rust.mlsUnload();
+      await _store.wipe();
+    }
     await clearMlsDeviceId(_storage, namespace: _ns);
     await acceptFreshIdentity();
 
@@ -1894,6 +1944,16 @@ class MlsService {
   /// Conversations this device has already asked history for this session — so it asks once, not on
   /// every settle.
   final _historyRequested = <String>{};
+
+  /// Clears the once-per-session guard on [requestHistory] for one conversation.
+  ///
+  /// For the narrow case the guard was not written for: an offer that arrived, was consumed by the
+  /// fetch, and then could not be kept. Without this the device has already "asked" and will never
+  /// ask again, so the history it just failed to receive never arrives at all.
+  Future<void> forgetHistoryRequest(String conversationId) async {
+    _historyRequested.remove(conversationId);
+    _historyNonces.remove(conversationId);
+  }
 
   /// Asks co-members for this conversation's pre-join history — once per conversation per session, and
   /// only when this device holds the group but has no local transcript for it (it just joined).
@@ -2123,12 +2183,13 @@ class MlsService {
       try {
         // The envelope's senderId goes with it: the server authenticates the POSTER of a control
         // message, which is a second, independent witness alongside the MLS signature.
-        if (await receiveHistoryOffer(
+        final result = await receiveHistoryOffer(
           conversationId,
           userId,
           offer.ciphertext,
           posterId: offer.senderId,
-        )) {
+        );
+        if (result == HistoryOfferResult.accepted) {
           return true;
         }
       } on Object catch (e) {
@@ -2147,7 +2208,7 @@ class MlsService {
   /// shows what it can and says so about the rest. What it must NEVER do is import an unverified
   /// transcript: that is somebody else's idea of what was said in this conversation, landing on a
   /// fresh device with nothing to compare it against.
-  Future<bool> receiveHistoryOffer(
+  Future<HistoryOfferResult> receiveHistoryOffer(
     String conversationId,
     String userId,
     Uint8List offerCiphertext, {
@@ -2157,22 +2218,29 @@ class MlsService {
     // v1 offers — unsigned — parse to null and are refused here. No silent fallback: accepting one
     // would reopen exactly the forgery the signature exists to close.
     final offer = parseOfferBody(offerCiphertext);
-    if (offer == null || offer.to != session.identity) return false;
-    if (!sameAccountIdentities(offer.from, session.identity)) return false;
-    if (!posterMatchesClaim(offer.from, posterId)) return false;
+    if (offer == null || offer.to != session.identity) {
+      return HistoryOfferResult.ignored;
+    }
+    if (!sameAccountIdentities(offer.from, session.identity)) {
+      return HistoryOfferResult.refused;
+    }
+    if (!posterMatchesClaim(offer.from, posterId)) {
+      return HistoryOfferResult.refused;
+    }
     // Our own offer echoed back off the stream.
-    if (offer.from == session.identity) return false;
+    if (offer.from == session.identity) return HistoryOfferResult.ignored;
 
     // The nonce we put in our own request. An offer that does not quote it back is answering a
     // question this device did not ask — a replay of an older handoff, or one minted from nothing.
     final expected = _historyNonces[conversationId];
     if (expected == null || base64Encode(expected) != offer.reqNonce) {
-      return false;
+      return HistoryOfferResult.refused;
     }
 
     final state = await _repo.mlsGroupState(conversationId);
     if (!state.isEstablished || !await session.hasGroup(state.groupId)) {
-      return false;
+      // Nothing fetched, nothing consumed — we simply cannot act on this one yet.
+      return HistoryOfferResult.ignored;
     }
 
     final derived = await session.exportSecret(
@@ -2183,13 +2251,17 @@ class MlsService {
     );
     // Bound to the epoch the offer was sealed at; if we have since moved, re-request rather than
     // open with a key that will not match.
-    if (derived == null || derived.epoch != offer.epoch) return false;
+    if (derived == null || derived.epoch != offer.epoch) {
+      return HistoryOfferResult.refused;
+    }
 
     final Uint8List blob;
     try {
       blob = await _repo.getHistory(conversationId, offer.historyId);
     } on Object {
-      return false;
+      // The server may or may not have deleted the blob before the response failed. Either way this
+      // device has no history and the offer cannot be relied on again.
+      return HistoryOfferResult.lost;
     }
 
     // Against the OFFERER's leaf key in the ratchet tree, over the bytes actually fetched. This is
@@ -2212,7 +2284,7 @@ class MlsService {
         'Pheme: history offer refused — the signature does not verify against '
         '${offer.from}\'s leaf key, or the blob was swapped',
       );
-      return false;
+      return HistoryOfferResult.refused;
     }
 
     final Uint8List plaintext;
@@ -2224,7 +2296,8 @@ class MlsService {
         ciphertext: blob,
       );
     } on Object {
-      return false;
+      // Fetched, and then would not open. The blob is spent; ask for another.
+      return HistoryOfferResult.lost;
     }
 
     try {
@@ -2243,13 +2316,17 @@ class MlsService {
             conversationId: bodies,
           }, offerer: offer.from);
           _historyNonces.remove(conversationId);
-          return true;
+          return HistoryOfferResult.accepted;
         }
       }
-    } on Object {
-      return false;
+    } on Object catch (e) {
+      // Most likely the cache refused the write — see ChatCacheWriteException. The transcript was
+      // fetched and decrypted and is now going nowhere, so this must be treated as lost rather than
+      // as a refusal, or the history quietly never arrives.
+      debugPrint('history offer decrypted but could not be stored: $e');
+      return HistoryOfferResult.lost;
     }
-    return false;
+    return HistoryOfferResult.lost;
   }
 
   /// base64/JSON control-body helpers. The wire carries the ciphertext field base64-encoded, so the

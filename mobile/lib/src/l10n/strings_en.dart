@@ -641,4 +641,10 @@ const Map<String, String> enStrings = {
       'Account restored, but the saved message history could not be opened. New messages will '
       'work normally.',
   'recovery.backupFailing': 'Backup is not up to date — open to check',
+  'recovery.restoreHere': 'Restore from a code',
+  'recovery.restoreHereConfirm':
+      'This device will take on a new identity and load the history from that backup. Messages '
+      'read only on this device, and not in the backup, are kept. This cannot be undone.',
+  'recovery.restoreAction': 'Restore',
+  'recovery.noBackup': 'There is no backup saved for this account.',
 };

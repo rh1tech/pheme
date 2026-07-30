@@ -13,6 +13,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../crypto/history_handoff.dart';
+import '../crypto/mls_service.dart';
 import '../crypto/attribution.dart';
 import '../data/app_providers.dart';
 import '../models/chat_models.dart';
@@ -24,6 +25,25 @@ import 'message_feed_controller.dart';
 const _electionStepMs = 400;
 
 class HistorySyncController extends Notifier<void> {
+  /// Conversations we have already re-asked about after losing an offer, so a device that cannot
+  /// store anything asks once more and then stops rather than churning offers forever.
+  final _reRequested = <String>{};
+
+  /// Asks for the history again after an offer was consumed and then lost.
+  ///
+  /// The offer's blob is deleted by the server as it is read, so a failed import does not leave
+  /// anything to retry — the only way back is for a co-device to seal a fresh one. requestHistory
+  /// refuses to ask twice in a session on its own, so this clears that guard once and once only.
+  void _reRequest(String conversationId, String userId) {
+    if (!_reRequested.add(conversationId)) return;
+    final mls = ref.read(mlsServiceProvider);
+    unawaited(
+      mls
+          .forgetHistoryRequest(conversationId)
+          .then((_) => mls.requestHistory(conversationId, userId)),
+    );
+  }
+
   /// Requests we have scheduled a response to, so a repeated event does not double-answer.
   final _answering = <String, Timer>{};
 
@@ -42,6 +62,7 @@ class HistorySyncController extends Notifier<void> {
       }
       _answering.clear();
       _offered.clear();
+      _reRequested.clear();
     });
   }
 
@@ -76,10 +97,23 @@ class HistorySyncController extends Notifier<void> {
               // another member's name has to post it from that member's account as well.
               posterId: message.senderId,
             )
-            .then((imported) {
-              // A fresh cache write does not repaint an open conversation on its own; nudge it.
-              if (imported) {
-                ref.invalidate(messageFeedProvider(conversationId));
+            .then((result) {
+              switch (result) {
+                case HistoryOfferResult.accepted:
+                  // A fresh cache write does not repaint an open conversation on its own; nudge it.
+                  ref.invalidate(messageFeedProvider(conversationId));
+                case HistoryOfferResult.lost:
+                  // The offer was fetched and then could not be kept, and fetching CONSUMED it —
+                  // the server deletes the blob as it is read. Nobody will offer again unless we
+                  // ask again, so the history would simply never arrive. Asking is bounded by
+                  // requestHistory's own once-per-conversation-per-session rule, so a device whose
+                  // cache is permanently broken retries once and then stops.
+                  _reRequest(conversationId, userId);
+                case HistoryOfferResult.ignored:
+                case HistoryOfferResult.refused:
+                  // Nothing consumed, or refused on its merits. Asking again would fetch the same
+                  // answer.
+                  break;
               }
             })
             .catchError((_) {}),

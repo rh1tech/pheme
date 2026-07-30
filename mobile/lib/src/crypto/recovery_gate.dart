@@ -26,6 +26,7 @@ import '../core/snackbar.dart';
 import '../l10n/app_localizations.dart';
 import 'mls_errors.dart';
 import 'mls_service.dart';
+import '../widgets/adaptive/adaptive_feedback.dart';
 import '../widgets/glass/glass.dart';
 
 class RecoveryGate extends ConsumerStatefulWidget {
@@ -287,6 +288,56 @@ class _CodeBox extends StatelessWidget {
 /// Shows the stored recovery code again, or offers to generate a new one — the "view code" screen,
 /// opened from settings. A restored device holds no local code; there we explain that and offer to
 /// generate a fresh one, which re-seals the backup and retires the old code.
+/// Asks for a recovery code, returning what was typed or null if cancelled.
+///
+/// Its own dialog rather than a field on the sheet: entering a code is a different act from reading
+/// one, and mixing them on one surface invites typing a code into a screen that is showing one.
+Future<String?> promptForRecoveryCode(BuildContext context) async {
+  final l10n = AppLocalizations.of(context);
+  final controller = TextEditingController();
+  final entered = await showGlassDialog<String>(
+    context: context,
+    builder: (ctx) => GlassDialog(
+      title: Text(l10n.t('recovery.restoreTitle')),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l10n.t('recovery.restoreDescription')),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              textCapitalization: TextCapitalization.characters,
+              decoration: InputDecoration(
+                labelText: l10n.t('recovery.codeLabel'),
+                hintText: l10n.t('recovery.codePlaceholder'),
+              ),
+              onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        GlassDialogAction(
+          label: l10n.t('common.cancel'),
+          onPressed: () => Navigator.of(ctx).pop(),
+        ),
+        GlassDialogAction(
+          label: l10n.t('recovery.restoreAction'),
+          emphasised: true,
+          onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+        ),
+      ],
+    ),
+  );
+  controller.dispose();
+  return entered;
+}
+
 Future<void> showRecoveryCodeSheet(BuildContext context, WidgetRef ref) async {
   final l10n = AppLocalizations.of(context);
   final mls = ref.read(mlsServiceProvider);
@@ -321,6 +372,62 @@ Future<void> showRecoveryCodeSheet(BuildContext context, WidgetRef ref) async {
             }
           }
 
+          /// Restores from a code typed here, replacing this device's identity.
+          ///
+          /// Confirmed first, because it is not a small thing: this device gets a new identity, and
+          /// anything it has read that is not in the backup and not in its own cache is not coming
+          /// back. The code is proven against the backup before anything is touched, so a wrong one
+          /// costs nothing.
+          Future<void> restoreHere() async {
+            if (busy || userId.isEmpty) return;
+            final entered = await promptForRecoveryCode(context);
+            if (entered == null || entered.isEmpty) return;
+            if (!context.mounted) return;
+            final ok = await showAdaptiveConfirm(
+              context,
+              title: l10n.t('recovery.restoreHere'),
+              message: l10n.t('recovery.restoreHereConfirm'),
+              confirmLabel: l10n.t('recovery.restoreHere'),
+              cancelLabel: l10n.t('common.cancel'),
+              isDestructive: true,
+            );
+            if (!ok) return;
+
+            setState(() => busy = true);
+            try {
+              final restored = await mls.restoreWithSecret(
+                userId,
+                entered,
+                replaceExisting: true,
+              );
+              if (ctx.mounted) Navigator.of(ctx).pop();
+              if (!context.mounted) return;
+              if (!restored) {
+                notifyError(context, l10n.t('recovery.noBackup'));
+                return;
+              }
+              ref.invalidate(conversationListProvider);
+              final outcome = mls.lastRestore;
+              if (outcome != null && outcome.historyMissing) {
+                notifyError(
+                  context,
+                  l10n.t(
+                    outcome.transcriptError != null
+                        ? 'backup.historyUnreadable'
+                        : 'backup.historyAbsent',
+                  ),
+                );
+              } else {
+                notifySuccess(context, l10n.t('backup.saved'));
+              }
+            } on Object {
+              setState(() => busy = false);
+              if (context.mounted) {
+                notifyError(context, l10n.t('backup.wrongPassphrase'));
+              }
+            }
+          }
+
           return GlassDialog(
             title: Text(l10n.t('recovery.viewTitle')),
             content: SingleChildScrollView(
@@ -338,6 +445,14 @@ Future<void> showRecoveryCodeSheet(BuildContext context, WidgetRef ref) async {
               ),
             ),
             actions: [
+              // The way back for somebody who declined the restore at first launch, or who is
+              // holding a code from another device. Without it that was a one-time decision with no
+              // route back: the gate only offers a restore to a device with no identity, and this
+              // device has one.
+              GlassDialogAction(
+                label: l10n.t('recovery.restoreHere'),
+                onPressed: busy ? null : restoreHere,
+              ),
               GlassDialogAction(
                 label: l10n.t('recovery.regenerate'),
                 onPressed: busy ? null : regenerate,
