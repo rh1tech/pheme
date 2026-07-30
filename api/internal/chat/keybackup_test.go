@@ -160,3 +160,225 @@ func getBackup(t *testing.T, f *fixture, token string) backupResponse {
 	}
 	return out
 }
+
+// The transcript is the only copy of a decrypted history, and there is one backup per user
+// which the upload handler replaces in place. A device that has read nothing must therefore
+// not be able to seal an empty transcript over a full one.
+//
+// This is not a hypothetical: a freshly installed phone did exactly that, and the history was
+// gone for good — the recovery code still opened the backup, the backup just no longer held
+// anything. Every case below is a step of that sequence.
+func TestKeyBackupRefusesToShrinkTheTranscript(t *testing.T) {
+	f := newFixture(t)
+	_, token := f.user(t, "shrink@pheme.test")
+
+	full := map[string]any{
+		"deviceId":             "the-device-that-had-the-history",
+		"salt":                 []byte("salt-aaaa"),
+		"nonce":                []byte("nonce-aaaaaa"),
+		"ciphertext":           []byte("sealed-state"),
+		"transcriptSalt":       []byte("t-salt"),
+		"transcriptNonce":      []byte("t-nonce"),
+		"transcriptCiphertext": []byte("a hundred messages, sealed"),
+		"transcriptMessages":   100,
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, full); rec.Code != http.StatusNoContent {
+		t.Fatalf("seed backup: got %d", rec.Code)
+	}
+
+	// The freshly installed device: same account, same recovery code, no history read yet.
+	empty := map[string]any{
+		"deviceId":   "freshly-installed",
+		"salt":       []byte("salt-bbbb"),
+		"nonce":      []byte("nonce-bbbbbb"),
+		"ciphertext": []byte("sealed-state-2"),
+		// No transcript at all — backupKeys sends none when the cache is empty.
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, empty); rec.Code != http.StatusConflict {
+		t.Fatalf("an empty transcript replaced a full one: got %d, want 409", rec.Code)
+	}
+
+	// A transcript that is merely SMALLER is refused for the same reason.
+	fewer := map[string]any{
+		"deviceId":             "freshly-installed",
+		"salt":                 []byte("salt-cccc"),
+		"nonce":                []byte("nonce-cccccc"),
+		"ciphertext":           []byte("sealed-state-3"),
+		"transcriptSalt":       []byte("t-salt-2"),
+		"transcriptNonce":      []byte("t-nonce-2"),
+		"transcriptCiphertext": []byte("three messages"),
+		"transcriptMessages":   3,
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, fewer); rec.Code != http.StatusConflict {
+		t.Fatalf("a smaller transcript replaced a larger one: got %d, want 409", rec.Code)
+	}
+
+	// The stored backup is untouched by either refusal — the history is still there.
+	got := getBackup(t, f, token)
+	if string(got.TranscriptCiphertext) != "a hundred messages, sealed" {
+		t.Fatalf("the stored transcript was damaged by a refused upload: %q", got.TranscriptCiphertext)
+	}
+
+	// Growing is always allowed: that is the normal case, a device that has read more.
+	more := map[string]any{
+		"deviceId":             "the-device-that-had-the-history",
+		"salt":                 []byte("salt-dddd"),
+		"nonce":                []byte("nonce-dddddd"),
+		"ciphertext":           []byte("sealed-state-4"),
+		"transcriptSalt":       []byte("t-salt-3"),
+		"transcriptNonce":      []byte("t-nonce-3"),
+		"transcriptCiphertext": []byte("a hundred and one messages, sealed"),
+		"transcriptMessages":   101,
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, more); rec.Code != http.StatusNoContent {
+		t.Fatalf("a larger transcript was refused: got %d", rec.Code)
+	}
+
+	// And a person who genuinely means it — having cleared their history, say — can still say so.
+	forced := map[string]any{
+		"deviceId":             "freshly-installed",
+		"salt":                 []byte("salt-eeee"),
+		"nonce":                []byte("nonce-eeeeee"),
+		"ciphertext":           []byte("sealed-state-5"),
+		"transcriptSalt":       []byte("t-salt-4"),
+		"transcriptNonce":      []byte("t-nonce-4"),
+		"transcriptCiphertext": []byte("deliberately fewer"),
+		"transcriptMessages":   1,
+		"force":                true,
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, forced); rec.Code != http.StatusNoContent {
+		t.Fatalf("a forced replacement was refused: got %d", rec.Code)
+	}
+	if got := getBackup(t, f, token); string(got.TranscriptCiphertext) != "deliberately fewer" {
+		t.Fatalf("force did not replace: %q", got.TranscriptCiphertext)
+	}
+}
+
+// The very first backup has nothing to be compared against and must always be accepted.
+func TestKeyBackupFirstUploadIsNeverRefused(t *testing.T) {
+	f := newFixture(t)
+	_, token := f.user(t, "first@pheme.test")
+
+	first := map[string]any{
+		"deviceId":   "dev-1",
+		"salt":       []byte("salt-aaaa"),
+		"nonce":      []byte("nonce-aaaaaa"),
+		"ciphertext": []byte("sealed-state"),
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, first); rec.Code != http.StatusNoContent {
+		t.Fatalf("first backup refused: got %d", rec.Code)
+	}
+}
+
+// A refused upload must leave the stored backup completely intact — record AND blobs.
+//
+// The handler writes the new blobs to the blob store BEFORE it knows whether the record will be
+// replaced, and deletes the previous ones after. A refusal that ran in the wrong order would
+// either delete the blobs the surviving record still points at — turning a refusal into exactly
+// the loss it was refusing — or leave the new ones behind as landfill.
+func TestKeyBackupRefusalLeavesTheStoredBackupUsable(t *testing.T) {
+	f := newFixture(t)
+	_, token := f.user(t, "refusal@pheme.test")
+
+	full := map[string]any{
+		"deviceId":             "has-the-history",
+		"salt":                 []byte("salt-aaaa"),
+		"nonce":                []byte("nonce-aaaaaa"),
+		"ciphertext":           []byte("sealed-state"),
+		"transcriptSalt":       []byte("t-salt"),
+		"transcriptNonce":      []byte("t-nonce"),
+		"transcriptCiphertext": []byte("the whole history"),
+		"transcriptMessages":   500,
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, full); rec.Code != http.StatusNoContent {
+		t.Fatalf("seed: got %d", rec.Code)
+	}
+
+	empty := map[string]any{
+		"deviceId":   "fresh",
+		"salt":       []byte("salt-bbbb"),
+		"nonce":      []byte("nonce-bbbbbb"),
+		"ciphertext": []byte("sealed-state-2"),
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, empty); rec.Code != http.StatusConflict {
+		t.Fatalf("refusal: got %d, want 409", rec.Code)
+	}
+
+	// The whole backup must still be fetchable and openable — not merely present in the record.
+	got := getBackup(t, f, token)
+	if string(got.Ciphertext) != "sealed-state" {
+		t.Fatalf("state blob lost or replaced by a refused upload: %q", got.Ciphertext)
+	}
+	if string(got.TranscriptCiphertext) != "the whole history" {
+		t.Fatalf("transcript blob lost or replaced by a refused upload: %q", got.TranscriptCiphertext)
+	}
+}
+
+// A transcript whose seal is present but whose salt or nonce is not can never be opened. Storing it
+// would make a restore report a history it cannot deliver, which is worse than reporting none.
+func TestKeyBackupRejectsAnUnopenableTranscript(t *testing.T) {
+	f := newFixture(t)
+	_, token := f.user(t, "partial@pheme.test")
+
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"no salt", map[string]any{
+			"transcriptNonce": []byte("t-nonce"), "transcriptCiphertext": []byte("sealed"),
+		}},
+		{"no nonce", map[string]any{
+			"transcriptSalt": []byte("t-salt"), "transcriptCiphertext": []byte("sealed"),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := map[string]any{
+				"deviceId":   "dev",
+				"salt":       []byte("salt-aaaa"),
+				"nonce":      []byte("nonce-aaaaaa"),
+				"ciphertext": []byte("sealed-state"),
+			}
+			for k, v := range tc.body {
+				body[k] = v
+			}
+			if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, body); rec.Code != http.StatusBadRequest {
+				t.Fatalf("got %d, want 400", rec.Code)
+			}
+		})
+	}
+}
+
+// The count and the blob must describe the same backup. A count with no transcript behind it would
+// raise the bar for every later upload against a history that is not stored — locking the account
+// out of backing up at all.
+func TestKeyBackupCountWithoutATranscriptDoesNotRaiseTheBar(t *testing.T) {
+	f := newFixture(t)
+	_, token := f.user(t, "phantom@pheme.test")
+
+	// A count claimed with no transcript to back it.
+	claimed := map[string]any{
+		"deviceId":           "liar",
+		"salt":               []byte("salt-aaaa"),
+		"nonce":              []byte("nonce-aaaaaa"),
+		"ciphertext":         []byte("sealed-state"),
+		"transcriptMessages": 9000,
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, claimed); rec.Code != http.StatusNoContent {
+		t.Fatalf("seed: got %d", rec.Code)
+	}
+
+	// A later, honest backup carrying a real transcript must not be refused on account of it.
+	honest := map[string]any{
+		"deviceId":             "honest",
+		"salt":                 []byte("salt-bbbb"),
+		"nonce":                []byte("nonce-bbbbbb"),
+		"ciphertext":           []byte("sealed-state-2"),
+		"transcriptSalt":       []byte("t-salt"),
+		"transcriptNonce":      []byte("t-nonce"),
+		"transcriptCiphertext": []byte("a real history"),
+		"transcriptMessages":   10,
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, honest); rec.Code != http.StatusNoContent {
+		t.Fatalf("an honest backup was refused because of a phantom count: got %d", rec.Code)
+	}
+}

@@ -88,6 +88,34 @@ String deviceLabel() {
 ///
 /// One per session. Held by a provider so the group state, the in-flight settles and the call freeze
 /// are shared by everything that touches a conversation.
+/// The state of the off-device copy, as far as this session knows.
+///
+/// It exists because the failure mode of a backup is silence. Nothing about a device whose backups
+/// have been refused for weeks looks different from one backing up cleanly — the difference only
+/// shows on the day the device is replaced, which is the day it cannot be fixed.
+class BackupHealth {
+  const BackupHealth({
+    required this.lastSucceededAt,
+    required this.lastError,
+    required this.armed,
+  });
+
+  /// When a backup last completed in THIS session. Null means none has run here — which is the
+  /// normal case just after launch and says nothing about the server's copy.
+  final DateTime? lastSucceededAt;
+
+  /// Why the most recent attempt failed, or null if the last one worked.
+  final Object? lastError;
+
+  /// Whether automatic backup has a secret to seal with at all. False means it is dormant: no
+  /// recovery code has been created, restored, or re-unlocked this session, so nothing is being
+  /// backed up and no failure will be reported either.
+  final bool armed;
+
+  /// Whether the person should be told something is wrong.
+  bool get failing => lastError != null;
+}
+
 /// What a restore actually recovered, as opposed to whether it completed.
 ///
 /// A restore can succeed at the thing it is named for — proving the recovery code and bringing the
@@ -1646,10 +1674,7 @@ class MlsService {
     // has no way to tell a device that has read everything from one that has read nothing — and it
     // was the second kind, freshly installed, that once replaced a full transcript with an empty
     // one and took the history with it.
-    final messageCount = bodies.values.fold<int>(
-      0,
-      (total, msgs) => total + msgs.length,
-    );
+    final messageCount = countBodies(bodies);
     ({Uint8List salt, Uint8List nonce, Uint8List ciphertext})? transcript;
     if (bodies.isNotEmpty) {
       final plaintext = Uint8List.fromList(
@@ -1776,10 +1801,7 @@ class MlsService {
     if (bodies != null) {
       try {
         await _cache.importContents(bodies);
-        imported = bodies.values.fold<int>(
-          0,
-          (total, msgs) => total + msgs.length,
-        );
+        imported = countBodies(bodies);
       } on Object catch (e, st) {
         // Already up and working without it — but say so, for the same reason as above.
         transcriptError = e;
@@ -2247,9 +2269,41 @@ class MlsService {
       _autoBackupTimer = null;
       final pass = _sessionPassphrase;
       if (pass == null) return;
-      unawaited(backupKeys(_autoBackupUser, pass).catchError((_) {}));
+      unawaited(_runAutoBackup(_autoBackupUser, pass));
     });
   }
+
+  /// Runs one automatic backup and REMEMBERS how it went.
+  ///
+  /// This used to be `backupKeys(...).catchError((_) {})` — every failure discarded, in silence, on
+  /// the one job whose whole purpose is to be there when the device is not. A backup that has been
+  /// failing for a month looks exactly like one that ran a minute ago, right up until somebody needs
+  /// it. Network trouble, a server that refuses the upload for holding less history than the stored
+  /// one, a transcript past the size cap: all of it vanished.
+  ///
+  /// Still swallowed in the sense that nothing is thrown at the caller — an automatic backup is not
+  /// something a person asked for and must not interrupt them. The difference is that the result is
+  /// now recorded, so [backupHealth] can say so where they will see it.
+  Future<void> _runAutoBackup(String userId, String passphrase) async {
+    try {
+      await backupKeys(userId, passphrase);
+      _lastBackupAt = DateTime.now();
+      _lastBackupError = null;
+    } on Object catch (e) {
+      _lastBackupError = e;
+      debugPrint('auto-backup failed: $e');
+    }
+  }
+
+  DateTime? _lastBackupAt;
+  Object? _lastBackupError;
+
+  /// Whether the off-device copy is current, and what went wrong if not.
+  BackupHealth get backupHealth => BackupHealth(
+    lastSucceededAt: _lastBackupAt,
+    lastError: _lastBackupError,
+    armed: _sessionPassphrase != null,
+  );
 
   /// Erases this device's keys and every decrypted body. Logout.
   ///

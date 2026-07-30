@@ -514,6 +514,12 @@ type putKeyBackupRequest struct {
 	TranscriptSalt       []byte `json:"transcriptSalt,omitempty"`
 	TranscriptNonce      []byte `json:"transcriptNonce,omitempty"`
 	TranscriptCiphertext []byte `json:"transcriptCiphertext,omitempty"`
+	// How many bodies the transcript holds. The server cannot open the blob, so this is what
+	// it compares a replacement against — see the shrink guard below.
+	TranscriptMessages int `json:"transcriptMessages,omitempty"`
+	// Set only when a person has asked for this backup to replace what is stored, knowing it
+	// carries less. Automatic backups never set it.
+	Force bool `json:"force,omitempty"`
 }
 
 // putKeyBackup stores the caller's encrypted MLS state, and optionally their sealed
@@ -551,6 +557,24 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 	// A GetKeyBackup miss is fine — this is the first backup.
 	prev, prevErr := h.Store.GetKeyBackup(r.Context(), uid)
 
+	// THE SHRINK GUARD. A transcript is the only copy of a decrypted history: MLS destroys the
+	// message key on decrypt, so what a device has read exists nowhere else, and there is one
+	// backup per user which this handler replaces in place.
+	//
+	// A freshly installed device has read nothing. Left to itself it seals an empty transcript,
+	// overwrites a full one, and the history is gone for everybody — including the person whose
+	// recovery code still opens the backup perfectly. That is not hypothetical; it is what
+	// happened, and it is why replacing a transcript with a smaller one now takes saying so.
+	//
+	// Compared on the client's own count rather than byte length: ciphertext length moves with
+	// padding and compression, and refusing a backup for being a few bytes shorter would block
+	// honest ones.
+	if prevErr == nil && !req.Force && req.TranscriptMessages < prev.TranscriptMessages {
+		httpx.Error(w, http.StatusConflict,
+			"this backup holds less history than the one already stored; restore this device first, or resend with force to replace it anyway")
+		return
+	}
+
 	ciphertextBlobID, err := h.Blobs.Put(r.Context(), req.Ciphertext, "application/octet-stream")
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not store backup")
@@ -575,6 +599,7 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 		backup.TranscriptSalt = req.TranscriptSalt
 		backup.TranscriptNonce = req.TranscriptNonce
 		backup.TranscriptBlobID = transcriptBlobID
+		backup.TranscriptMessages = req.TranscriptMessages
 	}
 
 	if err := h.Store.PutKeyBackup(r.Context(), backup); err != nil {
@@ -639,6 +664,7 @@ func (h *Handler) getKeyBackup(w http.ResponseWriter, r *http.Request) {
 		"transcriptSalt":       backup.TranscriptSalt,
 		"transcriptNonce":      backup.TranscriptNonce,
 		"transcriptCiphertext": transcriptCiphertext,
+		"transcriptMessages":   backup.TranscriptMessages,
 		"updatedAt":            backup.UpdatedAt,
 	})
 }

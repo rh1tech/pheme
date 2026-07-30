@@ -995,6 +995,18 @@ type MLSKeyBackup struct {
 	TranscriptNonce  []byte `bson:"transcriptNonce,omitempty" json:"transcriptNonce,omitempty"`
 	TranscriptBlobID string `bson:"transcriptBlobId,omitempty" json:"transcriptBlobId,omitempty"`
 
+	// How many message bodies the sealed transcript holds, as counted by the device that
+	// sealed it. Metadata, not content: the server cannot open the blob, so this is the only
+	// thing it can compare one backup against another by.
+	//
+	// It exists because the transcript is the ONLY copy of a decrypted history — MLS destroys
+	// the message key on decrypt — and there is one backup per user, replaced in place. A
+	// freshly installed device that has read nothing would otherwise seal an empty transcript
+	// over a full one and take the history with it, which is exactly what happened. The upload
+	// handler refuses a backup that carries fewer messages than the stored one unless the
+	// client says it means it.
+	TranscriptMessages int `bson:"transcriptMessages,omitempty" json:"transcriptMessages,omitempty"`
+
 	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
 }
 

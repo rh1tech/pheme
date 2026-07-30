@@ -28,6 +28,16 @@ import '../rust/api/vault.dart';
 import 'attribution.dart';
 import 'chat_content.dart';
 
+/// How many message bodies a transcript holds, across every conversation in it.
+///
+/// The number the server's backup guard compares one upload against another by — it cannot open
+/// the seal, so this is all it has to tell a device that has read everything from one that has read
+/// nothing. Counted in one place because the count and the blob must describe the same thing: a
+/// count that overstates lets an empty backup pass the guard, which is the failure it exists to
+/// prevent.
+int countBodies(Map<String, Map<String, String>> all) =>
+    all.values.fold<int>(0, (total, bodies) => total + bodies.length);
+
 /// Raised when a body cannot be written to the cache.
 ///
 /// It is an exception rather than a silent return because of what the caller is holding: a

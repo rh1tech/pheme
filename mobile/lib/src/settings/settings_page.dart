@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/app_config.dart';
+import '../chat/chat_providers.dart';
 import '../core/providers.dart';
 import '../core/server_address.dart';
 import '../core/snackbar.dart';
@@ -104,12 +105,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     // Watched, not read once: another admin can take the role away mid-session, and the row should
     // go with it rather than lead to a screen that 403s.
     final isAdmin = ref.watch(authControllerProvider).isAdmin;
+    // Read, not watched: nothing publishes a change, and this screen is rebuilt on every visit.
+    final backupFailing = ref.read(mlsServiceProvider).backupHealth.failing;
 
     return AdaptiveScaffold(
       grouped: isCupertino(context),
       title: Text(l10n.t('settings.title')),
       body: isCupertino(context)
-          ? _buildCupertino(l10n, settings, controller, registered, isAdmin)
+          ? _buildCupertino(
+              l10n,
+              settings,
+              controller,
+              registered,
+              isAdmin,
+              backupFailing,
+            )
           : _buildMaterial(
               context,
               l10n,
@@ -117,6 +127,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               controller,
               registered,
               isAdmin,
+              backupFailing,
             ),
     );
   }
@@ -132,6 +143,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     SettingsController controller,
     bool registered,
     bool isAdmin,
+    bool backupFailing,
   ) {
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -205,8 +217,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           onTap: () => context.push('/security'),
         ),
         ListTile(
-          leading: const Icon(Icons.vpn_key_outlined),
+          leading: Icon(
+            Icons.vpn_key_outlined,
+            color: backupFailing ? Theme.of(context).colorScheme.error : null,
+          ),
           title: Text(l10n.t('recovery.menuItem')),
+          // The only place a failing backup is visible. Silence here is what let a real backup
+          // go stale unnoticed until the device it lived on was replaced.
+          subtitle: backupFailing
+              ? Text(
+                  l10n.t('recovery.backupFailing'),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                )
+              : null,
           trailing: const Icon(Icons.chevron_right),
           onTap: () => showRecoveryCodeSheet(context, ref),
         ),
@@ -253,6 +276,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     SettingsController controller,
     bool registered,
     bool isAdmin,
+    bool backupFailing,
   ) {
     final languageCode = settings.locale?.languageCode ?? 'system';
     return ListView(
@@ -334,8 +358,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               onTap: () => context.push('/security'),
             ),
             CupertinoListTile.notched(
-              leading: const Icon(CupertinoIcons.lock_shield),
+              leading: Icon(
+                CupertinoIcons.lock_shield,
+                color: backupFailing ? CupertinoColors.destructiveRed : null,
+              ),
               title: Text(l10n.t('recovery.menuItem')),
+              subtitle: backupFailing
+                  ? Text(
+                      l10n.t('recovery.backupFailing'),
+                      style: const TextStyle(
+                        color: CupertinoColors.destructiveRed,
+                      ),
+                    )
+                  : null,
               trailing: const CupertinoListTileChevron(),
               onTap: () => showRecoveryCodeSheet(context, ref),
             ),

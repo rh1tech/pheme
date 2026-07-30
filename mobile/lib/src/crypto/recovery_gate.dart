@@ -156,7 +156,23 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
                 if (ctx.mounted) Navigator.of(ctx).pop();
                 if (ok && mounted) {
                   ref.invalidate(conversationListProvider);
-                  notifySuccess(context, l10n.t('backup.saved'));
+                  // Say what actually came back. A restore proves the code and brings the account
+                  // back whether or not it recovers any history — the history rides in a separate
+                  // seal — and reporting plain success for a restore that recovered nothing is how
+                  // somebody ends up staring at unreadable messages with no idea why.
+                  final outcome = mls.lastRestore;
+                  if (outcome != null && outcome.historyMissing) {
+                    notifyError(
+                      context,
+                      l10n.t(
+                        outcome.transcriptError != null
+                            ? 'backup.historyUnreadable'
+                            : 'backup.historyAbsent',
+                      ),
+                    );
+                  } else {
+                    notifySuccess(context, l10n.t('backup.saved'));
+                  }
                 }
               } on IdentityAlreadySetUpException {
                 if (ctx.mounted) Navigator.of(ctx).pop();

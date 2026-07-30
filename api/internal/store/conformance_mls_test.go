@@ -592,3 +592,62 @@ func TestConformance_PaginationTiesBySeq(t *testing.T) {
 		}
 	})
 }
+
+// The transcript's message count must survive a round trip in BOTH stores.
+//
+// It is the only thing the upload handler can compare one backup against another by — the
+// server cannot open the sealed blob — and it is what stops a freshly installed device from
+// replacing a full transcript with an empty one. The Mongo store writes an explicit field
+// list, so a field added to the struct is persisted by neither implementation until it is
+// added there too; that is exactly the kind of divergence this suite exists to catch, and it
+// nearly shipped.
+func TestConformance_KeyBackupCarriesTheTranscriptCount(t *testing.T) {
+	eachStore(t, func(t *testing.T, s storeUnderTest) {
+		ctx := context.Background()
+
+		full := domain.MLSKeyBackup{
+			UserID:             "u-count",
+			DeviceID:           "dev-1",
+			Salt:               []byte("salt"),
+			Nonce:              []byte("nonce"),
+			CiphertextBlobID:   "blob-state",
+			TranscriptSalt:     []byte("t-salt"),
+			TranscriptNonce:    []byte("t-nonce"),
+			TranscriptBlobID:   "blob-transcript",
+			TranscriptMessages: 137,
+			UpdatedAt:          time.Now().UTC(),
+		}
+		if err := s.store.PutKeyBackup(ctx, full); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+		got, err := s.store.GetKeyBackup(ctx, "u-count")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.TranscriptMessages != 137 {
+			t.Fatalf("transcriptMessages = %d, want 137 — the count did not survive storage", got.TranscriptMessages)
+		}
+
+		// Replacing with a transcript-less backup must clear the count, not leave the old one
+		// behind. A stale count is worse than none: the guard would compare against a number no
+		// stored transcript backs, and refuse honest backups forever.
+		bare := domain.MLSKeyBackup{
+			UserID:           "u-count",
+			DeviceID:         "dev-2",
+			Salt:             []byte("salt2"),
+			Nonce:            []byte("nonce2"),
+			CiphertextBlobID: "blob-state-2",
+			UpdatedAt:        time.Now().UTC(),
+		}
+		if err := s.store.PutKeyBackup(ctx, bare); err != nil {
+			t.Fatalf("put bare: %v", err)
+		}
+		got, err = s.store.GetKeyBackup(ctx, "u-count")
+		if err != nil {
+			t.Fatalf("get after bare: %v", err)
+		}
+		if got.TranscriptMessages != 0 {
+			t.Fatalf("transcriptMessages = %d after a transcript-less replace, want 0", got.TranscriptMessages)
+		}
+	})
+}

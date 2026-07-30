@@ -362,7 +362,11 @@ func (m *Mongo) PutKeyBackup(ctx context.Context, backup domain.MLSKeyBackup) er
 				"transcriptSalt":   backup.TranscriptSalt,
 				"transcriptNonce":  backup.TranscriptNonce,
 				"transcriptBlobId": backup.TranscriptBlobID,
-				"updatedAt":        backup.UpdatedAt,
+				// Written unconditionally for the same reason as the fields above: a stale
+				// count left behind by a previous upload is what the shrink guard would then
+				// compare against, and it would refuse honest backups forever.
+				"transcriptMessages": backup.TranscriptMessages,
+				"updatedAt":          backup.UpdatedAt,
 			},
 			"$setOnInsert": bson.M{"_id": mongoID(), "userId": backup.UserID},
 		},

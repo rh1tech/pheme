@@ -634,4 +634,11 @@ const Map<String, String> enStrings = {
   'admin.inviteStatusUsed': 'used',
   'admin.inviteStatusRevoked': 'revoked',
   'admin.inviteStatusExpired': 'expired',
+  'backup.historyAbsent':
+      'Account restored, but this backup carried no message history — it was saved by a device '
+      'that had not read any messages yet.',
+  'backup.historyUnreadable':
+      'Account restored, but the saved message history could not be opened. New messages will '
+      'work normally.',
+  'recovery.backupFailing': 'Backup is not up to date — open to check',
 };

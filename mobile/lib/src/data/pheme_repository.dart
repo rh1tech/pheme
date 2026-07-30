@@ -866,12 +866,19 @@ class PhemeRepository {
     Uint8List? transcriptSalt,
     Uint8List? transcriptNonce,
     Uint8List? transcriptCiphertext,
+    int transcriptMessages = 0,
+    bool force = false,
   }) {
     final body = <String, dynamic>{
       'deviceId': deviceId,
       'salt': base64Encode(salt),
       'nonce': base64Encode(nonce),
       'ciphertext': base64Encode(ciphertext),
+      // How many bodies the transcript holds. The server cannot open the seal, so this is the
+      // only thing it can compare a replacement against — it refuses a backup carrying less
+      // history than the stored one unless [force] says the person meant it.
+      'transcriptMessages': transcriptMessages,
+      if (force) 'force': true,
     };
     // The transcript seal travels whole or not at all — a ciphertext with no salt/nonce could
     // never be opened, and the server rejects a partial one.
