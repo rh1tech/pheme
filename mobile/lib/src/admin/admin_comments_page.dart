@@ -152,34 +152,30 @@ class _CommentRowState extends ConsumerState<_CommentRow> {
         ),
       ),
       trailing: _busy
-          ? const SizedBox(
-              width: 24,
-              height: 24,
+          ? const SizedBox.square(
+              dimension: GlassMetrics.minTapTarget,
               child: Center(child: AdaptiveProgress(size: 18)),
             )
-          : Builder(
-              builder: (anchor) => IconButton(
-                icon: const Icon(Icons.more_horiz),
-                tooltip: l10n.t('admin.actions'),
-                onPressed: () => showGlassMenu(anchor, [
-                  // Only when there is an account left to ban. A comment whose author has been
-                  // deleted still needs moderating, and offering an action that would 404 is worse
-                  // than not offering it.
-                  if (_comment.authorId.isNotEmpty)
-                    GlassMenuAction(
-                      label: l10n.t('admin.banAuthor'),
-                      icon: Icons.block,
-                      destructive: true,
-                      onSelected: _banAuthor,
-                    ),
+          : GlassMenuButton(
+              semanticLabel: l10n.t('admin.actions'),
+              actions: [
+                // Only when there is an account left to ban. A comment whose author has been
+                // deleted still needs moderating, and offering an action that would 404 is worse
+                // than not offering it.
+                if (_comment.authorId.isNotEmpty)
                   GlassMenuAction(
-                    label: l10n.t('common.delete'),
-                    icon: Icons.delete_outline,
+                    label: l10n.t('admin.banAuthor'),
+                    icon: Icons.block,
                     destructive: true,
-                    onSelected: _delete,
+                    onSelected: _banAuthor,
                   ),
-                ]),
-              ),
+                GlassMenuAction(
+                  label: l10n.t('common.delete'),
+                  icon: Icons.delete_outline,
+                  destructive: true,
+                  onSelected: _delete,
+                ),
+              ],
             ),
     );
   }

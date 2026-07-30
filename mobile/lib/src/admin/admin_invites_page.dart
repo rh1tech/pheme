@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,7 @@ import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/adaptive/adaptive.dart';
+import '../widgets/glass/glass.dart';
 import 'admin_models.dart';
 import 'admin_providers.dart';
 import 'widgets/admin_ui.dart';
@@ -44,10 +46,11 @@ class AdminInvitesPage extends ConsumerWidget {
       emptyLabel: l10n.t('admin.inviteNone'),
       fetch: (query, page) =>
           admin.listInvites(query: query, page: page, limit: adminPageLimit),
-      floatingActionButton: (context, reload) => FloatingActionButton(
+      primaryAction: (context, reload) => AdminAction(
+        icon: Icons.add,
+        iosIcon: CupertinoIcons.add,
+        label: l10n.t('admin.inviteNew'),
         onPressed: () => _create(context, ref, reload),
-        tooltip: l10n.t('admin.inviteNew'),
-        child: const Icon(Icons.add),
       ),
       rowBuilder: (context, invite, reload) =>
           _InviteRow(invite: invite, onChanged: reload),
@@ -243,19 +246,24 @@ class _InviteRowState extends ConsumerState<_InviteRow> {
         ),
       ),
       trailing: _busy
-          ? const SizedBox(
-              width: 24,
-              height: 24,
+          ? const SizedBox.square(
+              dimension: GlassMetrics.minTapTarget,
               child: Center(child: AdaptiveProgress(size: 18)),
             )
           // Only an unspent invitation can be withdrawn. Revoking a used one changes nothing —
           // the account it created is a separate matter, ended by blocking the user.
           : _invite.status != InviteStatus.pending
           ? null
-          : IconButton(
-              icon: const Icon(Icons.block),
-              tooltip: l10n.t('admin.inviteRevoke'),
-              onPressed: _revoke,
+          : GlassMenuButton(
+              semanticLabel: l10n.t('admin.actions'),
+              actions: [
+                GlassMenuAction(
+                  label: l10n.t('admin.inviteRevoke'),
+                  icon: Icons.block,
+                  destructive: true,
+                  onSelected: _revoke,
+                ),
+              ],
             ),
     );
   }

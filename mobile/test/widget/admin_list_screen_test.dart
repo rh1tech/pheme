@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,11 +8,13 @@ import 'package:pheme_mobile/src/admin/widgets/admin_ui.dart';
 import 'package:pheme_mobile/src/core/app_config.dart';
 import 'package:pheme_mobile/src/core/providers.dart';
 import 'package:pheme_mobile/src/l10n/app_localizations.dart';
+import 'package:pheme_mobile/src/widgets/glass/glass.dart';
+import 'package:pheme_mobile/src/widgets/pinned_search_header.dart';
 
 /// Every admin listing is an instance of AdminListScreen, so its state machine — first load,
 /// search, paging, empty — is worth pinning once here rather than five times over.
 
-Widget _wrap(Widget child) {
+Widget _wrap(Widget child, {TargetPlatform? platform}) {
   return ProviderScope(
     overrides: [
       initialAppStateProvider.overrideWithValue(
@@ -25,6 +28,7 @@ Widget _wrap(Widget child) {
       ),
     ],
     child: MaterialApp(
+      theme: platform == null ? null : ThemeData(platform: platform),
       locale: const Locale('en'),
       localizationsDelegates: const [
         AppLocalizations.delegate,
@@ -214,5 +218,72 @@ void main() {
     expect(find.text('row 5'), findsOneWidget);
     expect(find.text('Next'), findsNothing);
     expect(find.text('Previous'), findsNothing);
+  });
+
+  // AdaptiveScaffold renders whatever floatingActionButton it is given on BOTH platforms — the
+  // "Android only" in its doc is a convention for callers to keep, not something it enforces. The
+  // first version of these screens passed a raw Material FloatingActionButton straight through, so
+  // an iPhone got a Material floating button sitting over the bottom of the screen, which is the
+  // one place the app's two builds are deliberately meant to differ.
+  group('the primary action is reachable on both platforms', () {
+    Widget screen() => AdminListScreen<String>(
+      title: 'Rows',
+      emptyLabel: 'Nothing here.',
+      fetch: (q, p) async => _fakePage(q, p, total: 3),
+      rowBuilder: (context, item, reload) => ListTile(title: Text(item)),
+      primaryAction: (context, reload) => AdminAction(
+        icon: Icons.add,
+        iosIcon: CupertinoIcons.add,
+        label: 'Add thing',
+        onPressed: () {},
+      ),
+    );
+
+    testWidgets('android puts it in a floating button', (tester) async {
+      await tester.pumpWidget(
+        _wrap(screen(), platform: TargetPlatform.android),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(GlassActionButton), findsOneWidget);
+      expect(find.bySemanticsLabel('Add thing'), findsOneWidget);
+    });
+
+    testWidgets('ios puts it on the bar instead', (tester) async {
+      await tester.pumpWidget(_wrap(screen(), platform: TargetPlatform.iOS));
+      await tester.pumpAndSettle();
+
+      // No floating button on iOS — but the action must still be reachable.
+      expect(find.byType(GlassActionButton), findsNothing);
+      expect(find.bySemanticsLabel('Add thing'), findsOneWidget);
+    });
+  });
+
+  // Pinned outside the scroll view, so it stays put while the rows move under it. Carried inside
+  // the list instead, searching a long list starts with scrolling back up to find the box that
+  // would have saved the scrolling.
+  testWidgets('the search field is pinned, not carried in the list', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _wrap(
+        AdminListScreen<String>(
+          title: 'Rows',
+          searchPlaceholder: 'Search',
+          emptyLabel: 'Nothing here.',
+          fetch: (q, p) async => _fakePage(q, p),
+          rowBuilder: (context, item, reload) => ListTile(title: Text(item)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(PinnedSearchHeader), findsOneWidget);
+    final before = tester.getTopLeft(find.byType(PinnedSearchHeader));
+
+    await tester.drag(find.text('row 3'), const Offset(0, -400));
+    await tester.pumpAndSettle();
+
+    expect(tester.getTopLeft(find.byType(PinnedSearchHeader)), before);
   });
 }

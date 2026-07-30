@@ -132,39 +132,35 @@ class _ChannelRowState extends ConsumerState<_ChannelRow> {
       ),
       onTap: () => context.push('/admin/channels/${_channel.id}'),
       trailing: _busy
-          ? const SizedBox(
-              width: 24,
-              height: 24,
+          ? const SizedBox.square(
+              dimension: GlassMetrics.minTapTarget,
               child: Center(child: AdaptiveProgress(size: 18)),
             )
-          : Builder(
-              builder: (anchor) => IconButton(
-                icon: const Icon(Icons.more_horiz),
-                tooltip: l10n.t('admin.actions'),
-                onPressed: () => showGlassMenu(anchor, [
-                  GlassMenuAction(
-                    label: l10n.t('admin.viewMessages'),
-                    icon: Icons.article_outlined,
-                    onSelected: () =>
-                        context.push('/admin/channels/${_channel.id}'),
-                  ),
-                  GlassMenuAction(
-                    label: _channel.isDisabled
-                        ? l10n.t('admin.enable')
-                        : l10n.t('admin.disable'),
-                    icon: _channel.isDisabled
-                        ? Icons.toggle_on_outlined
-                        : Icons.toggle_off_outlined,
-                    onSelected: _toggleStatus,
-                  ),
-                  GlassMenuAction(
-                    label: l10n.t('common.delete'),
-                    icon: Icons.delete_outline,
-                    destructive: true,
-                    onSelected: _delete,
-                  ),
-                ]),
-              ),
+          : GlassMenuButton(
+              semanticLabel: l10n.t('admin.actions'),
+              actions: [
+                GlassMenuAction(
+                  label: l10n.t('admin.viewMessages'),
+                  icon: Icons.article_outlined,
+                  onSelected: () =>
+                      context.push('/admin/channels/${_channel.id}'),
+                ),
+                GlassMenuAction(
+                  label: _channel.isDisabled
+                      ? l10n.t('admin.enable')
+                      : l10n.t('admin.disable'),
+                  icon: _channel.isDisabled
+                      ? Icons.toggle_on_outlined
+                      : Icons.toggle_off_outlined,
+                  onSelected: _toggleStatus,
+                ),
+                GlassMenuAction(
+                  label: l10n.t('common.delete'),
+                  icon: Icons.delete_outline,
+                  destructive: true,
+                  onSelected: _delete,
+                ),
+              ],
             ),
     );
   }

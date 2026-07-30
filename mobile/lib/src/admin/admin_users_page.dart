@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -30,10 +31,11 @@ class AdminUsersPage extends ConsumerWidget {
       emptyLabel: l10n.t('admin.noUsers'),
       fetch: (query, page) =>
           admin.listUsers(query: query, page: page, limit: adminPageLimit),
-      floatingActionButton: (context, reload) => FloatingActionButton(
+      primaryAction: (context, reload) => AdminAction(
+        icon: Icons.person_add_alt,
+        iosIcon: CupertinoIcons.person_add,
+        label: l10n.t('admin.addUser'),
         onPressed: () => _createUser(context, ref, reload),
-        tooltip: l10n.t('admin.addUser'),
-        child: const Icon(Icons.person_add_alt),
       ),
       rowBuilder: (context, user, reload) =>
           _UserRow(user: user, isSelf: user.id == me, onChanged: reload),
@@ -152,9 +154,9 @@ class _UserRowState extends ConsumerState<_UserRow> {
     );
   }
 
-  void _openMenu(BuildContext anchorContext) {
-    final l10n = context.l10n;
-    final actions = <GlassMenuAction>[
+  /// What may be done to this account, given who is asking.
+  List<GlassMenuAction> _menuActions(AppLocalizations l10n) {
+    return <GlassMenuAction>[
       // Never offered on your own row. An admin who demotes or blocks themselves cannot undo it
       // from here — the next request is a 403 — and would need another admin, or the server's
       // allowlist, to get back in.
@@ -199,7 +201,6 @@ class _UserRowState extends ConsumerState<_UserRow> {
           onSelected: _delete,
         ),
     ];
-    showGlassMenu(anchorContext, actions);
   }
 
   @override
@@ -259,17 +260,13 @@ class _UserRowState extends ConsumerState<_UserRow> {
         ),
       ),
       trailing: _busy
-          ? const SizedBox(
-              width: 24,
-              height: 24,
+          ? const SizedBox.square(
+              dimension: GlassMetrics.minTapTarget,
               child: Center(child: AdaptiveProgress(size: 18)),
             )
-          : Builder(
-              builder: (anchor) => IconButton(
-                icon: const Icon(Icons.more_horiz),
-                tooltip: l10n.t('admin.actions'),
-                onPressed: () => _openMenu(anchor),
-              ),
+          : GlassMenuButton(
+              actions: _menuActions(l10n),
+              semanticLabel: l10n.t('admin.actions'),
             ),
     );
   }

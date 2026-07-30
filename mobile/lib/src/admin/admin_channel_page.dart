@@ -6,6 +6,7 @@ import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/error_view.dart';
+import '../widgets/glass/glass.dart';
 import 'admin_providers.dart';
 import 'widgets/admin_ui.dart';
 
@@ -138,12 +139,13 @@ class _AdminChannelPageState extends ConsumerState<AdminChannelPage> {
                 if (_messages.isEmpty)
                   SliverToBoxAdapter(child: _Empty(l10n.t('admin.noMessages')))
                 else
-                  SliverList.separated(
-                    itemCount: _messages.length,
-                    separatorBuilder: (_, _) =>
-                        const Divider(height: 1, indent: 16),
-                    itemBuilder: (context, i) =>
-                        _MessageRow(message: _messages[i]),
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    sliver: SliverList.builder(
+                      itemCount: _messages.length,
+                      itemBuilder: (context, i) =>
+                          _MessageRow(message: _messages[i]),
+                    ),
                   ),
                 if (_cursor.isNotEmpty)
                   SliverToBoxAdapter(
@@ -165,14 +167,15 @@ class _AdminChannelPageState extends ConsumerState<AdminChannelPage> {
                 if (_keys.isEmpty)
                   SliverToBoxAdapter(child: _Empty(l10n.t('channel.noKeys')))
                 else
-                  SliverList.separated(
-                    itemCount: _keys.length,
-                    separatorBuilder: (_, _) =>
-                        const Divider(height: 1, indent: 16),
-                    itemBuilder: (context, i) => _KeyRow(
-                      apiKey: _keys[i],
-                      busy: _busyKeyId == _keys[i].id,
-                      onRevoke: () => _revokeKey(_keys[i]),
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    sliver: SliverList.builder(
+                      itemCount: _keys.length,
+                      itemBuilder: (context, i) => _KeyRow(
+                        apiKey: _keys[i],
+                        busy: _busyKeyId == _keys[i].id,
+                        onRevoke: () => _revokeKey(_keys[i]),
+                      ),
                     ),
                   ),
               ],
@@ -249,19 +252,24 @@ class _KeyRow extends StatelessWidget {
         ),
       ),
       trailing: busy
-          ? const SizedBox(
-              width: 24,
-              height: 24,
+          ? const SizedBox.square(
+              dimension: GlassMetrics.minTapTarget,
               child: Center(child: AdaptiveProgress(size: 18)),
             )
           // A revoked key cannot be revoked again, and offering the action anyway is how a list
           // ends up reporting success for something it did not do.
           : apiKey.revoked
           ? null
-          : IconButton(
-              icon: const Icon(Icons.block),
-              tooltip: l10n.t('admin.revoke'),
-              onPressed: onRevoke,
+          : GlassMenuButton(
+              semanticLabel: l10n.t('admin.actions'),
+              actions: [
+                GlassMenuAction(
+                  label: l10n.t('admin.revoke'),
+                  icon: Icons.block,
+                  destructive: true,
+                  onSelected: onRevoke,
+                ),
+              ],
             ),
     );
   }

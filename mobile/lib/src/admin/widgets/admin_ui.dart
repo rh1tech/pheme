@@ -11,8 +11,9 @@ import 'package:flutter/material.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../widgets/adaptive/adaptive.dart';
-import '../../widgets/adaptive/adaptive_search_field.dart';
 import '../../widgets/error_view.dart';
+import '../../widgets/glass/glass.dart';
+import '../../widgets/pinned_search_header.dart';
 import '../admin_models.dart';
 
 /// How many rows one page of an admin listing holds. Matches the web panel's ADMIN_PAGE_LIMIT, so
@@ -154,6 +155,29 @@ class AdminPager extends StatelessWidget {
   }
 }
 
+/// A screen's primary action — "add user", "new invitation".
+///
+/// Declared rather than passed as a built widget, because WHERE it goes is a platform decision the
+/// screen should not have to make twice: last on the bar on iOS, a floating button on Android.
+///
+/// AdaptiveScaffold does not enforce that — it draws whatever floatingActionButton it is handed on
+/// either platform — so the first version of these screens, which passed a raw Material
+/// FloatingActionButton through, put a Material floating button on an iPhone.
+@immutable
+class AdminAction {
+  const AdminAction({
+    required this.icon,
+    required this.iosIcon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final IconData iosIcon;
+  final String label;
+  final VoidCallback onPressed;
+}
+
 /// The body of a paged admin listing: loading, error, empty and rows, in one place.
 ///
 /// Takes the page rather than a list so the pager and the emptiness check read the same numbers the
@@ -169,7 +193,6 @@ class AdminListBody<T> extends StatelessWidget {
     required this.itemBuilder,
     required this.onRetry,
     required this.onPageChanged,
-    this.header,
   });
 
   final AdminPage<T>? page;
@@ -179,9 +202,6 @@ class AdminListBody<T> extends StatelessWidget {
   final Widget Function(BuildContext, T) itemBuilder;
   final VoidCallback onRetry;
   final void Function(int page) onPageChanged;
-
-  /// Drawn above the first row and inside the scroll view, so it scrolls away with the content.
-  final Widget? header;
 
   @override
   Widget build(BuildContext context) {
@@ -201,7 +221,6 @@ class AdminListBody<T> extends StatelessWidget {
     return AdaptiveRefreshableScrollView(
       onRefresh: () async => onPageChanged(data.page),
       slivers: [
-        if (header != null) SliverToBoxAdapter(child: header),
         if (data.items.isEmpty)
           SliverToBoxAdapter(
             child: Padding(
@@ -217,10 +236,15 @@ class AdminListBody<T> extends StatelessWidget {
             ),
           )
         else
-          SliverList.separated(
-            itemCount: data.items.length,
-            separatorBuilder: (_, _) => const Divider(height: 1, indent: 16),
-            itemBuilder: (context, i) => itemBuilder(context, data.items[i]),
+          // No dividers, and vertical breathing room rather than rules between rows — the same
+          // treatment the chat and channel lists get. A ruled list is the Material default, not
+          // this app's.
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            sliver: SliverList.builder(
+              itemCount: data.items.length,
+              itemBuilder: (context, i) => itemBuilder(context, data.items[i]),
+            ),
           ),
         SliverToBoxAdapter(
           child: AdminPager(
@@ -251,8 +275,8 @@ String adminDate(String? iso) {
   return '${local.year}-$m-$d';
 }
 
-/// A whole paged admin screen: bar, search, rows, pager, and the load/retry/refresh state machine
-/// behind them.
+/// A whole paged admin screen: chrome, pinned search, rows, pager, and the load/retry/refresh state
+/// machine behind them.
 ///
 /// Every list in the panel is an instance of this with a different [fetch] and [rowBuilder]. The
 /// alternative — five screens each with its own copy of "query, page, loading, error, reload" — is
@@ -265,9 +289,7 @@ class AdminListScreen<T> extends StatefulWidget {
     required this.fetch,
     required this.rowBuilder,
     this.searchPlaceholder,
-    this.trailing,
-    this.floatingActionButton,
-    this.header,
+    this.primaryAction,
   });
 
   final String title;
@@ -284,11 +306,9 @@ class AdminListScreen<T> extends StatefulWidget {
   /// Null hides the search field, for a listing there is nothing to search by.
   final String? searchPlaceholder;
 
-  final List<Widget> Function(BuildContext context, VoidCallback reload)?
-  trailing;
-  final Widget Function(BuildContext context, VoidCallback reload)?
-  floatingActionButton;
-  final Widget Function(BuildContext context, VoidCallback reload)? header;
+  /// The screen's one creating action, if it has one. `reload` refreshes the list after it.
+  final AdminAction Function(BuildContext context, VoidCallback reload)?
+  primaryAction;
 
   @override
   State<AdminListScreen<T>> createState() => _AdminListScreenState<T>();
@@ -386,34 +406,75 @@ class _AdminListScreenState<T> extends State<AdminListScreen<T>> {
 
   @override
   Widget build(BuildContext context) {
+    final ios = isCupertino(context);
     final placeholder = widget.searchPlaceholder;
+    final action = widget.primaryAction?.call(context, _load);
+
     return AdaptiveScaffold(
       title: Text(widget.title),
-      trailing: widget.trailing?.call(context, _load) ?? const [],
-      floatingActionButton: widget.floatingActionButton?.call(context, _load),
       behindChrome: true,
-      body: AdminListBody<T>(
-        page: _data,
-        loading: _loading,
-        error: _error,
-        emptyLabel: widget.emptyLabel,
-        onRetry: _load,
-        onPageChanged: _goToPage,
-        header: Column(
-          children: [
-            if (placeholder != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                child: AdaptiveSearchField(
+      // The primary action goes where each platform puts it: last on the bar on iOS, floating on
+      // Android. See AdminAction.
+      trailing: [
+        if (ios && action != null)
+          GlassIconButton(
+            icon: action.iosIcon,
+            semanticLabel: action.label,
+            onPressed: action.onPressed,
+          ),
+      ],
+      floatingActionButton: ios || action == null
+          ? null
+          : GlassActionButton(
+              icon: action.icon,
+              semanticLabel: action.label,
+              onPressed: action.onPressed,
+            ),
+      body: Builder(
+        builder: (context) {
+          final media = MediaQuery.of(context);
+          // The field is pinned OUTSIDE the scroll view, and the list is told to start below it the
+          // same way it is told to start below the bar: as top padding. Carrying it inside the list
+          // instead — which is what these screens did first — means searching a long list starts
+          // with scrolling back up to find the box that would have saved the scrolling.
+          final feed = MediaQuery(
+            data: media.copyWith(
+              padding: media.padding.copyWith(
+                top:
+                    media.padding.top +
+                    (placeholder != null ? PinnedSearchHeader.extent : 0),
+              ),
+            ),
+            child: AdminListBody<T>(
+              page: _data,
+              loading: _loading,
+              error: _error,
+              emptyLabel: widget.emptyLabel,
+              onRetry: _load,
+              onPageChanged: _goToPage,
+              itemBuilder: (context, item) =>
+                  widget.rowBuilder(context, item, _load),
+            ),
+          );
+
+          if (placeholder == null) return feed;
+
+          return Stack(
+            children: [
+              Positioned.fill(child: feed),
+              Positioned(
+                top: media.padding.top,
+                left: 0,
+                right: 0,
+                child: PinnedSearchHeader(
                   controller: _search,
                   placeholder: placeholder,
                   onChanged: _onSearchChanged,
                 ),
               ),
-            if (widget.header != null) widget.header!(context, _load),
-          ],
-        ),
-        itemBuilder: (context, item) => widget.rowBuilder(context, item, _load),
+            ],
+          );
+        },
       ),
     );
   }
