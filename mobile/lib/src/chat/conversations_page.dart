@@ -357,6 +357,10 @@ class _ConversationRow extends ConsumerWidget {
     final title = conversationTitle(conversation, myUserId, l10n);
     final last = conversation.lastMessage;
     final cache = ref.watch(chatCacheProvider);
+    // The cache is filled from disk lazily, and until it is every row here reads "Encrypted
+    // message" — not because anything is wrong, but because nobody had asked for the plaintext
+    // that was sitting on disk. Watching the warm-up rebuilds the row when it lands.
+    ref.watch(previewWarmupProvider);
     // Pinned to the message id: a preview left over from an older message says nothing about who
     // wrote this one.
     final previewSender =

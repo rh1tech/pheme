@@ -41,6 +41,21 @@ final activeConversationIdProvider =
 
 /// The MLS orchestration. One per session: the group state, the in-flight settles and the call
 /// freeze are all shared by everything that touches a conversation, so there can only be one.
+/// Loads cached previews off disk for every conversation in the list.
+///
+/// The conversation list cannot decrypt, so a preview comes only from the local body cache — and
+/// that cache is filled lazily, by opening a chat. Without this the list opened on a column of
+/// "Encrypted message" that corrected itself only once each chat had been visited, while the
+/// plaintext sat on disk the whole time.
+///
+/// Watched by the list, so it rebuilds when the warm-up lands.
+final previewWarmupProvider = FutureProvider<void>((ref) async {
+  final conversations = await ref.watch(conversationListProvider.future);
+  await ref
+      .read(chatCacheProvider)
+      .warmPreviews(conversations.map((c) => c.id));
+});
+
 final mlsServiceProvider = Provider<MlsService>(
   (ref) => MlsService(
     repository: ref.watch(repositoryProvider),

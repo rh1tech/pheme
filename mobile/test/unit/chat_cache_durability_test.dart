@@ -253,4 +253,57 @@ void main() {
       expect((await fresh.load('c2')).length, 1);
     });
   });
+
+  group('the conversation list has previews before any chat is opened', () {
+    // The list cannot decrypt — it only ever sees ciphertext — so a preview comes from this cache
+    // and nowhere else. The cache was filled lazily by opening a chat, so a fresh launch showed a
+    // column of "Encrypted message" that corrected itself only once each conversation had been
+    // visited, with the plaintext on disk the whole time.
+    test(
+      'warmPreviews loads previews without opening the conversation',
+      () async {
+        final a = newCache();
+        await a.cacheContent('c1', 'm1', body('the last thing said'), author);
+        await a.cacheContent('c2', 'm2', body('and in the other one'), author);
+
+        // A new instance stands for a fresh launch: nothing in memory yet.
+        final fresh = newCache();
+        expect(
+          fresh.preview('c1'),
+          isNull,
+          reason: 'nothing loaded yet — this is the state the list opened in',
+        );
+
+        await fresh.warmPreviews(['c1', 'c2']);
+
+        expect(fresh.preview('c1'), 'the last thing said');
+        expect(fresh.preview('c2'), 'and in the other one');
+      },
+    );
+
+    test('warming is skipped for a conversation already in memory', () async {
+      final cache = newCache();
+      await cache.cacheContent('c1', 'm1', body('already here'), author);
+
+      // Would throw if it re-read and re-opened, since the vault now refuses.
+      vault.openThrows = true;
+      await cache.warmPreviews(['c1']);
+
+      expect(cache.preview('c1'), 'already here');
+    });
+
+    // One unreadable conversation must not stop the rest of the list from showing anything.
+    test('an unreadable conversation does not block the others', () async {
+      final a = newCache();
+      await a.cacheContent('c1', 'm1', body('readable'), author);
+
+      final fresh = newCache();
+      // c2 has a file that will not open; c1 is fine. Warming must survive the bad one.
+      await File('${tempRoot.path}/c2.json').writeAsBytes([9, 9, 9]);
+
+      await fresh.warmPreviews(['c2', 'c1']);
+
+      expect(fresh.preview('c1'), 'readable');
+    });
+  });
 }

@@ -220,6 +220,29 @@ class ChatCache {
     await _flush(conversationId, contents);
   }
 
+  /// Loads the stored bodies for [conversationIds] that are not in memory yet, so the conversation
+  /// list has previews to show.
+  ///
+  /// The list holds only ciphertext and cannot decrypt anything, so a preview can come from exactly
+  /// one place: this cache. It is populated by [load], and nothing called [load] until a chat was
+  /// opened — so on a fresh launch every row said "Encrypted message" and then quietly corrected
+  /// itself once the chat had been visited. The bodies were on disk the whole time; nobody had
+  /// asked for them.
+  ///
+  /// Reads one sealed file per conversation, once per launch. Not wasted work: the feed reuses the
+  /// same in-memory map the moment the chat is opened.
+  Future<void> warmPreviews(Iterable<String> conversationIds) async {
+    for (final id in conversationIds) {
+      if (_contents.containsKey(id)) continue;
+      try {
+        await load(id);
+      } on Object {
+        // One unreadable conversation must not stop the rest of the list from showing previews.
+        // load() has already marked it, so nothing will be written over it either.
+      }
+    }
+  }
+
   /// A message's content, if this device ever managed to read it.
   ChatContent? content(String conversationId, String messageId) =>
       entry(conversationId, messageId)?.content;
