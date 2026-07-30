@@ -88,6 +88,35 @@ String deviceLabel() {
 ///
 /// One per session. Held by a provider so the group state, the in-flight settles and the call freeze
 /// are shared by everything that touches a conversation.
+/// What a restore actually recovered, as opposed to whether it completed.
+///
+/// A restore can succeed at the thing it is named for — proving the recovery code and bringing the
+/// account back — while recovering NO history, because the history does not travel with the keys.
+/// It travels in the transcript, which is a separate seal that may be absent, unopenable, or
+/// simply empty. Those three outcomes used to be indistinguishable from a full recovery: the code
+/// was accepted, the device came up, and every message stayed unreadable with nothing to say why.
+class RestoreOutcome {
+  const RestoreOutcome({
+    required this.messagesRecovered,
+    required this.backupHadTranscript,
+    this.transcriptError,
+  });
+
+  /// How many message bodies came back. Zero with [backupHadTranscript] false means the backup
+  /// never carried a history to begin with — the common case for a backup sealed by a device that
+  /// had read nothing.
+  final int messagesRecovered;
+
+  /// Whether the backup carried a transcript at all.
+  final bool backupHadTranscript;
+
+  /// Set when a transcript was present but could not be opened or imported.
+  final Object? transcriptError;
+
+  /// Whether the person should be told the history did not come back.
+  bool get historyMissing => messagesRecovered == 0;
+}
+
 class MlsService {
   /// [namespace] separates one device's storage from another's in the same process. Empty in the app;
   /// the integration tests use it to run two devices at once.
@@ -166,6 +195,16 @@ class MlsService {
   /// Calls in flight. A counter and not a flag, because a second call can start before the first has
   /// finished tearing down, and the first one's cleanup must not unfreeze the second.
   int _callsInProgress = 0;
+
+  /// What the last restore recovered, for the screen that ran it to report honestly. Null until a
+  /// restore has run in this process.
+  RestoreOutcome? lastRestore;
+
+  /// How many decrypted bodies could not be written to the cache this session.
+  ///
+  /// Non-zero means messages are readable right now and will not be after a restart — the plaintext
+  /// is in memory and nowhere else. Surfaced rather than counted for its own sake.
+  int persistFailures = 0;
 
   /// The recovery secret this session is unlocked with, held only in memory. It is what auto-backup
   /// re-seals under; null means auto-backup is dormant (no secret to seal with). Set when a backup is
@@ -1290,9 +1329,27 @@ class MlsService {
     // so nothing downstream has to go back to the envelope for it.
     final content = parseContent(plaintext.plaintext);
     final attribution = Attribution.authenticated(plaintext.sender);
-    await _cache.cacheContent(conversationId, message.id, content, attribution);
-    // The decrypted body now lives only here (the message key is gone); back it up.
-    autoBackupSoon(_sessionUserId);
+    // Storing it can fail — no data key yet, a full disk, a cache file that would not open. The
+    // body is ALREADY decrypted at this point and the message key is already gone, so letting that
+    // failure propagate would present a message we can read perfectly as one we cannot, and the
+    // reader would never see it again. Hand it back regardless, and say so in the log: it survives
+    // in the in-memory map for this session, and a later write can still persist it.
+    try {
+      await _cache.cacheContent(
+        conversationId,
+        message.id,
+        content,
+        attribution,
+      );
+      // The decrypted body now lives only here (the message key is gone); back it up.
+      autoBackupSoon(_sessionUserId);
+    } on Object catch (e) {
+      debugPrint(
+        'decrypt: read the message but could not store it '
+        '($conversationId/${message.id}): $e',
+      );
+      persistFailures++;
+    }
     return CachedEntry(content, attribution);
   }
 
@@ -1559,7 +1616,14 @@ class MlsService {
   /// message key on decrypt). Without the transcript a restored device would come up able to follow
   /// the conversation forward but showing a blank history. Also arms auto-backup with the secret, so
   /// later messages are re-sealed without the user lifting a finger.
-  Future<void> backupKeys(String userId, String passphrase) async {
+  /// [force] replaces a stored backup that holds MORE history than this device has. Only ever set
+  /// from an explicit human action — never from auto-backup, which is what a freshly installed
+  /// device runs and which must not be able to erase a history it has never seen.
+  Future<void> backupKeys(
+    String userId,
+    String passphrase, {
+    bool force = false,
+  }) async {
     final session = await this.session(userId);
     final state = await session.exportState();
     if (state == null) throw Exception('no local key state to back up');
@@ -1578,6 +1642,14 @@ class MlsService {
     // The transcript, sealed under its own salt/nonce. Empty when this device has read nothing yet —
     // then there is simply no transcript blob to send.
     final bodies = await _cache.exportAllContents();
+    // What the server compares this backup against. It cannot open the seal, so without a count it
+    // has no way to tell a device that has read everything from one that has read nothing — and it
+    // was the second kind, freshly installed, that once replaced a full transcript with an empty
+    // one and took the history with it.
+    final messageCount = bodies.values.fold<int>(
+      0,
+      (total, msgs) => total + msgs.length,
+    );
     ({Uint8List salt, Uint8List nonce, Uint8List ciphertext})? transcript;
     if (bodies.isNotEmpty) {
       final plaintext = Uint8List.fromList(
@@ -1602,6 +1674,8 @@ class MlsService {
       transcriptSalt: transcript?.salt,
       transcriptNonce: transcript?.nonce,
       transcriptCiphertext: transcript?.ciphertext,
+      transcriptMessages: messageCount,
+      force: force,
     );
 
     // Keep the secret so auto-backup can carry later changes without prompting again.
@@ -1654,6 +1728,8 @@ class MlsService {
     // under the same passphrase. A history that will not open must not fail the restore — the device
     // still comes up working, just without the old scrollback.
     Map<String, Map<String, String>>? bodies;
+    Object? transcriptError;
+    var imported = 0;
     if (backup.hasTranscript) {
       try {
         final opened = await rust.mlsBackupDecrypt(
@@ -1673,8 +1749,13 @@ class MlsService {
             ),
           );
         }
-      } on Object {
+      } on Object catch (e, st) {
         // Best effort — the device is already coming up; it just will not have the old history.
+        // REPORTED, though. This used to be swallowed whole, so a restore that recovered the keys
+        // and none of the transcript looked identical to one that worked, and the person was left
+        // staring at a conversation of undecryptable messages with nothing anywhere saying why.
+        transcriptError = e;
+        debugPrint('restore: could not open the backed-up transcript: $e\n$st');
       }
     }
 
@@ -1695,8 +1776,16 @@ class MlsService {
     if (bodies != null) {
       try {
         await _cache.importContents(bodies);
-      } on Object {
-        // Already up and working without it.
+        imported = bodies.values.fold<int>(
+          0,
+          (total, msgs) => total + msgs.length,
+        );
+      } on Object catch (e, st) {
+        // Already up and working without it — but say so, for the same reason as above.
+        transcriptError = e;
+        debugPrint(
+          'restore: could not import the backed-up transcript: $e\n$st',
+        );
       }
     }
 
@@ -1704,6 +1793,11 @@ class MlsService {
     // imported history is re-sealed under this device's identity rather than only the old one's.
     _sessionPassphrase = passphrase;
     autoBackupSoon(userId);
+    lastRestore = RestoreOutcome(
+      messagesRecovered: imported,
+      backupHadTranscript: backup.hasTranscript,
+      transcriptError: transcriptError,
+    );
     return true;
   }
 

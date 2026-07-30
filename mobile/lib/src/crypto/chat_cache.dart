@@ -28,10 +28,58 @@ import '../rust/api/vault.dart';
 import 'attribution.dart';
 import 'chat_content.dart';
 
+/// Raised when a body cannot be written to the cache.
+///
+/// It is an exception rather than a silent return because of what the caller is holding: a
+/// plaintext MLS has already destroyed the key for. Swallowing this loses it for good, and the
+/// caller is the only place left that still has it.
+class ChatCacheWriteException implements Exception {
+  const ChatCacheWriteException(this.conversationId, this.reason);
+
+  final String conversationId;
+  final String reason;
+
+  @override
+  String toString() => 'ChatCacheWriteException($conversationId): $reason';
+}
+
+/// The seal and its inverse, injectable so the durability rules below can be tested without the
+/// Rust library — the same split the history-handoff tests already make. Production always uses
+/// [vaultSeal] / [vaultOpen]; nothing else in the app passes these.
+typedef VaultSealFn =
+    Future<Uint8List> Function({
+      required String domain,
+      required List<int> key,
+      required List<int> plaintext,
+    });
+typedef VaultOpenFn =
+    Future<Uint8List> Function({
+      required String domain,
+      required List<int> key,
+      required List<int> sealed,
+    });
+
 class ChatCache {
   /// [namespace] must match the MlsStore's — the two share a data key, and in a two-device test each
   /// device needs its own. Empty in the app.
-  ChatCache(this._storage, {String namespace = ''}) : _ns = namespace;
+  ///
+  /// [seal], [open] and [supportDirectory] exist for tests only. What they make testable is the one
+  /// thing in this class that cannot be recovered when it goes wrong: these bodies are the only copy
+  /// of a decrypted message, because MLS destroys the key on decrypt.
+  ChatCache(
+    this._storage, {
+    String namespace = '',
+    VaultSealFn? seal,
+    VaultOpenFn? open,
+    Future<Directory> Function()? supportDirectory,
+  }) : _ns = namespace,
+       _seal = seal ?? vaultSeal,
+       _open = open ?? vaultOpen,
+       _supportDirectory = supportDirectory ?? getApplicationSupportDirectory;
+
+  final VaultSealFn _seal;
+  final VaultOpenFn _open;
+  final Future<Directory> Function() _supportDirectory;
 
   final String _ns;
 
@@ -63,8 +111,16 @@ class ChatCache {
   final _previewSenders = <String, String>{};
   final _previewIds = <String, String>{};
 
+  /// Conversations whose stored bodies could not be opened this session.
+  ///
+  /// An unreadable file used to read as an empty one, and the next body cached would flush a map
+  /// built on that emptiness — replacing a file holding a whole history with one holding a single
+  /// message. A failed read is not evidence that there is nothing there; it is evidence that we
+  /// must not write. The file is left exactly as it is until something can open it.
+  final _unreadable = <String>{};
+
   Future<Directory> _dir() async {
-    final support = await getApplicationSupportDirectory();
+    final support = await _supportDirectory();
     final dir = Directory('${support.path}/bodies$_ns');
     if (!await dir.exists()) await dir.create(recursive: true);
     return dir;
@@ -96,7 +152,7 @@ class ChatCache {
 
     if (await file.exists() && key != null) {
       try {
-        final opened = await vaultOpen(
+        final opened = await _open(
           domain: _domain,
           key: key,
           sealed: await file.readAsBytes(),
@@ -106,11 +162,17 @@ class ChatCache {
           if (body is String) bodies[id] = body;
         });
       } on Object {
-        // Unreadable is the same as absent. The bodies are gone either way, and there is no second
-        // chance to decrypt them — so there is nothing to do but carry on with what we have.
+        // Unreadable, which is NOT the same as absent — see [_unreadable]. The reader carries on
+        // with what it has, so the conversation still opens; the writer is the one that must be
+        // stopped, or it replaces a file it could not read.
+        _unreadable.add(conversationId);
       }
+    } else if (await file.exists() && key == null) {
+      // A file we have not even tried to open, because the key was not available. Same rule.
+      _unreadable.add(conversationId);
     }
 
+    if (bodies.isNotEmpty) _unreadable.remove(conversationId);
     _contents[conversationId] = bodies;
     final newest = bodies.values.isNotEmpty ? bodies.values.last : null;
     if (newest != null) {
@@ -188,10 +250,25 @@ class ChatCache {
       _previewIds[conversationId] ?? '';
 
   Future<void> _flush(String conversationId, Map<String, String> bodies) async {
+    // Refuse to write over what we could not read. This is the whole of the protection against
+    // turning one failed open into a lost conversation.
+    if (_unreadable.contains(conversationId)) {
+      throw ChatCacheWriteException(
+        conversationId,
+        'the stored bodies could not be opened; writing would replace them',
+      );
+    }
     final key = await _dataKey();
-    if (key == null) return; // no identity yet; nothing to protect it with
+    if (key == null) {
+      // There is no key to seal with, and the caller is holding a plaintext that exists nowhere
+      // else. This used to return quietly, which threw the body away and reported success.
+      throw ChatCacheWriteException(
+        conversationId,
+        'no data key available to seal the cache with',
+      );
+    }
 
-    final sealed = await vaultSeal(
+    final sealed = await _seal(
       domain: _domain,
       key: key,
       plaintext: Uint8List.fromList(utf8.encode(jsonEncode(bodies))),
