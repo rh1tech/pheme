@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -648,6 +649,112 @@ func TestConformance_KeyBackupCarriesTheTranscriptCount(t *testing.T) {
 		}
 		if got.TranscriptMessages != 0 {
 			t.Fatalf("transcriptMessages = %d after a transcript-less replace, want 0", got.TranscriptMessages)
+		}
+	})
+}
+
+// The archive of superseded backups, in BOTH stores.
+//
+// Replacing a backup used to be the same act as destroying it — the previous transcript's salt and
+// nonce lived on the record and went with it, so even a surviving blob was noise. What has to hold
+// is that an archived version keeps its own seal parameters, that the archive is bounded, and that
+// pruning hands back what it dropped so the blobs can go too.
+func TestConformance_KeyBackupArchiveKeepsSupersededVersions(t *testing.T) {
+	eachStore(t, func(t *testing.T, s storeUnderTest) {
+		ctx := context.Background()
+
+		version := func(i int) domain.MLSKeyBackup {
+			return domain.MLSKeyBackup{
+				UserID:             "u-archive",
+				DeviceID:           fmt.Sprintf("dev-%d", i),
+				Salt:               []byte(fmt.Sprintf("salt-%d", i)),
+				Nonce:              []byte(fmt.Sprintf("nonce-%d", i)),
+				CiphertextBlobID:   fmt.Sprintf("state-blob-%d", i),
+				TranscriptSalt:     []byte(fmt.Sprintf("t-salt-%d", i)),
+				TranscriptNonce:    []byte(fmt.Sprintf("t-nonce-%d", i)),
+				TranscriptBlobID:   fmt.Sprintf("transcript-blob-%d", i),
+				TranscriptMessages: (i + 1) * 10,
+				// Distinct and increasing, since newest-first ordering is what the fallback reads.
+				UpdatedAt: time.Now().UTC().Add(time.Duration(i) * time.Minute),
+			}
+		}
+
+		for i := 0; i < 3; i++ {
+			if _, err := s.store.ArchiveKeyBackup(ctx, version(i), 5); err != nil {
+				t.Fatalf("archive %d: %v", i, err)
+			}
+		}
+
+		listed, err := s.store.ListKeyBackupVersions(ctx, "u-archive")
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(listed) != 3 {
+			t.Fatalf("listed %d versions, want 3", len(listed))
+		}
+		// Newest first — a fallback walks this in order and must try the most recent history first.
+		if listed[0].DeviceID != "dev-2" || listed[2].DeviceID != "dev-0" {
+			t.Fatalf("wrong order: %s … %s", listed[0].DeviceID, listed[2].DeviceID)
+		}
+		// Each version's OWN seal parameters survived. This is the property whose absence made a
+		// replaced backup unopenable.
+		if string(listed[2].TranscriptSalt) != "t-salt-0" ||
+			string(listed[2].TranscriptNonce) != "t-nonce-0" {
+			t.Fatal("an archived version lost its own salt/nonce")
+		}
+		if listed[2].TranscriptMessages != 10 {
+			t.Fatalf("archived count = %d, want 10", listed[2].TranscriptMessages)
+		}
+
+		// By id, scoped to the owner.
+		one, err := s.store.KeyBackupVersion(ctx, "u-archive", listed[0].ID)
+		if err != nil {
+			t.Fatalf("by id: %v", err)
+		}
+		if one.DeviceID != "dev-2" {
+			t.Fatalf("fetched %s, want dev-2", one.DeviceID)
+		}
+		if _, err := s.store.KeyBackupVersion(ctx, "somebody-else", listed[0].ID); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("another user fetched this version: %v", err)
+		}
+		if _, err := s.store.KeyBackupVersion(ctx, "u-archive", "no-such-id"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("unknown id: %v", err)
+		}
+	})
+}
+
+// Bounded, and it says what it dropped — the caller deletes those blobs, so a prune that stayed
+// silent would leak a transcript per replacement forever.
+func TestConformance_KeyBackupArchiveIsBoundedAndReportsPruned(t *testing.T) {
+	eachStore(t, func(t *testing.T, s storeUnderTest) {
+		ctx := context.Background()
+
+		var allPruned []domain.MLSKeyBackup
+		for i := 0; i < 5; i++ {
+			pruned, err := s.store.ArchiveKeyBackup(ctx, domain.MLSKeyBackup{
+				UserID:           "u-bounded",
+				DeviceID:         fmt.Sprintf("dev-%d", i),
+				CiphertextBlobID: fmt.Sprintf("state-%d", i),
+				TranscriptBlobID: fmt.Sprintf("transcript-%d", i),
+				UpdatedAt:        time.Now().UTC().Add(time.Duration(i) * time.Minute),
+			}, 2)
+			if err != nil {
+				t.Fatalf("archive %d: %v", i, err)
+			}
+			allPruned = append(allPruned, pruned...)
+		}
+
+		listed, err := s.store.ListKeyBackupVersions(ctx, "u-bounded")
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(listed) != 2 {
+			t.Fatalf("archive holds %d, want the 2 it was bounded to", len(listed))
+		}
+		// Five archived, two kept: three had to be reported so their blobs could be deleted.
+		if len(allPruned) != 3 {
+			t.Fatalf("pruned %d versions, want 3 — a silent prune leaks a transcript each time",
+				len(allPruned))
 		}
 	})
 }

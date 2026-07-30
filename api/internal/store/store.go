@@ -404,6 +404,21 @@ type Store interface {
 	// upserts; GetKeyBackup returns ErrNotFound when the user has none.
 	PutKeyBackup(ctx context.Context, backup domain.MLSKeyBackup) error
 	GetKeyBackup(ctx context.Context, userID string) (domain.MLSKeyBackup, error)
+	// ArchiveKeyBackup keeps a superseded backup so that replacing one is not the same as
+	// destroying it.
+	//
+	// There is one live backup per user and PutKeyBackup replaces it in place, which made an
+	// overwrite final: the previous transcript's salt and nonce went with the record, so even a
+	// retained blob could never be opened again. A device that had read nothing could therefore
+	// take a whole history with it, and did.
+	//
+	// Returns the versions pruned by [keep] so the caller can delete their blobs — the archive is
+	// bounded, or a chatty device would grow it without limit.
+	ArchiveKeyBackup(ctx context.Context, backup domain.MLSKeyBackup, keep int) ([]domain.MLSKeyBackup, error)
+	// ListKeyBackupVersions returns a user's superseded backups, newest first.
+	ListKeyBackupVersions(ctx context.Context, userID string) ([]domain.MLSKeyBackup, error)
+	// KeyBackupVersion returns one superseded backup by id, scoped to its owner.
+	KeyBackupVersion(ctx context.Context, userID, versionID string) (domain.MLSKeyBackup, error)
 
 	// The user's own device registry — what "your devices" reads. UpsertMLSDevice records
 	// a device and bumps its last-seen; ListMLSDevices returns the user's devices, most

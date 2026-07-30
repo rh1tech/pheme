@@ -132,6 +132,8 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 		"users":    {{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "usernameLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"usernameLower": bson.M{"$exists": true}})}},
 		"channels": {{Keys: bson.D{{Key: "publicId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "ownerId", Value: 1}}}, {Keys: bson.D{{Key: "aliasLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"aliasLower": bson.M{"$exists": true}})}},
 		"apiKeys":  {{Keys: bson.D{{Key: "channelId", Value: 1}}}},
+		// Superseded backups, newest first per user — the read every restore fallback makes.
+		"mlsKeyBackupVersions": {{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "updatedAt", Value: -1}}}},
 		// Registration looks an invite up BY the hash of the code presented, so this index is
 		// on the read path of every signup. Unique because two invites sharing a hash would be
 		// two invites sharing a code, and only one of them could ever be redeemed.

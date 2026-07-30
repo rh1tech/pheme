@@ -647,4 +647,6 @@ const Map<String, String> enStrings = {
       'read only on this device, and not in the backup, are kept. This cannot be undone.',
   'recovery.restoreAction': 'Restore',
   'recovery.noBackup': 'There is no backup saved for this account.',
+  'backup.historyFromArchive':
+      'Restored from an earlier backup — the most recent one held no message history.',
 };

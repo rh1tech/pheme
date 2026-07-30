@@ -502,6 +502,13 @@ func (h *Handler) memberIDs(ctx context.Context, convID string) (map[string]bool
 // somehow exceeds it can back up in a smaller window and grow from there.
 const maxBackupUploadBytes = 256 * 1024 * 1024
 
+// How many superseded backups are kept per user.
+//
+// Enough to survive the accident this exists for — a device or two coming up empty and re-sealing
+// before anybody notices — without letting a chatty client grow the archive without limit. Each
+// version costs a transcript, so the number is small on purpose.
+const keptBackupVersions = 3
+
 type putKeyBackupRequest struct {
 	DeviceID string `json:"deviceId"`
 	// All base64 of opaque bytes: the AES-GCM salt, nonce and sealed ciphertext.
@@ -612,15 +619,31 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The record now points at the new blobs; the old ones are unreferenced. Delete them —
-	// best effort, and only after the swap, so a failure here leaks a blob but never loses a
-	// backup. Nothing points at them any more regardless.
+	// The superseded backup is ARCHIVED, not deleted.
+	//
+	// It used to be deleted here, which made replacing a backup the same act as destroying it: the
+	// previous transcript's salt and nonce lived on the record and went with it, so even a blob
+	// that survived could never be opened again. A device that had read nothing could take a whole
+	// history with it, and did. Keeping a bounded run of previous versions is what makes that
+	// recoverable rather than merely detectable.
+	//
+	// Best effort: a backup that is safely stored must not be failed because the archive could not
+	// be written.
 	if prevErr == nil {
-		if prev.CiphertextBlobID != "" && prev.CiphertextBlobID != backup.CiphertextBlobID {
-			_ = h.Blobs.Delete(r.Context(), prev.CiphertextBlobID)
+		pruned, aErr := h.Store.ArchiveKeyBackup(r.Context(), prev, keptBackupVersions)
+		if aErr != nil {
+			h.logger().Warn("could not archive the superseded key backup",
+				"user", uid, "error", aErr)
 		}
-		if prev.TranscriptBlobID != "" && prev.TranscriptBlobID != backup.TranscriptBlobID {
-			_ = h.Blobs.Delete(r.Context(), prev.TranscriptBlobID)
+		// Only blobs that fell out of the archive are dropped, and only when nothing still points
+		// at them — the live record may share a blob with the version it replaced.
+		for _, old := range pruned {
+			if old.CiphertextBlobID != "" && old.CiphertextBlobID != backup.CiphertextBlobID {
+				_ = h.Blobs.Delete(r.Context(), old.CiphertextBlobID)
+			}
+			if old.TranscriptBlobID != "" && old.TranscriptBlobID != backup.TranscriptBlobID {
+				_ = h.Blobs.Delete(r.Context(), old.TranscriptBlobID)
+			}
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -658,6 +681,77 @@ func (h *Handler) getKeyBackup(w http.ResponseWriter, r *http.Request) {
 		// does not. Fall through with an empty transcript rather than fail the whole restore.
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
+		"salt":                 backup.Salt,
+		"nonce":                backup.Nonce,
+		"ciphertext":           ciphertext,
+		"transcriptSalt":       backup.TranscriptSalt,
+		"transcriptNonce":      backup.TranscriptNonce,
+		"transcriptCiphertext": transcriptCiphertext,
+		"transcriptMessages":   backup.TranscriptMessages,
+		"updatedAt":            backup.UpdatedAt,
+	})
+}
+
+// listKeyBackupVersions returns the superseded backups, newest first — metadata only.
+//
+// No ciphertext: this is the list a client scans to decide which version to try, and shipping three
+// transcripts to answer "what is there?" would make the common case expensive for no reason.
+func (h *Handler) listKeyBackupVersions(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	versions, err := h.Store.ListKeyBackupVersions(r.Context(), uid)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not list backup versions")
+		return
+	}
+	out := make([]map[string]any, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, map[string]any{
+			"id":                 v.ID,
+			"deviceId":           v.DeviceID,
+			"updatedAt":          v.UpdatedAt,
+			"transcriptMessages": v.TranscriptMessages,
+			"hasTranscript":      v.TranscriptBlobID != "",
+		})
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"versions": out})
+}
+
+// getKeyBackupVersion returns one superseded backup, hydrated exactly like the live one.
+//
+// Each version carries its OWN salt and nonce. That is what makes an archived backup openable at
+// all: they used to be overwritten along with the record, so a retained blob was so much noise.
+func (h *Handler) getKeyBackupVersion(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	if h.Blobs == nil {
+		httpx.Error(w, http.StatusNotFound, "no backup found")
+		return
+	}
+	backup, err := h.Store.KeyBackupVersion(r.Context(), uid, r.PathValue("versionId"))
+	if err != nil {
+		// Scoped to the owner by the store, and 404 either way, so a probe cannot tell somebody
+		// else's version id from one that does not exist.
+		httpx.Error(w, http.StatusNotFound, "no backup found")
+		return
+	}
+	ciphertext, _, err := h.Blobs.Get(r.Context(), backup.CiphertextBlobID)
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "no backup found")
+		return
+	}
+	var transcriptCiphertext []byte
+	if backup.TranscriptBlobID != "" {
+		if tc, _, tErr := h.Blobs.Get(r.Context(), backup.TranscriptBlobID); tErr == nil {
+			transcriptCiphertext = tc
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"id":                   backup.ID,
 		"salt":                 backup.Salt,
 		"nonce":                backup.Nonce,
 		"ciphertext":           ciphertext,

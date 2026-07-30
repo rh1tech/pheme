@@ -3,6 +3,7 @@ package chat
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -68,9 +69,14 @@ func TestKeyBackupIsPerUser(t *testing.T) {
 	}
 }
 
-// The sealed blobs live in the blob store, and replacing a backup must not leave the old
-// ones behind: one user keeps exactly the blobs their current backup references, however many
-// times they re-upload. This is what keeps "back up often" from growing storage without bound.
+// The sealed blobs live in the blob store, and storage must stay bounded however many times a
+// device re-uploads.
+//
+// This used to assert that a replaced backup's blobs were deleted immediately. They are not any
+// more, deliberately: the superseded backup is archived so that replacing one is not the same act
+// as destroying it — see putKeyBackup. What has to hold now is the weaker but sufficient property,
+// that the total stops growing once the archive is full. The old assertion was the reason a
+// replaced history could never be recovered.
 func TestKeyBackupReplacesBlobsWithoutOrphans(t *testing.T) {
 	f := newFixture(t)
 	_, token := f.user(t, "orphan-b@pheme.test")
@@ -95,17 +101,30 @@ func TestKeyBackupReplacesBlobsWithoutOrphans(t *testing.T) {
 	if n := blobs.Len(); n != 2 {
 		t.Fatalf("after first backup, want 2 blobs (state+transcript), got %d", n)
 	}
-	// Three more uploads. If old blobs leaked, this would climb to 8.
+
+	// The live backup plus a bounded archive: one live and keptBackupVersions superseded, each
+	// holding a state and a transcript.
 	put("state-2", "transcript-2")
 	put("state-3", "transcript-3")
 	put("state-4", "transcript-4")
-	if n := blobs.Len(); n != 2 {
-		t.Fatalf("after four backups, want 2 blobs (no orphans), got %d", n)
+	full := 2 * (1 + keptBackupVersions)
+	if n := blobs.Len(); n != full {
+		t.Fatalf("after four backups, want %d blobs (live + %d archived), got %d",
+			full, keptBackupVersions, n)
+	}
+
+	// THE BOUND. Past this point every upload prunes one version out of the archive and its blobs
+	// go with it, so the total holds steady rather than climbing forever.
+	for i := 5; i <= 12; i++ {
+		put(fmt.Sprintf("state-%d", i), fmt.Sprintf("transcript-%d", i))
+	}
+	if n := blobs.Len(); n != full {
+		t.Fatalf("after twelve backups, want %d blobs still, got %d — the prune is leaking", full, n)
 	}
 
 	// And the latest is what restores.
 	got := getBackup(t, f, token)
-	if string(got.Ciphertext) != "state-4" || string(got.TranscriptCiphertext) != "transcript-4" {
+	if string(got.Ciphertext) != "state-12" || string(got.TranscriptCiphertext) != "transcript-12" {
 		t.Fatalf("restored the wrong version: %q / %q", got.Ciphertext, got.TranscriptCiphertext)
 	}
 }
@@ -145,7 +164,10 @@ type backupResponse struct {
 	Salt                 []byte `json:"salt"`
 	Nonce                []byte `json:"nonce"`
 	Ciphertext           []byte `json:"ciphertext"`
+	TranscriptSalt       []byte `json:"transcriptSalt"`
+	TranscriptNonce      []byte `json:"transcriptNonce"`
 	TranscriptCiphertext []byte `json:"transcriptCiphertext"`
+	TranscriptMessages   int    `json:"transcriptMessages"`
 }
 
 func getBackup(t *testing.T, f *fixture, token string) backupResponse {
@@ -380,5 +402,172 @@ func TestKeyBackupCountWithoutATranscriptDoesNotRaiseTheBar(t *testing.T) {
 	}
 	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, honest); rec.Code != http.StatusNoContent {
 		t.Fatalf("an honest backup was refused because of a phantom count: got %d", rec.Code)
+	}
+}
+
+// THE INCIDENT, REPLAYED. A device that had read everything backs up; a freshly installed one comes
+// up empty and backs up over it. Before versioning that was the end of the history — the previous
+// transcript's salt and nonce went with the record it was overwritten on, so even a surviving blob
+// could never be opened. Now the superseded backup is archived and can be fetched whole.
+func TestASupersededBackupIsStillRecoverable(t *testing.T) {
+	f := newFixture(t)
+	_, token := f.user(t, "superseded@pheme.test")
+
+	full := map[string]any{
+		"deviceId":             "had-the-history",
+		"salt":                 []byte("salt-aaaa"),
+		"nonce":                []byte("nonce-aaaaaa"),
+		"ciphertext":           []byte("state-one"),
+		"transcriptSalt":       []byte("t-salt-1"),
+		"transcriptNonce":      []byte("t-nonce-1"),
+		"transcriptCiphertext": []byte("a hundred messages"),
+		"transcriptMessages":   100,
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, full); rec.Code != http.StatusNoContent {
+		t.Fatalf("seed: got %d", rec.Code)
+	}
+
+	// The fresh device replaces it — deliberately, as a person would after being warned.
+	empty := map[string]any{
+		"deviceId":             "freshly-installed",
+		"salt":                 []byte("salt-bbbb"),
+		"nonce":                []byte("nonce-bbbbbb"),
+		"ciphertext":           []byte("state-two"),
+		"transcriptSalt":       []byte("t-salt-2"),
+		"transcriptNonce":      []byte("t-nonce-2"),
+		"transcriptCiphertext": []byte("almost nothing"),
+		"transcriptMessages":   1,
+		"force":                true,
+	}
+	if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, empty); rec.Code != http.StatusNoContent {
+		t.Fatalf("forced replace: got %d", rec.Code)
+	}
+
+	// The live backup is the poor one — that was the person's choice.
+	if got := getBackup(t, f, token); string(got.TranscriptCiphertext) != "almost nothing" {
+		t.Fatalf("live transcript = %q", got.TranscriptCiphertext)
+	}
+
+	// But the history is not gone. It is one fetch away.
+	rec := f.do(http.MethodGet, "/v1/mls/key-backup/versions", token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list versions: got %d", rec.Code)
+	}
+	var listed struct {
+		Versions []struct {
+			ID                 string `json:"id"`
+			TranscriptMessages int    `json:"transcriptMessages"`
+			HasTranscript      bool   `json:"hasTranscript"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode versions: %v", err)
+	}
+	if len(listed.Versions) != 1 {
+		t.Fatalf("archived %d versions, want 1", len(listed.Versions))
+	}
+	if listed.Versions[0].TranscriptMessages != 100 || !listed.Versions[0].HasTranscript {
+		t.Fatalf("the archived version does not describe the lost history: %+v", listed.Versions[0])
+	}
+
+	// And it opens: its OWN salt and nonce came with it, which is exactly what used to be lost.
+	rec = f.do(http.MethodGet, "/v1/mls/key-backup/versions/"+listed.Versions[0].ID, token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get version: got %d", rec.Code)
+	}
+	var version backupResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &version); err != nil {
+		t.Fatalf("decode version: %v", err)
+	}
+	if string(version.TranscriptCiphertext) != "a hundred messages" {
+		t.Fatalf("archived transcript = %q, want the hundred messages", version.TranscriptCiphertext)
+	}
+	if string(version.TranscriptSalt) != "t-salt-1" || string(version.TranscriptNonce) != "t-nonce-1" {
+		t.Fatal("the archived version lost its own salt/nonce, so it can never be opened")
+	}
+}
+
+// The archive is bounded, or a chatty client grows it without limit. Each version costs a
+// transcript, so the oldest are dropped and their blobs go with them.
+func TestTheBackupArchiveIsBounded(t *testing.T) {
+	f := newFixture(t)
+	_, token := f.user(t, "bounded@pheme.test")
+
+	for i := 0; i < keptBackupVersions+3; i++ {
+		body := map[string]any{
+			"deviceId":             fmt.Sprintf("dev-%d", i),
+			"salt":                 []byte(fmt.Sprintf("salt-%d", i)),
+			"nonce":                []byte(fmt.Sprintf("nonce-%d", i)),
+			"ciphertext":           []byte(fmt.Sprintf("state-%d", i)),
+			"transcriptSalt":       []byte(fmt.Sprintf("t-salt-%d", i)),
+			"transcriptNonce":      []byte(fmt.Sprintf("t-nonce-%d", i)),
+			"transcriptCiphertext": []byte(fmt.Sprintf("transcript-%d", i)),
+			// Growing, so the shrink guard never fires and each upload really does replace.
+			"transcriptMessages": i + 1,
+		}
+		if rec := f.do(http.MethodPut, "/v1/mls/key-backup", token, body); rec.Code != http.StatusNoContent {
+			t.Fatalf("upload %d: got %d", i, rec.Code)
+		}
+	}
+
+	rec := f.do(http.MethodGet, "/v1/mls/key-backup/versions", token, nil)
+	var listed struct {
+		Versions []struct {
+			ID string `json:"id"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(listed.Versions) != keptBackupVersions {
+		t.Fatalf("archive holds %d versions, want %d", len(listed.Versions), keptBackupVersions)
+	}
+}
+
+// One person's archive is not another's, and a version id is not a capability.
+func TestBackupVersionsAreScopedToTheirOwner(t *testing.T) {
+	f := newFixture(t)
+	_, aliceTok := f.user(t, "alice-v@pheme.test")
+	_, bobTok := f.user(t, "bob-v@pheme.test")
+
+	for i := 0; i < 2; i++ {
+		body := map[string]any{
+			"deviceId":             "dev",
+			"salt":                 []byte("salt"),
+			"nonce":                []byte("nonce"),
+			"ciphertext":           []byte(fmt.Sprintf("alice-state-%d", i)),
+			"transcriptSalt":       []byte("t-salt"),
+			"transcriptNonce":      []byte("t-nonce"),
+			"transcriptCiphertext": []byte("alice's history"),
+			"transcriptMessages":   i + 1,
+		}
+		if rec := f.do(http.MethodPut, "/v1/mls/key-backup", aliceTok, body); rec.Code != http.StatusNoContent {
+			t.Fatalf("alice upload %d: got %d", i, rec.Code)
+		}
+	}
+
+	rec := f.do(http.MethodGet, "/v1/mls/key-backup/versions", aliceTok, nil)
+	var listed struct {
+		Versions []struct {
+			ID string `json:"id"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil || len(listed.Versions) == 0 {
+		t.Fatalf("alice has no archived versions: %v", err)
+	}
+
+	// Bob sees none of his own, and cannot fetch one of Alice's by id.
+	rec = f.do(http.MethodGet, "/v1/mls/key-backup/versions", bobTok, nil)
+	var bobList struct {
+		Versions []json.RawMessage `json:"versions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &bobList); err != nil {
+		t.Fatalf("decode bob: %v", err)
+	}
+	if len(bobList.Versions) != 0 {
+		t.Fatalf("bob sees %d of alice's versions", len(bobList.Versions))
+	}
+	if rec := f.do(http.MethodGet, "/v1/mls/key-backup/versions/"+listed.Versions[0].ID, bobTok, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("bob fetched alice's backup version: got %d, want 404", rec.Code)
 	}
 }

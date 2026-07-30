@@ -172,6 +172,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/conversations/{id}/calls/{callId}/ring", h.postCallRing)
 	mux.HandleFunc("PUT /v1/mls/key-backup", h.putKeyBackup)
 	mux.HandleFunc("GET /v1/mls/key-backup", h.getKeyBackup)
+	// Superseded backups. Replacing a backup no longer destroys the one it replaced, so there has
+	// to be a way to reach the older ones — see putKeyBackup.
+	mux.HandleFunc("GET /v1/mls/key-backup/versions", h.listKeyBackupVersions)
+	mux.HandleFunc("GET /v1/mls/key-backup/versions/{versionId}", h.getKeyBackupVersion)
 }
 
 const minUserSearchLen = 2

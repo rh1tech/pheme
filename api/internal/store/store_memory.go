@@ -16,57 +16,59 @@ import (
 // Memory is an in-memory Store implementation for local development and tests.
 // It is safe for concurrent use. Data does not survive a restart.
 type Memory struct {
-	mu              sync.RWMutex
-	users           map[string]domain.User
-	channels        map[string]domain.Channel
-	apiKeys         map[string]domain.APIKey
-	invites         map[string]domain.Invite
-	devices         map[string]domain.Device
-	revokedUsers    map[string]userRevocation
-	subscriptions   map[string]domain.Subscription
-	members         map[string]domain.ChannelMember
-	messages        map[string]domain.Message
-	deliveries      map[string]domain.Delivery
-	comments        map[string]domain.Comment
-	conversations   map[string]domain.Conversation
-	convMembers     map[string]domain.ConversationMember
-	chatMessages    map[string]domain.ChatMessage
-	attachments     map[string]domain.Attachment
-	keyPackages     map[string]domain.MLSKeyPackage
-	keyBackups      map[string]domain.MLSKeyBackup       // by userId (one per user)
-	mlsDevices      map[string]domain.MLSDevice          // by userId + ":" + deviceId
-	revokedSessions map[string]time.Time                 // sid -> expiry (terminated sessions)
-	mlsGroupInfo    map[string]domain.MLSGroupInfo       // by conversationId (one per group)
-	remoteSubs      map[string]domain.RemoteSubscription // by channelId + NUL + peerDomain
-	blobs           blob.Store
+	mu                sync.RWMutex
+	users             map[string]domain.User
+	channels          map[string]domain.Channel
+	apiKeys           map[string]domain.APIKey
+	invites           map[string]domain.Invite
+	devices           map[string]domain.Device
+	revokedUsers      map[string]userRevocation
+	subscriptions     map[string]domain.Subscription
+	members           map[string]domain.ChannelMember
+	messages          map[string]domain.Message
+	deliveries        map[string]domain.Delivery
+	comments          map[string]domain.Comment
+	conversations     map[string]domain.Conversation
+	convMembers       map[string]domain.ConversationMember
+	chatMessages      map[string]domain.ChatMessage
+	attachments       map[string]domain.Attachment
+	keyPackages       map[string]domain.MLSKeyPackage
+	keyBackups        map[string]domain.MLSKeyBackup       // by userId (one per user)
+	keyBackupVersions map[string][]domain.MLSKeyBackup     // by userId, newest first
+	mlsDevices        map[string]domain.MLSDevice          // by userId + ":" + deviceId
+	revokedSessions   map[string]time.Time                 // sid -> expiry (terminated sessions)
+	mlsGroupInfo      map[string]domain.MLSGroupInfo       // by conversationId (one per group)
+	remoteSubs        map[string]domain.RemoteSubscription // by channelId + NUL + peerDomain
+	blobs             blob.Store
 }
 
 // NewMemory returns an initialised in-memory store. The blob store (may be nil)
 // is used to remove a deleted message's images during cascade deletes.
 func NewMemory(blobs blob.Store) *Memory {
 	return &Memory{
-		users:           map[string]domain.User{},
-		channels:        map[string]domain.Channel{},
-		apiKeys:         map[string]domain.APIKey{},
-		invites:         map[string]domain.Invite{},
-		devices:         map[string]domain.Device{},
-		revokedUsers:    map[string]userRevocation{},
-		subscriptions:   map[string]domain.Subscription{},
-		members:         map[string]domain.ChannelMember{},
-		messages:        map[string]domain.Message{},
-		deliveries:      map[string]domain.Delivery{},
-		comments:        map[string]domain.Comment{},
-		conversations:   map[string]domain.Conversation{},
-		convMembers:     map[string]domain.ConversationMember{},
-		chatMessages:    map[string]domain.ChatMessage{},
-		attachments:     map[string]domain.Attachment{},
-		keyPackages:     map[string]domain.MLSKeyPackage{},
-		keyBackups:      map[string]domain.MLSKeyBackup{},
-		mlsDevices:      map[string]domain.MLSDevice{},
-		revokedSessions: map[string]time.Time{},
-		mlsGroupInfo:    map[string]domain.MLSGroupInfo{},
-		remoteSubs:      map[string]domain.RemoteSubscription{},
-		blobs:           blobs,
+		users:             map[string]domain.User{},
+		channels:          map[string]domain.Channel{},
+		apiKeys:           map[string]domain.APIKey{},
+		invites:           map[string]domain.Invite{},
+		devices:           map[string]domain.Device{},
+		revokedUsers:      map[string]userRevocation{},
+		subscriptions:     map[string]domain.Subscription{},
+		members:           map[string]domain.ChannelMember{},
+		messages:          map[string]domain.Message{},
+		deliveries:        map[string]domain.Delivery{},
+		comments:          map[string]domain.Comment{},
+		conversations:     map[string]domain.Conversation{},
+		convMembers:       map[string]domain.ConversationMember{},
+		chatMessages:      map[string]domain.ChatMessage{},
+		attachments:       map[string]domain.Attachment{},
+		keyPackages:       map[string]domain.MLSKeyPackage{},
+		keyBackups:        map[string]domain.MLSKeyBackup{},
+		keyBackupVersions: map[string][]domain.MLSKeyBackup{},
+		mlsDevices:        map[string]domain.MLSDevice{},
+		revokedSessions:   map[string]time.Time{},
+		mlsGroupInfo:      map[string]domain.MLSGroupInfo{},
+		remoteSubs:        map[string]domain.RemoteSubscription{},
+		blobs:             blobs,
 	}
 }
 

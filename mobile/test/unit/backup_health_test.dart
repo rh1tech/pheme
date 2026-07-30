@@ -12,6 +12,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pheme_mobile/src/crypto/chat_cache.dart';
 import 'package:pheme_mobile/src/crypto/mls_service.dart';
+import 'package:pheme_mobile/src/models/chat_models.dart';
 
 void main() {
   group('the count the server compares backups by', () {
@@ -146,5 +147,60 @@ void main() {
       );
       expect(ok.historyMissing, isFalse);
     });
+  });
+
+  group('the archive of superseded backups', () {
+    // The list a restore walks when the live backup turns out to hold nothing. It is metadata only,
+    // so the choice of which version to fetch is made without pulling three transcripts.
+    test('a version describes how much history it holds', () {
+      final v = MLSKeyBackupVersion.fromJson({
+        'id': 'v1',
+        'deviceId': 'the-device-that-had-it',
+        'updatedAt': '2026-07-30T13:36:48Z',
+        'transcriptMessages': 100,
+        'hasTranscript': true,
+      });
+      expect(v.id, 'v1');
+      expect(v.transcriptMessages, 100);
+      expect(v.hasTranscript, isTrue);
+    });
+
+    // A version with no transcript is worth nothing to a restore and must be skippable without
+    // fetching it.
+    test('a version with no transcript says so', () {
+      final v = MLSKeyBackupVersion.fromJson({
+        'id': 'v2',
+        'transcriptMessages': 0,
+        'hasTranscript': false,
+      });
+      expect(v.hasTranscript, isFalse);
+      expect(v.transcriptMessages, 0);
+    });
+
+    test('an older server sending nothing decodes rather than throwing', () {
+      final v = MLSKeyBackupVersion.fromJson(const {});
+      expect(v.id, '');
+      expect(v.hasTranscript, isFalse);
+    });
+
+    // Recovering from an archived version is reported separately from an ordinary restore: it means
+    // the newest backup had been replaced by a device holding less, which the person should know.
+    test(
+      'recovering from the archive is distinguishable from a normal restore',
+      () {
+        const fromArchive = RestoreOutcome(
+          messagesRecovered: 100,
+          backupHadTranscript: false,
+          recoveredFromArchivedVersion: true,
+        );
+        const normal = RestoreOutcome(
+          messagesRecovered: 100,
+          backupHadTranscript: true,
+        );
+        expect(fromArchive.historyMissing, isFalse);
+        expect(fromArchive.recoveredFromArchivedVersion, isTrue);
+        expect(normal.recoveredFromArchivedVersion, isFalse);
+      },
+    );
   });
 }

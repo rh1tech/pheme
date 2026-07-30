@@ -375,6 +375,69 @@ func (m *Mongo) PutKeyBackup(ctx context.Context, backup domain.MLSKeyBackup) er
 	return err
 }
 
+// ArchiveKeyBackup keeps a superseded backup in its own collection.
+//
+// A separate collection rather than an array on the live record: a transcript can be large, and a
+// Mongo document caps at 16MB — the very reason the ciphertext lives in GridFS. Each archived
+// version keeps its OWN salt and nonce, which is the whole point: those travel with the record, and
+// losing them is what made a replaced backup unopenable even when its blob survived.
+func (m *Mongo) ArchiveKeyBackup(
+	ctx context.Context, backup domain.MLSKeyBackup, keep int,
+) ([]domain.MLSKeyBackup, error) {
+	backup.ID = mongoID()
+	if _, err := m.db.Collection("mlsKeyBackupVersions").InsertOne(ctx, backup); err != nil {
+		return nil, err
+	}
+	if keep < 0 {
+		return nil, nil
+	}
+	// Everything past the newest `keep`, oldest last — returned so the caller can drop their blobs.
+	opts := options.Find().
+		SetSort(bson.D{{Key: "updatedAt", Value: -1}}).
+		SetSkip(int64(keep))
+	cur, err := m.db.Collection("mlsKeyBackupVersions").
+		Find(ctx, bson.M{"userId": backup.UserID}, opts)
+	if err != nil {
+		return nil, err
+	}
+	var pruned []domain.MLSKeyBackup
+	if err := cur.All(ctx, &pruned); err != nil {
+		return nil, err
+	}
+	for _, v := range pruned {
+		if _, err := m.db.Collection("mlsKeyBackupVersions").
+			DeleteOne(ctx, bson.M{"_id": v.ID}); err != nil {
+			return pruned, err
+		}
+	}
+	return pruned, nil
+}
+
+func (m *Mongo) ListKeyBackupVersions(
+	ctx context.Context, userID string,
+) ([]domain.MLSKeyBackup, error) {
+	opts := options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}})
+	cur, err := m.db.Collection("mlsKeyBackupVersions").
+		Find(ctx, bson.M{"userId": userID}, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.MLSKeyBackup
+	return out, cur.All(ctx, &out)
+}
+
+func (m *Mongo) KeyBackupVersion(
+	ctx context.Context, userID, versionID string,
+) (domain.MLSKeyBackup, error) {
+	var v domain.MLSKeyBackup
+	err := m.db.Collection("mlsKeyBackupVersions").
+		FindOne(ctx, bson.M{"_id": versionID, "userId": userID}).Decode(&v)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return domain.MLSKeyBackup{}, ErrNotFound
+	}
+	return v, err
+}
+
 // UpsertMLSDevice records or refreshes one of a user's devices. One document per (user, device);
 // createdAt is set once, lastSeenAt and label move with each publish.
 func (m *Mongo) UpsertMLSDevice(ctx context.Context, d domain.MLSDevice) error {

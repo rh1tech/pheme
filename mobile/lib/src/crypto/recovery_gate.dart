@@ -171,6 +171,11 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
                             : 'backup.historyAbsent',
                       ),
                     );
+                  } else if (outcome != null &&
+                      outcome.recoveredFromArchivedVersion) {
+                    // The newest backup held nothing and an older one saved it — worth saying,
+                    // because it means something replaced their backup with an emptier one.
+                    notifySuccess(context, l10n.t('backup.historyFromArchive'));
                   } else {
                     notifySuccess(context, l10n.t('backup.saved'));
                   }
@@ -417,6 +422,9 @@ Future<void> showRecoveryCodeSheet(BuildContext context, WidgetRef ref) async {
                         : 'backup.historyAbsent',
                   ),
                 );
+              } else if (outcome != null &&
+                  outcome.recoveredFromArchivedVersion) {
+                notifySuccess(context, l10n.t('backup.historyFromArchive'));
               } else {
                 notifySuccess(context, l10n.t('backup.saved'));
               }

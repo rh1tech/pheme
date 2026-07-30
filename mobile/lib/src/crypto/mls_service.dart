@@ -151,6 +151,7 @@ class RestoreOutcome {
     required this.messagesRecovered,
     required this.backupHadTranscript,
     this.transcriptError,
+    this.recoveredFromArchivedVersion = false,
   });
 
   /// How many message bodies came back. Zero with [backupHadTranscript] false means the backup
@@ -163,6 +164,11 @@ class RestoreOutcome {
 
   /// Set when a transcript was present but could not be opened or imported.
   final Object? transcriptError;
+
+  /// Whether the history came from a SUPERSEDED backup rather than the current one — meaning the
+  /// live backup had been replaced by a device holding less, and the archive is what saved it.
+  /// Worth telling the person: their newest backup is not the one they are running on.
+  final bool recoveredFromArchivedVersion;
 
   /// Whether the person should be told the history did not come back.
   bool get historyMissing => messagesRecovered == 0;
@@ -1796,25 +1802,10 @@ class MlsService {
     Map<String, Map<String, String>>? bodies;
     Object? transcriptError;
     var imported = 0;
+    var recoveredFromVersion = false;
     if (backup.hasTranscript) {
       try {
-        final opened = await rust.mlsBackupDecrypt(
-          passphrase: passphraseBytes,
-          salt: backup.transcriptSalt!,
-          nonce: backup.transcriptNonce!,
-          ciphertext: backup.transcriptCiphertext!,
-        );
-        final parsed = jsonDecode(utf8.decode(opened));
-        if (parsed is Map && parsed['bodies'] is Map) {
-          bodies = (parsed['bodies'] as Map).map(
-            (conversationId, msgs) => MapEntry(
-              conversationId as String,
-              (msgs as Map).map(
-                (id, body) => MapEntry(id as String, body as String),
-              ),
-            ),
-          );
-        }
+        bodies = await _openTranscript(backup, passphraseBytes);
       } on Object catch (e, st) {
         // Best effort — the device is already coming up; it just will not have the old history.
         // REPORTED, though. This used to be swallowed whole, so a restore that recovered the keys
@@ -1822,6 +1813,42 @@ class MlsService {
         // staring at a conversation of undecryptable messages with nothing anywhere saying why.
         transcriptError = e;
         debugPrint('restore: could not open the backed-up transcript: $e\n$st');
+      }
+    }
+
+    // The live backup carried no history. It may well have been replaced by a device that had read
+    // nothing — which is exactly the accident the archive exists for — so walk back through the
+    // superseded versions, newest first, and take the first one that opens under this same code.
+    //
+    // Under the SAME code deliberately: a version sealed under an older recovery code will not
+    // open, and that is not an error, it is simply not this person's history to recover with what
+    // they typed. Each version is tried and the first that yields bodies wins.
+    if (bodies == null || bodies.isEmpty) {
+      try {
+        for (final version in await _repo.keyBackupVersions()) {
+          if (!version.hasTranscript || version.transcriptMessages == 0) {
+            continue;
+          }
+          final archived = await _repo.keyBackupVersion(version.id);
+          if (archived == null || !archived.hasTranscript) continue;
+          Map<String, Map<String, String>>? opened;
+          try {
+            opened = await _openTranscript(archived, passphraseBytes);
+          } on Object {
+            // Sealed under a different recovery code. Not this person's to recover with what they
+            // typed — try the next one rather than failing the restore.
+            continue;
+          }
+          if (opened != null && opened.isNotEmpty) {
+            bodies = opened;
+            recoveredFromVersion = true;
+            transcriptError = null;
+            break;
+          }
+        }
+      } on Object catch (e) {
+        // An older server with no archive, or a network failure. The restore still proceeds.
+        debugPrint('restore: could not search the backup archive: $e');
       }
     }
 
@@ -1869,8 +1896,35 @@ class MlsService {
       messagesRecovered: imported,
       backupHadTranscript: backup.hasTranscript,
       transcriptError: transcriptError,
+      recoveredFromArchivedVersion: recoveredFromVersion,
     );
     return true;
+  }
+
+  /// Opens a backup's sealed transcript, or null when it holds no bodies.
+  ///
+  /// Shared by the live backup and every archived version, so a version is opened by exactly the
+  /// same rules as the current one — each carries its own salt and nonce, which is the whole reason
+  /// an archived backup is worth keeping.
+  Future<Map<String, Map<String, String>>?> _openTranscript(
+    MLSKeyBackup backup,
+    Uint8List passphraseBytes,
+  ) async {
+    if (!backup.hasTranscript) return null;
+    final opened = await rust.mlsBackupDecrypt(
+      passphrase: passphraseBytes,
+      salt: backup.transcriptSalt!,
+      nonce: backup.transcriptNonce!,
+      ciphertext: backup.transcriptCiphertext!,
+    );
+    final parsed = jsonDecode(utf8.decode(opened));
+    if (parsed is! Map || parsed['bodies'] is! Map) return null;
+    return (parsed['bodies'] as Map).map(
+      (conversationId, msgs) => MapEntry(
+        conversationId as String,
+        (msgs as Map).map((id, body) => MapEntry(id as String, body as String)),
+      ),
+    );
   }
 
   /// Makes sure this device has a recovery backup, generating a one-time code the first time.

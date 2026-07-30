@@ -284,6 +284,46 @@ func (m *Memory) PutKeyBackup(_ context.Context, backup domain.MLSKeyBackup) err
 	return nil
 }
 
+func (m *Memory) ArchiveKeyBackup(
+	_ context.Context, backup domain.MLSKeyBackup, keep int,
+) ([]domain.MLSKeyBackup, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if backup.ID == "" {
+		backup.ID = newID()
+	}
+	// Newest first, so pruning takes from the tail and the list reads the way it is served.
+	versions := append([]domain.MLSKeyBackup{backup}, m.keyBackupVersions[backup.UserID]...)
+	var pruned []domain.MLSKeyBackup
+	if keep >= 0 && len(versions) > keep {
+		pruned = append(pruned, versions[keep:]...)
+		versions = versions[:keep]
+	}
+	m.keyBackupVersions[backup.UserID] = versions
+	return pruned, nil
+}
+
+func (m *Memory) ListKeyBackupVersions(
+	_ context.Context, userID string,
+) ([]domain.MLSKeyBackup, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]domain.MLSKeyBackup{}, m.keyBackupVersions[userID]...), nil
+}
+
+func (m *Memory) KeyBackupVersion(
+	_ context.Context, userID, versionID string,
+) (domain.MLSKeyBackup, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, v := range m.keyBackupVersions[userID] {
+		if v.ID == versionID {
+			return v, nil
+		}
+	}
+	return domain.MLSKeyBackup{}, ErrNotFound
+}
+
 func (m *Memory) GetKeyBackup(_ context.Context, userID string) (domain.MLSKeyBackup, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

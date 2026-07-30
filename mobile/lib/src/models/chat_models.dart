@@ -484,6 +484,35 @@ class MLSDevice {
   );
 }
 
+/// A superseded backup, as the version list describes it — no ciphertext.
+///
+/// Enough to choose one: when it was taken, and how much history it holds. A restore walks these
+/// newest-first and fetches the first that claims any.
+class MLSKeyBackupVersion {
+  const MLSKeyBackupVersion({
+    required this.id,
+    required this.transcriptMessages,
+    required this.hasTranscript,
+    this.deviceId,
+    this.updatedAt,
+  });
+
+  final String id;
+  final int transcriptMessages;
+  final bool hasTranscript;
+  final String? deviceId;
+  final String? updatedAt;
+
+  factory MLSKeyBackupVersion.fromJson(Map<String, dynamic> j) =>
+      MLSKeyBackupVersion(
+        id: j['id'] as String? ?? '',
+        transcriptMessages: (j['transcriptMessages'] as num?)?.toInt() ?? 0,
+        hasTranscript: j['hasTranscript'] == true,
+        deviceId: j['deviceId'] as String?,
+        updatedAt: j['updatedAt'] as String?,
+      );
+}
+
 class MLSKeyBackup {
   MLSKeyBackup({
     required this.salt,

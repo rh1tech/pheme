@@ -893,6 +893,37 @@ class PhemeRepository {
   }
 
   /// The sealed backup, or null when there is none.
+  /// The superseded backups, newest first — metadata only, no ciphertext.
+  ///
+  /// What a restore reads when the live backup turns out to carry no history: replacing a backup no
+  /// longer destroys the one it replaced, so there is usually an older one that still holds it.
+  Future<List<MLSKeyBackupVersion>> keyBackupVersions() async {
+    try {
+      final d = await _get('/v1/mls/key-backup/versions');
+      return ((d['versions'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(MLSKeyBackupVersion.fromJson)
+          .toList(growable: false);
+    } on ApiException catch (e) {
+      // An older server has no archive. Not an error — there is simply nothing to fall back to.
+      if (e.statusCode == 404) return const [];
+      rethrow;
+    }
+  }
+
+  /// One superseded backup, hydrated like the live one. Each carries its OWN salt and nonce, which
+  /// is what makes it openable at all.
+  Future<MLSKeyBackup?> keyBackupVersion(String versionId) async {
+    try {
+      return MLSKeyBackup.fromJson(
+        await _get('/v1/mls/key-backup/versions/$versionId'),
+      );
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
   Future<MLSKeyBackup?> getKeyBackup() async {
     try {
       return MLSKeyBackup.fromJson(await _get('/v1/mls/key-backup'));
