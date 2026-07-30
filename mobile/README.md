@@ -174,6 +174,30 @@ build time. There is no default to fall back on, which is why a release build
 that forgets the define fails immediately rather than quietly reaching the wrong
 host.
 
+## Release builds
+
+A release build takes its version the same way the web app does, so both report
+the same string for the same release:
+
+```bash
+flutter build ipa --dart-define=PHEME_VERSION=v1.2.3
+flutter build appbundle --dart-define=PHEME_VERSION=v1.2.3
+```
+
+Without it `appVersion` falls back to `dev` — the honest answer for something
+that did not come from a tag, and the right default for a working build, but it
+means a release built without the define ships showing **Version dev** in
+**Settings → About**. Nothing fails; the build just misreports itself, which is
+worse than failing because it is only noticed once it is on somebody's phone.
+
+Combine it with `PHEME_API` when the build is also pointed at a deployment:
+
+```bash
+flutter build ipa \
+  --dart-define=PHEME_VERSION=v1.2.3 \
+  --dart-define=PHEME_API=https://host.example/<path-prefix>
+```
+
 Users of a self-hosted instance never see any of this: the **Server** field is on
 the sign-in, registration and password-reset screens, with a QR button beside it —
 they scan the code their operator hands them, or paste the URL, before they sign
