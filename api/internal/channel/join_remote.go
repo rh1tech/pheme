@@ -83,8 +83,13 @@ func (h *AppHandler) joinRemoteChannel(w http.ResponseWriter, r *http.Request) {
 	// remote channel.
 	mirror, err := h.Store.ChannelByOriginPublicID(r.Context(), host, publicID)
 	if err != nil {
+		mirrorPublicID, idErr := newMirrorPublicID()
+		if idErr != nil {
+			httpx.Error(w, http.StatusInternalServerError, "could not create channel")
+			return
+		}
 		mirror, err = h.Store.CreateChannel(r.Context(), domain.Channel{
-			PublicID:         newMirrorPublicID(),
+			PublicID:         mirrorPublicID,
 			Name:             name,
 			OwnerID:          uid, // the subscriber "owns" their local mirror
 			SubscriptionMode: domain.ModeOpen,
@@ -109,8 +114,10 @@ func (h *AppHandler) joinRemoteChannel(w http.ResponseWriter, r *http.Request) {
 
 // newMirrorPublicID mints a local public id for a mirror channel, distinct from
 // the origin's so it never collides under the global unique index.
-func newMirrorPublicID() string {
+func newMirrorPublicID() (string, error) {
 	b := make([]byte, 12)
-	_, _ = rand.Read(b)
-	return "ch_" + hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "ch_" + hex.EncodeToString(b), nil
 }

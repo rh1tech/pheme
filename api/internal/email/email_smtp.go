@@ -57,7 +57,10 @@ func (s *SMTPSender) Send(_ context.Context, to, subject, text, html string) err
 	if _, err := mail.ParseAddress(to); err != nil {
 		return fmt.Errorf("invalid recipient %q: %w", to, err)
 	}
-	msg := s.build(to, subject, text, html)
+	msg, err := s.build(to, subject, text, html)
+	if err != nil {
+		return fmt.Errorf("smtp build message: %w", err)
+	}
 
 	c, err := smtp.Dial(s.addr)
 	if err != nil {
@@ -97,16 +100,24 @@ func (s *SMTPSender) Send(_ context.Context, to, subject, text, html string) err
 }
 
 // build assembles a MIME message with CRLF line endings.
-func (s *SMTPSender) build(to, subject, text, html string) []byte {
-	boundary := "pheme-" + randomToken()
+func (s *SMTPSender) build(to, subject, text, html string) ([]byte, error) {
+	tok, err := randomToken()
+	if err != nil {
+		return nil, err
+	}
+	boundary := "pheme-" + tok
+	msgID, err := randomToken()
+	if err != nil {
+		return nil, err
+	}
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\r\n", args...) }
 
 	w("From: %s", s.from)
-	w("To: %s", to)
-	w("Subject: %s", subject)
+	w("To: %s", sanitizeHeader(to))
+	w("Subject: %s", sanitizeHeader(subject))
 	w("Date: %s", s.now().UTC().Format(time.RFC1123Z))
-	w("Message-ID: <%s@%s>", randomToken(), domainOf(s.fromAddr))
+	w("Message-ID: <%s@%s>", msgID, domainOf(s.fromAddr))
 	w("MIME-Version: 1.0")
 	w(`Content-Type: multipart/alternative; boundary="%s"`, boundary)
 	w("") // end of headers
@@ -124,7 +135,7 @@ func (s *SMTPSender) build(to, subject, text, html string) []byte {
 	w("%s", html)
 
 	w("--%s--", boundary)
-	return []byte(b.String())
+	return []byte(b.String()), nil
 }
 
 func domainOf(addr string) string {
@@ -134,8 +145,20 @@ func domainOf(addr string) string {
 	return "localhost"
 }
 
-func randomToken() string {
+// sanitizeHeader strips CR and LF from an email header value to prevent CRLF injection.
+func sanitizeHeader(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func randomToken() (string, error) {
 	b := make([]byte, 12)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

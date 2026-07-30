@@ -146,9 +146,12 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Passed via env to avoid shell-injection: a github.actor value containing
+          # shell metacharacters (backticks, $()) would execute if interpolated inline.
+          GHCR_USER: ${{ github.actor }}
         run: |
           echo "${GHCR_TOKEN}" | ssh -i ~/.ssh/id_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+            "docker login ghcr.io -u \"${GHCR_USER}\" --password-stdin"
 
       - name: Deploy
         env:
@@ -160,6 +163,10 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "API_IMAGE='${API_IMAGE}' WEB_IMAGE='${WEB_IMAGE}' /opt/pheme/deploy.sh '${ENV_NAME}'"
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
 
   smoke:
     name: Smoke test prod
@@ -277,8 +284,10 @@ jobs:
           chmod +x /opt/pheme/deploy.sh
 
       - name: Log in to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
 
       - name: Deploy
         env:

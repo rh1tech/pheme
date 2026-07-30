@@ -90,6 +90,10 @@ class Device {
     final dio = buildDio(
       baseUrl: _apiBase,
       tokenStore: tokens,
+      refreshCoordinator: TokenRefreshCoordinator(
+        baseUrl: _apiBase,
+        tokenStore: tokens,
+      ),
       onAuthFailure: () {},
     );
     final repo = PhemeRepository(dio);

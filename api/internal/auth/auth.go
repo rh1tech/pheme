@@ -15,14 +15,16 @@ import (
 // GenerateAPIKey returns a new high-entropy secret of the form "phm_<random>"
 // and its storage hash. The plaintext is shown to the user once; only the hash
 // is persisted.
-func GenerateAPIKey() (plaintext, hash, prefix string) {
+func GenerateAPIKey() (plaintext, hash, prefix string, err error) {
 	b := make([]byte, 24)
-	_, _ = rand.Read(b)
+	if _, err = rand.Read(b); err != nil {
+		return "", "", "", err
+	}
 	secret := base64.RawURLEncoding.EncodeToString(b)
 	plaintext = "phm_" + secret
 	hash = HashAPIKey(plaintext)
 	prefix = plaintext[:min(12, len(plaintext))]
-	return plaintext, hash, prefix
+	return plaintext, hash, prefix, nil
 }
 
 // HashAPIKey returns the hex-encoded SHA-256 of an API key. API keys are high

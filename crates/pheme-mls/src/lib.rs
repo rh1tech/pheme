@@ -634,12 +634,15 @@ impl Client {
             }
             Err(e) => return Err(format!("process commit: {e:?}")),
         };
-        if let ProcessedMessageContent::StagedCommitMessage(staged) = processed.into_content() {
-            group
-                .merge_staged_commit(&self.provider, *staged)
-                .map_err(err("merge staged"))?;
+        match processed.into_content() {
+            ProcessedMessageContent::StagedCommitMessage(staged) => {
+                group
+                    .merge_staged_commit(&self.provider, *staged)
+                    .map_err(err("merge staged"))?;
+                Ok(())
+            }
+            _ => Err("apply_commit: message is not a Commit".into()),
         }
-        Ok(())
     }
 
     /// Derives a secret from the group, for a purpose OUTSIDE MLS's own messaging.
@@ -877,7 +880,8 @@ impl Client {
         if !self.has_group(group_id) {
             return Err("not a member of this group".into());
         }
-        let identity = String::from_utf8_lossy(&self.identity).into_owned();
+        let identity = String::from_utf8(self.identity.clone())
+            .map_err(err("identity is not valid UTF-8"))?;
         let transcript =
             history::request_transcript(conversation_id, group_id, epoch, &identity, nonce);
         self.signer
@@ -926,7 +930,8 @@ impl Client {
         if !self.has_group(group_id) {
             return Err("not a member of this group".into());
         }
-        let identity = String::from_utf8_lossy(&self.identity).into_owned();
+        let identity = String::from_utf8(self.identity.clone())
+            .map_err(err("identity is not valid UTF-8"))?;
         let transcript = history::offer_transcript(
             conversation_id,
             group_id,
@@ -962,7 +967,8 @@ impl Client {
         ciphertext: &[u8],
         signature: &[u8],
     ) -> Result<(), String> {
-        let requester = String::from_utf8_lossy(&self.identity).into_owned();
+        let requester = String::from_utf8(self.identity.clone())
+            .map_err(err("identity is not valid UTF-8"))?;
         let transcript = history::offer_transcript(
             conversation_id,
             group_id,
@@ -994,6 +1000,7 @@ impl Client {
         let store: Vec<(Vec<u8>, Vec<u8>)> =
             values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let envelope = Envelope {
+            version: 1,
             store,
             public_key: self.signer.public().to_vec(),
             identity: self.identity.clone(),
@@ -1003,7 +1010,21 @@ impl Client {
 
     /// Restores a client from previously exported state.
     pub fn import_state(state: &[u8]) -> Result<Self, String> {
+        const MAX_STATE_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
+        if state.len() > MAX_STATE_BYTES {
+            return Err(format!(
+                "state blob too large: {} bytes (max {})",
+                state.len(),
+                MAX_STATE_BYTES
+            ));
+        }
         let envelope: Envelope = serde_json::from_slice(state).map_err(err("decode envelope"))?;
+        if envelope.version != 1 {
+            return Err(format!(
+                "unsupported state version: {} (expected 1)",
+                envelope.version
+            ));
+        }
         let provider = OpenMlsRustCrypto::default();
         {
             let mut dst = provider
@@ -1088,8 +1109,14 @@ impl PreviewClient {
     }
 }
 
+fn envelope_v1() -> u32 {
+    1
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Envelope {
+    #[serde(default = "envelope_v1")]
+    version: u32,
     store: Vec<(Vec<u8>, Vec<u8>)>,
     public_key: Vec<u8>,
     identity: Vec<u8>,
@@ -1128,7 +1155,8 @@ pub fn safety_number(member_keys: &[Vec<u8>]) -> String {
     // Length-prefix each key so two different key sets cannot hash to the same
     // input by running into each other at the boundary.
     for key in &sorted {
-        hasher.update((key.len() as u32).to_be_bytes());
+        let key_len = u32::try_from(key.len()).expect("key too long");
+        hasher.update(key_len.to_be_bytes());
         hasher.update(key);
     }
     let first = hasher.finalize();
@@ -2576,6 +2604,65 @@ mod tests {
             bob.decrypt(GID, &ct).body().as_deref(),
             Some(&b"delivered twice"[..])
         );
+    }
+
+    // An application message is not a Commit — feeding one to apply_commit must fail
+    // with a clear error rather than silently returning Ok and desynchronising the epoch.
+    #[test]
+    fn apply_commit_rejects_non_commit_message() {
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        // An encrypted application message — definitely not a Commit.
+        let ciphertext = alice.encrypt(GID, b"not a commit").unwrap();
+
+        let err = match bob.apply_commit(GID, &ciphertext) {
+            Err(e) => e,
+            Ok(()) => panic!("apply_commit should have returned an error for an application message"),
+        };
+        assert!(
+            err.contains("not a Commit") || err.contains("process commit"),
+            "apply_commit should return an error for non-Commit messages, got: {err}"
+        );
+
+        // The group state must be untouched: Bob can still decrypt subsequent messages.
+        let ct2 = alice.encrypt(GID, b"still works").unwrap();
+        assert_eq!(
+            bob.decrypt(GID, &ct2).unwrap().map(|d| d.plaintext).as_deref(),
+            Some(&b"still works"[..])
+        );
+    }
+
+    // An old state blob without a version field is treated as version 1 and loads fine.
+    #[test]
+    fn import_state_accepts_blob_without_version_field() {
+        let alice = Client::new(DOM, "alice", "dev-a").unwrap();
+        let bob = Client::new(DOM, "bob", "dev-b").unwrap();
+        establish(&alice, GID, &[&bob]);
+
+        let saved = bob.export_state().unwrap();
+        // Strip the version field to simulate an old blob.
+        let mut json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        json.as_object_mut().unwrap().remove("version");
+        let old_blob = serde_json::to_vec(&json).unwrap();
+
+        let bob2 = Client::import_state(&old_blob).unwrap();
+        let ct = alice.encrypt(GID, b"legacy state works").unwrap();
+        assert_eq!(
+            bob2.decrypt(GID, &ct).unwrap().map(|d| d.plaintext).as_deref(),
+            Some(&b"legacy state works"[..])
+        );
+    }
+
+    // A state blob that is too large is refused before deserialization.
+    #[test]
+    fn import_state_rejects_oversized_blob() {
+        let oversized = vec![0u8; 100 * 1024 * 1024 + 1];
+        match Client::import_state(&oversized) {
+            Err(e) => assert!(e.contains("too large"), "got: {e}"),
+            Ok(_) => panic!("expected an error for an oversized state blob"),
+        }
     }
 }
 

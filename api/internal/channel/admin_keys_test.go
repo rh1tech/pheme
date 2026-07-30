@@ -32,7 +32,10 @@ func seedChannelWithKey(t *testing.T, db store.Store, ownerID, name string) (dom
 	if err != nil {
 		t.Fatalf("create channel: %v", err)
 	}
-	plaintext, hash, prefix := auth.GenerateAPIKey()
+	plaintext, hash, prefix, err := auth.GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
 	key, err := db.CreateAPIKey(context.Background(), domain.APIKey{
 		ChannelID: ch.ID, HashedKey: hash, Prefix: prefix, Label: "primary",
 		CreatedAt: time.Now().UTC(),

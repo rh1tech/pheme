@@ -280,7 +280,11 @@ func (h *AppHandler) createKey(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "not your channel")
 		return
 	}
-	plaintext, hash, prefix := auth.GenerateAPIKey()
+	plaintext, hash, prefix, err := auth.GenerateAPIKey()
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not generate key")
+		return
+	}
 	k, err := h.Store.CreateAPIKey(r.Context(), domain.APIKey{
 		ChannelID: channelID,
 		HashedKey: hash,

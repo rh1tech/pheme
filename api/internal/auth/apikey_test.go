@@ -13,7 +13,10 @@ import (
 // cost of doing it properly is nil and the cost of finding out you were wrong is a leaked key.
 
 func TestAGeneratedKeyMatchesItsOwnHashAndNothingElse(t *testing.T) {
-	plaintext, hash, prefix := GenerateAPIKey()
+	plaintext, hash, prefix, err := GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
 
 	if !EqualAPIKey(plaintext, hash) {
 		t.Fatal("a freshly generated key does not match its own hash; no key would ever work")
@@ -39,7 +42,10 @@ func TestAGeneratedKeyMatchesItsOwnHashAndNothingElse(t *testing.T) {
 // The stored form must not be the key. Anyone with read access to the database would otherwise hold
 // every customer's credentials.
 func TestTheStoredHashIsNotTheKey(t *testing.T) {
-	plaintext, hash, _ := GenerateAPIKey()
+	plaintext, hash, _, err := GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
 
 	if hash == plaintext {
 		t.Fatal("the stored hash IS the key")
@@ -60,7 +66,10 @@ func TestTheStoredHashIsNotTheKey(t *testing.T) {
 func TestGeneratedKeysAreDistinct(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
-		plaintext, hash, _ := GenerateAPIKey()
+		plaintext, hash, _, err := GenerateAPIKey()
+		if err != nil {
+			t.Fatalf("GenerateAPIKey: %v", err)
+		}
 		if seen[plaintext] {
 			t.Fatalf("the same key was generated twice: %q", plaintext)
 		}
@@ -95,7 +104,10 @@ func TestHashingIsDeterministic(t *testing.T) {
 // Surrounding whitespace is forgiven on the way in — a key pasted from a config file or a shell
 // variable often carries a newline, and refusing it would be a support ticket rather than security.
 func TestAPresentedKeyIsTrimmed(t *testing.T) {
-	plaintext, hash, _ := GenerateAPIKey()
+	plaintext, hash, _, err := GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
 
 	for _, presented := range []string{
 		plaintext, " " + plaintext, plaintext + "\n", "\t" + plaintext + "  \r\n",
@@ -113,7 +125,10 @@ func TestAPresentedKeyIsTrimmed(t *testing.T) {
 // Nothing matches an empty or malformed stored hash. A row that lost its hash must not become a key
 // that accepts anything.
 func TestNothingMatchesAnEmptyOrBrokenStoredHash(t *testing.T) {
-	plaintext, _, _ := GenerateAPIKey()
+	plaintext, _, _, err := GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
 
 	for _, stored := range []string{"", "not-a-hash", strings.Repeat("0", 64)} {
 		if EqualAPIKey(plaintext, stored) {
@@ -121,7 +136,10 @@ func TestNothingMatchesAnEmptyOrBrokenStoredHash(t *testing.T) {
 		}
 	}
 	// And an empty presented key matches nothing either.
-	_, hash, _ := GenerateAPIKey()
+	_, hash, _, err := GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
 	for _, presented := range []string{"", "   ", "phm_"} {
 		if EqualAPIKey(presented, hash) {
 			t.Errorf("the empty-ish key %q was accepted", presented)

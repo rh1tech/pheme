@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -50,23 +51,32 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
 	go func() {
 		logger.Info("ingest API listening", "addr", cfg.IngestAddr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("ingest server", "error", err)
-			os.Exit(1)
+			stop <- syscall.SIGTERM
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
-	_ = pub.Close(shutdownCtx)
-	_ = db.Close(shutdownCtx)
-	_ = b.Close()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("server shutdown error", "error", err)
+	}
+	if err := pub.Close(shutdownCtx); err != nil {
+		logger.Warn("publisher close error", "error", err)
+	}
+	if err := db.Close(shutdownCtx); err != nil {
+		logger.Warn("store close error", "error", err)
+	}
+	if err := b.Close(); err != nil {
+		logger.Warn("bootstrap close error", "error", err)
+	}
 	logger.Info("ingest API stopped")
 }

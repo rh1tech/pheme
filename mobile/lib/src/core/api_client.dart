@@ -7,6 +7,64 @@ import 'api_exception.dart';
 import 'token_store.dart';
 import 'user_agent.dart';
 
+/// Shared lock for token refresh. Both the Dio interceptor and the SSE client's
+/// `freshToken` callback route through here, so a concurrent 401 on a regular
+/// API call and an SSE reconnect cannot trigger two simultaneous refresh calls
+/// that each overwrite the other's newly-issued tokens.
+class TokenRefreshCoordinator {
+  TokenRefreshCoordinator({required String baseUrl, required this.tokenStore}) {
+    _refreshDio = newNativeDio(
+      BaseOptions(
+        baseUrl: baseUrl,
+        headers: {'Content-Type': 'application/json'},
+      ),
+    );
+  }
+
+  final TokenStore tokenStore;
+  late final Dio _refreshDio;
+  Completer<bool>? _refreshing;
+
+  Future<bool> refresh() async {
+    if (_refreshing != null) return _refreshing!.future;
+    final completer = Completer<bool>();
+    _refreshing = completer;
+    try {
+      final tokens = tokenStore.current;
+      if (tokens == null) {
+        completer.complete(false);
+        return false;
+      }
+      final res = await _refreshDio.post<Map<String, dynamic>>(
+        '/v1/auth/refresh',
+        data: {'refreshToken': tokens.refreshToken},
+      );
+      final data = res.data;
+      if (res.statusCode == 200 && data != null) {
+        await tokenStore.save(
+          Tokens(
+            accessToken: data['accessToken'] as String,
+            refreshToken: data['refreshToken'] as String,
+          ),
+        );
+        completer.complete(true);
+        return true;
+      }
+      await tokenStore.clear();
+      completer.complete(false);
+      return false;
+    } catch (_) {
+      await tokenStore.clear();
+      completer.complete(false);
+      return false;
+    } finally {
+      _refreshing = null;
+    }
+  }
+
+  void dispose() => _refreshDio.close(force: true);
+}
+
 /// Routes a Dio instance through the platform's own HTTP stack — Cronet on
 /// Android, NSURLSession on iOS and macOS — instead of Dart's.
 ///
@@ -56,6 +114,7 @@ const Map<String, dynamic> publicRequest = {'public': true};
 Dio buildDio({
   required String baseUrl,
   required TokenStore tokenStore,
+  required TokenRefreshCoordinator refreshCoordinator,
   required void Function() onAuthFailure,
 }) {
   final dio = Dio(
@@ -73,57 +132,6 @@ Dio buildDio({
     ),
   );
   _useNativeStack(dio);
-
-  // A bare client (no interceptors) used only for the refresh call to avoid loops.
-  final refreshDio = Dio(
-    BaseOptions(
-      baseUrl: baseUrl,
-      headers: {'Content-Type': 'application/json'},
-    ),
-  );
-  // The refresh client needs it too. Miss this and token refresh — a request
-  // made on every session, from every device — goes out over the Dart stack
-  // with a different fingerprint from everything around it, which is a louder
-  // signal than never having changed anything.
-  _useNativeStack(refreshDio);
-  Completer<bool>? refreshing;
-
-  Future<bool> refresh() async {
-    if (refreshing != null) return refreshing!.future;
-    final completer = Completer<bool>();
-    refreshing = completer;
-    try {
-      final tokens = tokenStore.current;
-      if (tokens == null) {
-        completer.complete(false);
-        return false;
-      }
-      final res = await refreshDio.post<Map<String, dynamic>>(
-        '/v1/auth/refresh',
-        data: {'refreshToken': tokens.refreshToken},
-      );
-      final data = res.data;
-      if (res.statusCode == 200 && data != null) {
-        await tokenStore.save(
-          Tokens(
-            accessToken: data['accessToken'] as String,
-            refreshToken: data['refreshToken'] as String,
-          ),
-        );
-        completer.complete(true);
-        return true;
-      }
-      await tokenStore.clear();
-      completer.complete(false);
-      return false;
-    } catch (_) {
-      await tokenStore.clear();
-      completer.complete(false);
-      return false;
-    } finally {
-      refreshing = null;
-    }
-  }
 
   dio.interceptors.add(
     InterceptorsWrapper(
@@ -143,8 +151,9 @@ Dio buildDio({
         if (status == 401 &&
             !isPublic &&
             response.requestOptions.extra['retried'] != true) {
-          // Attempt a refresh + single retry.
-          refresh().then((ok) async {
+          // Attempt a refresh + single retry. Uses the shared coordinator so
+          // a concurrent SSE reconnect does not race against this refresh.
+          refreshCoordinator.refresh().then((ok) async {
             if (!ok) {
               onAuthFailure();
               handler.reject(_authError(response.requestOptions), true);
@@ -160,11 +169,21 @@ Dio buildDio({
               handler.resolve(retried);
             } on DioException catch (e) {
               handler.reject(e, true);
+            } catch (e) {
+              // Non-Dio errors (SocketException, TimeoutException, etc.) must
+              // still resolve the handler — otherwise the original caller hangs.
+              handler.reject(
+                DioException(
+                  requestOptions: response.requestOptions,
+                  error: e,
+                  type: DioExceptionType.unknown,
+                ),
+                true,
+              );
             }
           });
           return;
         }
-
         if (status >= 200 && status < 300) {
           handler.next(response);
           return;

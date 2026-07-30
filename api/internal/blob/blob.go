@@ -29,8 +29,10 @@ type Store interface {
 
 // newID returns a 32-character hex id from 16 random bytes. Using a random id
 // (rather than a sequential/ObjectID) keeps the public image URL unguessable.
-func newID() string {
+func newID() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

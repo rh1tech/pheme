@@ -24,7 +24,10 @@ func NewMemory() *Memory {
 
 // Put stores a copy of data under a new id.
 func (m *Memory) Put(_ context.Context, data []byte, contentType string) (string, error) {
-	id := newID()
+	id, err := newID()
+	if err != nil {
+		return "", err
+	}
 	cp := make([]byte, len(data))
 	copy(cp, data)
 	m.mu.Lock()

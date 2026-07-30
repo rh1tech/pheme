@@ -112,7 +112,10 @@ impl MlsClient {
         group_id: &[u8],
         user_ids: js_sys::Array,
     ) -> Result<Vec<u8>, JsError> {
-        let ids: Vec<String> = user_ids.iter().filter_map(|v| v.as_string()).collect();
+        let ids: Vec<String> = user_ids
+            .iter()
+            .map(|v| v.as_string().ok_or_else(|| JsError::new("all identities must be strings")))
+            .collect::<Result<_, _>>()?;
         self.inner.stage_remove_users(group_id, &ids).map_err(js)
     }
 
@@ -127,7 +130,10 @@ impl MlsClient {
         group_id: &[u8],
         identities: js_sys::Array,
     ) -> Result<Vec<u8>, JsError> {
-        let ids: Vec<String> = identities.iter().filter_map(|v| v.as_string()).collect();
+        let ids: Vec<String> = identities
+            .iter()
+            .map(|v| v.as_string().ok_or_else(|| JsError::new("all identities must be strings")))
+            .collect::<Result<_, _>>()?;
         self.inner.stage_remove_devices(group_id, &ids).map_err(js)
     }
 
@@ -175,7 +181,8 @@ impl MlsClient {
     pub fn member_identities(&self, group_id: &[u8]) -> Result<js_sys::Array, JsError> {
         let out = js_sys::Array::new();
         for id in self.inner.member_identities(group_id).map_err(js)? {
-            out.push(&JsValue::from_str(&String::from_utf8_lossy(&id)));
+            let s = String::from_utf8(id).map_err(|e| JsError::new(&format!("identity is not valid UTF-8: {e}")))?;
+            out.push(&JsValue::from_str(&s));
         }
         Ok(out)
     }
@@ -385,7 +392,12 @@ impl From<crate::Decrypted> for DecryptedMessage {
     fn from(d: crate::Decrypted) -> Self {
         DecryptedMessage {
             plaintext: d.plaintext,
-            sender: String::from_utf8_lossy(&d.sender).into_owned(),
+            // Credentials are constructed by `Client::new` as `mimi://…` ASCII, so
+            // valid UTF-8. A non-UTF-8 credential would have been refused at group
+            // admission; fall back to lossy only as a last resort so the UI always
+            // sees a displayable string.
+            sender: String::from_utf8(d.sender)
+                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
             epoch: d.epoch,
         }
     }

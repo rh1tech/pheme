@@ -126,7 +126,11 @@ func TestBuildProducesAWellFormedMultipartMessage(t *testing.T) {
 	}
 	s.now = func() time.Time { return time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC) }
 
-	msg := string(s.build("to@pheme.test", "Your code", "123456", "<b>123456</b>"))
+	msgBytes, err := s.build("to@pheme.test", "Your code", "123456", "<b>123456</b>")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	msg := string(msgBytes)
 
 	for _, want := range []string{
 		"From: Pheme <noreply@pheme.test>",
@@ -167,7 +171,11 @@ func TestBuildProducesAWellFormedMultipartMessage(t *testing.T) {
 // Both parts must close with the terminating boundary, or a client shows the message as truncated.
 func TestBuildClosesItsMultipartBoundary(t *testing.T) {
 	s, _ := NewSMTPSender("mail.example", 25, "a@pheme.test", "", "", false)
-	msg := string(s.build("to@pheme.test", "s", "text", "<p>html</p>"))
+	msgBytes, err := s.build("to@pheme.test", "s", "text", "<p>html</p>")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	msg := string(msgBytes)
 
 	start := strings.Index(msg, "boundary=\"")
 	if start == -1 {
@@ -188,8 +196,15 @@ func TestBuildClosesItsMultipartBoundary(t *testing.T) {
 // duplicate by many servers and silently dropped — which would look like mail simply not arriving.
 func TestBuildIsUniquePerMessage(t *testing.T) {
 	s, _ := NewSMTPSender("mail.example", 25, "a@pheme.test", "", "", false)
-	first := string(s.build("to@pheme.test", "s", "t", "h"))
-	second := string(s.build("to@pheme.test", "s", "t", "h"))
+	firstBytes, err := s.build("to@pheme.test", "s", "t", "h")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	secondBytes, err := s.build("to@pheme.test", "s", "t", "h")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	first, second := string(firstBytes), string(secondBytes)
 
 	idOf := func(msg string) string {
 		for _, line := range strings.Split(msg, "\r\n") {

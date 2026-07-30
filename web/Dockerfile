@@ -18,6 +18,11 @@ ENV PHEME_VERSION=${PHEME_VERSION}
 RUN npm run build
 
 FROM nginx:1.27-alpine
+# Privilege model: the nginx master process binds port 80 as root (required by the OS for
+# ports < 1024). Worker processes immediately drop to the `nginx` user defined in the base
+# image's nginx.conf. Served files are copied below with default root:root ownership and
+# 644 permissions — workers read them but cannot write. This is the standard nginx-alpine
+# privilege split; a non-root master would require a higher port and a reverse-proxy in front.
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY deploy/docker-entrypoint.sh /docker-entrypoint.d/40-pheme-config.sh
@@ -32,4 +37,6 @@ RUN printf '%s\n' \
     "add_header X-Frame-Options \"DENY\" always;" \
     "add_header Referrer-Policy \"strict-origin-when-cross-origin\" always;" \
     > /etc/nginx/conf.d/pheme-security-headers.conf
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD wget -qO- http://localhost/ || exit 1
 EXPOSE 80

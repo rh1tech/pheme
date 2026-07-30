@@ -19,11 +19,13 @@ type TokenBucket struct {
 	rate     float64 // tokens added per second
 	capacity float64
 	buckets  map[string]*bucket
+	once     sync.Once
 }
 
 type bucket struct {
-	tokens float64
-	last   time.Time
+	tokens     float64
+	last       time.Time
+	lastAccess time.Time
 }
 
 // NewTokenBucket creates a limiter allowing bursts up to capacity and refilling
@@ -37,23 +39,46 @@ func NewTokenBucket(ratePerSec, capacity float64) *TokenBucket {
 }
 
 // Allow consumes one token for key, returning false when the bucket is empty.
+// On first call it also starts a background goroutine that evicts idle buckets.
 func (t *TokenBucket) Allow(key string) bool {
+	t.once.Do(func() {
+		go t.evictLoop()
+	})
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	now := time.Now()
 	b, ok := t.buckets[key]
 	if !ok {
-		t.buckets[key] = &bucket{tokens: t.capacity - 1, last: now}
+		t.buckets[key] = &bucket{tokens: t.capacity - 1, last: now, lastAccess: now}
 		return true
 	}
 
 	elapsed := now.Sub(b.last).Seconds()
 	b.tokens = min(t.capacity, b.tokens+elapsed*t.rate)
 	b.last = now
+	b.lastAccess = now
 	if b.tokens < 1 {
 		return false
 	}
 	b.tokens--
 	return true
+}
+
+// evictLoop runs in the background and removes buckets that have not been
+// accessed in the last 10 minutes, preventing unbounded memory growth.
+func (t *TokenBucket) evictLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		cutoff := time.Now().Add(-10 * time.Minute)
+		t.mu.Lock()
+		for key, b := range t.buckets {
+			if b.lastAccess.Before(cutoff) {
+				delete(t.buckets, key)
+			}
+		}
+		t.mu.Unlock()
+	}
 }

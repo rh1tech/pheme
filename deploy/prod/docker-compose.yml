@@ -96,7 +96,7 @@ services:
       PHEME_PUBLIC_API_URL: ${PHEME_API_BASE}
       PHEME_RABBIT_URI: "amqp://${RABBIT_USER}:${RABBIT_PASS}@rabbitmq:5672/"
       PHEME_REDIS_ADDR: "redis:6379"
-      PHEME_JWT_SECRET: ${PHEME_JWT_SECRET}
+      PHEME_JWT_SECRET: ${PHEME_JWT_SECRET:?PHEME_JWT_SECRET must be set}
       PHEME_JWT_LEGACY_UNTIL: ${PHEME_JWT_LEGACY_UNTIL:-}
       # Host nginx overwrites X-Forwarded-For, so the API can key its auth
       # rate limits on the real client address instead of the proxy's.
@@ -114,8 +114,9 @@ services:
       # that one origin. Anything unlisted gets no CORS headers at all.
       PHEME_CORS_ORIGINS: ${PHEME_WEB_ORIGIN}
       PHEME_ADMIN_EMAILS: ${PHEME_ADMIN_EMAILS}
-      PHEME_VAPID_PUBLIC: ${PHEME_VAPID_PUBLIC}
-      PHEME_VAPID_PRIVATE: ${PHEME_VAPID_PRIVATE}
+      PHEME_INVITE_ONLY: ${PHEME_INVITE_ONLY:-true}
+      PHEME_VAPID_PUBLIC: ${PHEME_VAPID_PUBLIC:?PHEME_VAPID_PUBLIC must be set}
+      PHEME_VAPID_PRIVATE: ${PHEME_VAPID_PRIVATE:?PHEME_VAPID_PRIVATE must be set}
       PHEME_VAPID_SUBJECT: ${PHEME_VAPID_SUBJECT}
       # 1:1 voice calls. The API hands clients a STUN/TURN list with a short-lived
       # credential derived from PHEME_TURN_SECRET, which must match coturn's
@@ -227,14 +228,21 @@ services:
       # publishes a readable copy here and restarts this container on renewal — see
       # turnserver.conf, which explains why the restart is not optional.
       - ${PHEME_TURN_CERT_DIR:-/opt/pheme/turn-certs}:/certs:ro
-    # The realm and the shared secret are passed here, not in turnserver.conf: that file is
-    # in git and coturn does not expand environment variables. The secret must be the same
-    # one the App API signs credentials with (PHEME_TURN_SECRET).
+    # The realm and the shared secret are injected via environment variables and written into
+    # a runtime copy of the config before coturn starts. Passing them as CLI arguments would
+    # expose the secret in /proc/<pid>/cmdline and `ps aux`, readable by any user on the host.
+    environment:
+      PHEME_TURN_REALM: ${PHEME_TURN_REALM:-example.com}
+      PHEME_TURN_SECRET: ${PHEME_TURN_SECRET:-}
+    # Override the image entrypoint: render realm + static-auth-secret from env into a
+    # writable copy of the config, then exec turnserver. The source file stays :ro.
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - "-c"
-      - "/etc/coturn/turnserver.conf"
-      - "--realm=${PHEME_TURN_REALM:-example.com}"
-      - "--static-auth-secret=${PHEME_TURN_SECRET:-}"
+      - |
+        cp /etc/coturn/turnserver.conf /run/coturn.conf &&
+        printf '\nrealm=%s\nstatic-auth-secret=%s\n' \
+          "${PHEME_TURN_REALM:-example.com}" "${PHEME_TURN_SECRET}" >> /run/coturn.conf &&
+        exec turnserver -c /run/coturn.conf
 
 volumes:
   mongo-data:

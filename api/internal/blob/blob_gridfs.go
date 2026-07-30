@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -44,7 +45,10 @@ func (g *GridFS) Put(ctx context.Context, data []byte, contentType string) (stri
 	if err != nil {
 		return "", err
 	}
-	id := newID()
+	id, err := newID()
+	if err != nil {
+		return "", err
+	}
 	opts := options.GridFSUpload().SetMetadata(bson.M{"contentType": contentType})
 	if err := b.UploadFromStreamWithID(id, id, bytes.NewReader(data), opts); err != nil {
 		return "", err
@@ -89,9 +93,14 @@ func (g *GridFS) Get(_ context.Context, id string) ([]byte, string, error) {
 		}
 	}
 
-	data, err := io.ReadAll(ds)
+	const maxBlobRead = 200 * 1024 * 1024 // 200 MiB — above the 128 MiB history cap
+	reader := io.LimitReader(ds, maxBlobRead+1)
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, "", err
+	}
+	if int64(len(data)) > maxBlobRead {
+		return nil, "", fmt.Errorf("blob exceeds maximum size")
 	}
 	return data, contentType, nil
 }

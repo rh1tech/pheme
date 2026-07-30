@@ -116,16 +116,20 @@ void main() {
     timeout: const Timeout(Duration(minutes: 2)),
   );
 
-  // buildDio is what the whole app actually uses, and it builds TWO clients —
-  // the configured one and a bare one for token refresh. The refresh client is
-  // easy to miss, and missing it would send a request made on every session
-  // from every device over a different stack from everything around it.
+  // buildDio is what the whole app actually uses. The refresh client (now
+  // inside TokenRefreshCoordinator) is easy to miss, and missing it would send
+  // a request made on every session from every device over a different stack.
   test(
     'both clients from buildDio use the platform stack',
     () async {
+      final tokens = TokenStore(const FlutterSecureStorage());
       final dio = buildDio(
         baseUrl: 'https://example.invalid',
-        tokenStore: TokenStore(const FlutterSecureStorage()),
+        tokenStore: tokens,
+        refreshCoordinator: TokenRefreshCoordinator(
+          baseUrl: 'https://example.invalid',
+          tokenStore: tokens,
+        ),
         onAuthFailure: () {},
       );
       final f = await _fingerprint(dio);

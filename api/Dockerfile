@@ -35,5 +35,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 # is never the entrypoint.
 COPY --from=build /out/pheme-app /out/pheme-ingest /out/pheme-dispatcher /out/pheme-vapidgen /out/pheme-hostkey /out/pheme-nodelist /usr/local/bin/
 USER nonroot:nonroot
+# HEALTHCHECK: distroless/static has no shell, wget, or curl, so a Dockerfile HEALTHCHECK
+# cannot run an HTTP probe here. Use an orchestrator-level TCP probe on the app's listen
+# address, or see deploy/prod/docker-compose.yml for the service-level healthcheck config.
 # Default to the App API; ingest and dispatcher override entrypoint in compose.
 ENTRYPOINT ["/usr/local/bin/pheme-app"]

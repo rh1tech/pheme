@@ -230,9 +230,15 @@ func devices(n int) []domain.Device {
 
 func syntheticToken() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		fmt.Fprintf(os.Stderr, "crypto/rand failed: %v\n", err)
+		os.Exit(1)
+	}
 	blob := make([]byte, 96)
-	_, _ = rand.Read(blob)
+	if _, err := rand.Read(blob); err != nil {
+		fmt.Fprintf(os.Stderr, "crypto/rand failed: %v\n", err)
+		os.Exit(1)
+	}
 	return base64.RawURLEncoding.EncodeToString(b) + ":APA91b" +
 		base64.RawURLEncoding.EncodeToString(blob)
 }

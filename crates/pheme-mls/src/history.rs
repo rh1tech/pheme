@@ -72,11 +72,14 @@ pub fn digest(bytes: &[u8]) -> Vec<u8> {
 fn transcript(label: &str, fields: &[&[u8]]) -> Vec<u8> {
     let mut out =
         Vec::with_capacity(8 + label.len() + fields.iter().map(|f| f.len() + 4).sum::<usize>());
-    out.extend_from_slice(&(label.len() as u32).to_be_bytes());
+    let label_len = u32::try_from(label.len()).expect("label too long");
+    out.extend_from_slice(&label_len.to_be_bytes());
     out.extend_from_slice(label.as_bytes());
-    out.extend_from_slice(&(fields.len() as u32).to_be_bytes());
+    let fields_len = u32::try_from(fields.len()).expect("too many fields");
+    out.extend_from_slice(&fields_len.to_be_bytes());
     for field in fields {
-        out.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        let field_len = u32::try_from(field.len()).expect("field too long");
+        out.extend_from_slice(&field_len.to_be_bytes());
         out.extend_from_slice(field);
     }
     out

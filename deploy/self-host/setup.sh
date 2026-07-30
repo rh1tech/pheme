@@ -139,6 +139,10 @@ PHEME_JWT_SECRET=$jwt_secret
 PHEME_TRUST_PROXY_HEADERS=true
 PHEME_ADMIN_EMAILS=$admin_email
 
+# Registration is by invitation only. Sign in as the admin above and mint links
+# from Admin -> Invites; set this to false to let anyone sign up.
+PHEME_INVITE_ONLY=true
+
 PHEME_VAPID_PUBLIC=$vapid_public
 PHEME_VAPID_PRIVATE=$vapid_private
 

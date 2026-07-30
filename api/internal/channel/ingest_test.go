@@ -75,7 +75,10 @@ func newIngest(t *testing.T) *ingestFixture {
 	if err != nil {
 		t.Fatalf("create channel: %v", err)
 	}
-	plaintext, hash, prefix := auth.GenerateAPIKey()
+	plaintext, hash, prefix, err := auth.GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
 	if _, err := st.CreateAPIKey(context.Background(), domain.APIKey{
 		ChannelID: ch.ID, HashedKey: hash, Prefix: prefix, Label: "test", CreatedAt: time.Now().UTC(),
 	}); err != nil {
@@ -219,7 +222,10 @@ func TestIngestRefusesARevokedKey(t *testing.T) {
 func TestIngestASecondKeyStillWorksAfterTheFirstIsRevoked(t *testing.T) {
 	f := newIngest(t)
 
-	second, hash, prefix := auth.GenerateAPIKey()
+	second, hash, prefix, err := auth.GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
 	if _, err := f.h.Store.CreateAPIKey(context.Background(), domain.APIKey{
 		ChannelID: f.channel.ID, HashedKey: hash, Prefix: prefix, Label: "rotated",
 		CreatedAt: time.Now().UTC(),
@@ -534,7 +540,10 @@ func TestIngestIdempotencyIsScopedToTheChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create other channel: %v", err)
 	}
-	plaintext, hash, prefix := auth.GenerateAPIKey()
+	plaintext, hash, prefix, err := auth.GenerateAPIKey()
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
 	if _, err := f.h.Store.CreateAPIKey(context.Background(), domain.APIKey{
 		ChannelID: other.ID, HashedKey: hash, Prefix: prefix, Label: "theirs",
 		CreatedAt: time.Now().UTC(),
