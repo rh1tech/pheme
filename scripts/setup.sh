@@ -124,4 +124,8 @@ EOF
 echo
 ok "Setup complete."
 echo "  Next:  ${C_BOLD}./scripts/dev.sh${C_RESET}   (or: make dev)"
+# The repo's own hooks, rather than whatever this clone happened to have. The commit-msg one
+# refuses a message that credits an AI — see .githooks/commit-msg for why that matters.
+git config core.hooksPath .githooks
+echo "  Hooks: core.hooksPath -> .githooks"
 echo "  Admin: set PHEME_ADMIN_EMAILS in .env.dev to grant yourself admin."

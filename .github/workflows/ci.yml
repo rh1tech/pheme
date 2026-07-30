@@ -35,6 +35,54 @@ concurrency:
 # using the `ci` runner label so tests do not queue behind releases.
 
 jobs:
+  attribution:
+    name: Attribution
+    # Cheap and first: a commit crediting an AI must never reach main, and finding out at merge
+    # time is finding out too late. GitHub's own "restrict commit metadata" ruleset would block
+    # this at push time, but that rule is Enterprise-only — so this is the enforcement that is
+    # actually available, and it is why it gates the merge rather than merely reporting.
+    #
+    # A local hook cannot do this job: it protects whoever installed it, and the commit that
+    # prompted all this was authored through GitHub's own web surface, where no local hook runs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history on a PR so every commit in the branch is inspected, not just the tip.
+          fetch-depth: 0
+      - name: Reject AI attribution in commit messages
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          # An empty or all-zero BASE means there is no predecessor to diff against (first push
+          # to a branch, or a forced update). Fall back to the tip commit alone rather than
+          # scanning 400 commits of history that were already accepted.
+          if [ -z "${BASE}" ] || [ "${BASE}" = "0000000000000000000000000000000000000000" ]; then
+            range="${HEAD_SHA} -1"
+          else
+            range="${BASE}..${HEAD_SHA}"
+          fi
+          echo "Inspecting: ${range}"
+          # shellcheck disable=SC2086
+          offenders=$(git log --format='%H%x09%an <%ae>%x09%s%n%b' ${range} \
+            | grep -inE 'co-authored-by:.*(copilot|claude|chatgpt|gpt-|anthropic|openai|codex|cursor|devin|gemini|bard)|generated with \[?(claude|copilot|chatgpt)|assisted-by:|claude-session' || true)
+          if [ -n "${offenders}" ]; then
+            echo "::error::Commit messages credit an AI. Remove the trailer and amend/rebase."
+            echo "${offenders}"
+            exit 1
+          fi
+          # Authorship, not just trailers: a commit written BY a bot account counts too.
+          bots=$(git log --format='%H %an <%ae>' ${range} \
+            | grep -iE 'copilot|claude|chatgpt|anthropic|openai\[bot\]' || true)
+          if [ -n "${bots}" ]; then
+            echo "::error::Commits authored by an AI account."
+            echo "${bots}"
+            exit 1
+          fi
+          echo "No AI attribution found."
+
   api:
     name: API (Go)
     runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","linux","ci"]') }}

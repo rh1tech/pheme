@@ -11,8 +11,12 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-setup: ## One-time bootstrap (env, ports, VAPID keys)
+setup: ## One-time bootstrap (env, ports, VAPID keys, git hooks)
 	@./scripts/setup.sh
+
+hooks: ## Point git at the repo's hooks (.githooks)
+	@git config core.hooksPath .githooks
+	@echo "core.hooksPath = .githooks"
 
 dev: ## Run the full dev stack (infra + services + web)
 	@./scripts/dev.sh
