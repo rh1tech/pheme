@@ -101,13 +101,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final settings = ref.watch(settingsControllerProvider);
     final controller = ref.read(settingsControllerProvider.notifier);
     final registered = ref.watch(deviceControllerProvider) != null;
+    // Watched, not read once: another admin can take the role away mid-session, and the row should
+    // go with it rather than lead to a screen that 403s.
+    final isAdmin = ref.watch(authControllerProvider).isAdmin;
 
     return AdaptiveScaffold(
       grouped: isCupertino(context),
       title: Text(l10n.t('settings.title')),
       body: isCupertino(context)
-          ? _buildCupertino(l10n, settings, controller, registered)
-          : _buildMaterial(context, l10n, settings, controller, registered),
+          ? _buildCupertino(l10n, settings, controller, registered, isAdmin)
+          : _buildMaterial(
+              context,
+              l10n,
+              settings,
+              controller,
+              registered,
+              isAdmin,
+            ),
     );
   }
 
@@ -121,6 +131,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     SettingsState settings,
     SettingsController controller,
     bool registered,
+    bool isAdmin,
   ) {
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -199,6 +210,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           trailing: const Icon(Icons.chevron_right),
           onTap: () => showRecoveryCodeSheet(context, ref),
         ),
+        // The panel, for the accounts that have one. Absent rather than disabled for everybody
+        // else: a row that exists and refuses is an invitation to wonder what is behind it, and
+        // there is nothing an ordinary account could do with it anyway.
+        if (isAdmin)
+          ListTile(
+            leading: const Icon(Icons.shield_outlined),
+            title: Text(l10n.t('admin.title')),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/admin'),
+          ),
         ListTile(
           leading: Icon(
             Icons.logout,
@@ -231,6 +252,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     SettingsState settings,
     SettingsController controller,
     bool registered,
+    bool isAdmin,
   ) {
     final languageCode = settings.locale?.languageCode ?? 'system';
     return ListView(
@@ -317,6 +339,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               trailing: const CupertinoListTileChevron(),
               onTap: () => showRecoveryCodeSheet(context, ref),
             ),
+            if (isAdmin)
+              CupertinoListTile.notched(
+                leading: const Icon(CupertinoIcons.shield_lefthalf_fill),
+                title: Text(l10n.t('admin.title')),
+                trailing: const CupertinoListTileChevron(),
+                onTap: () => context.push('/admin'),
+              ),
             CupertinoListTile.notched(
               leading: const Icon(
                 CupertinoIcons.square_arrow_right,

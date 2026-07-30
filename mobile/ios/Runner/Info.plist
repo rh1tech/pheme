@@ -2,10 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Invitation and channel links: pheme://invite?code=... See lib/src/core/deep_links.dart. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>tech.rh1.pheme.phemeMobile</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>pheme</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Pheme needs access to your photos so you can send them in your end-to-end encrypted chats.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Pheme uses the camera to scan channel QR codes.</string>
+	<string>Pheme uses the camera to take photos for your end-to-end encrypted chats and to scan channel QR codes.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Pheme uses the microphone for end-to-end encrypted voice calls.</string>
 	<key>UIBackgroundModes</key>

@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/deep_links.dart';
 import '../core/providers.dart';
 import '../core/snackbar.dart';
 import '../data/app_providers.dart';
@@ -30,6 +33,24 @@ class ChannelsPage extends ConsumerStatefulWidget {
 class _ChannelsPageState extends ConsumerState<ChannelsPage> {
   final _search = TextEditingController();
   String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    // A pheme://join link may have been waiting since before this screen existed — the app can have
+    // been cold-started by one, and joining needs an authenticated session, which only exists once
+    // the router has got this far.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _takeJoinLink());
+  }
+
+  /// Claims a pending join link and joins the channel it names.
+  void _takeJoinLink() {
+    final link = ref
+        .read(deepLinkControllerProvider.notifier)
+        .consume<JoinLink>();
+    if (link == null || !mounted) return;
+    unawaited(_joinRef(context, ref, link.ref));
+  }
 
   @override
   void dispose() {
@@ -106,6 +127,15 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
       builder: (_) => const JoinChannelSheet(),
     );
     if (reference == null || reference.isEmpty || !context.mounted) return;
+    await _joinRef(context, ref, reference);
+  }
+
+  /// Joins by reference, from wherever the reference came from — the sheet, or a link.
+  Future<void> _joinRef(
+    BuildContext context,
+    WidgetRef ref,
+    String reference,
+  ) async {
     final l10n = context.l10n;
     try {
       final channel = await ref
@@ -125,6 +155,11 @@ class _ChannelsPageState extends ConsumerState<ChannelsPage> {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
+    // A link tapped while the app was merely backgrounded arrives with this screen already built,
+    // so there is no post-frame callback coming to catch it.
+    ref.listen(deepLinkControllerProvider, (_, next) {
+      if (next is JoinLink) _takeJoinLink();
+    });
     final ios = isCupertino(context);
     final channels = ref.watch(channelsProvider);
     final joined = ref.watch(joinedChannelsProvider);

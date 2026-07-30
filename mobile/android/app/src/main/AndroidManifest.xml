@@ -43,7 +43,9 @@
     <application
         android:label="Pheme"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -66,6 +68,22 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!--
+                Invitation and channel links: pheme://invite?code=..., pheme://join?ref=...,
+                pheme://server?url=... See lib/src/core/deep_links.dart for why this is a private
+                scheme rather than an https App Link — a self-hosted server's domain is not known
+                when the app is built, and an unverified https filter on a path like /login would
+                offer Pheme as a handler for every login page on the internet.
+
+                singleTop above is what makes a link arriving while the app is already open reuse
+                this activity instead of stacking a second copy of it.
+            -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="pheme"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

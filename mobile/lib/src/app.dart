@@ -6,6 +6,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'chat/chat_providers.dart';
+import 'core/deep_links.dart';
 import 'core/providers.dart';
 import 'l10n/app_localizations.dart';
 import 'push/push_service.dart';
@@ -30,6 +31,10 @@ class _PhemeAppState extends ConsumerState<PhemeApp> {
     super.initState();
     final push = ref.read(pushServiceProvider);
     _tapSub = push.onMessageTap.listen(_openMessage);
+    // Start listening for pheme:// links. The controller PARKS whatever arrives rather than acting
+    // on it, because the screen that can act — the login form for an invitation, the channel list
+    // for a join — may not exist yet on a cold start. Each takes its own when it is ready.
+    unawaited(ref.read(deepLinkControllerProvider.notifier).start());
     // A tap that cold-started the app: navigate once the first frame is ready.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final initial = push.takeInitialMessage();
@@ -41,6 +46,14 @@ class _PhemeAppState extends ConsumerState<PhemeApp> {
   void dispose() {
     _tapSub?.cancel();
     super.dispose();
+  }
+
+  /// Acts on a link that needs no particular screen: pointing this install at another server.
+  ///
+  /// The other two kinds are claimed by the screens that can use them, so they are not handled
+  /// here — see LoginPage (invitations) and ChannelsPage (joins).
+  Future<void> _applyServerLink(ServerLink link) async {
+    await ref.read(settingsControllerProvider.notifier).setBaseUrl(link.server);
   }
 
   void _openMessage(NotificationTarget target) {
@@ -66,6 +79,14 @@ class _PhemeAppState extends ConsumerState<PhemeApp> {
     // where a Ref is available, rather than the service reaching into Riverpod itself.
     ref.listen(activeConversationIdProvider, (_, next) {
       ref.read(pushServiceProvider).activeConversationId = next;
+    });
+    // A server link is the one kind no screen is waiting for, so it is taken here.
+    ref.listen(deepLinkControllerProvider, (_, next) {
+      if (next is! ServerLink) return;
+      final link = ref
+          .read(deepLinkControllerProvider.notifier)
+          .consume<ServerLink>();
+      if (link != null) unawaited(_applyServerLink(link));
     });
     final themeMode = ref.watch(
       settingsControllerProvider.select((s) => s.themeMode),
