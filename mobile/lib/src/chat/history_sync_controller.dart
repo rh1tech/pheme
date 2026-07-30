@@ -45,6 +45,15 @@ class HistorySyncController extends Notifier<void> {
     });
   }
 
+  void _markOffered(String id) {
+    // Cap the set to prevent unbounded growth over long sessions. Dart Sets
+    // preserve insertion order, so removing first evicts the oldest entry.
+    if (_offered.length >= 200) {
+      _offered.remove(_offered.first);
+    }
+    _offered.add(id);
+  }
+
   void _onEvent(LiveEvent event) {
     final userId = ref.read(myUserIdProvider);
     final conversationId = event.conversationId;
@@ -54,7 +63,7 @@ class HistorySyncController extends Notifier<void> {
     if (message.contentType == ContentType.mlsHistoryOffer) {
       // Record that this conversation has an offer, so an in-flight election stands down. Then try
       // to receive it — receiveHistoryOffer ignores offers not addressed to this device.
-      _offered.add('$conversationId:${message.id}');
+      _markOffered('$conversationId:${message.id}');
       final mls = ref.read(mlsServiceProvider);
       unawaited(
         mls

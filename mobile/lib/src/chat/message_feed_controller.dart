@@ -137,6 +137,9 @@ class MessageFeedController extends Notifier<MessageFeedState> {
   /// Guards against a slow settle stacking up behind itself on a 15-second timer.
   bool _settling = false;
 
+  /// Guards against concurrent resync calls from rapid SSE reconnects.
+  bool _resyncing = false;
+
   @override
   MessageFeedState build() {
     // Live messages, including the MLS control traffic that admits a new device to the group.
@@ -354,7 +357,8 @@ class MessageFeedController extends Notifier<MessageFeedState> {
   /// the stream, once here — appears once. Silent on failure: the next reconnect, or the next open,
   /// tries again.
   Future<void> _resyncAfterGap() async {
-    if (state.loading) return;
+    if (state.loading || _resyncing) return;
+    _resyncing = true;
     try {
       final page = await ref
           .read(repositoryProvider)
@@ -373,6 +377,8 @@ class MessageFeedController extends Notifier<MessageFeedState> {
       unawaited(_markNewestRead());
     } on Object {
       // Leave it. Another reconnect or the next open will pick it up.
+    } finally {
+      _resyncing = false;
     }
   }
 

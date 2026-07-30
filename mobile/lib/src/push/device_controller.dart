@@ -24,7 +24,17 @@ import '../core/providers.dart';
 /// button did nothing. Registering now always happens; the push token is attached when there is one.
 class DeviceController extends Notifier<String?> {
   @override
-  String? build() => ref.read(initialAppStateProvider).deviceId;
+  String? build() {
+    // Wire the token-refresh callback once, here in build(), so it is never
+    // re-registered on every call to register(). A rotated token has to reach
+    // the server; the only way it does is by registering again.
+    ref.read(pushServiceProvider).onTokenRefresh((_) {
+      state =
+          null; // force the next ensureRegistered to re-register with the new token
+      unawaited(ensureRegistered());
+    });
+    return ref.read(initialAppStateProvider).deviceId;
+  }
 
   bool get isRegistered => state != null;
 
@@ -32,14 +42,7 @@ class DeviceController extends Notifier<String?> {
   /// cannot. Returns the device id.
   Future<String> register() async {
     // A rotated token has to reach the server, and the only way it does is by registering again.
-    // See PushService.onTokenRefresh — without this the app holds a device id forever and never
-    // notices that the address behind it stopped working.
-    ref.read(pushServiceProvider).onTokenRefresh((_) {
-      state =
-          null; // force the next ensureRegistered to re-register with the new token
-      unawaited(ensureRegistered());
-    });
-
+    // The onTokenRefresh callback is wired once in build(), so it is not re-registered here.
     final existing = state;
     if (existing != null) return existing;
 

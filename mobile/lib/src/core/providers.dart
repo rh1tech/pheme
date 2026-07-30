@@ -38,6 +38,21 @@ final authControllerProvider = NotifierProvider<AuthController, AuthState>(
   AuthController.new,
 );
 
+final tokenRefreshCoordinatorProvider = Provider<TokenRefreshCoordinator>((
+  ref,
+) {
+  final baseUrl = ref.watch(
+    settingsControllerProvider.select((s) => s.baseUrl),
+  );
+  final tokenStore = ref.watch(tokenStoreProvider);
+  final coordinator = TokenRefreshCoordinator(
+    baseUrl: baseUrl,
+    tokenStore: tokenStore,
+  );
+  ref.onDispose(coordinator.dispose);
+  return coordinator;
+});
+
 /// The Dio client. Rebuilt when the configured base URL changes; refresh
 /// failures route to [AuthController.onSessionExpired].
 final dioProvider = Provider<Dio>((ref) {
@@ -45,9 +60,11 @@ final dioProvider = Provider<Dio>((ref) {
     settingsControllerProvider.select((s) => s.baseUrl),
   );
   final tokenStore = ref.watch(tokenStoreProvider);
+  final coordinator = ref.watch(tokenRefreshCoordinatorProvider);
   final dio = buildDio(
     baseUrl: baseUrl,
     tokenStore: tokenStore,
+    refreshCoordinator: coordinator,
     onAuthFailure: () =>
         ref.read(authControllerProvider.notifier).onSessionExpired(),
   );
