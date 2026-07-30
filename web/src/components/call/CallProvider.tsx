@@ -176,7 +176,20 @@ export function CallProvider({ children }: { children: ReactNode }) {
     // A call WE placed, ringing on another of our own devices. Do not ring here.
     if (signal.fromUserId === userId) return
     if (handledRef.current.has(signal.callId)) return
-    if (callRef.current || incoming) return // already busy; TODO: send `busy`
+    if (callRef.current || incoming) {
+      // Best-effort: tell the caller we're busy
+      const busyConversationId = e.conversationId
+      const busyCallId = signal.callId
+      if (busyConversationId) {
+        void (async () => {
+          try {
+            const busyCall = await Call.incoming(busyConversationId, userId, busyCallId, () => {})
+            await busyCall.decline()
+          } catch { /* ignore — declining a busy call is best-effort */ }
+        })()
+      }
+      return
+    }
 
     // Read out of the event before the closure: inside it, TypeScript can no longer prove the
     // field is still there, and neither can we — the event object is not ours.

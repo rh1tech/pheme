@@ -37,6 +37,7 @@ func (r *Redis) PutSignup(ctx context.Context, s Signup, ttl time.Duration) erro
 		"passwordHash", s.PasswordHash,
 		"codeHash", s.CodeHash,
 		"attempts", s.Attempts,
+		"inviteId", s.InviteID,
 	)
 	pipe.Expire(ctx, key, ttl)
 	_, err := pipe.Exec(ctx)
@@ -57,6 +58,7 @@ func (r *Redis) GetSignup(ctx context.Context, email string) (Signup, error) {
 		PasswordHash: res["passwordHash"],
 		CodeHash:     res["codeHash"],
 		Attempts:     attempts,
+		InviteID:     res["inviteId"],
 	}, nil
 }
 

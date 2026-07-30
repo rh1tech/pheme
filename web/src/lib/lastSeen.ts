@@ -41,6 +41,15 @@ export function markSeen(channelId: string, iso: string): void {
   }
 }
 
+/** Clears all read-state on logout so the next user cannot see channel membership. */
+export function clearAllSeen(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+  } catch {
+    // Blocked storage: harmless, key will be overwritten on next write.
+  }
+}
+
 /** Drops a channel's read state (e.g. after leaving or deleting it). */
 export function forgetSeen(channelId: string): void {
   const current = read()

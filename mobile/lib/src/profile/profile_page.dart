@@ -9,6 +9,7 @@ import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/error_view.dart';
+import '../widgets/photo_source_sheet.dart';
 
 /// Keep in sync with the server avatar limit (api/internal/channel/notify_input.go).
 const _maxImageBytes = 10 * 1024 * 1024;
@@ -116,7 +117,9 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
 
   Future<void> _pickAvatar() async {
     final l10n = context.l10n;
-    final picked = await _picker.pickImage(source: ImageSource.gallery);
+    final source = await askPhotoSource(context);
+    if (source == null || !mounted) return;
+    final picked = await _picker.pickImage(source: source);
     if (picked == null || !mounted) return;
     if (await picked.length() > _maxImageBytes) {
       if (mounted) {

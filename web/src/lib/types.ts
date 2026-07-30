@@ -358,6 +358,33 @@ export interface AdminUser {
   channelCount: number
 }
 
+// An invitation as the admin panel sees it. `code` is present ONLY in the response to the
+// request that created it: the server stores a hash, so a link that is not copied then is gone.
+export interface AdminInvite {
+  id: string
+  prefix: string
+  note?: string
+  createdBy: string
+  createdAt: string
+  expiresAt?: string
+  usedAt?: string
+  usedBy?: string
+  revokedAt?: string
+  status: 'pending' | 'used' | 'revoked' | 'expired'
+  code?: string
+}
+
+// What the signup form has to ask for on this server.
+export interface RegistrationInfo {
+  inviteOnly: boolean
+}
+
+// The verdict on one invitation code.
+export interface InviteCheck {
+  valid: boolean
+  reason?: 'unknown' | 'used' | 'revoked' | 'expired'
+}
+
 export interface AdminChannel extends Channel {
   ownerEmail: string
 }

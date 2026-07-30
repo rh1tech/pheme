@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/jwt.dart';
 import '../core/providers.dart';
-import '../core/token_store.dart';
 import '../live/sse_client.dart';
 import '../models/models.dart';
 
@@ -47,7 +46,6 @@ final liveEventsProvider = StreamProvider<LiveEvent>((ref) {
     settingsControllerProvider.select((s) => s.baseUrl),
   );
   final tokenStore = ref.watch(tokenStoreProvider);
-  final repo = ref.watch(repositoryProvider);
 
   Future<String?> freshToken() async {
     final tokens = tokenStore.current;
@@ -57,20 +55,18 @@ final liveEventsProvider = StreamProvider<LiveEvent>((ref) {
     final soon = DateTime.now().toUtc().add(_streamTokenFloor);
     if (expiry != null && expiry.isAfter(soon)) return tokens.accessToken;
 
-    try {
-      final refreshed = await repo.refreshSession(tokens.refreshToken);
-      await tokenStore.save(
-        Tokens(
-          accessToken: refreshed.accessToken,
-          refreshToken: refreshed.refreshToken,
-        ),
-      );
-      return refreshed.accessToken;
-    } on Object {
+    // Route through the shared coordinator so this refresh is serialised with
+    // any concurrent 401 refresh from the Dio interceptor. Without this, an SSE
+    // reconnect and a regular API 401 can each start a refresh at the same time,
+    // with the second overwriting the first's freshly-issued tokens.
+    final coordinator = ref.read(tokenRefreshCoordinatorProvider);
+    final ok = await coordinator.refresh();
+    if (!ok) {
       // Refresh failed — hand back what we have. The connection will be refused and the loop will
       // back off and try again; if the session is truly gone, the next API call drops us to login.
       return tokens.accessToken;
     }
+    return tokenStore.current?.accessToken ?? tokens.accessToken;
   }
 
   final client = SseClient(

@@ -35,6 +35,11 @@ type Signup struct {
 	PasswordHash string
 	CodeHash     string
 	Attempts     int
+	// InviteID is the invite this signup was let in on, carried from register through to
+	// verify. It is recorded HERE, on the pending signup, rather than consumed at register:
+	// spending it before the email is proven would let anyone burn an invitation by typing
+	// somebody else's address into the form.
+	InviteID string
 }
 
 // Reset is a pending password reset awaiting code confirmation.

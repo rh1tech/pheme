@@ -117,6 +117,11 @@ function subscriptionMatchesKey(sub: PushSubscription, vapidPublicKey: string): 
  */
 let syncStarted = false
 
+/** Resets the sync flag so a newly logged-in user triggers a fresh registration. */
+export function resetWebPushSync(): void {
+  syncStarted = false
+}
+
 export async function syncWebPushDevice(): Promise<void> {
   if (syncStarted) return
   syncStarted = true

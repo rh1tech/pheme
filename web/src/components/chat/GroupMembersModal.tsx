@@ -197,15 +197,16 @@ function AddMemberSearch({ exclude, busy, onPick, onAddHandle }: AddMemberSearch
     // Too short, or a handle: no server query — a `user@host` handle is resolved on
     // demand when the user picks "add … from another server", not by local search.
     if (q.length < 2 || q.includes('@')) return
+    let alive = true
     const timer = window.setTimeout(() => {
       setSearching(true)
       api
         .searchUsers(q)
-        .then(setResults)
-        .catch(() => setResults([]))
-        .finally(() => setSearching(false))
+        .then(r => { if (alive) setResults(r) })
+        .catch(() => { if (alive) setResults([]) })
+        .finally(() => { if (alive) setSearching(false) })
     }, 250)
-    return () => window.clearTimeout(timer)
+    return () => { alive = false; window.clearTimeout(timer) }
   }, [query])
 
   const shown = (trimmed.length < 2 || trimmed.includes('@') ? [] : results).filter(

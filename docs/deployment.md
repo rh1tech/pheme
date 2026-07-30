@@ -147,6 +147,7 @@ At minimum set:
 - `PHEME_PUBLIC_API_URL` to the same externally reachable base;
 - `PHEME_CORS_ORIGINS` to exact web origins, or empty for mobile-only;
 - `PHEME_ADMIN_EMAILS`;
+- `PHEME_INVITE_ONLY` (default `true` — registration requires an invitation link generated from Admin → Invites; set `false` for open signup);
 - VAPID keys if Web Push is enabled.
 
 The production stack selects MongoDB, GridFS, RabbitMQ, Redis-backed live events,

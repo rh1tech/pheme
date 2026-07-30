@@ -163,6 +163,14 @@ type Config struct {
 	// Authorization
 	AdminEmails []string // emails granted the admin role on register/login
 
+	// InviteOnly closes public registration: POST /v1/auth/register is refused unless
+	// it carries a valid, unspent invite code minted by an admin.
+	//
+	// DEFAULT ON. An open relay accumulates accounts nobody vouched for, and the failure
+	// mode of getting this wrong is silent — the server keeps working, it just lets the
+	// world in. An operator who genuinely wants open signup says so explicitly.
+	InviteOnly bool
+
 	// Initial admin seeding. When both are set, the App API ensures a verified,
 	// active admin with these credentials exists at startup (created if missing).
 	// Opt-in: leaving either empty disables seeding. Used to bootstrap the first
@@ -255,6 +263,7 @@ func Load() Config {
 		PeerURLs:         env("PHEME_PEER_URLS", ""),
 
 		AdminEmails: envList("PHEME_ADMIN_EMAILS"),
+		InviteOnly:  envBool("PHEME_INVITE_ONLY", true),
 
 		SeedAdminEmail:    env("PHEME_SEED_ADMIN_EMAIL", ""),
 		SeedAdminPassword: env("PHEME_SEED_ADMIN_PASSWORD", ""),

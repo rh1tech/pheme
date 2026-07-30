@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Anchor,
   Button,
@@ -11,10 +11,10 @@ import {
   Text,
   TextInput,
 } from '@mantine/core'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { Trans, useTranslation } from 'react-i18next'
 import { useAuth } from '../auth/context'
-import { ApiError } from '../lib/api'
+import { ApiError, api } from '../lib/api'
 import { notifyError } from '../lib/notify'
 import { checkPassword } from '../lib/password'
 import { useCountdown } from '../hooks/useCountdown'
@@ -27,11 +27,24 @@ import { deployedBaseUrl, isValidServerUrl, saveBaseUrl, storedBaseUrl } from '.
 
 const RESEND_SECONDS = 120
 
+// The server's verdict on ONE code. The code it applies to is stored with it, so a verdict
+// is never shown against a code the visitor has since edited — the stale-result bug that a
+// bare valid/invalid flag invites.
+type InviteVerdict = { code: string; valid: boolean; reason?: string }
+
 export function LoginPage() {
   const { login, register, verifyEmail, isAuthenticated } = useAuth()
   const navigate = useNavigate()
   const { t } = useTranslation()
-  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [searchParams] = useSearchParams()
+  // An invitation link lands here with the code in the query. Arriving with one means the
+  // visitor came to sign UP, so the form opens on register rather than making them find the
+  // toggle — and the code is theirs to correct if the link was mangled in transit.
+  const inviteFromLink = searchParams.get('invite')?.trim() ?? ''
+  const [mode, setMode] = useState<'login' | 'register'>(inviteFromLink ? 'register' : 'login')
+  const [invite, setInvite] = useState(inviteFromLink)
+  const [inviteOnly, setInviteOnly] = useState(false)
+  const [inviteVerdict, setInviteVerdict] = useState<InviteVerdict | null>(null)
   const [step, setStep] = useState<'credentials' | 'verify'>('credentials')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -44,6 +57,50 @@ export function LoginPage() {
   const [server, setServer] = useState(() => storedBaseUrl() || deployedBaseUrl())
   // Set the moment a sign-in succeeds; see the redirect below.
   const [signedIn, setSignedIn] = useState(false)
+
+  // Whether this server takes open registrations. Asked once, and asked of whichever server
+  // the address field currently points at — the answer belongs to that server, not to this
+  // build, so switching servers has to re-ask.
+  useEffect(() => {
+    if (!isValidServerUrl(server)) return
+    let live = true
+    saveBaseUrl(server)
+    api
+      .registrationInfo()
+      .then((info) => {
+        if (live) setInviteOnly(info.inviteOnly)
+      })
+      // A server too old to answer, or one that is briefly unreachable, is treated as open:
+      // the invite field simply does not appear, and a register attempt still gets the real
+      // verdict from /register. Guessing "closed" here would block signup on a hiccup.
+      .catch(() => {
+        if (live) setInviteOnly(false)
+      })
+    return () => {
+      live = false
+    }
+  }, [server])
+
+  // Check the code once it settles, so a spent link says so before the form is filled in.
+  useEffect(() => {
+    const code = invite.trim()
+    if (!inviteOnly || mode !== 'register' || code === '') return
+    let live = true
+    const timer = setTimeout(() => {
+      api
+        .checkInvite(code)
+        .then((res) => {
+          if (live) setInviteVerdict({ code, valid: res.valid, reason: res.reason })
+        })
+        // Silence, not a verdict: /register is the one that decides, and calling a good
+        // invitation bad because the check request failed would be worse than saying nothing.
+        .catch(() => undefined)
+    }, 400)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [invite, inviteOnly, mode])
 
   // Leaving after a successful sign-in is decided by STATE, and by nothing else.
   //
@@ -80,7 +137,7 @@ export function LoginPage() {
         await login(email, password)
         setSignedIn(true)
       } else {
-        await register(email, password)
+        await register(email, password, invite.trim() || undefined)
         setCode('')
         setStep('verify')
         startCooldown(RESEND_SECONDS)
@@ -108,7 +165,7 @@ export function LoginPage() {
     if (cooldown > 0 || loading) return
     setLoading(true)
     try {
-      await register(email, password)
+      await register(email, password, invite.trim() || undefined)
       startCooldown(RESEND_SECONDS)
     } catch (err) {
       fail(err)
@@ -124,10 +181,22 @@ export function LoginPage() {
     setCode('')
   }
 
+  const needsInvite = mode === 'register' && inviteOnly
+  // Derived, not stored: a verdict counts only while it still describes what is in the box.
+  const verdict = inviteVerdict?.code === invite.trim() ? inviteVerdict : null
+  const checkingInvite = needsInvite && invite.trim() !== '' && verdict === null
   const canSubmitCredentials =
     email.trim() !== '' &&
     isValidServerUrl(server) &&
-    (mode === 'login' || checkPassword(password).acceptable)
+    (mode === 'login' || checkPassword(password).acceptable) &&
+    // A code we already know to be spent is not worth a round trip; an unchecked one is, so
+    // only a verdict of "bad" blocks the button.
+    (!needsInvite || (invite.trim() !== '' && verdict?.valid !== false))
+
+  const inviteReason = verdict && !verdict.valid ? (verdict.reason ?? 'unknown') : null
+  const inviteError = inviteReason
+    ? t(`auth.invite${inviteReason.charAt(0).toUpperCase()}${inviteReason.slice(1)}`)
+    : null
 
   return (
     <Center mih="100vh" p="md">
@@ -197,6 +266,25 @@ export function LoginPage() {
                 />
                 {mode === 'register' && <PasswordStrength value={password} />}
               </div>
+              {needsInvite && (
+                <TextInput
+                  label={t('auth.invite')}
+                  placeholder={t('auth.invitePlaceholder')}
+                  value={invite}
+                  onChange={(e) => setInvite(e.currentTarget.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && submitCredentials()}
+                  error={inviteError}
+                  description={
+                    invite.trim() === ''
+                      ? t('auth.inviteRequired')
+                      : checkingInvite
+                        ? t('auth.inviteChecking')
+                        : verdict?.valid
+                          ? t('auth.inviteValid')
+                          : undefined
+                  }
+                />
+              )}
               <ServerInput
                 value={server}
                 onChange={setServer}

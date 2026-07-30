@@ -31,6 +31,7 @@ import '../widgets/adaptive/platform.dart';
 import '../widgets/error_view.dart';
 import '../widgets/glass/glass.dart';
 import '../widgets/measured_height.dart';
+import '../widgets/photo_source_sheet.dart';
 import 'chat_providers.dart';
 import 'chat_time.dart';
 import 'conversation_title.dart';
@@ -234,15 +235,29 @@ class _ChatViewState extends ConsumerState<_ChatView> {
     setState(() => _unseen++);
   }
 
-  /// Picks photos. Resized and re-encoded by the platform, which is what strips the EXIF.
+  /// Picks photos, from the camera or the library. Resized and re-encoded by the platform, which is
+  /// what strips the EXIF.
   Future<void> _attach() async {
+    final source = await askPhotoSource(context);
+    if (source == null || !mounted) return;
+
     try {
-      final picked = await ImagePicker().pickMultiImage(
-        maxWidth: 1600,
-        maxHeight: 1600,
-        imageQuality: 82,
-        limit: _maxPhotos - _photos.length,
-      );
+      // The camera returns one shot at a time; only the library can hand over a selection.
+      final picked = source == ImageSource.camera
+          ? [
+              ?await ImagePicker().pickImage(
+                source: ImageSource.camera,
+                maxWidth: 1600,
+                maxHeight: 1600,
+                imageQuality: 82,
+              ),
+            ]
+          : await ImagePicker().pickMultiImage(
+              maxWidth: 1600,
+              maxHeight: 1600,
+              imageQuality: 82,
+              limit: _maxPhotos - _photos.length,
+            );
       if (picked.isEmpty || !mounted) return;
 
       final bytes = <Uint8List>[];

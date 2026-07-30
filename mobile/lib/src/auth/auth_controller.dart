@@ -39,8 +39,10 @@ class AuthController extends Notifier<AuthState> {
 
   /// Starts registration — the server emails a verification code. The account
   /// is created (and the user logged in) once [verifyEmail] confirms the code.
-  Future<void> register(String email, String password) async {
-    await ref.read(repositoryProvider).register(email, password);
+  Future<void> register(String email, String password, {String? invite}) async {
+    await ref
+        .read(repositoryProvider)
+        .register(email, password, invite: invite);
   }
 
   Future<void> verifyEmail(String email, String code) async {

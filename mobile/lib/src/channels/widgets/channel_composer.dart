@@ -8,6 +8,7 @@ import '../../core/snackbar.dart';
 import '../../core/providers.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/glass/glass.dart';
+import '../../widgets/photo_source_sheet.dart';
 
 /// The bar at the foot of a channel, where a chat has its message box.
 ///
@@ -70,8 +71,14 @@ class _ChannelComposerState extends ConsumerState<ChannelComposer> {
 
   Future<void> _pickImages() async {
     final l10n = context.l10n;
+    final source = await askPhotoSource(context);
+    if (source == null || !mounted) return;
+
     try {
-      final picked = await ImagePicker().pickMultiImage();
+      // The camera hands back a single shot; only the library can return a selection.
+      final picked = source == ImageSource.camera
+          ? [?await ImagePicker().pickImage(source: ImageSource.camera)]
+          : await ImagePicker().pickMultiImage();
       if (picked.isEmpty || !mounted) return;
       setState(() {
         final room = _maxImages - _images.length;

@@ -30,6 +30,9 @@ func (h *AdminHandler) Register(protected *http.ServeMux) {
 	protected.HandleFunc("PATCH /v1/admin/users/{id}", h.updateUser)
 	protected.HandleFunc("POST /v1/admin/users/{id}/reset-password", h.resetUserPassword)
 	protected.HandleFunc("DELETE /v1/admin/users/{id}", h.deleteUser)
+	protected.HandleFunc("GET /v1/admin/invites", h.listInvites)
+	protected.HandleFunc("POST /v1/admin/invites", h.createInvite)
+	protected.HandleFunc("POST /v1/admin/invites/{id}/revoke", h.revokeInvite)
 	protected.HandleFunc("GET /v1/admin/channels", h.listChannels)
 	protected.HandleFunc("PATCH /v1/admin/channels/{id}", h.updateChannel)
 	protected.HandleFunc("DELETE /v1/admin/channels/{id}", h.deleteChannel)
@@ -424,11 +427,23 @@ func (h *AdminHandler) revokeKey(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
 	}
-	if err := h.Store.RevokeAPIKey(r.Context(), r.PathValue("keyId")); err != nil {
+	channelID := r.PathValue("id")
+	keyID := r.PathValue("keyId")
+	key, err := h.Store.APIKeyByID(r.Context(), keyID)
+	if err != nil {
+		// Return 404 regardless — don't leak whether the key exists on another channel.
+		httpx.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	if key.ChannelID != channelID {
+		httpx.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	if err := h.Store.RevokeAPIKey(r.Context(), keyID); err != nil {
 		h.writeStoreErr(w, err, "could not revoke key")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"status": "revoked", "id": r.PathValue("keyId")})
+	httpx.JSON(w, http.StatusOK, map[string]any{"status": "revoked", "id": keyID})
 }
 
 func (h *AdminHandler) writeStoreErr(w http.ResponseWriter, err error, msg string) {

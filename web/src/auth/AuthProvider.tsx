@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { api, setOnAuthFailure } from '../lib/api'
 import { clearTokens, loadTokens, saveTokens } from '../lib/tokens'
 import { forgetSession, wipeLocalKeys } from '../lib/mls'
+import { clearPreviews } from '../lib/chatCache'
+import { clearAllSeen } from '../lib/lastSeen'
+import { resetWebPushSync } from '../lib/webpush'
 import { notifyError } from '../lib/notify'
 import i18n from '../i18n'
 import { decodeRole, decodeUserId } from '../lib/jwt'
@@ -34,6 +37,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // guard performs the moment the identity is cleared, and the user reads it on the
   // login page. Clearing the identity is what navigates; the wipe cannot prevent that.
   const logout = useCallback(() => {
+    clearPreviews()          // sync localStorage clear — must run before async wipe can fail
+    clearAllSeen()           // prevent membership leak across users on shared devices
+    resetWebPushSync()       // allow fresh push registration for the next session
     clearTokens()
     setIdentity({ userId: null, role: null })
     wipeLocalKeys()
@@ -67,8 +73,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Registration only triggers a verification email; the account is created (and
   // the user logged in) once the code is confirmed via verifyEmail.
-  const register = useCallback(async (email: string, password: string) => {
-    await api.register(email, password)
+  const register = useCallback(async (email: string, password: string, invite?: string) => {
+    await api.register(email, password, invite)
   }, [])
 
   const verifyEmail = useCallback(

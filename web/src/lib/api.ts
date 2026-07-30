@@ -11,6 +11,7 @@ import {
 import type {
   AdminChannel,
   AdminComment,
+  AdminInvite,
   AdminStats,
   AdminUser,
   ApiKey,
@@ -26,6 +27,7 @@ import type {
   CommentsPage,
   CreatedKey,
   Device,
+  InviteCheck,
   JoinedChannel,
   Member,
   MemberStatus,
@@ -39,6 +41,7 @@ import type {
   NotificationPrivacy,
   Platform,
   PublicUser,
+  RegistrationInfo,
   Role,
   SubscriptionMode,
   TokenResponse,
@@ -105,9 +108,14 @@ async function rawFetch<T>(path: string, opts: RequestOptions, token?: string): 
   if (res.status === 204) return undefined as T
   if (res.status === 404 && opts.allow404) return null as T
   const text = await res.text()
-  const data = text ? JSON.parse(text) : undefined
+  let data: unknown
+  try {
+    data = text ? JSON.parse(text) : undefined
+  } catch {
+    throw new ApiError(res.status, `Server returned non-JSON response (${res.status})`)
+  }
   if (!res.ok) {
-    const message = data?.error?.message ?? res.statusText
+    const message = (data as Record<string, Record<string, string>> | undefined)?.error?.message ?? res.statusText
     throw new ApiError(res.status, message)
   }
   return data as T
@@ -235,8 +243,19 @@ async function requestBinary(
 
 export const api = {
   // Auth (public)
-  register: (email: string, password: string) =>
-    request<CodeSentResponse>('/v1/auth/register', { method: 'POST', body: { email, password }, public: true }),
+  // What the signup form must collect here. Asked before the form is drawn, so an
+  // invite-only server does not present a field that will be rejected — or hide one it needs.
+  registrationInfo: () => request<RegistrationInfo>('/v1/auth/registration', { public: true }),
+  // Whether an invitation link is still good, so a spent one is named as such instead of
+  // failing at the end of a filled-in form.
+  checkInvite: (code: string) =>
+    request<InviteCheck>(`/v1/auth/invite?code=${encodeURIComponent(code)}`, { public: true }),
+  register: (email: string, password: string, invite?: string) =>
+    request<CodeSentResponse>('/v1/auth/register', {
+      method: 'POST',
+      body: { email, password, ...(invite ? { invite } : {}) },
+      public: true,
+    }),
   verifyEmail: (email: string, code: string) =>
     request<TokenResponse>('/v1/auth/verify', { method: 'POST', body: { email, code }, public: true }),
   login: (email: string, password: string) =>
@@ -840,6 +859,17 @@ export const api = {
     request<unknown>(`/v1/admin/users/${userId}/reset-password`, { method: 'POST', body: { newPassword } }),
   adminDeleteUser: (userId: string) =>
     request<void>(`/v1/admin/users/${userId}`, { method: 'DELETE' }),
+  adminListInvites: (q = '', page = 1, limit = 20) => {
+    const p = new URLSearchParams({ page: String(page), limit: String(limit) })
+    if (q) p.set('q', q)
+    return request<{ invites: AdminInvite[]; total: number; page: number; limit: number }>(
+      `/v1/admin/invites?${p.toString()}`,
+    ).then((r) => ({ items: r.invites ?? [], total: r.total, page: r.page, limit: r.limit }))
+  },
+  adminCreateInvite: (body: { note?: string; expiresInDays?: number }) =>
+    request<AdminInvite>('/v1/admin/invites', { method: 'POST', body }),
+  adminRevokeInvite: (inviteId: string) =>
+    request<AdminInvite>(`/v1/admin/invites/${inviteId}/revoke`, { method: 'POST' }),
   adminListChannels: (q = '', page = 1, limit = 20) => {
     const p = new URLSearchParams({ page: String(page), limit: String(limit) })
     if (q) p.set('q', q)

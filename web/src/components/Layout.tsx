@@ -7,6 +7,7 @@ import {
   IconUsers,
   IconUserCircle,
   IconMessage,
+  IconTicket,
 } from '@tabler/icons-react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -39,6 +40,7 @@ export function Layout() {
   const onAdminUsers = location.pathname.startsWith('/admin/users')
   const onAdminChannels = location.pathname.startsWith('/admin/channels')
   const onAdminComments = location.pathname.startsWith('/admin/comments')
+  const onAdminInvites = location.pathname.startsWith('/admin/invites')
 
   return (
     <AppShell
@@ -112,6 +114,13 @@ export function Layout() {
                   label={t('admin.navComments')}
                   leftSection={<IconMessage size={18} />}
                   onClick={() => go('/admin/comments')}
+                  variant="filled"
+                />
+                <NavLink
+                  active={onAdminInvites}
+                  label={t('admin.navInvites')}
+                  leftSection={<IconTicket size={18} />}
+                  onClick={() => go('/admin/invites')}
                   variant="filled"
                 />
               </NavLink>

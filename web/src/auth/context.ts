@@ -7,7 +7,7 @@ export interface AuthState {
   isAdmin: boolean
   login: (email: string, password: string) => Promise<void>
   /** Starts registration: emails a verification code. Does not log in. */
-  register: (email: string, password: string) => Promise<void>
+  register: (email: string, password: string, invite?: string) => Promise<void>
   /** Confirms the emailed code, creating the account and logging in. */
   verifyEmail: (email: string, code: string) => Promise<void>
   /** Confirms a reset code, sets the new password, and logs in. */

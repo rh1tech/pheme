@@ -2,6 +2,8 @@ package channel
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"github.com/rh1tech/pheme/api/internal/domain"
 	mailer "github.com/rh1tech/pheme/api/internal/email"
 	"github.com/rh1tech/pheme/api/internal/httpx"
+	"github.com/rh1tech/pheme/api/internal/invite"
 	"github.com/rh1tech/pheme/api/internal/otp"
 	"github.com/rh1tech/pheme/api/internal/ratelimit"
 	"github.com/rh1tech/pheme/api/internal/store"
@@ -35,6 +38,11 @@ type AuthHandler struct {
 	Mailer      mailer.Sender // delivers verification / reset codes
 	AdminEmails map[string]bool
 	Logger      *slog.Logger
+
+	// InviteOnly refuses registration that does not carry a valid, unspent invite code.
+	// See config.Config.InviteOnly — it defaults to on there, and the zero value here is
+	// off so a handler built by hand in a test stays open unless it says otherwise.
+	InviteOnly bool
 
 	// Revoker protects the public refresh and password-reset routes, which sit
 	// outside the JWT middleware. It is required in every serving configuration.
@@ -70,6 +78,8 @@ type AuthHandler struct {
 
 // Routes registers the auth endpoints on a mux. These are public (no JWT).
 func (h *AuthHandler) Routes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/auth/registration", h.registration)
+	mux.HandleFunc("GET /v1/auth/invite", h.checkInvite)
 	mux.HandleFunc("POST /v1/auth/register", h.register)
 	mux.HandleFunc("POST /v1/auth/verify", h.verify)
 	mux.HandleFunc("POST /v1/auth/login", h.login)
@@ -166,6 +176,9 @@ func (h *AuthHandler) currentRole(ctx context.Context, u domain.User) (domain.Ro
 type credentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// Invite carries the code from an invitation link. Ignored unless the server is
+	// invite-only, and ignored entirely on login.
+	Invite string `json:"invite,omitempty"`
 }
 
 type tokenResponse struct {
@@ -188,9 +201,85 @@ func normalizeEmail(raw string) (string, bool) {
 	return e, true
 }
 
+// registration tells a client what the signup form has to ask for, before it draws one.
+// Public and cacheless: it is the same answer for everybody and reveals nothing an attempt
+// to register would not.
+func (h *AuthHandler) registration(w http.ResponseWriter, r *http.Request) {
+	httpx.JSON(w, http.StatusOK, map[string]any{"inviteOnly": h.InviteOnly})
+}
+
+// inviteStatus is the verdict on one code: what a client needs to decide between "show the
+// form" and "this link is no good".
+type inviteStatus struct {
+	Valid  bool   `json:"valid"`
+	Reason string `json:"reason,omitempty"` // unknown | used | revoked | expired
+}
+
+// resolveInvite finds the invite behind a code and says whether it may still be redeemed.
+// A code that matches nothing and a code that has been spent are told apart on purpose: the
+// invitee needs to know whether to check the link or ask for a new one, and neither answer
+// helps an attacker who does not already hold a code.
+func (h *AuthHandler) resolveInvite(r *http.Request, code string) (domain.Invite, inviteStatus, error) {
+	code = invite.Normalize(code)
+	if code == "" {
+		return domain.Invite{}, inviteStatus{Reason: "unknown"}, nil
+	}
+	inv, err := h.Store.InviteByCodeHash(r.Context(), invite.HashCode(code))
+	if errors.Is(err, store.ErrNotFound) {
+		return domain.Invite{}, inviteStatus{Reason: "unknown"}, nil
+	} else if err != nil {
+		return domain.Invite{}, inviteStatus{}, err
+	}
+	if status := inv.Status(time.Now().UTC()); status != domain.InvitePending {
+		return inv, inviteStatus{Reason: string(status)}, nil
+	}
+	return inv, inviteStatus{Valid: true}, nil
+}
+
+// checkInvite reports whether an invitation link is still good, so the signup screen can say
+// so before the visitor fills a form it is going to reject.
+//
+// Rate limited like the credential endpoints, and for the same reason: without it this is an
+// oracle an attacker can grind against to find a live code.
+func (h *AuthHandler) checkInvite(w http.ResponseWriter, r *http.Request) {
+	if !h.allow(w, r, "invite", "") {
+		return
+	}
+	if !h.InviteOnly {
+		// Nothing to check — anybody may register — and answering "invalid" here would make
+		// an open server look broken to a client that asked.
+		httpx.JSON(w, http.StatusOK, inviteStatus{Valid: true})
+		return
+	}
+	_, status, err := h.resolveInvite(r, r.URL.Query().Get("code"))
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not check the invite")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, status)
+}
+
+// inviteMessage is what the person holding a bad link is told.
+func inviteMessage(reason string) string {
+	switch reason {
+	case "used":
+		return "this invitation has already been used"
+	case "revoked":
+		return "this invitation has been withdrawn"
+	case "expired":
+		return "this invitation has expired"
+	default:
+		return "a valid invitation is required to register on this server"
+	}
+}
+
 // register validates the credentials, stores a pending signup, and emails a
 // 6-digit verification code. Re-calling it for the same email acts as a resend,
 // gated by the per-email cooldown. The account is not created until /verify.
+//
+// On an invite-only server the invitation is CHECKED here but not spent: it is recorded on
+// the pending signup and consumed at /verify, once the email has actually been proven. The
+// other order lets a stranger burn somebody else's invitation by typing their address in.
 func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 	var req credentials
 	if !httpx.Decode(w, r, &req) {
@@ -216,6 +305,20 @@ func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var inviteID string
+	if h.InviteOnly {
+		inv, status, err := h.resolveInvite(r, req.Invite)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "registration failed")
+			return
+		}
+		if !status.Valid {
+			httpx.Error(w, http.StatusForbidden, inviteMessage(status.Reason))
+			return
+		}
+		inviteID = inv.ID
+	}
+
 	allowed, err := h.Codes.CooldownOK(r.Context(), "signup:"+email, h.cooldown())
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "registration failed")
@@ -236,7 +339,7 @@ func (h *AuthHandler) register(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "registration failed")
 		return
 	}
-	pending := otp.Signup{Email: email, PasswordHash: hash, CodeHash: otp.HashCode(code)}
+	pending := otp.Signup{Email: email, PasswordHash: hash, CodeHash: otp.HashCode(code), InviteID: inviteID}
 	if err := h.Codes.PutSignup(r.Context(), pending, h.codeTTL()); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "registration failed")
 		return
@@ -303,7 +406,36 @@ func (h *AuthHandler) verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Spend the invitation BEFORE creating the account, and only then. ConsumeInvite is a
+	// compare-and-set, so of two people finishing verification against the same link in the
+	// same instant exactly one gets past this line — which is the entire meaning of "once".
+	// Checking redeemability and then creating the user would let both through.
+	//
+	// The account's id is minted here rather than by the store so the invite can record who
+	// spent it in that same atomic step; without it the row would have to be written twice
+	// and a crash between the two would leave an invitation nobody can account for.
+	userID, err := newUserID()
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "verification failed")
+		return
+	}
+	inviteID := ""
+	if h.InviteOnly && s.InviteID != "" {
+		switch err := h.Store.ConsumeInvite(r.Context(), s.InviteID, userID, time.Now().UTC()); {
+		case err == nil:
+			inviteID = s.InviteID
+		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrInviteSpent):
+			_ = h.Codes.DelSignup(r.Context(), email)
+			httpx.Error(w, http.StatusForbidden, inviteMessage("used"))
+			return
+		default:
+			httpx.Error(w, http.StatusInternalServerError, "verification failed")
+			return
+		}
+	}
+
 	u, err := h.Store.CreateUser(r.Context(), domain.User{
+		ID:           userID,
 		Email:        email,
 		PasswordHash: s.PasswordHash,
 		// Signup asks for an email and a password, so without this every account is created with
@@ -315,11 +447,28 @@ func (h *AuthHandler) verify(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:   time.Now().UTC(),
 	})
 	if err != nil {
+		// The invitation was spent a moment ago for an account that does not exist. Hand it
+		// back, or a transient database fault costs the invitee their one chance to sign up.
+		if inviteID != "" {
+			if rerr := h.Store.ReleaseInvite(r.Context(), inviteID); rerr != nil {
+				h.logger().Error("release invite after failed signup", "inviteId", inviteID, "error", rerr)
+			}
+		}
 		httpx.Error(w, http.StatusInternalServerError, "verification failed")
 		return
 	}
 	_ = h.Codes.DelSignup(r.Context(), email)
 	h.issue(w, u.ID, string(u.Role), http.StatusCreated)
+}
+
+// newUserID mints an account id in the same shape the stores use, so an id chosen here is
+// indistinguishable from one they would have generated.
+func newUserID() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
@@ -442,12 +591,13 @@ func (h *AuthHandler) forgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Codes.PutReset(r.Context(), otp.Reset{Email: email, UserID: u.ID, CodeHash: otp.HashCode(code)}, h.codeTTL()); err != nil {
+		h.logger().Warn("forgot-password: store reset code failed", "error", err)
 		respondOK()
 		return
 	}
 	subject, text, html := mailer.PasswordResetEmail(code)
 	if err := h.Mailer.Send(r.Context(), email, subject, text, html); err != nil {
-		h.logger().Error("send reset email", "error", err)
+		h.logger().Warn("forgot-password: send reset email failed", "error", err)
 	}
 	respondOK()
 }

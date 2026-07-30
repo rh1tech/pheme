@@ -18,6 +18,7 @@ import { ProfilePage } from './pages/ProfilePage'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage'
 import { AdminChannelsPage } from './pages/admin/AdminChannelsPage'
+import { AdminInvitesPage } from './pages/admin/AdminInvitesPage'
 import { AdminCommentsPage } from './pages/admin/AdminCommentsPage'
 import { AdminChannelPage } from './pages/AdminChannelPage'
 
@@ -69,6 +70,7 @@ export default function App() {
             <Route path="/admin/users" element={adminRoute(<AdminUsersPage />)} />
             <Route path="/admin/channels" element={adminRoute(<AdminChannelsPage />)} />
             <Route path="/admin/comments" element={adminRoute(<AdminCommentsPage />)} />
+          <Route path="/admin/invites" element={adminRoute(<AdminInvitesPage />)} />
             <Route path="/admin/channels/:id" element={adminRoute(<AdminChannelPage />)} />
           </Route>
 

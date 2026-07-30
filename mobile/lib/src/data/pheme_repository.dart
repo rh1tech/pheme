@@ -17,13 +17,38 @@ class PhemeRepository {
 
   // --- Auth (public) ---
 
+  /// Whether this server takes open registrations, or only invited ones.
+  ///
+  /// Asked before the signup form is drawn, so an invite-only server does not present a form
+  /// that will be refused — and an open one does not ask for a code nobody has.
+  Future<bool> registrationIsInviteOnly() => _get(
+    '/v1/auth/registration',
+    public: true,
+  ).then((d) => d['inviteOnly'] == true);
+
+  /// Whether an invitation code is still redeemable, and if not, why.
+  ///
+  /// Returns the server's reason verbatim — `unknown`, `used`, `revoked`, `expired` — or null
+  /// when the code is good.
+  Future<String?> checkInvite(String code) =>
+      _get('/v1/auth/invite', query: {'code': code}, public: true).then((d) {
+        if (d['valid'] == true) return null;
+        final reason = d['reason'];
+        return reason is String && reason.isNotEmpty ? reason : 'unknown';
+      });
+
   /// Starts registration: the server emails a 6-digit verification code. No
   /// account exists and no tokens are issued until [verifyEmail] confirms it.
-  Future<void> register(String email, String password) => _post(
-    '/v1/auth/register',
-    {'email': email, 'password': password},
-    public: true,
-  );
+  ///
+  /// [invite] carries the code from an invitation on a server that requires one; it is
+  /// checked here but only SPENT when [verifyEmail] succeeds, so an abandoned signup does
+  /// not consume somebody's invitation.
+  Future<void> register(String email, String password, {String? invite}) =>
+      _post('/v1/auth/register', {
+        'email': email,
+        'password': password,
+        if (invite != null && invite.isNotEmpty) 'invite': invite,
+      }, public: true);
 
   /// Confirms a pending signup's code, creating the account and logging in.
   Future<TokenResponse> verifyEmail(String email, String code) => _post(
@@ -957,7 +982,14 @@ class PhemeRepository {
   Future<Map<String, dynamic>> _get(
     String path, {
     Map<String, dynamic>? query,
-  }) => _send(() => _dio.get<dynamic>(path, queryParameters: query));
+    bool public = false,
+  }) => _send(
+    () => _dio.get<dynamic>(
+      path,
+      queryParameters: query,
+      options: Options(extra: public ? publicRequest : null),
+    ),
+  );
 
   Future<Map<String, dynamic>> _put(String path, Object? body) =>
       _send(() => _dio.put<dynamic>(path, data: body));

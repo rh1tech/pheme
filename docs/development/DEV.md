@@ -172,6 +172,18 @@ role, and exposes `isAuthenticated` / `isAdmin`. Route guards: `RequireAuth` and
 `RequireAdmin`. Admins are granted by the server's `PHEME_ADMIN_EMAILS` allowlist
 (synced on login) and can promote/demote/block other users.
 
+Registration is invite-only wherever `PHEME_INVITE_ONLY` is true — the default
+everywhere except the local dev env, which `scripts/setup.sh` writes as `false`
+so signing up on a fresh checkout does not need a bootstrapped admin first. On a
+closed server, an admin mints single-use links from **Admin → Invites**; the link
+is shown once and only its hash is stored.
+
+The Flutter app carries the same panel: **Settings → Admin panel**, shown only to
+accounts holding the role. It covers the overview, users, channels (with each
+channel's messages and API keys), comment moderation and invitations. Invitations
+minted there produce a `pheme://invite?code=…&server=…` link, which opens the app
+directly on a phone; the web panel offers both that and the browser link.
+
 ## 8. Local development
 
 ```bash

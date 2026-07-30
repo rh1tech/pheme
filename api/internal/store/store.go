@@ -32,6 +32,11 @@ var ErrAliasTaken = errors.New("alias taken")
 // uses (case-insensitively). Handlers map it to HTTP 409.
 var ErrUsernameTaken = errors.New("username taken")
 
+// ErrInviteSpent is returned by ConsumeInvite when the invite was already redeemed,
+// revoked, or has expired. It is the race-loser's answer: two people who open the same
+// link at the same instant both pass validation, and exactly one of them gets this.
+var ErrInviteSpent = errors.New("invite already used")
+
 // deleteBlobs best-effort removes image blobs for cascade deletes. A nil store or
 // a per-id failure is ignored: the history rows are already gone, so a leftover
 // blob is at worst harmless garbage to be reclaimed later.
@@ -154,8 +159,28 @@ type Store interface {
 
 	// API keys
 	CreateAPIKey(ctx context.Context, k domain.APIKey) (domain.APIKey, error)
+	APIKeyByID(ctx context.Context, keyID string) (domain.APIKey, error)
 	APIKeysByChannel(ctx context.Context, channelID string) ([]domain.APIKey, error)
 	RevokeAPIKey(ctx context.Context, keyID string) error
+
+	// Registration invites
+	CreateInvite(ctx context.Context, i domain.Invite) (domain.Invite, error)
+	// InviteByCodeHash finds an invite by the hash of its code, redeemable or not. The
+	// caller decides what a spent one means; returning only live invites would make a
+	// used link and a forged one indistinguishable, and the two deserve different words.
+	InviteByCodeHash(ctx context.Context, codeHash string) (domain.Invite, error)
+	InviteByID(ctx context.Context, id string) (domain.Invite, error)
+	AdminListInvites(ctx context.Context, query string, offset, limit int) ([]domain.Invite, int64, error)
+	// ConsumeInvite spends an invite for userID. It is a COMPARE-AND-SET, not a write:
+	// it must succeed for at most one caller even when several redeem the same link in
+	// the same instant, which is the whole of what makes an invite one-time. Losers get
+	// ErrInviteSpent; an unknown id gets ErrNotFound.
+	ConsumeInvite(ctx context.Context, id, userID string, now time.Time) error
+	// ReleaseInvite undoes a consume, for the narrow case where the account could not be
+	// created after the invite was spent. Otherwise a transient database error would burn
+	// the invitation and the invitee would have nothing to try again with.
+	ReleaseInvite(ctx context.Context, id string) error
+	RevokeInvite(ctx context.Context, id string, now time.Time) error
 
 	// Devices & subscriptions
 	CreateDevice(ctx context.Context, d domain.Device) (domain.Device, error)

@@ -99,6 +99,8 @@ PHEME_REDIS_ADDR="127.0.0.1:$REDIS_HOST_PORT"
 PHEME_JWT_SECRET="$JWT_SECRET"
 # Comma-separated emails granted the admin role on register/login.
 PHEME_ADMIN_EMAILS=""
+# Registration is invite-only by default; set to false for an open dev instance.
+PHEME_INVITE_ONLY=false
 
 # Web Push.
 PHEME_VAPID_PUBLIC="$VAPID_PUBLIC"

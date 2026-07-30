@@ -121,7 +121,9 @@ func (m *Mongo) releaseSharedPushAddresses(ctx context.Context) error {
 
 func mongoID() string {
 	b := make([]byte, 12)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -130,6 +132,10 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 		"users":    {{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "usernameLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"usernameLower": bson.M{"$exists": true}})}},
 		"channels": {{Keys: bson.D{{Key: "publicId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "ownerId", Value: 1}}}, {Keys: bson.D{{Key: "aliasLower", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"aliasLower": bson.M{"$exists": true}})}},
 		"apiKeys":  {{Keys: bson.D{{Key: "channelId", Value: 1}}}},
+		// Registration looks an invite up BY the hash of the code presented, so this index is
+		// on the read path of every signup. Unique because two invites sharing a hash would be
+		// two invites sharing a code, and only one of them could ever be redeemed.
+		"invites": {{Keys: bson.D{{Key: "codeHash", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "createdAt", Value: -1}}}},
 		"devices": {
 			{Keys: bson.D{{Key: "userId", Value: 1}}},
 			{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "webPushEndpoint", Value: 1}}, Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"webPushEndpoint": bson.M{"$exists": true}})},
@@ -687,6 +693,15 @@ func (m *Mongo) CreateAPIKey(ctx context.Context, k domain.APIKey) (domain.APIKe
 	return k, err
 }
 
+func (m *Mongo) APIKeyByID(ctx context.Context, keyID string) (domain.APIKey, error) {
+	var k domain.APIKey
+	err := m.db.Collection("apiKeys").FindOne(ctx, bson.M{"_id": keyID}).Decode(&k)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return domain.APIKey{}, ErrNotFound
+	}
+	return k, err
+}
+
 func (m *Mongo) APIKeysByChannel(ctx context.Context, channelID string) ([]domain.APIKey, error) {
 	cur, err := m.db.Collection("apiKeys").Find(ctx, bson.M{"channelId": channelID})
 	if err != nil {
@@ -709,6 +724,114 @@ func (m *Mongo) RevokeAPIKey(ctx context.Context, keyID string) error {
 		// Either the key does not exist or it is already revoked; treat a missing
 		// key as not found, an already-revoked key as success.
 		count, cerr := m.db.Collection("apiKeys").CountDocuments(ctx, bson.M{"_id": keyID})
+		if cerr != nil {
+			return cerr
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
+	}
+	return nil
+}
+
+func (m *Mongo) CreateInvite(ctx context.Context, i domain.Invite) (domain.Invite, error) {
+	if i.ID == "" {
+		i.ID = mongoID()
+	}
+	_, err := m.db.Collection("invites").InsertOne(ctx, i)
+	return i, err
+}
+
+func (m *Mongo) InviteByCodeHash(ctx context.Context, codeHash string) (domain.Invite, error) {
+	if codeHash == "" {
+		return domain.Invite{}, ErrNotFound
+	}
+	var i domain.Invite
+	err := m.db.Collection("invites").FindOne(ctx, bson.M{"codeHash": codeHash}).Decode(&i)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return domain.Invite{}, ErrNotFound
+	}
+	return i, err
+}
+
+func (m *Mongo) InviteByID(ctx context.Context, id string) (domain.Invite, error) {
+	var i domain.Invite
+	err := m.db.Collection("invites").FindOne(ctx, bson.M{"_id": id}).Decode(&i)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return domain.Invite{}, ErrNotFound
+	}
+	return i, err
+}
+
+func (m *Mongo) AdminListInvites(ctx context.Context, query string, offset, limit int) ([]domain.Invite, int64, error) {
+	filter := bson.M{}
+	if q := strings.TrimSpace(query); q != "" {
+		rx := primitive.Regex{Pattern: regexp.QuoteMeta(q), Options: "i"}
+		filter["$or"] = []bson.M{{"note": rx}, {"prefix": rx}}
+	}
+	return findPaged[domain.Invite](ctx, m.db.Collection("invites"), filter, offset, limit)
+}
+
+// ConsumeInvite spends an invite in ONE conditional update. The filter carries the whole
+// redeemability rule — unused, unrevoked, unexpired — so the database, not the handler,
+// decides which of two simultaneous redemptions wins. A read-then-write here would let both
+// callers see a pending invite and both create an account from it.
+func (m *Mongo) ConsumeInvite(ctx context.Context, id, userID string, now time.Time) error {
+	at := now.UTC()
+	res, err := m.db.Collection("invites").UpdateOne(ctx,
+		bson.M{
+			"_id":       id,
+			"usedAt":    bson.M{"$exists": false},
+			"revokedAt": bson.M{"$exists": false},
+			"$or": []bson.M{
+				{"expiresAt": bson.M{"$exists": false}},
+				{"expiresAt": bson.M{"$gt": at}},
+			},
+		},
+		bson.M{"$set": bson.M{"usedAt": at, "usedBy": userID}},
+	)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		count, cerr := m.db.Collection("invites").CountDocuments(ctx, bson.M{"_id": id})
+		if cerr != nil {
+			return cerr
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
+		return ErrInviteSpent
+	}
+	return nil
+}
+
+func (m *Mongo) ReleaseInvite(ctx context.Context, id string) error {
+	res, err := m.db.Collection("invites").UpdateOne(ctx,
+		bson.M{"_id": id},
+		bson.M{"$unset": bson.M{"usedAt": "", "usedBy": ""}},
+	)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *Mongo) RevokeInvite(ctx context.Context, id string, now time.Time) error {
+	res, err := m.db.Collection("invites").UpdateOne(ctx,
+		bson.M{"_id": id, "revokedAt": bson.M{"$exists": false}},
+		bson.M{"$set": bson.M{"revokedAt": now.UTC()}},
+	)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		// Missing is not found; already revoked is success — the caller asked for a state
+		// the row is already in.
+		count, cerr := m.db.Collection("invites").CountDocuments(ctx, bson.M{"_id": id})
 		if cerr != nil {
 			return cerr
 		}

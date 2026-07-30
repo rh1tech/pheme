@@ -20,6 +20,7 @@ type Memory struct {
 	users           map[string]domain.User
 	channels        map[string]domain.Channel
 	apiKeys         map[string]domain.APIKey
+	invites         map[string]domain.Invite
 	devices         map[string]domain.Device
 	revokedUsers    map[string]userRevocation
 	subscriptions   map[string]domain.Subscription
@@ -47,6 +48,7 @@ func NewMemory(blobs blob.Store) *Memory {
 		users:           map[string]domain.User{},
 		channels:        map[string]domain.Channel{},
 		apiKeys:         map[string]domain.APIKey{},
+		invites:         map[string]domain.Invite{},
 		devices:         map[string]domain.Device{},
 		revokedUsers:    map[string]userRevocation{},
 		subscriptions:   map[string]domain.Subscription{},
@@ -70,7 +72,9 @@ func NewMemory(blobs blob.Store) *Memory {
 
 func newID() string {
 	b := make([]byte, 12)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -639,6 +643,16 @@ func (m *Memory) CreateAPIKey(_ context.Context, k domain.APIKey) (domain.APIKey
 	return k, nil
 }
 
+func (m *Memory) APIKeyByID(_ context.Context, keyID string) (domain.APIKey, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	k, ok := m.apiKeys[keyID]
+	if !ok {
+		return domain.APIKey{}, ErrNotFound
+	}
+	return k, nil
+}
+
 func (m *Memory) APIKeysByChannel(_ context.Context, channelID string) ([]domain.APIKey, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -649,6 +663,102 @@ func (m *Memory) APIKeysByChannel(_ context.Context, channelID string) ([]domain
 		}
 	}
 	return out, nil
+}
+
+func (m *Memory) CreateInvite(_ context.Context, i domain.Invite) (domain.Invite, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if i.ID == "" {
+		i.ID = newID()
+	}
+	m.invites[i.ID] = i
+	return i, nil
+}
+
+func (m *Memory) InviteByCodeHash(_ context.Context, codeHash string) (domain.Invite, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if codeHash == "" {
+		return domain.Invite{}, ErrNotFound
+	}
+	for _, i := range m.invites {
+		if i.CodeHash == codeHash {
+			return i, nil
+		}
+	}
+	return domain.Invite{}, ErrNotFound
+}
+
+func (m *Memory) InviteByID(_ context.Context, id string) (domain.Invite, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	i, ok := m.invites[id]
+	if !ok {
+		return domain.Invite{}, ErrNotFound
+	}
+	return i, nil
+}
+
+func (m *Memory) AdminListInvites(_ context.Context, query string, offset, limit int) ([]domain.Invite, int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	q := strings.ToLower(strings.TrimSpace(query))
+	var all []domain.Invite
+	for _, i := range m.invites {
+		if q == "" || strings.Contains(strings.ToLower(i.Note), q) || strings.Contains(strings.ToLower(i.Prefix), q) {
+			all = append(all, i)
+		}
+	}
+	sort.Slice(all, func(a, b int) bool { return all[a].CreatedAt.After(all[b].CreatedAt) })
+	return paginate(all, offset, limit), int64(len(all)), nil
+}
+
+// ConsumeInvite spends an invite under the store's write lock, which is what makes it
+// atomic here: two goroutines redeeming the same link serialise, and the second sees the
+// UsedAt the first wrote.
+func (m *Memory) ConsumeInvite(_ context.Context, id, userID string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	i, ok := m.invites[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if !i.Redeemable(now) {
+		return ErrInviteSpent
+	}
+	at := now.UTC()
+	i.UsedAt = &at
+	i.UsedBy = userID
+	m.invites[id] = i
+	return nil
+}
+
+func (m *Memory) ReleaseInvite(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	i, ok := m.invites[id]
+	if !ok {
+		return ErrNotFound
+	}
+	i.UsedAt = nil
+	i.UsedBy = ""
+	m.invites[id] = i
+	return nil
+}
+
+func (m *Memory) RevokeInvite(_ context.Context, id string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	i, ok := m.invites[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if i.RevokedAt == nil {
+		at := now.UTC()
+		i.RevokedAt = &at
+		m.invites[id] = i
+	}
+	return nil
 }
 
 func (m *Memory) RevokeAPIKey(_ context.Context, keyID string) error {

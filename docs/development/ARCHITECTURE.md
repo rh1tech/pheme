@@ -76,7 +76,8 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
   undeduplicated — a duplicate notification is a lesser fault than a missing one.
 
 ### App (user JWT)
-- `POST /v1/auth/register` (emails a 6-digit code) · `POST /v1/auth/verify` (confirms the code → creates the account, logs in) · `POST /v1/auth/login` · `POST /v1/auth/refresh`
+- `POST /v1/auth/register` (emails a 6-digit code; carries `invite` on an invite-only server) · `POST /v1/auth/verify` (confirms the code → creates the account, spends the invite, logs in) · `POST /v1/auth/login` · `POST /v1/auth/refresh`
+- `GET /v1/auth/registration` → `{inviteOnly}` — what the signup form must ask for, read before it is drawn · `GET /v1/auth/invite?code=` → `{valid, reason?}` — whether an invitation link is still good (rate-limited like the credential endpoints)
 - **Profile (self):** `GET /v1/me` · `PATCH /v1/me` (`{username?, displayName?, bio?, phone?, website?}` — username validated + unique, empty clears it) · `POST /v1/me/avatar` (multipart `avatar`, reuses the image pipeline) · `DELETE /v1/me/avatar`
 - `POST /v1/auth/forgot-password` (emails a reset code) · `POST /v1/auth/reset-password`
 - `POST /v1/channels` · `GET /v1/channels` (owned) · `GET /v1/channels/{id}` (single, with caller's relation) · `PATCH /v1/channels/{id}` (name/mode, and `alias` owner-only) · `DELETE /v1/channels/{id}`
@@ -94,6 +95,7 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
 ### Admin (JWT, admin role only) — `/v1/admin/*`
 - `GET /v1/admin/stats` — totals (users, channels, messages, deliveries, devices), top channels, recent messages
 - `GET /v1/admin/users` · `POST /v1/admin/users` (create a user directly: email + password + role, bypassing email verification) · `PATCH /v1/admin/users/{id}` (role/status) · `DELETE /v1/admin/users/{id}` (cascades the user's data) · `POST /v1/admin/users/{id}/reset-password`
+- **Invitations:** `GET /v1/admin/invites?q=&page=&limit=` · `POST /v1/admin/invites` (`{note?, expiresInDays?}` — the ONLY response that carries the code; the store keeps a hash) · `POST /v1/admin/invites/{id}/revoke`
 - `GET /v1/admin/channels` · `DELETE /v1/admin/channels/{id}` (cascades)
 - `GET /v1/admin/channels/{id}/keys` · `DELETE /v1/admin/channels/{id}/keys/{keyId}`
 - **Comment moderation:** `GET /v1/admin/comments?q=&page=&limit=` (every comment, enriched with author email, channel name and message title) · `DELETE /v1/admin/comments/{id}`. Banning a comment's author reuses `PATCH /v1/admin/users/{id}` (`status: blocked`).
@@ -106,6 +108,8 @@ repeated failures route to a Dead Letter Queue for retry/inspection.
   in production). Operators are responsible for a trusted relay and the
   sender-domain SPF, DKIM, and DMARC configuration.
 - JWT: short-lived access token + rotating refresh token. The token carries the user's role.
+- **Deep links (mobile).** The app registers the private `pheme://` scheme — `pheme://invite?code=&server=`, `pheme://join?ref=`, `pheme://server?url=` — rather than https App Links, because a self-hosted server's domain is not known when the app is built and an unverified https filter on `/login` would offer Pheme as a handler for every login page on the internet. An invitation link therefore carries the server with it, which is the one thing a fresh install cannot guess. Parsing and validation live in `mobile/lib/src/core/deep_links.dart`; a link naming an unusable server is stripped of it rather than dropped.
+- Registration is **invite-only by default** (`PHEME_INVITE_ONLY`, default true). An admin mints a single-use invitation from the panel; `/register` checks it and `/verify` spends it, so an abandoned signup does not burn an invitation and a compare-and-set in the store makes two simultaneous redemptions produce one account. Only the code's SHA-256 hash is stored, so the link is displayed exactly once.
 - Roles: `user` (default) and `admin`. Admins are designated by the `PHEME_ADMIN_EMAILS` allowlist and the role is (re)synced on every register/login, so changing the list takes effect on next login. Admin-only endpoints live under `/v1/admin/*` and verify the role from the JWT. Admins can also add users directly from the panel (`POST /v1/admin/users`), creating an active account with no email step.
 - **Initial admin seeding.** When `PHEME_SEED_ADMIN_EMAIL` and `PHEME_SEED_ADMIN_PASSWORD` are both set, the App API ensures a verified, active admin with those credentials exists at startup (created only if missing). This is opt-in (no-op when unset), bootstraps the first admin without the email-verification flow, and backs the E2E suite.
 - Public ingest endpoint protected by per-key Redis token-bucket rate limiting and idempotency keys (dedupe website retries).

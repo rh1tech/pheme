@@ -384,6 +384,61 @@ type APIKey struct {
 	RevokedAt *time.Time `bson:"revokedAt,omitempty" json:"revokedAt,omitempty"`
 }
 
+// Invite is a one-time ticket to create an account on an invite-only server.
+//
+// ONLY THE HASH IS STORED, as with APIKey and the email verification codes. An invite is a
+// credential — whoever holds one can create an account — so a database dump must not hand the
+// reader a working set of them. The consequence is that the link can be shown exactly once, at
+// the moment it is generated; Prefix exists so an admin can still tell the rows apart afterwards.
+type Invite struct {
+	ID       string `bson:"_id,omitempty" json:"id"`
+	CodeHash string `bson:"codeHash" json:"-"`
+	// Prefix is the first few characters of the code, kept in the clear so the admin list can
+	// name a row without revealing enough to redeem it.
+	Prefix string `bson:"prefix" json:"prefix"`
+	// Note is whatever the admin wrote to remember who this was for.
+	Note string `bson:"note,omitempty" json:"note,omitempty"`
+	// CreatedBy is the admin's user id.
+	CreatedBy string    `bson:"createdBy" json:"createdBy"`
+	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
+	// ExpiresAt is when the invite stops being redeemable. NIL MEANS NEVER.
+	ExpiresAt *time.Time `bson:"expiresAt,omitempty" json:"expiresAt,omitempty"`
+	// UsedAt and UsedBy are set the moment the invite is spent, and are what makes it one-time.
+	UsedAt    *time.Time `bson:"usedAt,omitempty" json:"usedAt,omitempty"`
+	UsedBy    string     `bson:"usedBy,omitempty" json:"usedBy,omitempty"`
+	RevokedAt *time.Time `bson:"revokedAt,omitempty" json:"revokedAt,omitempty"`
+}
+
+// InviteStatus is the single word an admin list shows for an invite.
+type InviteStatus string
+
+const (
+	InvitePending InviteStatus = "pending"
+	InviteUsed    InviteStatus = "used"
+	InviteRevoked InviteStatus = "revoked"
+	InviteExpired InviteStatus = "expired"
+)
+
+// Status classifies the invite at time `now`. Spent and revoked outrank expiry: an invite that was
+// redeemed before it lapsed is "used", and saying "expired" would misreport what became of it.
+func (i Invite) Status(now time.Time) InviteStatus {
+	switch {
+	case i.UsedAt != nil:
+		return InviteUsed
+	case i.RevokedAt != nil:
+		return InviteRevoked
+	case i.ExpiresAt != nil && !now.Before(*i.ExpiresAt):
+		return InviteExpired
+	default:
+		return InvitePending
+	}
+}
+
+// Redeemable reports whether this invite may still create an account.
+func (i Invite) Redeemable(now time.Time) bool {
+	return i.Status(now) == InvitePending
+}
+
 // Device is a push target registered by a user.
 type Device struct {
 	ID         string   `bson:"_id,omitempty" json:"id"`
