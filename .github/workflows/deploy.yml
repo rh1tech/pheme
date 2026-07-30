@@ -98,6 +98,11 @@ jobs:
           tags: |
             ${{ steps.refs.outputs.api_image }}
             ${{ steps.refs.outputs.api_repo }}:latest
+          # Links the package back to this repository. GHCR reads this label to decide which
+          # repository a container belongs to, which is what grants the repo's GITHUB_TOKEN write
+          # access to it — the link that recreating this repository broke.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           provenance: false
 
       - name: Build & push Web image
@@ -112,6 +117,11 @@ jobs:
           tags: |
             ${{ steps.refs.outputs.web_image }}
             ${{ steps.refs.outputs.web_repo }}:latest
+          # Links the package back to this repository. GHCR reads this label to decide which
+          # repository a container belongs to, which is what grants the repo's GITHUB_TOKEN write
+          # access to it — the link that recreating this repository broke.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           provenance: false
 
       # A persistent cache is a cache that grows. Anything untouched for a fortnight is not
