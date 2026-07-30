@@ -27,6 +27,21 @@ import 'package:path_provider_foundation/path_provider_foundation.dart';
 
 import '../rust/api/vault.dart';
 
+/// Raised when the data key cannot be read but something is already sealed under it.
+///
+/// Not a corruption and not a loss: on iOS the keychain is unreadable until the device has been
+/// unlocked once after a reboot, and a background wake can land in that window. The only wrong
+/// response is to mint a replacement, which would orphan every sealed file on the device — so this
+/// says "not now" and the write is retried when the device is available.
+class DataKeyUnavailableException implements Exception {
+  const DataKeyUnavailableException();
+
+  @override
+  String toString() =>
+      'DataKeyUnavailableException: the data key is not readable yet and '
+      'sealed state already exists; minting a new one would orphan it';
+}
+
 class MlsStore {
   /// [namespace] separates one device's storage from another's IN THE SAME PROCESS.
   ///
@@ -34,7 +49,16 @@ class MlsStore {
   /// integration tests use it to stand up two devices at once, which is the only way to exercise the
   /// group choreography — establish, welcome, commit, admit — against a real server, and the only way
   /// to test what happens to a device that joins late.
-  MlsStore(this._storage, {String namespace = ''}) : _ns = namespace;
+  /// [supportDirectory] exists for tests only, so the rule that protects the data key can be
+  /// exercised without a device container. Production always uses the platform's own.
+  MlsStore(
+    this._storage, {
+    String namespace = '',
+    Future<Directory> Function()? supportDirectory,
+  }) : _ns = namespace,
+       _supportDirectory = supportDirectory ?? getApplicationSupportDirectory;
+
+  final Future<Directory> Function() _supportDirectory;
 
   final String _ns;
 
@@ -108,7 +132,7 @@ class MlsStore {
   Future<File> _stateFileHandle() async {
     final cached = _file;
     if (cached != null) return cached;
-    final dir = await _sharedDir() ?? await getApplicationSupportDirectory();
+    final dir = await _sharedDir() ?? await _supportDirectory();
     return _file = File('${dir.path}/$_stateFile');
   }
 
@@ -188,7 +212,7 @@ class MlsStore {
   /// process killed halfway through a direct write leaves a truncated key store, which is every
   /// group on this device gone.
   Future<void> writeState(Uint8List state) async {
-    final key = await _dataKey() ?? await _mintDataKey();
+    final key = await _dataKey() ?? await _mintDataKeyForAFreshStore();
     final sealed = await vaultSeal(domain: _domain, key: key, plaintext: state);
 
     final file = await _stateFileHandle();
@@ -364,6 +388,27 @@ class MlsStore {
       encoded.split(',').map(int.parse).toList(growable: false),
     );
     return bytes.length == _keyLength ? bytes : null;
+  }
+
+  /// Mints the data key, but ONLY for a store that has nothing sealed under the old one.
+  ///
+  /// This used to be an unconditional `?? await _mintDataKey()`, and that was the single most
+  /// destructive line in the app. The key is read from the keychain with `first_unlock`
+  /// accessibility, and a read before the first unlock after a reboot returns NULL rather than
+  /// failing — so a write that happened in the background, woken by a push, would find no key,
+  /// mint a fresh one over the top, and orphan everything sealed under its predecessor: this
+  /// store's own state, every cached message body, every cached envelope. All of it unopenable,
+  /// for good, and in silence.
+  ///
+  /// A missing key is only safe to replace when there is nothing that key was protecting. If a
+  /// sealed state file is already on disk, the key is not gone — it is unavailable — and the right
+  /// answer is to fail this write and try again when the device is unlocked.
+  Future<Uint8List> _mintDataKeyForAFreshStore() async {
+    final file = await _stateFileHandle();
+    if (await file.exists()) {
+      throw const DataKeyUnavailableException();
+    }
+    return _mintDataKey();
   }
 
   Future<Uint8List> _mintDataKey() async {
