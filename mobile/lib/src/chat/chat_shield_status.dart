@@ -14,6 +14,8 @@
 // So the shield now carries a status tint, and the tint is about the two things that can go wrong:
 // whether the history is recoverable, and whether the person on the other end is who they claim.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -111,10 +113,19 @@ ShieldLevel shieldLevelFor(BackupHealth backup, bool? verified) {
 /// notification through all of them to move a tint is more machinery than the tint is worth.
 final backupHealthProvider = StreamProvider.autoDispose<BackupHealth>((ref) {
   final mls = ref.watch(mlsServiceProvider);
-  return Stream<BackupHealth>.periodic(
-    const Duration(seconds: 2),
-    (_) => mls.backupHealth,
-  ).distinct(
+  // The CURRENT value first, then the poll. A periodic stream emits nothing until its first tick,
+  // and the fallback for "nothing yet" is the dormant reading — so for the first two seconds after
+  // any screen opened, a perfectly healthy device reported that it had no recovery code and the
+  // "back up now" button sat there disabled. An indicator whose first answer is wrong is worse
+  // than one that is slow: people read it immediately and believe it.
+  return Stream<BackupHealth>.multi((controller) {
+    controller.add(mls.backupHealth);
+    final timer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => controller.add(mls.backupHealth),
+    );
+    controller.onCancel = timer.cancel;
+  }).distinct(
     (a, b) =>
         a.armed == b.armed &&
         a.pending == b.pending &&
