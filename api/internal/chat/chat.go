@@ -174,6 +174,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/mls/key-backup", h.getKeyBackup)
 	// Superseded backups. Replacing a backup no longer destroys the one it replaced, so there has
 	// to be a way to reach the older ones — see putKeyBackup.
+	// The append-only tail in front of the snapshot. Registered before the {versionId} pattern
+	// would ever be consulted for it, and distinct from it, so "tail" can never be read as a
+	// version id.
+	mux.HandleFunc("POST /v1/mls/key-backup/tail", h.appendKeyBackupTail)
+	mux.HandleFunc("GET /v1/mls/key-backup/tail", h.getKeyBackupTail)
 	mux.HandleFunc("GET /v1/mls/key-backup/versions", h.listKeyBackupVersions)
 	mux.HandleFunc("GET /v1/mls/key-backup/versions/{versionId}", h.getKeyBackupVersion)
 }

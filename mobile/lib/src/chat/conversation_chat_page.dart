@@ -38,6 +38,7 @@ import 'conversation_title.dart';
 import 'group_members_sheet.dart';
 import 'message_feed_controller.dart';
 import 'receipts.dart';
+import 'chat_shield_status.dart';
 import 'safety_number_sheet.dart';
 import 'widgets/call_event_bubble.dart';
 import 'widgets/conversation_avatar.dart';
@@ -455,10 +456,32 @@ class _ChatViewState extends ConsumerState<_ChatView> {
             // opened before, is the first frame.
             onPressed: feed.joined == true ? () => _placeCall() : null,
           ),
-        GlassIconButton(
-          icon: isCupertino(context) ? CupertinoIcons.lock : Icons.lock_outline,
-          semanticLabel: l10n.t('safety.verify'),
-          onPressed: () => showSafetyNumberSheet(context, _conversationId),
+        // The shield, tinted by what it actually knows. A lock that says "encrypted" on every chat
+        // says nothing; what a person needs to know is whether the history is recoverable and
+        // whether the other end is verified, and both have real answers.
+        Builder(
+          builder: (context) {
+            final shield = ref.watch(shieldStatusProvider(_conversationId));
+            return GlassIconButton(
+              icon: switch (shield.level) {
+                ShieldLevel.atRisk =>
+                  isCupertino(context)
+                      ? CupertinoIcons.exclamationmark_shield
+                      : Icons.gpp_maybe_outlined,
+                ShieldLevel.secure =>
+                  isCupertino(context)
+                      ? CupertinoIcons.lock_shield_fill
+                      : Icons.verified_user_outlined,
+                ShieldLevel.attention =>
+                  isCupertino(context)
+                      ? CupertinoIcons.lock_shield
+                      : Icons.shield_outlined,
+              },
+              statusTint: shield.tint(Theme.of(context).colorScheme),
+              semanticLabel: l10n.t('safety.verify'),
+              onPressed: () => showSafetyNumberSheet(context, _conversationId),
+            );
+          },
         ),
         _ConversationMenu(
           conversation: conversation,

@@ -420,6 +420,18 @@ type Store interface {
 	// KeyBackupVersion returns one superseded backup by id, scoped to its owner.
 	KeyBackupVersion(ctx context.Context, userID, versionID string) (domain.MLSKeyBackup, error)
 
+	// The append-only tail in front of the snapshot — see domain.MLSKeyBackupTailEntry for why
+	// it exists. AppendKeyBackupTail is idempotent per (userID, conversationID, messageID), so a
+	// retry after an ambiguous failure cannot duplicate a body; ListKeyBackupTail returns a
+	// user's entries oldest first, which is the order a restore replays them in;
+	// TruncateKeyBackupTail drops everything a snapshot has now absorbed and reports how many
+	// went; CountKeyBackupTail is what the shrink guard adds to the snapshot's own count so that
+	// "how much history is stored" stays an honest number.
+	AppendKeyBackupTail(ctx context.Context, entries []domain.MLSKeyBackupTailEntry) error
+	ListKeyBackupTail(ctx context.Context, userID string) ([]domain.MLSKeyBackupTailEntry, error)
+	TruncateKeyBackupTail(ctx context.Context, userID string, before time.Time) (int, error)
+	CountKeyBackupTail(ctx context.Context, userID string) (int, error)
+
 	// The user's own device registry — what "your devices" reads. UpsertMLSDevice records
 	// a device and bumps its last-seen; ListMLSDevices returns the user's devices, most
 	// recently seen first; DeleteMLSDevice removes one (a terminated device).

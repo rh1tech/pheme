@@ -10,6 +10,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../l10n/app_localizations.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
+import '../crypto/mls_service.dart';
+import 'chat_shield_status.dart';
 import 'safety_pin_store.dart';
 
 Future<void> showSafetyNumberSheet(
@@ -179,6 +181,12 @@ class _Body extends ConsumerWidget {
           ],
         ),
 
+        // What the shield's colour is about, said in words. The number above answers "is this the
+        // right person"; this answers "would I lose what I wrote if this phone were gone", which is
+        // the question the backup exists for and the one nothing used to answer anywhere.
+        const SizedBox(height: 20),
+        _BackupStatus(conversationId: conversationId),
+
         if (state.changed) ...[
           const SizedBox(height: 20),
           AdaptiveButton.filled(
@@ -192,6 +200,78 @@ class _Body extends ConsumerWidget {
             child: Text(l10n.t('safety.accept')),
           ),
         ],
+      ],
+    );
+  }
+}
+
+/// The backup half of the shield: whether this device's history is off the handset, and if not,
+/// why not.
+class _BackupStatus extends ConsumerWidget {
+  const _BackupStatus({required this.conversationId});
+
+  final String conversationId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+    final shield = ref.watch(shieldStatusProvider(conversationId));
+    final backup = shield.backup;
+
+    // Ordered most-serious first, and each one says what it means rather than naming a mechanism.
+    // "Auto-backup dormant" is a fact about the code; "nothing here is backed up" is a fact about
+    // the person's messages, and only the second one lets them decide whether to care.
+    final (icon, key, tone) = switch (backup) {
+      BackupHealth(armed: false) => (
+        Icons.gpp_maybe_outlined,
+        'backup.statusNone',
+        theme.colorScheme.error,
+      ),
+      BackupHealth(failing: true) => (
+        Icons.sync_problem_outlined,
+        'backup.statusFailing',
+        theme.colorScheme.error,
+      ),
+      BackupHealth(pending: > 0) => (
+        Icons.cloud_upload_outlined,
+        'backup.statusPending',
+        theme.colorScheme.tertiary,
+      ),
+      _ => (
+        Icons.cloud_done_outlined,
+        'backup.statusSafe',
+        theme.colorScheme.onSurfaceVariant,
+      ),
+    };
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: tone),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                l10n.t(key),
+                style: theme.textTheme.bodySmall?.copyWith(color: tone),
+              ),
+              // The count, only when there is one. A silent "0 waiting" is noise; a number that
+              // sits there and does not fall is the thing worth seeing.
+              if (backup.pending > 0)
+                Text(
+                  l10n
+                      .t('backup.statusPendingCount')
+                      .replaceFirst('{count}', '${backup.pending}'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ],
     );
   }

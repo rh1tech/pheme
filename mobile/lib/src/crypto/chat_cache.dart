@@ -220,6 +220,14 @@ class ChatCache {
     await _flush(conversationId, contents);
   }
 
+  /// The stored body EXACTLY as it is serialised, or null if this device does not hold it.
+  ///
+  /// Raw on purpose. This is what the backup tail seals and what a restore replays, and both sides
+  /// have to agree byte for byte with what [exportAllContents] produces — round-tripping through
+  /// parse and re-serialise here could only lose whatever a future content version carried.
+  String? raw(String conversationId, String messageId) =>
+      _contents[conversationId]?[messageId];
+
   /// Loads the stored bodies for [conversationIds] that are not in memory yet, so the conversation
   /// list has previews to show.
   ///
@@ -282,10 +290,20 @@ class ChatCache {
   String previewMessageId(String conversationId) =>
       _previewIds[conversationId] ?? '';
 
-  Future<void> _flush(String conversationId, Map<String, String> bodies) async {
+  Future<void> _flush(
+    String conversationId,
+    Map<String, String> bodies, {
+    bool authoritative = false,
+  }) async {
     // Refuse to write over what we could not read. This is the whole of the protection against
     // turning one failed open into a lost conversation.
-    if (_unreadable.contains(conversationId)) {
+    //
+    // Unless the caller IS the recovery. A restore has just destroyed the data key on purpose, so
+    // every file here is sealed under a key that no longer exists — unopenable by anyone, forever.
+    // Refusing to overwrite them protects nothing and vetoes the transcript that is the only
+    // remaining copy of the history, which is how a good backup restored one conversation out of
+    // twenty-three.
+    if (!authoritative && _unreadable.contains(conversationId)) {
       throw ChatCacheWriteException(
         conversationId,
         'the stored bodies could not be opened; writing would replace them',
@@ -344,11 +362,42 @@ class ChatCache {
   /// because it is this account's own earlier transcript — the attributions in it were made by a
   /// device of ours, from decrypts it performed itself, and re-labelling them as relayed would be
   /// false.
+  /// [authoritative] marks an import that outranks whatever is on disk: a restore from a recovery
+  /// backup, which runs immediately after the data key was destroyed and so cannot open a single
+  /// stored file. Ordinary imports leave it false and keep the protective refusal.
+  ///
+  /// A conversation that cannot be written no longer abandons the ones after it. Every entry is
+  /// attempted, and the failures are raised together at the end — one bad conversation used to cost
+  /// the whole transcript, and which conversations survived depended on map iteration order.
   Future<void> importContents(
     Map<String, Map<String, String>> all, {
     String offerer = '',
+    bool authoritative = false,
   }) async {
+    final failures = <String, Object>{};
     for (final entry in all.entries) {
+      final conversationId = entry.key;
+      try {
+        await _importOne(entry, offerer: offerer, authoritative: authoritative);
+      } on Object catch (e) {
+        failures[conversationId] = e;
+      }
+    }
+    if (failures.isNotEmpty) {
+      throw ChatCacheWriteException(
+        failures.keys.join(', '),
+        'could not store ${failures.length} of ${all.length} conversations: '
+        '${failures.values.first}',
+      );
+    }
+  }
+
+  Future<void> _importOne(
+    MapEntry<String, Map<String, String>> entry, {
+    required String offerer,
+    required bool authoritative,
+  }) async {
+    {
       final conversationId = entry.key;
       final contents = await load(conversationId);
       var changed = false;
@@ -364,10 +413,12 @@ class ChatCache {
           changed = true;
         }
       });
-      if (!changed) continue;
+      if (!changed) return;
       final newest = contents.values.isNotEmpty ? contents.values.last : null;
       if (newest != null) _previews[conversationId] = _previewOf(newest);
-      await _flush(conversationId, contents);
+      await _flush(conversationId, contents, authoritative: authoritative);
+      // Whatever could not be opened has now been replaced by something that can be.
+      if (authoritative) _unreadable.remove(conversationId);
     }
   }
 
@@ -388,6 +439,10 @@ class ChatCache {
     _previews.clear();
     _previewSenders.clear();
     _previewIds.clear();
+    // The files these referred to are about to be deleted, so there is nothing left to protect. Left
+    // behind, a conversation marked unreadable before the wipe stayed unwritable for the life of the
+    // process — including to the restore that was trying to repopulate it.
+    _unreadable.clear();
     final dir = await _dir();
     if (await dir.exists()) await dir.delete(recursive: true);
   }

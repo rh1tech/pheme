@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../chat/chat_providers.dart';
 import '../chat/history_sync_controller.dart';
+import '../chat/message_feed_controller.dart';
 import '../core/snackbar.dart';
 import '../l10n/app_localizations.dart';
 import 'mls_errors.dart';
@@ -156,6 +157,11 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
                 final ok = await mls.restoreWithSecret(userId, secret);
                 if (ctx.mounted) Navigator.of(ctx).pop();
                 if (ok && mounted) {
+                  // The open feeds too, not just the list. They are holding the "Not available on this
+                  // device" they concluded BEFORE the transcript arrived, and that conclusion is cached
+                  // per message — so a restore that recovered everything still showed a screen full of
+                  // blanks until the app was restarted.
+                  ref.invalidate(messageFeedProvider);
                   ref.invalidate(conversationListProvider);
                   // Say what actually came back. A restore proves the code and brings the account
                   // back whether or not it recovers any history — the history rides in a separate
@@ -192,6 +198,16 @@ class _RecoveryGateState extends ConsumerState<RecoveryGate> {
 
             Future<void> startFresh() async {
               await mls.acceptFreshIdentity();
+              // Drop what is still on screen. The keys and the bodies are gone from the disk by
+              // now, but the open message feeds are holding plaintext they decrypted BEFORE the
+              // sign-out, and nothing was asking them to look again — so starting fresh left every
+              // chat sitting there fully readable, and only a restart of the app made it agree
+              // that the history was gone. Refusing a restore has to mean an empty history
+              // immediately, not eventually.
+              if (mounted) {
+                ref.invalidate(messageFeedProvider);
+                ref.invalidate(conversationListProvider);
+              }
               if (ctx.mounted) Navigator.of(ctx).pop();
             }
 
@@ -411,6 +427,11 @@ Future<void> showRecoveryCodeSheet(BuildContext context, WidgetRef ref) async {
                 notifyError(context, l10n.t('recovery.noBackup'));
                 return;
               }
+              // The open feeds too, not just the list. They are holding the "Not available on this
+              // device" they concluded BEFORE the transcript arrived, and that conclusion is cached
+              // per message — so a restore that recovered everything still showed a screen full of
+              // blanks until the app was restarted.
+              ref.invalidate(messageFeedProvider);
               ref.invalidate(conversationListProvider);
               final outcome = mls.lastRestore;
               if (outcome != null && outcome.historyMissing) {

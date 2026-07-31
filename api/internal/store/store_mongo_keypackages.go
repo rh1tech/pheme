@@ -684,3 +684,73 @@ func (m *Mongo) ResetMLSGroup(ctx context.Context, conversationID string) (domai
 	}
 	return updated.MLS, nil
 }
+
+// --- the append-only backup tail ---------------------------------------------------------------
+
+// AppendKeyBackupTail upserts each entry on (userId, conversationId, messageId).
+//
+// Upsert rather than insert so that a client retrying an append it never got an answer to cannot
+// leave two copies of one body behind — and so that the operation stays safe to repeat, which is
+// the only way a client can guarantee delivery over a network that can lie about failure.
+//
+// Written as a WHOLE-DOCUMENT $set rather than an explicit field list. The sibling PutKeyBackup
+// enumerates its fields, and adding TranscriptMessages to the struct without adding it there
+// silently persisted nothing — the bug that made a backup look healthy while holding no count at
+// all. There is nothing to preserve across an overwrite here, so the safe form is the one that
+// cannot drift from the struct.
+func (m *Mongo) AppendKeyBackupTail(
+	ctx context.Context, entries []domain.MLSKeyBackupTailEntry,
+) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	models := make([]mongo.WriteModel, 0, len(entries))
+	for _, entry := range entries {
+		entry.ID = ""
+		filter := bson.M{
+			"userId":         entry.UserID,
+			"conversationId": entry.ConversationID,
+			"messageId":      entry.MessageID,
+		}
+		models = append(models, mongo.NewUpdateOneModel().
+			SetFilter(filter).
+			SetUpdate(bson.M{"$set": entry}).
+			SetUpsert(true))
+	}
+	_, err := m.db.Collection("mlsKeyBackupTail").
+		BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
+	return err
+}
+
+// ListKeyBackupTail returns a user's entries OLDEST FIRST — replay order. A newer body must land
+// after an older one so that, where both exist, the merge sees them in the order they were made.
+func (m *Mongo) ListKeyBackupTail(
+	ctx context.Context, userID string,
+) ([]domain.MLSKeyBackupTailEntry, error) {
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}})
+	cur, err := m.db.Collection("mlsKeyBackupTail").Find(ctx, bson.M{"userId": userID}, opts)
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.MLSKeyBackupTailEntry
+	return out, cur.All(ctx, &out)
+}
+
+func (m *Mongo) TruncateKeyBackupTail(
+	ctx context.Context, userID string, before time.Time,
+) (int, error) {
+	res, err := m.db.Collection("mlsKeyBackupTail").DeleteMany(ctx, bson.M{
+		"userId": userID,
+		// Strictly before — see the Memory implementation for why the boundary is exclusive.
+		"createdAt": bson.M{"$lt": before},
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(res.DeletedCount), nil
+}
+
+func (m *Mongo) CountKeyBackupTail(ctx context.Context, userID string) (int, error) {
+	n, err := m.db.Collection("mlsKeyBackupTail").CountDocuments(ctx, bson.M{"userId": userID})
+	return int(n), err
+}

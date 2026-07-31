@@ -488,6 +488,40 @@ class MLSDevice {
 ///
 /// Enough to choose one: when it was taken, and how much history it holds. A restore walks these
 /// newest-first and fetches the first that claims any.
+/// One message body, sealed on its own, in the append-only tail in front of the snapshot.
+///
+/// The snapshot is debounced, and everything written inside that debounce lives on exactly one
+/// device — MLS destroys the message key on both encrypt and decrypt, so a body that never left
+/// the handset before the handset did is gone. A tail entry is that body's second copy, written
+/// the moment it exists rather than whenever the next snapshot happens to run.
+class KeyBackupTailEntry {
+  const KeyBackupTailEntry({
+    required this.conversationId,
+    required this.messageId,
+    required this.salt,
+    required this.nonce,
+    required this.ciphertext,
+  });
+
+  final String conversationId;
+  final String messageId;
+  final Uint8List salt;
+  final Uint8List nonce;
+  final Uint8List ciphertext;
+
+  factory KeyBackupTailEntry.fromJson(Map<String, dynamic> j) =>
+      KeyBackupTailEntry(
+        conversationId: j['conversationId'] as String? ?? '',
+        messageId: j['messageId'] as String? ?? '',
+        salt: _bytes(j['salt']),
+        nonce: _bytes(j['nonce']),
+        ciphertext: _bytes(j['ciphertext']),
+      );
+
+  static Uint8List _bytes(Object? v) =>
+      v is String ? base64Decode(v) : Uint8List(0);
+}
+
 class MLSKeyBackupVersion {
   const MLSKeyBackupVersion({
     required this.id,

@@ -1010,6 +1010,41 @@ type MLSKeyBackup struct {
 	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
 }
 
+// MLSKeyBackupTailEntry is ONE message body, sealed on its own and appended the moment the body
+// exists — the write-ahead log in front of the snapshot in MLSKeyBackup.
+//
+// The snapshot alone leaves a window, and the window is not a nuisance: it is total loss. MLS
+// destroys the message key on encrypt and on decrypt, so a body lives in exactly one place — the
+// device that produced it — until a backup carries it off. That backup was debounced by twenty
+// seconds, and everything inside those twenty seconds was one dropped handset away from being
+// gone for good. Re-uploading the whole transcript per message would close the window at a cost of
+// O(n) per message, so instead each body is appended on its own, in constant time, and the
+// snapshot merely checkpoints and truncates what the tail already holds.
+//
+// Sealed client-side under the same recovery code as the snapshot, with its own salt and nonce, so
+// the server can neither open an entry nor tell two entries apart by their contents. Kept inline
+// rather than in the blob store: one body is small, and a GridFS round trip per message would
+// undo the point of the design.
+type MLSKeyBackupTailEntry struct {
+	ID     string `bson:"_id,omitempty" json:"id"`
+	UserID string `bson:"userId" json:"userId"`
+	// The device that sealed it, for diagnosis only — every device of an account seals under the
+	// same recovery code, so any of them can open any entry.
+	DeviceID string `bson:"deviceId" json:"deviceId"`
+
+	// What the entry is a body FOR. The pair is unique per user, which is what makes appending
+	// idempotent: a retried append after an ambiguous network failure overwrites rather than
+	// duplicating, and a replay on restore is keyed the same way the cache is.
+	ConversationID string `bson:"conversationId" json:"conversationId"`
+	MessageID      string `bson:"messageId" json:"messageId"`
+
+	Salt       []byte `bson:"salt" json:"salt"`
+	Nonce      []byte `bson:"nonce" json:"nonce"`
+	Ciphertext []byte `bson:"ciphertext" json:"ciphertext"`
+
+	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
+}
+
 // Ident returns this user's qualified identifier. Accounts with no Domain are
 // local, so they take the domain of the host asking.
 func (u User) Ident(localDomain string) ident.ID {

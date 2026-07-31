@@ -868,6 +868,7 @@ class PhemeRepository {
     Uint8List? transcriptCiphertext,
     int transcriptMessages = 0,
     bool force = false,
+    DateTime? tailThrough,
   }) {
     final body = <String, dynamic>{
       'deviceId': deviceId,
@@ -879,6 +880,12 @@ class PhemeRepository {
       // history than the stored one unless [force] says the person meant it.
       'transcriptMessages': transcriptMessages,
       if (force) 'force': true,
+      // The instant this device began reading its cache to build the snapshot. Everything the
+      // tail holds from before then is inside this upload, so the server can drop it. Omitted
+      // means "truncate nothing", which is what an upload that did not come from a full export
+      // must say — dropping a body the snapshot does not contain is unrecoverable.
+      if (tailThrough != null)
+        'tailThrough': tailThrough.toUtc().toIso8601String(),
     };
     // The transcript seal travels whole or not at all — a ciphertext with no salt/nonce could
     // never be opened, and the server rejects a partial one.
@@ -890,6 +897,42 @@ class PhemeRepository {
       body['transcriptCiphertext'] = base64Encode(transcriptCiphertext);
     }
     return _put('/v1/mls/key-backup', body);
+  }
+
+  /// Appends sealed message bodies to the backup tail — the copy that exists the moment the body
+  /// does, rather than whenever the next snapshot happens to run.
+  ///
+  /// Each entry carries its own salt and nonce: one recovery code, one seal per body, so a body
+  /// can be written the instant it is decrypted without re-sealing anything already stored.
+  Future<void> appendKeyBackupTail(
+    String deviceId,
+    List<KeyBackupTailEntry> entries,
+  ) {
+    if (entries.isEmpty) return Future<void>.value();
+    return _post('/v1/mls/key-backup/tail', {
+      'deviceId': deviceId,
+      'entries': [
+        for (final e in entries)
+          {
+            'conversationId': e.conversationId,
+            'messageId': e.messageId,
+            'salt': base64Encode(e.salt),
+            'nonce': base64Encode(e.nonce),
+            'ciphertext': base64Encode(e.ciphertext),
+          },
+      ],
+    });
+  }
+
+  /// Everything appended since the last checkpoint, oldest first — what a restore replays on top
+  /// of the snapshot.
+  Future<List<KeyBackupTailEntry>> keyBackupTail() async {
+    final d = await _get('/v1/mls/key-backup/tail');
+    final entries = (d['entries'] as List?) ?? const [];
+    return [
+      for (final e in entries)
+        KeyBackupTailEntry.fromJson(e as Map<String, dynamic>),
+    ];
   }
 
   /// The sealed backup, or null when there is none.

@@ -545,3 +545,79 @@ type userRevocation struct {
 	Cutoff    time.Time
 	ExpiresAt time.Time
 }
+
+// --- the append-only backup tail ---------------------------------------------------------------
+//
+// Kept as a flat slice in append order, which is the order a restore replays. Idempotency is by
+// (conversation, message): an append that names a body already held REPLACES it in place rather
+// than adding a second copy, so a client retrying an ambiguous request cannot inflate the tail —
+// and cannot lose its place in it either.
+
+func (m *Memory) AppendKeyBackupTail(
+	_ context.Context, entries []domain.MLSKeyBackupTailEntry,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, entry := range entries {
+		if entry.ID == "" {
+			entry.ID = newID()
+		}
+		existing := m.keyBackupTail[entry.UserID]
+		replaced := false
+		for i, held := range existing {
+			if held.ConversationID == entry.ConversationID && held.MessageID == entry.MessageID {
+				entry.ID = held.ID
+				existing[i] = entry
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			existing = append(existing, entry)
+		}
+		m.keyBackupTail[entry.UserID] = existing
+	}
+	return nil
+}
+
+func (m *Memory) ListKeyBackupTail(
+	_ context.Context, userID string,
+) ([]domain.MLSKeyBackupTailEntry, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := append([]domain.MLSKeyBackupTailEntry{}, m.keyBackupTail[userID]...)
+	// Sorted, not merely in the order they arrived. Mongo sorts on createdAt, and the contract is
+	// oldest-first because that is the order a restore replays in — a store that returned append
+	// order would agree with the other implementation only until two appends raced.
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (m *Memory) TruncateKeyBackupTail(
+	_ context.Context, userID string, before time.Time,
+) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kept := make([]domain.MLSKeyBackupTailEntry, 0, len(m.keyBackupTail[userID]))
+	removed := 0
+	for _, entry := range m.keyBackupTail[userID] {
+		// STRICTLY before. An entry stamped at the same instant the snapshot began may or may not
+		// be inside it, and dropping a body that turns out not to be is unrecoverable, whereas
+		// keeping one that is merely costs a duplicate the replay discards.
+		if entry.CreatedAt.Before(before) {
+			removed++
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	m.keyBackupTail[userID] = kept
+	return removed, nil
+}
+
+func (m *Memory) CountKeyBackupTail(_ context.Context, userID string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.keyBackupTail[userID]), nil
+}

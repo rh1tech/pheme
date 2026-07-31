@@ -74,6 +74,18 @@ void seedDataKey() {
 
 ChatContent body(String text) => ChatContent(body: text);
 
+/// A conversation's sealed file, at the path the cache actually uses.
+File bodyFile(String conversationId) =>
+    File('${tempRoot.path}/bodies/$conversationId.json');
+
+/// Replaces the data key with a different one, as MlsStore.wipe() followed by minting a fresh
+/// identity does. Everything already on disk becomes permanently unopenable.
+void rotateDataKey() {
+  FlutterSecureStorage.setMockInitialValues({
+    'pheme.mlsDataKey': List<int>.generate(32, (i) => 200 - i).join(','),
+  });
+}
+
 final author = Attribution.authenticated('mimi://test.example/d/alice/dev-a');
 
 void main() {
@@ -240,6 +252,108 @@ void main() {
     });
   });
 
+  group('restoring onto a device that already had an identity', () {
+    // THE ONE THAT MADE A GOOD BACKUP UNRESTORABLE.
+    //
+    // A Settings restore destroys the MLS store, and the store owns `pheme.mlsDataKey` — the key
+    // this cache seals bodies with. Every .json left in the cache directory is sealed under a key
+    // that no longer exists, so load() cannot open it and marks it unreadable; _flush then refuses
+    // to write, correctly, because normally an unreadable file is a file worth protecting.
+    //
+    // Here it is not. The key was destroyed on purpose, seconds ago, by the restore itself. The
+    // refusal protects nothing and blocks the import — which is the entire point of the restore.
+    // On a real account this delivered ONE conversation out of the backup and abandoned the other
+    // twenty-two, reported as "Not available on this device" for every message.
+    test(
+      'a body cache whose key was destroyed does not block the import that replaces it',
+      () async {
+        final before = newCache();
+        await before.cacheContent(
+          'c1',
+          'old-1',
+          body('under the old key'),
+          author,
+        );
+        await before.cacheContent(
+          'c2',
+          'old-2',
+          body('also the old key'),
+          author,
+        );
+
+        // What restoreKeys does: MlsStore.wipe() deletes the data key, session() mints a new one.
+        rotateDataKey();
+
+        // A cache that has not opened these conversations this session — which is every
+        // conversation, right after a restore. load() cannot open them under the new key.
+        final after = newCache();
+
+        // The transcript out of the backup is the authority here, and says so.
+        await after.importContents({
+          'c1': {'m1': '{"body":"first"}'},
+          'c2': {'m2': '{"body":"second"}'},
+          'c3': {'m3': '{"body":"third"}'},
+        }, authoritative: true);
+
+        final reopened = newCache();
+        expect((await reopened.load('c1')).length, 1);
+        expect((await reopened.load('c2')).length, 1);
+        expect(
+          (await reopened.load('c3')).length,
+          1,
+          reason:
+              'every conversation in the backup must land, not just the first',
+        );
+      },
+    );
+
+    // wipe() cleared the content maps but not the unreadable set, so a conversation marked
+    // unreadable before the wipe stayed blocked for the life of the process — nothing could ever be
+    // written to it again, including the restore's own import.
+    test('wiping clears the record of what could not be read', () async {
+      final cache = newCache();
+      await cache.cacheContent('c1', 'm1', body('before'), author);
+
+      vault.openThrows = true;
+      final blocked = newCache();
+      await blocked.load('c1'); // marks c1 unreadable
+      vault.openThrows = false;
+
+      await blocked.wipe();
+
+      // The file is gone; there is nothing left to protect, so the write must be allowed.
+      await blocked.importContents({
+        'c1': {'m2': '{"body":"after"}'},
+      });
+      expect((await newCache().load('c1')).length, 1);
+    });
+
+    // One conversation that genuinely cannot be written must not cost the other twenty-two. The
+    // loop abandoned everything after the first failure, so which history survived depended on
+    // directory iteration order.
+    test('one unwritable conversation does not abandon the rest', () async {
+      final cache = newCache();
+      // c1 is unreadable and stays that way — a real protective refusal.
+      await bodyFile('c1').create(recursive: true);
+      await bodyFile('c1').writeAsBytes([9, 9, 9]);
+      await cache.load('c1');
+
+      await expectLater(
+        cache.importContents({
+          'c1': {'m1': '{"body":"refused"}'},
+          'c2': {'m2': '{"body":"must still land"}'},
+          'c3': {'m3': '{"body":"and this one"}'},
+        }),
+        throwsA(isA<ChatCacheWriteException>()),
+        reason: 'the caller must still be told that something was refused',
+      );
+
+      final fresh = newCache();
+      expect((await fresh.load('c2')).length, 1);
+      expect((await fresh.load('c3')).length, 1);
+    });
+  });
+
   group('forgetting is scoped', () {
     test('forget removes one conversation and leaves the rest', () async {
       final cache = newCache();
@@ -299,7 +413,8 @@ void main() {
 
       final fresh = newCache();
       // c2 has a file that will not open; c1 is fine. Warming must survive the bad one.
-      await File('${tempRoot.path}/c2.json').writeAsBytes([9, 9, 9]);
+      await bodyFile('c2').create(recursive: true);
+      await bodyFile('c2').writeAsBytes([9, 9, 9]);
 
       await fresh.warmPreviews(['c2', 'c1']);
 

@@ -30,6 +30,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:pheme_mobile/src/core/api_client.dart';
 import 'package:pheme_mobile/src/core/token_store.dart';
 import 'package:pheme_mobile/src/crypto/chat_cache.dart';
+import 'package:pheme_mobile/src/crypto/chat_envelope_cache.dart';
 import 'package:pheme_mobile/src/crypto/mls_service.dart';
 import 'package:pheme_mobile/src/data/pheme_repository.dart';
 
@@ -52,32 +53,82 @@ const _password = 'Correct12345';
 Future<void> _createUser(String email) async {
   final dio = Dio(BaseOptions(baseUrl: _apiBase));
 
-  final session = await dio.post<Map<String, dynamic>>(
-    '/v1/auth/login',
-    data: {'email': _adminEmail, 'password': _adminPassword},
+  // The auth endpoints are rate limited, and a suite that signs several accounts in per test walks
+  // straight into it — a 429 that has nothing to say about the code under test. Backing off is the
+  // honest response: the limiter is behaving correctly and the test simply has to wait its turn.
+  final session = await _withBackoff(
+    () => dio.post<Map<String, dynamic>>(
+      '/v1/auth/login',
+      data: {'email': _adminEmail, 'password': _adminPassword},
+    ),
   );
   final token = session.data!['accessToken'] as String;
 
-  await dio.post<void>(
-    '/v1/admin/users',
-    data: {'email': email, 'password': _password, 'role': 'user'},
-    options: Options(headers: {'Authorization': 'Bearer $token'}),
+  await _withBackoff(
+    () => dio.post<void>(
+      '/v1/admin/users',
+      data: {'email': email, 'password': _password, 'role': 'user'},
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    ),
   );
+}
+
+/// Retries a request that was rate limited, and only that. Any other failure is a real one and is
+/// rethrown immediately — a blanket retry would turn a genuine bug into a slow test.
+Future<T> _withBackoff<T>(Future<T> Function() send) async {
+  for (var attempt = 0; ; attempt++) {
+    try {
+      return await send();
+    } on DioException catch (e) {
+      if (e.response?.statusCode != 429 || attempt >= 6) rethrow;
+      await Future<void>.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+    }
+  }
 }
 
 /// One device: its own account session, its own storage namespace, its own MLS identity.
 class Device {
   Device._({
     required this.userId,
+    required this.label,
+    required this.email,
     required this.repo,
     required this.mls,
     required this.cache,
   });
 
   final String userId;
+
+  /// The storage namespace, which is what makes this device a device. Re-signing in under the SAME
+  /// label is the same handset; a different label is a different one.
+  final String label;
+
+  /// The account this device is signed in as, so a test can sign the same person in elsewhere.
+  final String email;
+
   final PhemeRepository repo;
   final MlsService mls;
   final ChatCache cache;
+
+  /// Signs out the way AuthController.logout does: the keys go, and everything sealed under them
+  /// goes with them.
+  ///
+  /// Deliberately not just `wipeLocalKeys()`. The body cache and the envelope cache are sealed with
+  /// the SAME `pheme.mlsDataKey` the store owns, so a sign-out that dropped the key and left them
+  /// behind would leave a device full of files nothing can ever open — and a test that modelled
+  /// sign-out as key-wiping alone would never see what those files do to the restore that follows.
+  Future<void> signOut() async {
+    await mls.wipeLocalKeys();
+    await cache.wipe();
+    await ChatEnvelopeCache(
+      const FlutterSecureStorage(),
+      namespace: '.$label',
+    ).wipe();
+  }
+
+  /// Signs the same account back in on the SAME handset — same namespace, so whatever survived the
+  /// sign-out is still there to be found.
+  Future<Device> signInAgain() => Device.signIn(label, email);
 
   /// Signs [email] in on a device whose storage is entirely its own.
   ///
@@ -98,7 +149,7 @@ class Device {
     );
     final repo = PhemeRepository(dio);
 
-    final session = await repo.login(email, _password);
+    final session = await _withBackoff(() => repo.login(email, _password));
     await tokens.save(
       Tokens(
         accessToken: session.accessToken,
@@ -111,6 +162,8 @@ class Device {
 
     return Device._(
       userId: session.userId,
+      label: label,
+      email: email,
       repo: repo,
       cache: cache,
       mls: MlsService(

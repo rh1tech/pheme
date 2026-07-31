@@ -85,6 +85,7 @@ class GlassIconButton extends StatelessWidget {
     this.tinted = false,
     this.destructive = false,
     this.badge = false,
+    this.statusTint,
   });
 
   final IconData icon;
@@ -99,6 +100,14 @@ class GlassIconButton extends StatelessWidget {
 
   /// A dot in the top-right corner, for a control carrying something unread.
   final bool badge;
+
+  /// A wash of colour behind the glass, for a control that reports a STATE rather than only
+  /// offering an action — the chat shield, which says whether the history is safe.
+  ///
+  /// Behind rather than instead of the glass, and expected to arrive already faint: the surface
+  /// keeps its blur and its border, so the control still reads as one of the set rather than as an
+  /// alert box that wandered into the toolbar.
+  final Color? statusTint;
 
   @override
   Widget build(BuildContext context) {
@@ -122,9 +131,15 @@ class GlassIconButton extends StatelessWidget {
               ),
               child: Icon(icon, size: GlassMetrics.icon, color: foreground),
             )
-          : GlassSurface(
-              borderRadius: BorderRadius.circular(GlassMetrics.control / 2),
-              child: Icon(icon, size: GlassMetrics.icon, color: foreground),
+          : DecoratedBox(
+              decoration: BoxDecoration(
+                color: statusTint,
+                shape: BoxShape.circle,
+              ),
+              child: GlassSurface(
+                borderRadius: BorderRadius.circular(GlassMetrics.control / 2),
+                child: Icon(icon, size: GlassMetrics.icon, color: foreground),
+              ),
             ),
     );
 

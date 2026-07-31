@@ -187,6 +187,22 @@ func (m *Mongo) ensureIndexes(ctx context.Context) error {
 			},
 		},
 		"mlsKeyBackups": {{Keys: bson.D{{Key: "userId", Value: 1}}, Options: options.Index().SetUnique(true)}},
+		// One entry per body. Unique on purpose: AppendKeyBackupTail upserts on exactly this key,
+		// and without the index two concurrent appends of the same body — a retry racing the
+		// original — both miss and both insert, leaving a duplicate that the shrink guard then
+		// counts as extra history the device does not have.
+		"mlsKeyBackupTail": {
+			{
+				Keys: bson.D{
+					{Key: "userId", Value: 1},
+					{Key: "conversationId", Value: 1},
+					{Key: "messageId", Value: 1},
+				},
+				Options: options.Index().SetUnique(true),
+			},
+			// The truncate-on-checkpoint scan and the oldest-first replay both run on this.
+			{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "createdAt", Value: 1}}},
+		},
 	}
 	for coll, models := range specs {
 		if _, err := m.db.Collection(coll).Indexes().CreateMany(ctx, models); err != nil {

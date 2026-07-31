@@ -33,12 +33,13 @@ type Memory struct {
 	chatMessages      map[string]domain.ChatMessage
 	attachments       map[string]domain.Attachment
 	keyPackages       map[string]domain.MLSKeyPackage
-	keyBackups        map[string]domain.MLSKeyBackup       // by userId (one per user)
-	keyBackupVersions map[string][]domain.MLSKeyBackup     // by userId, newest first
-	mlsDevices        map[string]domain.MLSDevice          // by userId + ":" + deviceId
-	revokedSessions   map[string]time.Time                 // sid -> expiry (terminated sessions)
-	mlsGroupInfo      map[string]domain.MLSGroupInfo       // by conversationId (one per group)
-	remoteSubs        map[string]domain.RemoteSubscription // by channelId + NUL + peerDomain
+	keyBackups        map[string]domain.MLSKeyBackup            // by userId (one per user)
+	keyBackupVersions map[string][]domain.MLSKeyBackup          // by userId, newest first
+	keyBackupTail     map[string][]domain.MLSKeyBackupTailEntry // by userId, append order
+	mlsDevices        map[string]domain.MLSDevice               // by userId + ":" + deviceId
+	revokedSessions   map[string]time.Time                      // sid -> expiry (terminated sessions)
+	mlsGroupInfo      map[string]domain.MLSGroupInfo            // by conversationId (one per group)
+	remoteSubs        map[string]domain.RemoteSubscription      // by channelId + NUL + peerDomain
 	blobs             blob.Store
 }
 
@@ -64,6 +65,7 @@ func NewMemory(blobs blob.Store) *Memory {
 		keyPackages:       map[string]domain.MLSKeyPackage{},
 		keyBackups:        map[string]domain.MLSKeyBackup{},
 		keyBackupVersions: map[string][]domain.MLSKeyBackup{},
+		keyBackupTail:     map[string][]domain.MLSKeyBackupTailEntry{},
 		mlsDevices:        map[string]domain.MLSDevice{},
 		revokedSessions:   map[string]time.Time{},
 		mlsGroupInfo:      map[string]domain.MLSGroupInfo{},

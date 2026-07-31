@@ -121,6 +121,8 @@ class BackupHealth {
     required this.lastSucceededAt,
     required this.lastError,
     required this.armed,
+    this.pending = 0,
+    this.tailError,
   });
 
   /// When a backup last completed in THIS session. Null means none has run here — which is the
@@ -135,8 +137,24 @@ class BackupHealth {
   /// backed up and no failure will be reported either.
   final bool armed;
 
+  /// How many message bodies are sealed on this device but not yet on the server.
+  ///
+  /// Normally zero, and briefly one while a message is being sent. Anything that stays here is a
+  /// message whose only copy in existence is this handset — the state the tail exists to leave as
+  /// quickly as possible, and the one worth telling somebody about if it persists.
+  final int pending;
+
+  /// Why the last append to the tail failed, or null. Distinct from [lastError], which is about
+  /// the whole-history snapshot: the snapshot can be perfectly healthy while every new message is
+  /// failing to reach the server, and those are opposite problems.
+  final Object? tailError;
+
   /// Whether the person should be told something is wrong.
-  bool get failing => lastError != null;
+  bool get failing => lastError != null || tailError != null;
+
+  /// Everything this device has written is on the server. The green case, and the only one that
+  /// means "losing this handset right now costs nothing".
+  bool get complete => armed && !failing && pending == 0;
 }
 
 /// What a restore actually recovered, as opposed to whether it completed.
@@ -277,6 +295,38 @@ class MlsService {
   /// How long auto-backup waits after a change before re-sealing, so a burst of messages costs one
   /// backup, not one per message.
   static const _autoBackupDebounce = Duration(seconds: 20);
+
+  // --- the backup tail -----------------------------------------------------------------------
+  //
+  // The snapshot above is a whole-history re-seal, so it has to be debounced — and everything
+  // written inside that debounce lived on exactly one device. MLS destroys the message key on
+  // encrypt AND on decrypt, so a body that never left the handset before the handset did is gone:
+  // not "recoverable from the server", gone, because the ciphertext on the server can never be
+  // opened again by anyone.
+  //
+  // The tail closes that window without paying the snapshot's cost. Each body is sealed on its own
+  // and appended in constant time, so a message can be backed up as it is sent rather than
+  // twenty seconds later, and the snapshot's only remaining job is to checkpoint and truncate.
+
+  /// Bodies sealed and waiting to be appended. Entries stay here until the server has them, so a
+  /// failed append is retried rather than dropped — the whole point is that this copy exists.
+  final _pendingTail = <String, KeyBackupTailEntry>{};
+
+  /// The pending flush of [_pendingTail], and how long a body waits for company.
+  ///
+  /// Short, because it is the loss window. Opening a chat decrypts a screenful at once and there
+  /// is no reason to spend a request per message, but nothing here should wait meaningfully: a
+  /// sent message flushes immediately rather than on this timer.
+  Timer? _tailFlushTimer;
+  static const _tailFlushDebounce = Duration(milliseconds: 400);
+
+  /// Why the last append failed, or null. Surfaced through [backupHealth]: an append that is
+  /// failing looks exactly like one that is working right up until somebody needs it.
+  Object? _lastTailError;
+
+  /// How many bodies are sealed but not yet on the server — what the shield reports as "not backed
+  /// up yet".
+  int get pendingBackupCount => _pendingTail.length;
 
   // --- session ---------------------------------------------------------------------------------
 
@@ -1297,7 +1347,11 @@ class MlsService {
       content,
       Attribution.authenticated(session.identity),
     );
-    // A newly-sent body is only on this device until it is backed up; carry it into the backup.
+    // A newly-sent body is only on this device until it is backed up. The snapshot is debounced by
+    // twenty seconds, which for a message this device ENCRYPTED is twenty seconds in which the only
+    // copy in existence is on this handset — so it goes to the tail immediately, as part of
+    // sending, and the snapshot merely catches up later.
+    await _backUpBody(conversation.id, message.id, urgent: true);
     autoBackupSoon(_sessionUserId);
     return message;
   }
@@ -1398,7 +1452,10 @@ class MlsService {
         content,
         attribution,
       );
-      // The decrypted body now lives only here (the message key is gone); back it up.
+      // The decrypted body now lives only here (the message key is gone); back it up. Batched
+      // rather than urgent: opening a chat decrypts a screenful at once, and the flush is
+      // milliseconds away.
+      unawaited(_backUpBody(conversationId, message.id));
       autoBackupSoon(_sessionUserId);
     } on Object catch (e) {
       debugPrint(
@@ -1443,6 +1500,7 @@ class MlsService {
       content,
       Attribution.authenticated(session.identity),
     );
+    await _backUpBody(conversationId, message.id, urgent: true);
     autoBackupSoon(_sessionUserId);
   }
 
@@ -1702,6 +1760,10 @@ class MlsService {
 
     // The transcript, sealed under its own salt/nonce. Empty when this device has read nothing yet —
     // then there is simply no transcript blob to send.
+    // Stamped BEFORE the read, not after. Everything the tail holds from before this instant is,
+    // by construction, inside the snapshot about to be uploaded, so the server can drop exactly
+    // that much and no more — a body appended while this export was running is not in it.
+    final tailThrough = DateTime.now().toUtc();
     final bodies = await _cache.exportAllContents();
     // What the server compares this backup against. It cannot open the seal, so without a count it
     // has no way to tell a device that has read everything from one that has read nothing — and it
@@ -1733,6 +1795,7 @@ class MlsService {
       transcriptNonce: transcript?.nonce,
       transcriptCiphertext: transcript?.ciphertext,
       transcriptMessages: messageCount,
+      tailThrough: tailThrough,
       force: force,
     );
 
@@ -1862,11 +1925,41 @@ class MlsService {
     // Replacing an identity means the old key state has to go, or session() below loads it back
     // instead of minting. Deliberately AFTER the passphrase was proven and the transcript opened:
     // everything destructive in this method happens past the point where a wrong code has already
-    // thrown. The body cache is NOT wiped — importContents merges, so bodies this device decrypted
-    // itself and the backup never saw are kept rather than thrown away.
+    // thrown.
+    //
+    // The body cache has to go with it, and this is not a choice: MlsStore.wipe() deletes
+    // `pheme.mlsDataKey`, which is the key the body cache seals with. Every file left behind is
+    // sealed under a key that no longer exists anywhere, so it can never be opened again — and left
+    // in place, each one made load() mark its conversation unreadable, which made _flush refuse the
+    // import. A healthy twenty-three-message backup restored ONE conversation and reported "Not
+    // available on this device" for the rest.
+    //
+    // So the bodies this device decrypted itself and the backup never saw are carried across
+    // properly instead: read out HERE, while the key that opens them still exists, and merged back
+    // on top of the transcript afterwards. That was the intent of keeping the files, and keeping
+    // them never achieved it.
+    // The tail: everything appended since the snapshot was taken. Read BEFORE anything
+    // destructive, alongside the snapshot, because it is the half of the history that the
+    // snapshot by definition cannot hold — the most recent messages, which is usually the half
+    // somebody actually misses.
+    var tailBodies = const <String, Map<String, String>>{};
+    try {
+      tailBodies = await _openTail(passphraseBytes);
+    } on Object catch (e) {
+      // An older server with no tail endpoint, or a network failure. The snapshot still restores.
+      debugPrint('restore: could not read the backup tail: $e');
+    }
+
+    var localBodies = const <String, Map<String, String>>{};
     if (hasIdentity && replaceExisting) {
+      try {
+        localBodies = await _cache.exportAllContents();
+      } on Object catch (e) {
+        debugPrint('restore: could not preserve locally-decrypted bodies: $e');
+      }
       await rust.mlsUnload();
       await _store.wipe();
+      await _cache.wipe();
     }
     await clearMlsDeviceId(_storage, namespace: _ns);
     await acceptFreshIdentity();
@@ -1875,9 +1968,19 @@ class MlsService {
     // store, and the history has to sit on top of an established identity, not be overwritten by it.
     await session(userId);
 
+    // The local bodies go in FIRST, so that on a collision the copy this device decrypted itself is
+    // the one that stays — importContents never overwrites what it finds.
+    if (localBodies.isNotEmpty) {
+      try {
+        await _cache.importContents(localBodies, authoritative: true);
+      } on Object catch (e) {
+        debugPrint('restore: could not restore locally-decrypted bodies: $e');
+      }
+    }
+
     if (bodies != null) {
       try {
-        await _cache.importContents(bodies);
+        await _cache.importContents(bodies, authoritative: true);
         imported = countBodies(bodies);
       } on Object catch (e, st) {
         // Already up and working without it — but say so, for the same reason as above.
@@ -1885,6 +1988,18 @@ class MlsService {
         debugPrint(
           'restore: could not import the backed-up transcript: $e\n$st',
         );
+      }
+    }
+
+    // The tail LAST, and it is the newest thing here — bodies written after the snapshot was
+    // sealed. importContents never overwrites, so anything the snapshot already carried keeps the
+    // snapshot's copy and only the genuinely newer messages are added.
+    if (tailBodies.isNotEmpty) {
+      try {
+        await _cache.importContents(tailBodies, authoritative: true);
+        imported += countBodies(tailBodies);
+      } on Object catch (e) {
+        debugPrint('restore: could not import the backup tail: $e');
       }
     }
 
@@ -2404,6 +2519,132 @@ class MlsService {
     });
   }
 
+  /// Seals one body and puts it in line for the tail.
+  ///
+  /// [urgent] flushes immediately instead of waiting for company — used when this device is the
+  /// one that produced the body by SENDING it, where the plaintext has never existed anywhere else
+  /// for even a moment and there is nothing to gain by waiting.
+  ///
+  /// Silent when auto-backup is not armed: a device with no recovery code has nothing to seal
+  /// under, and that is a setup state, not a failure.
+  Future<void> _backUpBody(
+    String conversationId,
+    String messageId, {
+    bool urgent = false,
+  }) async {
+    final passphrase = _sessionPassphrase;
+    if (passphrase == null) return;
+
+    final raw = _cache.raw(conversationId, messageId);
+    // Nothing stored means the cache write failed, and that failure is already reported by the
+    // caller. Sealing whatever happened to be in memory instead would put a body in the backup
+    // that the device itself could not read back.
+    if (raw == null) return;
+
+    try {
+      final sealed = await rust.mlsBackupEncrypt(
+        passphrase: Uint8List.fromList(
+          normalizeRecoveryCode(passphrase).codeUnits,
+        ),
+        plaintext: Uint8List.fromList(utf8.encode(raw)),
+      );
+      _pendingTail['$conversationId/$messageId'] = KeyBackupTailEntry(
+        conversationId: conversationId,
+        messageId: messageId,
+        salt: sealed.salt,
+        nonce: sealed.nonce,
+        ciphertext: sealed.ciphertext,
+      );
+    } on Object catch (e) {
+      _lastTailError = e;
+      debugPrint('backup tail: could not seal a body: $e');
+      return;
+    }
+
+    if (urgent) {
+      await _flushTail();
+      return;
+    }
+    _tailFlushTimer ??= Timer(_tailFlushDebounce, () {
+      _tailFlushTimer = null;
+      unawaited(_flushTail());
+    });
+  }
+
+  /// Sends everything queued. Entries stay queued until the server confirms.
+  ///
+  /// Appending is idempotent server-side — one entry per (conversation, message) — so re-sending
+  /// after a failure that may or may not have landed is safe, and that is what makes it correct to
+  /// keep retrying rather than guess.
+  Future<void> _flushTail() async {
+    if (_pendingTail.isEmpty) return;
+    final session = _session == null ? null : await _session;
+    final deviceId = session?.deviceId ?? '';
+
+    final batch = List<KeyBackupTailEntry>.from(_pendingTail.values);
+    try {
+      await _repo.appendKeyBackupTail(deviceId, batch);
+      for (final entry in batch) {
+        _pendingTail.remove('${entry.conversationId}/${entry.messageId}');
+      }
+      _lastTailError = null;
+    } on Object catch (e) {
+      // Left in the queue on purpose. The body is still in the local cache, so nothing is lost
+      // yet — but it is one device away from being lost, which is exactly the state this reports.
+      _lastTailError = e;
+      debugPrint(
+        'backup tail: append failed, ${batch.length} bodies still local: $e',
+      );
+    }
+  }
+
+  /// Everything appended since the last checkpoint, opened and merged — the half of a restore the
+  /// snapshot cannot cover, because it was written after the snapshot was taken.
+  Future<Map<String, Map<String, String>>> _openTail(
+    Uint8List passphraseBytes,
+  ) async {
+    final out = <String, Map<String, String>>{};
+    final entries = await _repo.keyBackupTail();
+    for (final entry in entries) {
+      try {
+        final opened = await rust.mlsBackupDecrypt(
+          passphrase: passphraseBytes,
+          salt: entry.salt,
+          nonce: entry.nonce,
+          ciphertext: entry.ciphertext,
+        );
+        (out[entry.conversationId] ??= <String, String>{})[entry.messageId] =
+            utf8.decode(opened);
+      } on Object catch (e) {
+        // One unopenable entry must not cost the rest. It is one message; the others are still
+        // recoverable, and refusing them all to be tidy would be the worse outcome by far.
+        debugPrint('restore: a tail entry would not open: $e');
+      }
+    }
+    return out;
+  }
+
+  /// Runs an owed auto-backup NOW rather than letting the debounce swallow it.
+  ///
+  /// Only when one is actually owed: with no timer pending there is nothing newer than the stored
+  /// backup, and uploading anyway would cost a sign-out a network round trip for nothing.
+  Future<void> _flushPendingBackup() async {
+    if (_autoBackupTimer == null) return;
+    _autoBackupTimer!.cancel();
+    _autoBackupTimer = null;
+
+    final passphrase = _sessionPassphrase;
+    final userId = _autoBackupUser;
+    if (passphrase == null || userId.isEmpty) return;
+
+    // Bounded, and _runAutoBackup already swallows-and-records rather than throwing. A sign-out that
+    // hung on a dead network would be a worse bug than the one this fixes.
+    await _runAutoBackup(
+      userId,
+      passphrase,
+    ).timeout(const Duration(seconds: 10), onTimeout: () {});
+  }
+
   /// Runs one automatic backup and REMEMBERS how it went.
   ///
   /// This used to be `backupKeys(...).catchError((_) {})` — every failure discarded, in silence, on
@@ -2434,6 +2675,8 @@ class MlsService {
     lastSucceededAt: _lastBackupAt,
     lastError: _lastBackupError,
     armed: _sessionPassphrase != null,
+    pending: _pendingTail.length,
+    tailError: _lastTailError,
   );
 
   /// Erases this device's keys and every decrypted body. Logout.
@@ -2499,6 +2742,19 @@ class MlsService {
   }
 
   Future<void> wipeLocalKeys() async {
+    // FIRST, before a single thing is torn down: run the backup that is already owed.
+    //
+    // Auto-backup is debounced by twenty seconds, and this method used to cancel the pending timer
+    // on its way past. A message written inside that window therefore never reached the server —
+    // and for a message this device SENT, the local cache is the only copy that has ever existed,
+    // because MLS destroyed the key on encrypt. Signing out took it with it, permanently, and the
+    // restore afterwards was blameless: it returned a transcript that genuinely never held it.
+    //
+    // This has to happen here, at the top, while the session and the data key are still alive —
+    // backupKeys needs both. It is bounded so that signing out cannot hang on a bad network, and it
+    // cannot throw: a failed backup must not trap somebody in an account they asked to leave.
+    await _flushPendingBackup();
+
     // Same ordering as restoreKeys, and for the same reason: a session whose operations are queued
     // behind its mutex must be refused BEFORE the client they are queued against is unloaded, or one
     // of them wakes up, passes the liveness check on a stale generation, and writes the keys the user

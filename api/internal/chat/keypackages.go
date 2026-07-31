@@ -527,7 +527,37 @@ type putKeyBackupRequest struct {
 	// Set only when a person has asked for this backup to replace what is stored, knowing it
 	// carries less. Automatic backups never set it.
 	Force bool `json:"force,omitempty"`
+	// The instant the client began reading its cache to build this snapshot. Everything appended
+	// to the tail before then is, by construction, inside the snapshot and can be dropped.
+	//
+	// The client sends it rather than the server using its own clock because only the client
+	// knows when the read started, and using receipt time would discard bodies appended DURING
+	// the upload — which the snapshot does not contain. Absent means "truncate nothing", so an
+	// older client checkpointing against a newer server merely leaves its tail in place.
+	TailThrough time.Time `json:"tailThrough,omitempty"`
 }
+
+// appendKeyBackupTailRequest carries bodies sealed one at a time, the moment each exists.
+type appendKeyBackupTailRequest struct {
+	DeviceID string `json:"deviceId"`
+	Entries  []struct {
+		ConversationID string `json:"conversationId"`
+		MessageID      string `json:"messageId"`
+		Salt           []byte `json:"salt"`
+		Nonce          []byte `json:"nonce"`
+		Ciphertext     []byte `json:"ciphertext"`
+	} `json:"entries"`
+}
+
+// How many bodies one append may carry, and how large one sealed body may be.
+//
+// A body is a message's content, not its attachments — those are blobs referenced by id — so a
+// few kilobytes is generous. The batch bound exists because the catch-up path appends everything
+// a chat decrypted on open, which is a screenful, not a history.
+const (
+	maxTailEntriesPerRequest = 512
+	maxTailEntryBytes        = 256 * 1024
+)
 
 // putKeyBackup stores the caller's encrypted MLS state, and optionally their sealed
 // transcripts. Both ciphertexts are sealed client-side under a passphrase-derived key and
@@ -576,7 +606,18 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 	// Compared on the client's own count rather than byte length: ciphertext length moves with
 	// padding and compression, and refusing a backup for being a few bytes shorter would block
 	// honest ones.
-	if prevErr == nil && !req.Force && req.TranscriptMessages < prev.TranscriptMessages {
+	// The tail counts as stored history too, and must, or this guard understates what it is
+	// protecting. A device that checkpoints and then appends fifty bodies has 50 more messages
+	// backed up than the snapshot admits to; comparing against the snapshot alone would wave
+	// through a replacement that silently drops them.
+	tailHeld, tailErr := h.Store.CountKeyBackupTail(r.Context(), uid)
+	if tailErr != nil {
+		// Unknown rather than zero. Assuming zero would weaken the guard on exactly the request
+		// that most needs it, so the upload waits for a server that can answer.
+		httpx.Error(w, http.StatusServiceUnavailable, "could not read the stored backup")
+		return
+	}
+	if prevErr == nil && !req.Force && req.TranscriptMessages < prev.TranscriptMessages+tailHeld {
 		httpx.Error(w, http.StatusConflict,
 			"this backup holds less history than the one already stored; restore this device first, or resend with force to replace it anyway")
 		return
@@ -646,7 +687,98 @@ func (h *Handler) putKeyBackup(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// The snapshot now holds everything the tail was carrying up to the moment the client began
+	// reading, so that much of the tail has done its job and can go.
+	//
+	// Deliberately AFTER the snapshot is safely stored: truncating first would open a window in
+	// which the bodies exist in neither place. Best effort for the same reason as the archive — a
+	// tail that fails to shrink costs storage, and failing the upload over it would cost history.
+	if !req.TailThrough.IsZero() {
+		if _, tErr := h.Store.TruncateKeyBackupTail(r.Context(), uid, req.TailThrough.UTC()); tErr != nil {
+			h.logger().Warn("could not truncate the backup tail after a checkpoint",
+				"user", uid, "error", tErr)
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// appendKeyBackupTail records sealed message bodies one at a time, as they come into existence.
+//
+// This is the half of the backup that has no window. The snapshot is debounced, and everything
+// written inside the debounce lived on exactly one device — MLS destroys the message key on both
+// encrypt and decrypt, so a body that never left the handset before the handset did is gone. The
+// client appends here as part of sending, and after decrypting, so "the message was delivered"
+// and "the message is recoverable" become the same moment.
+func (h *Handler) appendKeyBackupTail(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var req appendKeyBackupTailRequest
+	if !httpx.DecodeLimited(w, r, &req, maxBackupUploadBytes) {
+		return
+	}
+	if len(req.Entries) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if len(req.Entries) > maxTailEntriesPerRequest {
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "too many entries in one append")
+		return
+	}
+
+	now := time.Now().UTC()
+	entries := make([]domain.MLSKeyBackupTailEntry, 0, len(req.Entries))
+	for _, e := range req.Entries {
+		// Every field is required. A tail entry with no message id could never be matched to a
+		// message on replay, and one with no ciphertext is a body that was silently not backed up
+		// while reporting that it was — which is the failure this whole mechanism exists to end.
+		if e.ConversationID == "" || e.MessageID == "" || len(e.Ciphertext) == 0 ||
+			len(e.Salt) == 0 || len(e.Nonce) == 0 {
+			httpx.Error(w, http.StatusBadRequest,
+				"each entry needs a conversation, a message, a salt, a nonce and a ciphertext")
+			return
+		}
+		if len(e.Ciphertext) > maxTailEntryBytes {
+			httpx.Error(w, http.StatusRequestEntityTooLarge, "a sealed body is too large for the tail")
+			return
+		}
+		entries = append(entries, domain.MLSKeyBackupTailEntry{
+			UserID:         uid,
+			DeviceID:       req.DeviceID,
+			ConversationID: e.ConversationID,
+			MessageID:      e.MessageID,
+			Salt:           e.Salt,
+			Nonce:          e.Nonce,
+			Ciphertext:     e.Ciphertext,
+			CreatedAt:      now,
+		})
+	}
+
+	if err := h.Store.AppendKeyBackupTail(r.Context(), entries); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not store the backup entries")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// getKeyBackupTail returns everything appended since the last checkpoint, oldest first — what a
+// restore replays on top of the snapshot.
+func (h *Handler) getKeyBackupTail(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.requireUser(w, r)
+	if !ok {
+		return
+	}
+	entries, err := h.Store.ListKeyBackupTail(r.Context(), uid)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not read the backup tail")
+		return
+	}
+	if entries == nil {
+		entries = []domain.MLSKeyBackupTailEntry{}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
 // getKeyBackup returns the caller's sealed backup for client-side recovery. 404
