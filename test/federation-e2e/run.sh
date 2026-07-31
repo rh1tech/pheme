@@ -156,15 +156,10 @@ FOL_PASS=$(sed -n 's/PHEME_SEED_ADMIN_PASSWORD=//p' "$WORK/fol.env")
 export FED_NODELIST="$WORK/coord/nodelist.json" FED_CA="$WORK/tls/fed.crt"
 
 # --- bring it all up ----------------------------------------------------------
-log "starting hub + follower + fedproxy"
+log "starting hub + follower"
 docker network create "$NET" >/dev/null 2>&1 || true
 FED_NODELIST="$FED_NODELIST" FED_CA="$FED_CA" docker compose -p "${PROJECT}-hub" -f "$WORK/compose.yml" --env-file "$WORK/hub.env" up -d >/dev/null 2>&1
 FED_NODELIST="$FED_NODELIST" FED_CA="$FED_CA" docker compose -p "${PROJECT}-fol" -f "$WORK/compose.yml" --env-file "$WORK/fol.env" up -d >/dev/null 2>&1
-docker run -d --name "${PROJECT}-fedproxy" --network "$NET" \
-  --network-alias "$HUB_DOMAIN" --network-alias "$FOL_DOMAIN" \
-  -v "$WORK/tls/fedproxy.conf:/etc/nginx/conf.d/default.conf:ro" \
-  -v "$WORK/tls/fed.crt:/fed.crt:ro" -v "$WORK/tls/fed.key:/fed.key:ro" \
-  nginx:alpine >/dev/null
 
 HUB=http://127.0.0.1:$HUB_PORT
 FOL=http://127.0.0.1:$FOL_PORT
@@ -178,6 +173,32 @@ for base in "$HUB" "$FOL"; do
     [ "$i" = 60 ] && fail "$base never came up (last code $code)"
     sleep 1
   done
+done
+
+# --- the proxy, only once both hosts exist in DNS -----------------------------
+#
+# nginx resolves every `proxy_pass` upstream ONCE, at startup, and exits with
+# "host not found in upstream" if a name does not resolve yet. Started alongside the two compose
+# projects it was racing them: whichever machine brought the follower's app container up slowest
+# lost, nginx died on the spot, and every S2S hop then failed with a 502 that said nothing about
+# why. It passed on a developer's machine and failed every time on the runner, which is the
+# signature of a race, not of a bug in what was being tested.
+#
+# Started here instead, after both apps have answered, the names are guaranteed to be in Docker's
+# embedded DNS. The readiness check below then confirms the proxy itself survived startup, so a
+# future ordering problem fails saying so rather than as a 502 three steps later.
+log "starting fedproxy"
+docker run -d --name "${PROJECT}-fedproxy" --network "$NET" \
+  --network-alias "$HUB_DOMAIN" --network-alias "$FOL_DOMAIN" \
+  -v "$WORK/tls/fedproxy.conf:/etc/nginx/conf.d/default.conf:ro" \
+  -v "$WORK/tls/fed.crt:/fed.crt:ro" -v "$WORK/tls/fed.key:/fed.key:ro" \
+  nginx:alpine >/dev/null
+
+for i in $(seq 1 30); do
+  state=$(docker inspect -f '{{.State.Running}}' "${PROJECT}-fedproxy" 2>/dev/null || echo false)
+  [ "$state" = "true" ] && break
+  [ "$i" = 30 ] && fail "fedproxy did not stay up (see its log below)"
+  sleep 1
 done
 
 b64() { printf '%s' "$1" | base64; }
