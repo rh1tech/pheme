@@ -30,7 +30,26 @@ NET="${PROJECT}net"
 WORK="$(mktemp -d)"
 
 log() { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
-fail() { printf '\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
+# On failure, say WHY before tearing everything down.
+#
+# Without this a CI failure is one line — "add remote member returned 502" — and the containers
+# that know the reason are already gone by the time anybody reads it. A cross-host failure that
+# reproduces only on the runner is exactly the case where the logs are the whole diagnosis, and
+# exactly the case where they were being thrown away.
+dump_logs() {
+  printf '\n\033[1;33m-- hub app log (tail) --\033[0m\n' >&2
+  docker logs --tail 80 "${PROJECT}-hub-app-1" 2>&1 | tail -80 >&2 || true
+  printf '\n\033[1;33m-- follower app log (tail) --\033[0m\n' >&2
+  docker logs --tail 80 "${PROJECT}-fol-app-1" 2>&1 | tail -80 >&2 || true
+  printf '\n\033[1;33m-- fedproxy log (tail) --\033[0m\n' >&2
+  docker logs --tail 40 "${PROJECT}-fedproxy" 2>&1 | tail -40 >&2 || true
+}
+
+fail() {
+  printf '\033[1;31mFAIL: %s\033[0m\n' "$*" >&2
+  dump_logs
+  exit 1
+}
 
 cleanup() {
   log "teardown"
