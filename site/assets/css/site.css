@@ -220,6 +220,14 @@ a:hover { color: var(--text); }
   .nav-open .site-nav { display: flex; }
   .site-nav a { padding: 0.8rem 0; border-bottom: 1px solid var(--line); }
   .site-nav .btn { margin-top: 0.9rem; text-align: center; }
+  /* The theme and language buttons are the first thing under the bar when the menu opens, and
+     they were touching its border. Give them their own band with air on both sides. */
+  .site-nav .bar-tools {
+    padding: 0.9rem 0 0.2rem;
+    justify-content: flex-start;
+    gap: 0.6rem;
+  }
+  .lang-menu > ul { right: auto; left: 0; }
 }
 
 /* ---------- icon controls in the bar ----------
@@ -308,6 +316,7 @@ a:hover { color: var(--text); }
 /* ---------- hero ---------- */
 .hero { padding: clamp(3.5rem, 2rem + 7vw, 7rem) 0 var(--space-section); }
 .hero .wrap { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: clamp(2rem, 1rem + 4vw, 5rem); align-items: center; }
+.hero .wrap > * { min-width: 0; }
 @media (max-width: 940px) { .hero .wrap { grid-template-columns: 1fr; } }
 
 h1 {
@@ -364,6 +373,7 @@ h2 {
 
 /* ---------- feature grid ---------- */
 .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1.1rem; }
+.grid > * { min-width: 0; }
 .card {
   grid-column: span 2;
   background: linear-gradient(180deg, var(--surface), var(--ink-raised));
@@ -424,6 +434,8 @@ h2 {
 
 /* ---------- split ---------- */
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(2rem, 1rem + 4vw, 4.5rem); align-items: center; }
+/* Without this a code block widens its own column instead of scrolling inside it. */
+.split > * { min-width: 0; }
 @media (max-width: 880px) { .split { grid-template-columns: 1fr; } }
 
 /* ---------- code block ---------- */
@@ -444,6 +456,11 @@ h2 {
   white-space: pre;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  /* Scrolls with a visible edge rather than looking like text that was cut off. */
+  overscroll-behavior-x: contain;
+}
+@media (max-width: 620px) {
+  .code { font-size: 0.78rem; padding: 1rem 1.05rem; }
 }
 .code .c { color: var(--text-faint); }
 .code .k { color: var(--accent-bright); }
