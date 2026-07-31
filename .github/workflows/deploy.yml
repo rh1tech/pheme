@@ -28,6 +28,7 @@ env:
   REGISTRY: ghcr.io
   API_IMAGE_NAME: ${{ github.repository_owner }}/pheme-api
   WEB_IMAGE_NAME: ${{ github.repository_owner }}/pheme-web
+  SITE_IMAGE_NAME: ${{ github.repository_owner }}/pheme-site
 
 jobs:
   build:
@@ -40,6 +41,7 @@ jobs:
     outputs:
       api_image: ${{ steps.refs.outputs.api_image }}
       web_image: ${{ steps.refs.outputs.web_image }}
+      site_image: ${{ steps.refs.outputs.site_image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -49,11 +51,14 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           API="${REGISTRY,,}/${API_IMAGE_NAME,,}"
           WEB="${REGISTRY,,}/${WEB_IMAGE_NAME,,}"
+          SITE="${REGISTRY,,}/${SITE_IMAGE_NAME,,}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "api_image=${API}:${TAG}" >> "$GITHUB_OUTPUT"
           echo "web_image=${WEB}:${TAG}" >> "$GITHUB_OUTPUT"
           echo "api_repo=${API}" >> "$GITHUB_OUTPUT"
           echo "web_repo=${WEB}" >> "$GITHUB_OUTPUT"
+          echo "site_image=${SITE}:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "site_repo=${SITE}" >> "$GITHUB_OUTPUT"
 
       # The HOST daemon's builder, deliberately, rather than a fresh container per run.
       #
@@ -124,6 +129,22 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           provenance: false
 
+      # The marketing site at pheme.rh1.tech. Static files and nginx — no build args, because it
+      # has nothing to know about the deployment it lands in.
+      - name: Build & push Site image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: ./site
+          file: ./site/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.refs.outputs.site_image }}
+            ${{ steps.refs.outputs.site_repo }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          provenance: false
+
       # A persistent cache is a cache that grows. Anything untouched for a fortnight is not
       # helping a build any more; `if: always()` so a failed build still tidies up after itself.
       - name: Bound the build cache
@@ -180,9 +201,10 @@ jobs:
           ENV_NAME: prod
           API_IMAGE: ${{ needs.build.outputs.api_image }}
           WEB_IMAGE: ${{ needs.build.outputs.web_image }}
+          SITE_IMAGE: ${{ needs.build.outputs.site_image }}
         run: |
           ssh -i ~/.ssh/id_deploy "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "API_IMAGE='${API_IMAGE}' WEB_IMAGE='${WEB_IMAGE}' /opt/pheme/deploy.sh '${ENV_NAME}'"
+            "API_IMAGE='${API_IMAGE}' WEB_IMAGE='${WEB_IMAGE}' SITE_IMAGE='${SITE_IMAGE}' /opt/pheme/deploy.sh '${ENV_NAME}'"
 
       - name: Clean up SSH key
         if: always()
@@ -313,8 +335,9 @@ jobs:
         env:
           API_IMAGE: ${{ needs.build.outputs.api_image }}
           WEB_IMAGE: ${{ needs.build.outputs.web_image }}
+          SITE_IMAGE: ${{ needs.build.outputs.site_image }}
         run: |
-          API_IMAGE="$API_IMAGE" WEB_IMAGE="$WEB_IMAGE" /opt/pheme/deploy.sh prod
+          API_IMAGE="$API_IMAGE" WEB_IMAGE="$WEB_IMAGE" SITE_IMAGE="$SITE_IMAGE" /opt/pheme/deploy.sh prod
 
   smoke-2:
     name: Smoke test prod (host 2)

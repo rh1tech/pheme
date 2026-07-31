@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Support — Pheme</title>
+  <meta name="description" content="Help with Pheme: recovery codes, lost devices, self-hosting, and how to get in touch.">
+  <link rel="canonical" href="https://pheme.rh1.tech/support/">
+  <link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/support/">
+  <link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/support/">
+  <link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/support/">
+  <link rel="icon" type="image/png" href="/assets/img/icon-512.png">
+  <meta name="theme-color" content="#08080c">
+  <script>document.documentElement.classList.add('js')</script>
+  <link rel="stylesheet" href="/assets/css/site.css?v=1">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/assets/img/icon-512.png" alt="" width="30" height="30">Pheme</a>
+    <button class="nav-toggle" aria-expanded="false" aria-label="Menu"><span></span></button>
+    <nav class="site-nav" aria-label="Main">
+      <a href="/#how">How it works</a>
+      <a href="/#features">Features</a>
+      <a href="/support/">Support</a>
+      <a class="btn btn-primary" href="https://kn86r-dev.rh1.tech">Open the app</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section>
+    <div class="wrap prose">
+      <h1>Support</h1>
+      <p class="updated">support@rh1.tech</p>
+
+      <p>
+        Write to <a href="mailto:support@rh1.tech">support@rh1.tech</a> from the address your
+        account uses. Bugs and feature requests are better on
+        <a href="https://github.com/rh1tech/pheme/issues">GitHub</a>, where they stay public and
+        get fixed in the open.
+      </p>
+
+      <h2>Your recovery code</h2>
+      <p>
+        Pheme shows it once, when your first device sets up encryption. Write it down. It is the
+        only thing that opens your history if you lose every device you are signed in on — nobody
+        can reproduce it, reset it, or recover it for you, and that is the point: a code we could
+        recover would be a code we could use.
+      </p>
+      <p>
+        You can see it again on a device that still has it, and regenerate it, in
+        <strong>Settings → Devices &amp; security</strong>.
+      </p>
+
+      <h3>"Back up now" is greyed out</h3>
+      <p>
+        That means this device holds no recovery code — the code was created somewhere else, or
+        local storage was cleared — so it has nothing to seal a backup with. Enter your code in
+        <strong>Devices &amp; security</strong> and it will start backing up again, including
+        everything read on it since.
+      </p>
+
+      <h2>Lost or replaced a device</h2>
+      <ol>
+        <li>Sign in on the new device.</li>
+        <li>If another device is still signed in, it hands over your history automatically — keep it online and unlocked until the new one has caught up.</li>
+        <li>Otherwise enter your recovery code when asked, and the history is restored from the sealed backup.</li>
+        <li>Remove the lost device in <strong>Settings → Devices &amp; security</strong>. It immediately stops being able to read anything new.</li>
+      </ol>
+
+      <h2>A message says "Not available on this device"</h2>
+      <p>
+        That message was sent before this device joined the conversation, and it is permanent rather
+        than a loading state — MLS gives a new device no access to what came before it. Restoring
+        from a recovery code, or a handover from a device that already has the history, is what
+        fills it in.
+      </p>
+
+      <h2>Running your own server</h2>
+      <p>
+        The stack is a Docker Compose file: API, web client, database, push and TURN. See the
+        <a href="https://github.com/rh1tech/pheme">repository</a> for the deployment guide. You do
+        not need an account with us to run one, and nothing about your instance depends on this
+        site staying up.
+      </p>
+
+      <h2>Deleting your account</h2>
+      <p>
+        <strong>Settings → Account → Delete account</strong>. If you cannot reach the app, email us
+        from your registered address. See the <a href="/privacy/">privacy policy</a> for what is
+        removed.
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="/"><img src="/assets/img/icon-512.png" alt="" width="30" height="30">Pheme</a>
+      <p class="tagline">An end-to-end encrypted messenger you can run yourself.</p>
+    </div>
+    <div>
+      <h4>Product</h4>
+      <ul>
+        <li><a href="/#how">How it works</a></li>
+        <li><a href="/#features">Features</a></li>
+        <li><a href="/#channels">Channels</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Project</h4>
+      <ul>
+        <li><a href="https://github.com/rh1tech/pheme">Source code</a></li>
+        <li><a href="/support/">Support</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Legal</h4>
+      <ul>
+        <li><a href="/privacy/">Privacy policy</a></li>
+        <li><a href="/terms/">Terms of use</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap colophon">
+    <span>© 2026 Pheme</span>
+    <span class="lang">
+      <a href="/support/" aria-current="true">English</a>
+      <a href="/ru/support/">Русский</a>
+    </span>
+  </div>
+</footer>
+
+<script src="/assets/js/site.js?v=1"></script>
+</body>
+</html>

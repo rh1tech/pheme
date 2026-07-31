@@ -40,6 +40,16 @@ fi
 if [ -n "${WEB_IMAGE:-}" ]; then
   sed -i "s|^WEB_IMAGE=.*|WEB_IMAGE=${WEB_IMAGE}|" "$ENV_FILE"
 fi
+# The marketing site. Appended rather than substituted when the key is absent, so a stack.env
+# written before the site existed picks it up on the first deploy instead of failing on an
+# undefined variable.
+if [ -n "${SITE_IMAGE:-}" ]; then
+  if grep -q '^SITE_IMAGE=' "$ENV_FILE"; then
+    sed -i "s|^SITE_IMAGE=.*|SITE_IMAGE=${SITE_IMAGE}|" "$ENV_FILE"
+  else
+    echo "SITE_IMAGE=${SITE_IMAGE}" >> "$ENV_FILE"
+  fi
+fi
 
 compose() {
   docker compose -p "$PROJECT" --env-file "$ENV_FILE" -f "$COMPOSE" "$@"

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Поддержка — Pheme</title>
+  <meta name="description" content="Помощь по Pheme: коды восстановления, потерянные устройства, свой сервер и контакты.">
+  <link rel="canonical" href="https://pheme.rh1.tech/ru/support/">
+  <link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/support/">
+  <link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/support/">
+  <link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/support/">
+  <link rel="icon" type="image/png" href="/assets/img/icon-512.png">
+  <meta name="theme-color" content="#08080c">
+  <script>document.documentElement.classList.add('js')</script>
+  <link rel="stylesheet" href="/assets/css/site.css?v=1">
+</head>
+<body>
+
+<a class="skip" href="#main">К содержанию</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/ru/"><img src="/assets/img/icon-512.png" alt="" width="30" height="30">Pheme</a>
+    <button class="nav-toggle" aria-expanded="false" aria-label="Меню"><span></span></button>
+    <nav class="site-nav" aria-label="Main">
+      <a href="/ru/#how">Как это работает</a>
+      <a href="/ru/#features">Возможности</a>
+      <a href="/ru/support/">Поддержка</a>
+      <a class="btn btn-primary" href="https://kn86r-dev.rh1.tech">Открыть приложение</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section>
+    <div class="wrap prose">
+      <h1>Поддержка</h1>
+      <p class="updated">support@rh1.tech</p>
+
+      <p>
+        Пишите на <a href="mailto:support@rh1.tech">support@rh1.tech</a> с адреса, на который
+        зарегистрирован аккаунт. Ошибки и пожелания лучше оставлять на
+        <a href="https://github.com/rh1tech/pheme/issues">GitHub</a>: там они остаются публичными и
+        исправляются открыто.
+      </p>
+
+      <h2>Код восстановления</h2>
+      <p>
+        Pheme показывает его один раз — когда первое устройство настраивает шифрование. Запишите
+        его. Это единственное, что открывает вашу историю, если вы потеряете все устройства: никто
+        не может его воспроизвести, сбросить или восстановить за вас. В этом и смысл — код, который
+        мы могли бы восстановить, был бы кодом, которым мы могли бы воспользоваться.
+      </p>
+      <p>
+        Посмотреть его снова и перевыпустить можно на устройстве, где он есть:
+        <strong>Настройки → Устройства и безопасность</strong>.
+      </p>
+
+      <h3>Кнопка «Создать копию сейчас» неактивна</h3>
+      <p>
+        Значит, на этом устройстве нет кода восстановления — код создан в другом месте или локальное
+        хранилище очищено, — и запечатывать копию нечем. Введите код в разделе
+        <strong>Устройства и безопасность</strong>, и резервное копирование возобновится, включая
+        всё прочитанное здесь с тех пор.
+      </p>
+
+      <h2>Потеряли или сменили устройство</h2>
+      <ol>
+        <li>Войдите на новом устройстве.</li>
+        <li>Если другое устройство ещё в системе, оно передаст историю автоматически — держите его в сети и разблокированным, пока новое не догонит.</li>
+        <li>Иначе введите код восстановления, когда его спросят, и история восстановится из запечатанной копии.</li>
+        <li>Удалите потерянное устройство в разделе <strong>Настройки → Устройства и безопасность</strong>. Оно сразу перестанет читать новое.</li>
+      </ol>
+
+      <h2>Сообщение «Недоступно на этом устройстве»</h2>
+      <p>
+        Это сообщение было отправлено до того, как устройство вошло в разговор, и надпись
+        постоянная, а не индикатор загрузки: MLS не даёт новому устройству доступа к тому, что было
+        раньше. Заполнить пробел может восстановление по коду или передача истории с устройства,
+        где она уже есть.
+      </p>
+
+      <h2>Свой сервер</h2>
+      <p>
+        Весь стек — один Docker Compose: API, веб-клиент, база, push и TURN. Руководство по
+        развёртыванию — в <a href="https://github.com/rh1tech/pheme">репозитории</a>. Аккаунт у нас
+        для этого не нужен, и ваш сервер никак не зависит от работы этого сайта.
+      </p>
+
+      <h2>Удаление аккаунта</h2>
+      <p>
+        <strong>Настройки → Аккаунт → Удалить аккаунт</strong>. Если приложение недоступно,
+        напишите нам с зарегистрированного адреса. Что именно удаляется — в
+        <a href="/ru/privacy/">политике конфиденциальности</a>.
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="/ru/"><img src="/assets/img/icon-512.png" alt="" width="30" height="30">Pheme</a>
+      <p class="tagline">Мессенджер со сквозным шифрованием, который можно поднять самому.</p>
+    </div>
+    <div>
+      <h4>Продукт</h4>
+      <ul>
+        <li><a href="/ru/#how">Как это работает</a></li>
+        <li><a href="/ru/#features">Возможности</a></li>
+        <li><a href="/ru/#channels">Каналы</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Проект</h4>
+      <ul>
+        <li><a href="https://github.com/rh1tech/pheme">Исходный код</a></li>
+        <li><a href="/ru/support/">Поддержка</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Правовое</h4>
+      <ul>
+        <li><a href="/ru/privacy/">Конфиденциальность</a></li>
+        <li><a href="/ru/terms/">Условия использования</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap colophon">
+    <span>© 2026 Pheme</span>
+    <span class="lang">
+      <a href="https://pheme.rh1.tech/support/">English</a>
+      <a href="https://pheme.rh1.tech/ru/support/" aria-current="true">Русский</a>
+    </span>
+  </div>
+</footer>
+
+<script src="/assets/js/site.js?v=1"></script>
+</body>
+</html>

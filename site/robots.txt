@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://pheme.rh1.tech/sitemap.xml

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://pheme.rh1.tech/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/"/>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://pheme.rh1.tech/ru/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/"/>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://pheme.rh1.tech/privacy/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/privacy/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/privacy/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/privacy/"/>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pheme.rh1.tech/ru/privacy/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/privacy/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/privacy/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/privacy/"/>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pheme.rh1.tech/terms/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/terms/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/terms/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/terms/"/>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pheme.rh1.tech/ru/terms/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/terms/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/terms/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/terms/"/>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pheme.rh1.tech/support/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/support/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/support/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/support/"/>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pheme.rh1.tech/ru/support/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/support/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/support/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://pheme.rh1.tech/support/"/>
+    <priority>0.6</priority>
+  </url>
+</urlset>

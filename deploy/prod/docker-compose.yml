@@ -199,6 +199,16 @@ services:
     ports:
       - "127.0.0.1:${WEB_HOST_PORT}:80"
 
+  # The marketing site at pheme.rh1.tech. Entirely separate from `web`, which is the app itself:
+  # different domain, different container, no shared state. Static files and nginx, so there is
+  # nothing to configure at start — it has no API to talk to and nothing to know about this
+  # deployment.
+  site:
+    image: ${SITE_IMAGE}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SITE_HOST_PORT:-8193}:80"
+
   # STUN + TURN for 1:1 voice calls. Media is peer to peer and never touches this
   # machine — except for the minority of calls whose two ends cannot reach each other
   # directly at all, which TURN relays. See turnserver.conf.
