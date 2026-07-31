@@ -428,11 +428,15 @@ const Map<String, String> enStrings = {
   'backup.tooShort': 'Use at least {min} characters',
   'backup.mismatch': 'Passphrases do not match',
   'backup.save': 'Back up now',
-  'backup.statusSafe': 'Everything here is backed up. Losing this phone would not lose these messages.',
+  'backup.statusSafe':
+      'Everything here is backed up. Losing this phone would not lose these messages.',
   'backup.statusPending': 'Backing up the newest messages…',
-  'backup.statusPendingCount': '{count} not yet on the server — they exist only on this phone.',
-  'backup.statusFailing': 'Backup is failing. New messages exist only on this phone.',
-  'backup.statusNone': 'No recovery code, so nothing here is backed up. Lose this phone and these messages are gone.',
+  'backup.statusPendingCount':
+      '{count} not yet on the server — they exist only on this phone.',
+  'backup.statusFailing':
+      'Backup is failing. New messages exist only on this phone.',
+  'backup.statusNone':
+      'No recovery code, so nothing here is backed up. Lose this phone and these messages are gone.',
   'backup.saved': 'Chats backed up',
   'backup.saveFailed': 'Could not back up your chats',
   'backup.restoreTitle': 'Restore your chats',
