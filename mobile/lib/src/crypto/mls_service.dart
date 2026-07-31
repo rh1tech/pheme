@@ -1850,9 +1850,9 @@ class MlsService {
       normalizeRecoveryCode(passphrase).codeUnits,
     );
 
-    // Prove the passphrase by opening the state blob (throws on a wrong one), then discard it — this
-    // device does not adopt those keys.
-    await rust.mlsBackupDecrypt(
+    // Prove the passphrase by opening the state blob (throws on a wrong one). This device does not
+    // ADOPT those keys — but it does read with them once, below, before dropping them.
+    final oldState = await rust.mlsBackupDecrypt(
       passphrase: passphraseBytes,
       salt: backup.salt,
       nonce: backup.nonce,
@@ -1950,6 +1950,19 @@ class MlsService {
       debugPrint('restore: could not read the backup tail: $e');
     }
 
+    // The messages the OLD identity could have read but never did — see
+    // _recoverUnreadWithOldState. Run here, while nothing has been torn down yet: it needs the
+    // group map that the wipe below destroys, and it must finish before the fresh identity claims
+    // the single Rust client.
+    var unread = const <String, Map<String, String>>{};
+    try {
+      unread = await _recoverUnreadWithOldState(oldState);
+    } on Object catch (e) {
+      // Never fatal. Everything here is a bonus on top of the transcript; a restore that could not
+      // reach the network still brings the account and the history back.
+      debugPrint('restore: could not recover unread messages: $e');
+    }
+
     var localBodies = const <String, Map<String, String>>{};
     if (hasIdentity && replaceExisting) {
       try {
@@ -2003,6 +2016,18 @@ class MlsService {
       }
     }
 
+    // The unread recovery LAST. importContents never overwrites, so every copy this device or the
+    // backup already had wins over it — which is right: those were decrypted and attributed by a
+    // device acting as itself, and this one was read with an identity that no longer exists.
+    if (unread.isNotEmpty) {
+      try {
+        await _cache.importContents(unread, authoritative: true);
+        imported += countBodies(unread);
+      } on Object catch (e) {
+        debugPrint('restore: could not import recovered unread messages: $e');
+      }
+    }
+
     // Keep the secret so THIS fresh device's own backup stays current, and schedule a catch-up so the
     // imported history is re-sealed under this device's identity rather than only the old one's.
     _sessionPassphrase = passphrase;
@@ -2014,6 +2039,120 @@ class MlsService {
       recoveredFromArchivedVersion: recoveredFromVersion,
     );
     return true;
+  }
+
+  /// Opens the messages the OLD identity could read but never got round to reading, using its
+  /// backed-up ratchet — and then throws that ratchet away.
+  ///
+  /// -------------------------------------------------------------------------------------------
+  /// WHY THIS EXISTS, AND WHY IT IS NOT THE CLONING TRAP
+  ///
+  /// The backup carries two different things: the KEYS, which restore the ability to talk, and the
+  /// TRANSCRIPT, which restores what was said. The transcript can only ever hold what the old
+  /// device DECRYPTED. A message that arrived while the app was closed was never decrypted, so it
+  /// is in no transcript and no tail — and the restored device comes up under a fresh MLS leaf,
+  /// which by construction cannot open ciphertext sent before it joined. Those messages are lost
+  /// with nothing anywhere reporting it. That is exactly how a message sent at 10:06:37 vanished
+  /// while the backup taken at 10:06:07 looked perfectly healthy.
+  ///
+  /// The old ratchet CAN open them, because it is the one they were sealed for. So it is loaded
+  /// here, used, and discarded — never written to the store, never used to send, commit, join or
+  /// publish a KeyPackage, and never allowed to become this device's identity.
+  ///
+  /// That last part is the whole distinction from the trap restoreKeys was built to avoid. Adopting
+  /// the old leaf makes two devices share one identity, and MLS then shows each of them its own
+  /// messages as undecryptable and forks their ratchets on the next Commit. Reading with it once,
+  /// in memory, and dropping it does none of that: no second device ever exists.
+  ///
+  /// Deliberately bypasses MlsSession and calls the Rust decrypt directly. MlsSession PERSISTS the
+  /// ratchet after every decrypt, which for this state would write the old identity to disk — the
+  /// very thing that must not happen.
+  /// -------------------------------------------------------------------------------------------
+  ///
+  /// Returns raw serialised bodies, keyed exactly as the cache and the transcript key them, so the
+  /// result merges with the snapshot and the tail under the same rules.
+  Future<Map<String, Map<String, String>>> _recoverUnreadWithOldState(
+    Uint8List state,
+  ) async {
+    final recovered = <String, Map<String, String>>{};
+
+    // Read the group map BEFORE anything is torn down: it lives in the store this restore is about
+    // to wipe, and without it there is nothing to try the ciphertext against.
+    final List<Conversation> conversations;
+    try {
+      conversations = await _repo.listConversations();
+    } on Object catch (e) {
+      debugPrint('restore: could not list conversations to recover unread: $e');
+      return recovered;
+    }
+    // Group ids from the SERVER, not from the local store.
+    //
+    // The store's map belongs to the device that built it, and the device most in need of this
+    // recovery is a replacement that has never held one — a phone that was lost, wiped, or
+    // reinstalled. Asking the local store there returns nothing and the whole pass quietly
+    // recovers zero messages, which is precisely the case it exists for. The server knows which
+    // group each conversation is, and which ones it used to be; the ciphertext is useless without
+    // the ratchet anyway, so learning the id from it gives nothing away.
+    final groupsByConversation = <String, List<String>>{};
+    for (final conversation in conversations) {
+      final ids = <String>{...await _store.groupIds(conversation.id)};
+      try {
+        final state = await _repo.mlsGroupState(conversation.id);
+        ids.addAll(state.allGroupIds);
+      } on Object {
+        // Never established, or unreachable. Whatever the store knew still stands.
+      }
+      if (ids.isNotEmpty) groupsByConversation[conversation.id] = ids.toList();
+    }
+
+    await rust.mlsUnload();
+    await rust.mlsLoad(state: state);
+    try {
+      for (final conversation in conversations) {
+        final groups =
+            groupsByConversation[conversation.id] ?? const <String>[];
+        if (groups.isEmpty) continue;
+
+        final ChatMessagesPage page;
+        try {
+          page = await _repo.listChatMessages(conversation.id);
+        } on Object {
+          continue; // one unreachable conversation must not stop the others
+        }
+
+        for (final message in page.messages) {
+          if (message.isControl || message.isSystem) continue;
+          // Already held — the snapshot or the tail carried it, and that copy is the one this
+          // device authenticated for itself.
+          if (_cache.raw(conversation.id, message.id) != null) continue;
+
+          for (final groupId in groups) {
+            try {
+              final out = await rust.mlsDecrypt(
+                groupId: Uint8List.fromList(utf8.encode(groupId)),
+                ciphertext: message.ciphertext,
+              );
+              final plaintext = out.plaintext;
+              if (plaintext == null) continue;
+              (recovered[conversation.id] ??=
+                  <String, String>{})[message.id] = encodeCacheEntry(
+                parseContent(plaintext),
+                Attribution.authenticated(out.sender ?? ''),
+              );
+              break;
+            } on Object {
+              // Not this group's message, or one even the old identity could not read. Either way
+              // there is nothing to recover and the next group may still answer.
+            }
+          }
+        }
+      }
+    } finally {
+      // Gone from memory before the fresh identity is minted. Nothing has written it to disk, and
+      // nothing now can.
+      await rust.mlsUnload();
+    }
+    return recovered;
   }
 
   /// Opens a backup's sealed transcript, or null when it holds no bodies.

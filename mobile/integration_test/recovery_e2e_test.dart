@@ -350,6 +350,95 @@ void main() {
     });
   });
 
+  group('a message that arrived but was never read', () {
+    // THE ONE THE TAIL CANNOT COVER, and the one that lost a real message.
+    //
+    // The tail and the transcript can only carry what this device DECRYPTED. A message that lands
+    // while the app is closed is decrypted by nobody, so it is in neither — and a restore comes up
+    // under a fresh MLS leaf, which by construction cannot open ciphertext sealed before it joined.
+    // The message is then unreadable forever, on a device whose backup looked perfectly healthy.
+    //
+    // Modelled exactly: Bob writes, Alice's device NEVER opens the conversation, and Alice then
+    // restores onto a replacement. Only the backed-up ratchet can open that ciphertext, which is
+    // what the restore now uses — once, in memory, before discarding it.
+    testWidgets('is recovered by the restore that replaces the device', (
+      _,
+    ) async {
+      final s = await _establish('11');
+
+      // Bob says something Alice never reads. No read(), no decrypt, nothing to back up.
+      final unread = await s.bob.mls.sendMessage(
+        await s.bob.repo.getConversation(s.conversation.id),
+        s.bob.userId,
+        'sent while her phone was in her pocket',
+      );
+
+      final replacement = await Device.signIn(
+        'alice11-replacement',
+        s.alice.email,
+      );
+      expect(
+        await replacement.mls.restoreWithSecret(replacement.userId, s.code),
+        isTrue,
+      );
+
+      final read = await replacement.read(s.conversation.id);
+      expect(
+        read[unread.id],
+        'sent while her phone was in her pocket',
+        reason:
+            'nothing decrypted it before the device was replaced, so only the '
+            'backed-up ratchet could ever open it',
+      );
+      // And the history that WAS read still arrives, from the transcript as before.
+      for (final entry in s.sent.entries) {
+        expect(read[entry.key], entry.value, reason: 'lost "${entry.value}"');
+      }
+    });
+
+    // The recovery must not become the cloning trap restoreKeys exists to avoid. The old leaf is
+    // read with and dropped; if it were adopted, the device that still holds it would see its own
+    // messages as undecryptable and the two ratchets would fork on the next Commit.
+    testWidgets('does not adopt the identity it read with', (_) async {
+      final s = await _establish('12');
+
+      final replacement = await Device.signIn(
+        'alice12-replacement',
+        s.alice.email,
+      );
+      expect(
+        await replacement.mls.restoreWithSecret(replacement.userId, s.code),
+        isTrue,
+      );
+
+      // Both devices send after the restore. If the replacement had adopted the old leaf they
+      // would share one identity, and each would see the other's message as its own — which a
+      // sender can never decrypt.
+      final fromReplacement = await replacement.mls.sendMessage(
+        await replacement.repo.getConversation(s.conversation.id),
+        replacement.userId,
+        'from the replacement',
+      );
+      final fromBob = await s.bob.mls.sendMessage(
+        await s.bob.repo.getConversation(s.conversation.id),
+        s.bob.userId,
+        'from bob',
+      );
+
+      final hers = await replacement.read(s.conversation.id);
+      expect(hers[fromReplacement.id], 'from the replacement');
+      expect(
+        hers[fromBob.id],
+        'from bob',
+        reason:
+            'a forked or shared ratchet shows up here as an unreadable peer',
+      );
+
+      final his = await s.bob.read(s.conversation.id);
+      expect(his[fromReplacement.id], 'from the replacement');
+    });
+  });
+
   group('restoring from Settings, after having started fresh', () {
     // THE ONE THAT ACTUALLY HAPPENED, and the reason the other five in this file are not enough on
     // their own: every one of them restores onto a device whose body cache is EMPTY, so there is
