@@ -38,21 +38,26 @@
       <p class="updated">Last updated 1 August 2026</p>
 
       <p>
-        Pheme is an end-to-end encrypted messenger. This policy describes what the software
-        collects and what a server running it can see. It applies to the app and to the instance
-        operated at <code>pheme.rh1.tech</code>.
+        Pheme is software, not a service. There is no Pheme account and no central server. You sign
+        in to whichever server runs it, and whoever operates that server decides what happens to
+        your data.
       </p>
       <p>
-        <strong>Pheme can be self-hosted.</strong> If you signed in to a server run by your company,
-        your community or another individual, that operator is the data controller for your account
-        and their policy governs it. This document then describes the software's behaviour, not
-        their obligations.
+        <strong>This site does not run one.</strong> pheme.rh1.tech serves these pages and nothing
+        else. No accounts exist here and no messages pass through it.
+      </p>
+      <p>
+        What follows describes what the software collects and what a server running it can see, so
+        that you can judge an instance before trusting it, and so that anyone setting one up knows
+        what they are taking responsibility for. If you use a server run by your company, your
+        community or a friend, that operator is the data controller for your account and their
+        policy is the one that governs it.
       </p>
 
-      <h2>What the server holds</h2>
+      <h2>What a server running Pheme holds</h2>
       <p>
-        Being end-to-end encrypted decides <em>who can read content</em>. It does not mean nothing is
-        stored. A server running Pheme holds:
+        End-to-end encryption decides <em>who can read content</em>. It does not mean nothing is
+        stored. A Pheme server holds:
       </p>
       <table>
         <thead>
@@ -61,95 +66,91 @@
         <tbody>
           <tr><td>Email address</td><td>Registration, sign-in, password reset</td><td>Yes</td></tr>
           <tr><td>Display name and username</td><td>So people can find and recognise you</td><td>Yes</td></tr>
-          <tr><td>Avatar image, if you upload one</td><td>Shown next to your messages</td><td>Yes</td></tr>
-          <tr><td>Message content and attachments</td><td>Delivery and offline storage</td><td><strong>No</strong> — ciphertext only</td></tr>
+          <tr><td>Avatar image, if uploaded</td><td>Shown next to your messages</td><td>Yes</td></tr>
+          <tr><td>Message content and attachments</td><td>Delivery and offline storage</td><td><strong>No</strong>, ciphertext only</td></tr>
           <tr><td>Routing metadata</td><td>Who is in a conversation, timestamps, message sizes</td><td>Yes</td></tr>
-          <tr><td>Push notification token</td><td>So notifications can reach your device</td><td>Yes</td></tr>
-          <tr><td>Channel subscriptions and post history</td><td>Delivering channel posts and their backlog</td><td>Posts are ciphertext; subscriptions are not</td></tr>
+          <tr><td>Push notification token</td><td>So notifications can reach the device</td><td>Yes</td></tr>
+          <tr><td>Channel subscriptions and post history</td><td>Delivering posts and their backlog</td><td>Posts are ciphertext; subscriptions are not</td></tr>
         </tbody>
       </table>
       <p>
-        Message keys are generated and rotated on your devices using MLS (RFC 9420) and never leave
-        them. The operator of a Pheme server cannot read your messages, your calls' contents, or
-        your attachments, and neither can anyone who obtains a copy of the database.
+        Message keys are generated and rotated on the devices themselves using MLS (RFC 9420) and
+        never leave them. An operator cannot read your messages, the contents of your calls or your
+        attachments, and neither can anyone who obtains a copy of the database.
       </p>
 
-      <h2>What it does not collect</h2>
+      <h2>What the software never collects</h2>
       <ul>
         <li>No advertising identifiers, and no ads.</li>
         <li>No third-party analytics or product telemetry.</li>
-        <li>No crash reporting SDK in the shipped build.</li>
-        <li>No contact-list upload. Pheme never reads your address book.</li>
+        <li>No crash reporting SDK in the released builds.</li>
+        <li>No contact-list upload. Pheme does not read your address book.</li>
         <li>No location data.</li>
       </ul>
 
       <h2>Permissions the app asks for</h2>
       <ul>
-        <li><strong>Camera</strong> — only when you take a photo to send, or scan a code.</li>
-        <li><strong>Microphone</strong> — only during a voice call.</li>
-        <li><strong>Notifications</strong> — to tell you a message arrived.</li>
-        <li><strong>Photos</strong> — only for pictures you choose to attach.</li>
+        <li><strong>Camera</strong>, when you take a photo to send or scan a code.</li>
+        <li><strong>Microphone</strong>, during a voice call.</li>
+        <li><strong>Notifications</strong>, to tell you a message arrived.</li>
+        <li><strong>Photos</strong>, for pictures you choose to attach.</li>
       </ul>
-      <p>Each is requested when the feature is first used, and the app works without granting them.</p>
+      <p>Each is requested the first time the feature is used, and the app runs without them.</p>
 
-      <h2>Third parties</h2>
+      <h2>Push notifications</h2>
       <p>
-        <strong>Firebase Cloud Messaging</strong> (Google) delivers push notifications on Android,
-        and <strong>Apple Push Notification service</strong> does so on iOS. They receive a device
-        token and the fact that a notification is being sent. They do not receive message content —
-        the notification payload is not the message, and the app decrypts locally to show it.
+        Where an operator has configured push, delivery runs through Firebase Cloud Messaging on
+        Android and Apple Push Notification service on iOS. Those services receive a device token
+        and the fact that a notification is being sent. They do not receive message content: the
+        payload is not the message, and the app decrypts locally to display it.
       </p>
-      <p>No data is sold, rented, or shared with anyone for their own purposes.</p>
 
-      <h2>How long it is kept</h2>
+      <h2>How long data is kept</h2>
       <p>
-        Messages remain on the server until delivered and until you or the other participants delete
-        them; deleting a conversation removes its stored ciphertext. Account records are kept until
-        the account is deleted.
+        The software stores messages until they are delivered and until you or the other
+        participants delete them. Deleting a conversation removes its stored ciphertext. Account
+        records last until the account is deleted. An operator can set stricter limits and should
+        say so in their own policy.
       </p>
 
       <h2>Deleting your account</h2>
       <p>
-        In the app: <strong>Settings → Account → Delete account</strong>. This removes your account
-        record, your profile, your push registration and your channel subscriptions, and it deletes
-        the message ciphertext the server holds for you.
+        In the app: <strong>Settings → Account → Delete account</strong>. This asks your server to
+        remove your account record, your profile, your push registration, your channel
+        subscriptions and the message ciphertext it holds for you.
       </p>
       <p>
-        Copies already delivered to other people's devices are theirs and cannot be recalled — the
-        same as any conversation. If you cannot reach the app, email
-        <a href="mailto:support@rh1.tech">support@rh1.tech</a> from your registered address.
+        Copies already delivered to other people's devices belong to them and cannot be recalled,
+        the same as any conversation. If you cannot reach the app, contact your operator.
       </p>
 
       <h2>Your rights</h2>
       <p>
-        Depending on where you live you may have the right to access, correct, export or erase your
-        personal data, and to object to its processing. Write to
-        <a href="mailto:support@rh1.tech">support@rh1.tech</a> and we will answer within 30 days.
-        Because message content is encrypted with keys we do not hold, an export can only contain
-        what the server can actually read.
+        Rights of access, correction, export, erasure and objection apply against the operator
+        holding your data, so that is who to write to. Because message content is encrypted with
+        keys they do not have, any export can only contain what their server can actually read.
+      </p>
+      <p>
+        For questions about the software itself, write to
+        <a href="mailto:support@rh1.tech">support@rh1.tech</a>.
       </p>
 
       <h2>Children</h2>
-      <p>Pheme is not directed at children under 13, and accounts are not knowingly created for them.</p>
+      <p>Pheme is not directed at children under 13.</p>
 
       <h2>Security</h2>
       <p>
         Traffic between clients and servers, and between federated servers, is encrypted in transit
         with TLS. Message content is additionally end-to-end encrypted. Pheme has not been
-        independently audited against a security standard; the source is public so that the claims
-        here can be checked rather than trusted.
+        independently audited against a security standard. The source is public so that the claims
+        on this site can be checked rather than trusted.
       </p>
 
       <h2>Changes</h2>
-      <p>
-        Material changes will be announced in the app before they take effect, and the date at the
-        top of this page will change.
-      </p>
+      <p>The date at the top of this page changes when this document does.</p>
 
       <h2>Contact</h2>
-      <p>
-        <a href="mailto:support@rh1.tech">support@rh1.tech</a>
-      </p>
+      <p><a href="mailto:support@rh1.tech">support@rh1.tech</a></p>
     </div>
   </section>
 </main>
