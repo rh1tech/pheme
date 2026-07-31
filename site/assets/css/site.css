@@ -47,6 +47,65 @@
   --radius-sm: 10px;
   --duration: 320ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --glow-a: rgba(119, 64, 238, 0.22);
+  --glow-b: rgba(64, 96, 238, 0.08);
+  --grain: 0.5;
+  --code-bg: #0b0b12;
+  --code-text: #9c9aad;
+}
+
+/* LIGHT THEME.
+   Not the dark palette inverted — that is how a dark-first design turns into grey mush. The
+   surfaces get their own values, the accent darkens so it still passes contrast on white, and the
+   glows come down because a bloom that reads as depth on black reads as a smudge on paper. */
+:root[data-theme='light'] {
+  --ink: #fbfaff;
+  --ink-raised: #ffffff;
+  --surface: #ffffff;
+  --surface-hi: #f4f2fa;
+  --line: rgba(16, 12, 40, 0.10);
+  --line-strong: rgba(16, 12, 40, 0.18);
+
+  --accent: #6429dd;
+  --accent-bright: #5620c4;
+  --accent-dim: #c9b6ff;
+  --accent-glow: rgba(119, 64, 238, 0.22);
+
+  --text: #14121c;
+  --text-dim: #55516a;
+  --text-faint: #837e96;
+  --ok: #15803d;
+  --glow-a: rgba(119, 64, 238, 0.13);
+  --glow-b: rgba(64, 96, 238, 0.06);
+  --grain: 0.18;
+  --code-bg: #f2effa;
+  --code-text: #413d55;
+}
+
+/* Somebody who has never touched the switch gets what their system asks for. Once they choose,
+   data-theme is set and wins over this. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --ink: #fbfaff;
+    --ink-raised: #ffffff;
+    --surface: #ffffff;
+    --surface-hi: #f4f2fa;
+    --line: rgba(16, 12, 40, 0.10);
+    --line-strong: rgba(16, 12, 40, 0.18);
+    --accent: #6429dd;
+    --accent-bright: #5620c4;
+    --accent-dim: #c9b6ff;
+    --accent-glow: rgba(119, 64, 238, 0.22);
+    --text: #14121c;
+    --text-dim: #55516a;
+    --text-faint: #837e96;
+    --ok: #15803d;
+    --glow-a: rgba(119, 64, 238, 0.13);
+    --glow-b: rgba(64, 96, 238, 0.06);
+    --grain: 0.18;
+    --code-bg: #f2effa;
+    --code-text: #413d55;
+  }
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -59,8 +118,8 @@ body {
      purple bloom at the very top, so the fold has a light source and the rest
      of the page falls away from it. */
   background-image:
-    radial-gradient(900px 520px at 50% -8%, rgba(119, 64, 238, 0.22), transparent 68%),
-    radial-gradient(1400px 800px at 82% 8%, rgba(64, 96, 238, 0.08), transparent 62%);
+    radial-gradient(900px 520px at 50% -8%, var(--glow-a), transparent 68%),
+    radial-gradient(1400px 800px at 82% 8%, var(--glow-b), transparent 62%);
   background-repeat: no-repeat;
   color: var(--text);
   font-family: var(--font-body);
@@ -78,7 +137,7 @@ body::after {
   inset: 0;
   pointer-events: none;
   z-index: 1;
-  opacity: 0.5;
+  opacity: var(--grain);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
 }
 
@@ -122,7 +181,14 @@ a:hover { color: var(--text); }
 }
 .brand img { width: 30px; height: 30px; border-radius: 8px; }
 
-.site-nav { margin-left: auto; display: flex; align-items: center; gap: 1.6rem; }
+.site-nav { margin-left: auto; display: flex; align-items: center; gap: 1.5rem; }
+/* Smaller than a page button on purpose. In the bar it sits beside four text links, and at full
+   size it shouted over all of them. */
+.site-nav .btn {
+  padding: 0.44rem 0.9rem;
+  font-size: 0.88rem;
+  color: #fff;
+}
 .site-nav a {
   color: var(--text-dim); text-decoration: none; font-size: 0.95rem;
   transition: color var(--duration) var(--ease-out);
@@ -155,6 +221,64 @@ a:hover { color: var(--text); }
   .site-nav a { padding: 0.8rem 0; border-bottom: 1px solid var(--line); }
   .site-nav .btn { margin-top: 0.9rem; text-align: center; }
 }
+
+/* ---------- icon controls in the bar ----------
+   Theme and language. Square, quiet, and the same size as each other, so they read as a pair of
+   settings rather than as two more actions competing with the one real call to action. */
+.bar-tools { display: flex; align-items: center; gap: 0.4rem; }
+
+.icon-btn {
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  position: relative;
+  transition: color var(--duration) var(--ease-out),
+              border-color var(--duration) var(--ease-out),
+              background-color var(--duration) var(--ease-out);
+}
+.icon-btn:hover { color: var(--text); border-color: var(--line-strong); }
+.icon-btn svg { display: block; }
+
+/* One button, two glyphs: whichever theme is NOT active is the one offered. */
+.icon-btn .sun { display: none; }
+:root[data-theme='light'] .icon-btn .sun { display: block; }
+:root[data-theme='light'] .icon-btn .moon { display: none; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .icon-btn .sun { display: block; }
+  :root:not([data-theme]) .icon-btn .moon { display: none; }
+}
+
+/* The language menu. Built from the page's own hreflang links, so adding a translation adds an
+   entry here without touching any markup. */
+.lang-menu { position: relative; }
+.lang-menu > ul {
+  position: absolute; top: calc(100% + 8px); right: 0;
+  min-width: 168px;
+  list-style: none;
+  background: var(--ink-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem;
+  box-shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.6);
+  display: none;
+  z-index: 60;
+}
+.lang-menu[open] > ul { display: block; }
+.lang-menu li a {
+  display: block;
+  padding: 0.5rem 0.7rem;
+  border-radius: 7px;
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 0.93rem;
+  white-space: nowrap;
+}
+.lang-menu li a:hover { background: var(--surface-hi); color: var(--text); }
+.lang-menu li a[aria-current='true'] { color: var(--text); font-weight: 560; }
 
 /* ---------- buttons ---------- */
 .btn {
@@ -313,12 +437,15 @@ h2 {
 
 /* ---------- code block ---------- */
 .code {
-  background: var(--ink-raised);
+  /* A tinted panel rather than the raised surface. In dark they are nearly the same; in light the
+     raised surface IS white, so a code block sat on a white page with no edge and grey text on it
+     read as a faint smudge instead of as a terminal. */
+  background: var(--code-bg);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 1.2rem 1.3rem;
   font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.75;
-  color: var(--text-dim);
+  color: var(--code-text);
   /* PRE, not normal wrapping. The block is written with real newlines in the HTML, and without
      this the browser collapses them and a four-line command renders as one grey paragraph —
      which is exactly what it did. Scrolls sideways rather than reflowing, because a wrapped
@@ -404,7 +531,16 @@ h2 {
 .site-footer a { color: var(--text-dim); text-decoration: none; font-size: 0.94rem; }
 .site-footer a:hover { color: var(--text); }
 .site-footer .tagline { color: var(--text-faint); font-size: 0.9rem; max-width: 34ch; margin-top: 0.8rem; }
-.colophon { border-top: 1px solid var(--line); margin-top: 2.6rem; padding-top: 1.6rem; display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; color: var(--text-faint); font-size: 0.86rem; }
+.colophon {
+  border-top: 1px solid var(--line);
+  margin-top: 2.6rem; padding-top: 1.6rem;
+  display: flex; flex-wrap: wrap; gap: 0.5rem 1rem;
+  justify-content: space-between; align-items: flex-end;
+  color: var(--text-faint); font-size: 0.86rem;
+}
+/* Two facts, two lines. Run together they read as one long credit and the licence — the part
+   somebody might actually need — disappears into the middle of it. */
+.colophon .credit { display: grid; gap: 0.25rem; }
 .lang { display: flex; gap: 0.7rem; }
 .lang a[aria-current='true'] { color: var(--text); }
 
