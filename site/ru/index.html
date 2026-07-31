@@ -19,7 +19,7 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="theme-color" content="#08080c">
   <script>(function(){try{var t=localStorage.getItem('pheme.theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}document.documentElement.classList.add('js')})()</script>
-  <link rel="stylesheet" href="/assets/css/site.css?v=4">
+  <link rel="stylesheet" href="/assets/css/site.css?v=5">
 </head>
 <body>
 
@@ -30,7 +30,7 @@
     <a class="brand" href="/ru/"><img src="/assets/img/icon-512.png" alt="" width="30" height="30">Pheme</a>
     <button class="nav-toggle" aria-expanded="false" aria-label="Меню"><span></span></button>
     <nav class="site-nav" aria-label="Основная навигация">
-      <a href="#how">Как устроено</a>
+      <a href="#how">Как работает Pheme</a>
       <a href="#features">Возможности</a>
       <a href="#channels">Каналы</a>
       <a href="#self-host">Свой сервер</a>
@@ -57,7 +57,6 @@
   <section class="hero">
     <div class="wrap">
       <div>
-        <span class="eyebrow"><span class="dot"></span>iOS · Android · Веб · MLS (RFC 9420)</span>
         <h1>Мессенджер на <em>вашем сервере</em>.</h1>
         <p class="lede">
           Переписка, звонки и каналы со сквозным шифрованием. Сервер хранит и пересылает шифртекст,
@@ -84,7 +83,7 @@
   <section id="how">
     <div class="wrap">
       <div class="section-head reveal">
-        <p class="kicker">Как устроено</p>
+        <p class="kicker">Как работает Pheme</p>
         <h2>Шифрование идёт между людьми, а не между серверами.</h2>
         <p>
           Pheme работает по MLS, стандарту IETF для группового шифрования. Ключи создаются и
@@ -143,7 +142,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg>
           </div>
           <h3>Голосовые звонки</h3>
-          <p>Установка звонка шифруется теми же ключами, что и сообщения, а не идёт отдельным каналом, который виден серверу.</p>
+          <p>Звонок шифруется теми же ключами, что и сообщения, а не идёт отдельным каналом, который виден серверу.</p>
         </article>
 
         <article class="card">
@@ -151,7 +150,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m4 18 5-5 4 4 3-3 4 4"/></svg>
           </div>
           <h3>Фото и файлы</h3>
-          <p>Вложения шифруются так же, как всё остальное. На сервере лежат файлы, которые он не может открыть.</p>
+          <p>Вложения шифруются так же, как всё остальное. Файлы, сохранённые на сервере, нельзя расшифровать без ключа пользователя.</p>
         </article>
 
         <article class="card wide">
@@ -172,9 +171,9 @@
           </div>
           <h3>На вашем языке</h3>
           <p>
-            Переведены все экраны, включая те, которые читают, когда что-то пошло не так и важна
-            каждая формулировка. Сейчас это русский и английский. Строки лежат в репозитории, так
-            что добавить язык — это пул-реквест, а не просьба.
+            Переведено всё приложение: списки чатов, настройки, предупреждения о безопасности,
+            экран с кодом восстановления. Сейчас есть русский и английский, а строки лежат в
+            репозитории, так что добавить язык можно пул-реквестом.
           </p>
         </article>
       </div>
@@ -268,7 +267,7 @@
   <section id="faq">
     <div class="wrap">
       <div class="section-head reveal">
-        <p class="kicker">Вопросы</p>
+        <p class="kicker">FAQ</p>
         <h2>Частые вопросы.</h2>
       </div>
       <div class="faq reveal">
@@ -286,7 +285,7 @@
         </details>
         <details>
           <summary>Обязательно ли ставить свой сервер?</summary>
-          <p>Сервер нужен, чтобы было куда входить. Это может быть сервер компании, сообщества или тот, который вы поднимете сами за вечер.</p>
+          <p>Сервер нужен, чтобы было куда заходить. Это может быть сервер компании, сообщества или тот, который вы поднимете сами за вечер.</p>
         </details>
         <details>
           <summary>Какие данные собираются?</summary>
@@ -300,7 +299,7 @@
     <div class="wrap">
       <div class="band reveal">
         <h2>Запустите свой сервер.</h2>
-        <p>Склонируйте репозиторий, поднимите стек и укажите приложению его адрес.</p>
+        <p>Клонируйте репозиторий, поднимите стек и укажите приложению адрес нового сервера.</p>
         <div class="hero-actions">
           <a class="btn btn-primary" href="https://github.com/rh1tech/pheme">Взять код</a>
           <a class="btn btn-ghost" href="/ru/support/">Документация</a>
@@ -320,7 +319,7 @@
     <div>
       <h4>Продукт</h4>
       <ul>
-        <li><a href="#how">Как устроено</a></li>
+        <li><a href="#how">Как работает Pheme</a></li>
         <li><a href="#features">Возможности</a></li>
         <li><a href="#channels">Каналы</a></li>
         <li><a href="#self-host">Свой сервер</a></li>
@@ -348,6 +347,6 @@
   </div>
 </footer>
 
-<script src="/assets/js/site.js?v=4"></script>
+<script src="/assets/js/site.js?v=5"></script>
 </body>
 </html>
