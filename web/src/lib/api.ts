@@ -576,6 +576,12 @@ export const api = {
     nonce: string,
     ciphertext: string,
     transcript?: { salt: string; nonce: string; ciphertext: string },
+    // How many bodies the transcript holds, and when this device began reading its cache to build
+    // it. The server cannot open the seal, so the count is the ONLY thing it can compare one
+    // backup against another by — omitting it made every upload look like a device that had read
+    // nothing, which the shrink guard refuses with a 409 as soon as any other device holds more.
+    transcriptMessages = 0,
+    tailThrough?: Date,
   ) =>
     request<void>('/v1/mls/key-backup', {
       method: 'PUT',
@@ -584,6 +590,8 @@ export const api = {
         salt,
         nonce,
         ciphertext,
+        transcriptMessages,
+        ...(tailThrough ? { tailThrough: tailThrough.toISOString() } : {}),
         ...(transcript
           ? {
               transcriptSalt: transcript.salt,
@@ -593,6 +601,42 @@ export const api = {
           : {}),
       },
     }),
+
+  /**
+   * Appends sealed message bodies to the backup tail — the copy that exists the moment the body
+   * does, rather than whenever the next whole-history snapshot happens to run.
+   *
+   * The snapshot is debounced, and everything written inside that debounce lives on exactly one
+   * device: MLS destroys the message key on encrypt and on decrypt, so a body that never left the
+   * browser before the browser did is gone. Each entry carries its own salt and nonce, so one body
+   * can be written without re-sealing anything already stored.
+   */
+  appendKeyBackupTail: (
+    deviceId: string,
+    entries: {
+      conversationId: string
+      messageId: string
+      salt: string
+      nonce: string
+      ciphertext: string
+    }[],
+  ) =>
+    request<void>('/v1/mls/key-backup/tail', {
+      method: 'POST',
+      body: { deviceId, entries },
+    }),
+
+  /** Everything appended since the last checkpoint, oldest first — replayed on top of a restore. */
+  getKeyBackupTail: (quiet = false) =>
+    request<{
+      entries: {
+        conversationId: string
+        messageId: string
+        salt: string
+        nonce: string
+        ciphertext: string
+      }[]
+    } | null>('/v1/mls/key-backup/tail', { quiet, allow404: true }),
   getKeyBackup: (quiet = false) =>
     request<{
       salt: string

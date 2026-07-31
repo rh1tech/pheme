@@ -5,7 +5,7 @@ import { IconDeviceDesktop, IconShieldCheck, IconShieldOff } from '@tabler/icons
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
 import { api } from '../../lib/api'
-import { backupExists, terminateOwnDevice } from '../../lib/mls'
+import { backUpNow, backupExists, backupHealth, terminateOwnDevice } from '../../lib/mls'
 import { loadMlsDeviceId } from '../../lib/device'
 import { ResponsiveModal } from '../ResponsiveModal'
 import type { MLSDevice } from '../../lib/types'
@@ -39,11 +39,25 @@ export function SecurityModal({ opened, onClose }: SecurityModalProps) {
   const [devices, setDevices] = useState<MLSDevice[] | null>(null)
   const [backedUp, setBackedUp] = useState<boolean | null>(null)
   const [failed, setFailed] = useState(false)
+  // What THIS browser knows about its own backup, as opposed to whether the server holds one at
+  // all. The two answer different questions: the server copy can exist and be a month stale, and a
+  // device can be failing every upload while that stale copy sits there looking healthy. Polled,
+  // because several unrelated paths move it — a send, a decrypt, a failed append.
+  const [health, setHealth] = useState(() => backupHealth())
+  const [backingUp, setBackingUp] = useState(false)
   // The device a "Remove?" confirmation is currently showing for, and the one whose removal is
   // in flight — so the row can ask before acting and disable while it works.
   const [confirming, setConfirming] = useState<string | null>(null)
   const [removing, setRemoving] = useState<string | null>(null)
   const thisDeviceId = loadMlsDeviceId()
+
+  useEffect(() => {
+    if (!opened) return
+    // The first reading comes from the interval like every other one. Setting state directly in
+    // the effect would be a second source of truth for the same value.
+    const tick = setInterval(() => setHealth(backupHealth()), 500)
+    return () => clearInterval(tick)
+  }, [opened])
 
   useEffect(() => {
     if (!opened) return
@@ -110,6 +124,58 @@ export function SecurityModal({ opened, onClose }: SecurityModalProps) {
           <Text size="xs" c="dimmed">
             {t('security.syncOn')}
           </Text>
+
+          {/*
+            What this browser knows about its OWN backup, which is a different question from
+            whether the server holds one. A stored backup can be a month stale, and a device can be
+            failing every upload while that stale copy sits there looking healthy — which is
+            exactly what happened here: the count the server compares uploads against was never
+            sent from this client, so every one came back refused and nothing said so.
+          */}
+          {health.armed && health.failing ? (
+            <Text size="xs" c="red">
+              {t('security.backupFailing')}
+            </Text>
+          ) : health.armed && health.pending > 0 ? (
+            <Text size="xs" c="dimmed">
+              {t('security.backupPending', { count: health.pending })}
+            </Text>
+          ) : null}
+
+          {/*
+            The manual override. Backups run themselves, but "runs itself" is not something a
+            person can check before closing a laptop for good or handing it on — this is how they
+            make it true now instead of trusting that it already is.
+
+            Disabled rather than hidden without a recovery code: an absent control reads as "this
+            is fine", and a device backing nothing up is the least fine state there is.
+          */}
+          <Group>
+            <Button
+              size="xs"
+              variant="light"
+              loading={backingUp}
+              disabled={!health.armed}
+              onClick={async () => {
+                if (!userId) return
+                setBackingUp(true)
+                try {
+                  await backUpNow(userId)
+                  notifications.show({ message: t('security.backupNowDone'), color: 'green' })
+                } catch {
+                  // Deliberately not the raw error: what reaches here is an HTTP failure or a WASM
+                  // message, and neither tells anybody anything they can act on. The status line
+                  // above keeps the detail for the state it reports.
+                  notifications.show({ message: t('security.backupNowFailed'), color: 'red' })
+                } finally {
+                  setBackingUp(false)
+                  setHealth(backupHealth())
+                }
+              }}
+            >
+              {t('security.backupNow')}
+            </Button>
+          </Group>
         </Stack>
 
         <Stack gap="xs">

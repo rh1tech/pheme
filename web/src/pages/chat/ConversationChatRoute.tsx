@@ -34,6 +34,7 @@ import {
   parseMembership,
   MLS_DEVICE,
   PeerKeysMissingError,
+  appendBodyToTail,
   autoBackupSoon,
   base64ToBytes,
   catchUpToLatest,
@@ -637,7 +638,12 @@ export function ConversationChatRoute() {
             const content = (opened && deserializeContent(opened.plaintext)) || null
             entry = content && opened ? { content, attribution: authenticated(opened.sender) } : null
             if (entry) {
-              void cacheContent(id, m.id, entry.content, entry.attribution)
+              void cacheContent(id, m.id, entry.content, entry.attribution).then(() =>
+                // The decrypted body now lives only here — the message key is gone. Batched rather
+                // than urgent: opening a chat decrypts a screenful at once and the flush is
+                // milliseconds away.
+                appendBodyToTail(id, m.id),
+              )
               // A call's record is encrypted exactly like a message, because it IS one — the
               // difference is only what the body means, which the bubble decides. The one thing
               // it must not do is become the chat list's preview: "{"outcome":"missed"}" is not
@@ -1053,7 +1059,9 @@ export function ConversationChatRoute() {
       processedRef.current.add(msg.id)
       bodiesRef.current = { ...bodiesRef.current, [msg.id]: { content, attribution: mine } }
       setBodies(bodiesRef.current)
-      void cacheContent(id, msg.id, content, mine)
+      // Urgent: this device encrypted it, so until the append lands the only copy in existence is
+      // in this browser.
+      void cacheContent(id, msg.id, content, mine).then(() => appendBodyToTail(id, msg.id, true))
       setPreview(
         id,
         body || (photos.length ? '__photo__' : ''),
@@ -1093,18 +1101,23 @@ export function ConversationChatRoute() {
     void send()
   }
 
-  // What actually renders in the feed. Two kinds are dropped:
-  //   * MLS control messages, which carry no user-visible text; and
-  //   * messages this device cannot read (body resolved to null) — a stretch of history
-  //     from before this device joined, or one not in the backup it restored. Rather than
-  //     announce "not available on this device", we simply do not show them: a new device
-  //     opens a clean conversation of what it CAN read, not a wall of apologies. A message
-  //     still decrypting (body undefined) is kept — its bubble shows "…" until it lands.
+  // What actually renders in the feed. Three kinds are dropped:
+  //   * MLS control messages, which carry no user-visible text;
+  //   * messages this device cannot read (body resolved to null) — a stretch of history from
+  //     before this device joined, or one not in the backup it restored. Rather than announce
+  //     "not available on this device", we simply do not show them: a new device opens a clean
+  //     conversation of what it CAN read, not a wall of apologies;
+  //   * messages whose decrypt has not finished (body still undefined).
+  //
+  // That last one used to be kept and rendered as an ellipsis. An empty space says the same thing
+  // more quietly, and the placeholder had a real cost: the feed paints from cache before the
+  // decrypt loop runs over it, so a whole transcript arrived as a column of ellipses that then
+  // rewrote itself line by line. Waiting costs milliseconds and the messages simply appear.
   const visibleMessages = messages.filter(
     (m) =>
       !MLS_CONTROL_TYPES.has(m.contentType) &&
       // A system line has no body to decrypt and must not be dropped for lacking one.
-      (m.contentType === MEMBERSHIP || bodies[m.id] !== null),
+      (m.contentType === MEMBERSHIP || (bodies[m.id] !== null && bodies[m.id] !== undefined)),
   )
 
   const title = header ? conversationTitle(header, userId ?? '') : ''
@@ -1377,13 +1390,11 @@ export function ConversationChatRoute() {
                         ) : null}
 
                         {content === undefined ? (
-                          // Not tried yet — it has just arrived and its decrypt is still running. An
-                          // ellipsis is the honest thing HERE, where something really is about to
-                          // appear; saying "not available" for the instant before a body lands is
-                          // what made every incoming message flash that it could not be read.
-                          <Text size="sm" c="dimmed" aria-hidden>
-                            …
-                          </Text>
+                          // Not tried yet. Filtered out of visibleMessages before it reaches here,
+                          // so this branch renders nothing; it stays only to keep the type
+                          // exhaustive. It used to draw an ellipsis, which turned a cache-painted
+                          // transcript into a column of placeholders rewriting itself.
+                          null
                         ) : content === null ? (
                           // Unreadable — this device cannot read it and never will. Filtered out
                           // of visibleMessages before it reaches here, so this branch renders

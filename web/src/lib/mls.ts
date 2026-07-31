@@ -42,7 +42,14 @@ import {
   setHomeDomain,
   userKey,
 } from './roster'
-import { cacheContent, clearPreviews, exportAllContents, importContents } from './chatCache'
+import {
+  cacheContent,
+  clearPreviews,
+  countBodies,
+  exportAllContents,
+  importContents,
+  rawBody,
+} from './chatCache'
 import { authenticated } from './attribution'
 import {
   HISTORY_VERSION,
@@ -2323,6 +2330,9 @@ export async function postCallEvent(
   // Attributed to THIS device's own credential — the same identity MLS would have authenticated
   // had anybody else read it. We wrote it, so this is not a claim, it is a fact.
   await cacheContent(conversationId, msg.id, { body }, authenticated(session.identity))
+  // This device encrypted it, so the local cache is the only copy that has ever existed. Urgent:
+  // there is nothing to gain by waiting for company.
+  await appendBodyToTail(conversationId, msg.id, true)
 }
 
 /**
@@ -2708,6 +2718,164 @@ const AUTO_BACKUP_DEBOUNCE_MS = 60_000
 let autoBackupTimer: ReturnType<typeof setTimeout> | null = null
 let autoBackupUser = ''
 
+/** When a backup last succeeded in this session, and why the last attempt failed. */
+let lastBackupAt: Date | null = null
+let lastBackupError: unknown = null
+
+/** Bodies sealed and waiting to reach the server — see appendBodyToTail. */
+const pendingTail = new Map<
+  string,
+  { conversationId: string; messageId: string; salt: string; nonce: string; ciphertext: string }
+>()
+let lastTailError: unknown = null
+
+export type BackupHealth = {
+  /** Whether anything is being backed up at all: false means no recovery code on this device. */
+  armed: boolean
+  lastSucceededAt: Date | null
+  lastError: unknown
+  /** Bodies sealed here but not yet on the server. */
+  pending: number
+  tailError: unknown
+  failing: boolean
+}
+
+export function backupHealth(): BackupHealth {
+  return {
+    armed: sessionPassphrase != null,
+    lastSucceededAt: lastBackupAt,
+    lastError: lastBackupError,
+    pending: pendingTail.size,
+    tailError: lastTailError,
+    failing: lastBackupError != null || lastTailError != null,
+  }
+}
+
+async function runAutoBackup(userId: string, passphrase: string): Promise<void> {
+  try {
+    await backupKeys(userId, passphrase)
+    lastBackupAt = new Date()
+    lastBackupError = null
+  } catch (e) {
+    lastBackupError = e
+  }
+}
+
+/**
+ * Seals one body and puts it in line for the backup tail.
+ *
+ * `urgent` flushes immediately instead of waiting for company — used when this device produced the
+ * body by SENDING it, where the plaintext has never existed anywhere else for even a moment.
+ *
+ * Silent when auto-backup is not armed: a device with no recovery code has nothing to seal under,
+ * which is a setup state rather than a failure.
+ */
+export async function appendBodyToTail(
+  conversationId: string,
+  messageId: string,
+  urgent = false,
+): Promise<void> {
+  const pass = sessionPassphrase
+  if (!pass) return
+
+  const raw = await rawBody(conversationId, messageId)
+  // Nothing stored means the cache write failed, and that failure is the caller's to report.
+  // Sealing whatever happened to be in memory instead would put a body in the backup that this
+  // device could not read back.
+  if (raw == null) return
+
+  try {
+    const sealed = encryptBackup(
+      new TextEncoder().encode(normalizeRecoveryCode(pass)),
+      new TextEncoder().encode(raw),
+    )
+    pendingTail.set(`${conversationId}/${messageId}`, {
+      conversationId,
+      messageId,
+      salt: bytesToBase64(sealed.salt),
+      nonce: bytesToBase64(sealed.nonce),
+      ciphertext: bytesToBase64(sealed.ciphertext),
+    })
+  } catch (e) {
+    lastTailError = e
+    return
+  }
+
+  if (urgent) {
+    await flushTail()
+    return
+  }
+  if (tailFlushTimer) return
+  tailFlushTimer = setTimeout(() => {
+    tailFlushTimer = null
+    void flushTail()
+  }, TAIL_FLUSH_DEBOUNCE_MS)
+}
+
+/**
+ * Sends everything queued. Entries stay queued until the server confirms.
+ *
+ * Appending is idempotent server-side — one entry per (conversation, message) — so re-sending
+ * after a failure that may or may not have landed is safe, and that is what makes it correct to
+ * keep retrying rather than guess.
+ */
+export async function flushTail(): Promise<void> {
+  if (pendingTail.size === 0) return
+  const batch = [...pendingTail.values()]
+  try {
+    // The device id is for diagnosis only — every device of an account seals under the same
+    // recovery code, so any of them can open any entry.
+    await api.appendKeyBackupTail(loadMlsDeviceId() ?? '', batch)
+    for (const entry of batch) pendingTail.delete(`${entry.conversationId}/${entry.messageId}`)
+    lastTailError = null
+  } catch (e) {
+    // Left in the queue on purpose. The body is still in the local cache, so nothing is lost yet —
+    // but it is one closed tab away from being lost, which is exactly the state this reports.
+    lastTailError = e
+  }
+}
+
+/**
+ * Backs everything up NOW, because a person asked.
+ *
+ * Two steps, in the order that matters. The queued bodies go first: they are the most recently
+ * written, so they are the ones most likely to exist nowhere but this browser, and a snapshot that
+ * succeeded while they were still queued would report success without having carried them. Then the
+ * full checkpoint, which is what makes the whole history recoverable rather than only its tail.
+ *
+ * Throws so the caller can say what went wrong — this one was asked for, so unlike the automatic
+ * path it must not fail quietly.
+ */
+export async function backUpNow(userId: string): Promise<void> {
+  const pass = sessionPassphrase
+  if (!pass) throw new Error('no recovery code on this device to back up under')
+
+  // Cancel the pending debounce: it is about to be redundant, and leaving it armed would run a
+  // second identical backup a minute later.
+  if (autoBackupTimer) {
+    clearTimeout(autoBackupTimer)
+    autoBackupTimer = null
+  }
+
+  await flushTail()
+  if (lastTailError) throw lastTailError
+
+  try {
+    await backupKeys(userId, pass)
+    lastBackupAt = new Date()
+    lastBackupError = null
+  } catch (e) {
+    // Recorded as well as thrown. The caller shows a message that is gone in seconds; the status
+    // line has to keep saying so until it is actually fixed.
+    lastBackupError = e
+    throw e
+  }
+}
+
+/** How long a body waits for company before being sent. Short: it is the loss window. */
+const TAIL_FLUSH_DEBOUNCE_MS = 400
+let tailFlushTimer: ReturnType<typeof setTimeout> | null = null
+
 /**
  * Schedules a background backup, if one is unlocked this session. A no-op when it is not — the
  * user has not set up or restored a backup here, so there is no passphrase to seal with, and
@@ -2725,10 +2893,11 @@ export function autoBackupSoon(userId: string): void {
     autoBackupTimer = null
     const pass = sessionPassphrase
     if (!pass) return
-    // Fire and forget: a failed auto-backup is not worth surfacing — the next change
-    // schedules another, and the manual backup button is always there. The keys and
-    // transcripts are safe locally regardless.
-    void backupKeys(autoBackupUser, pass).catch(() => {})
+    // Recorded, not discarded. This used to swallow every failure, which is how the server
+    // refusing every upload looked exactly like a backup that was working: the count the shrink
+    // guard compares against was never being sent, so each attempt came back 409 and nobody heard.
+    // A backup that is failing has to be distinguishable from one that is not.
+    void runAutoBackup(autoBackupUser, pass)
   }, delay)
 }
 
@@ -2747,9 +2916,23 @@ export async function backupKeys(userId: string, passphrase: string): Promise<vo
   const pass = new TextEncoder().encode(passphrase)
   const blob = encryptBackup(pass, state)
 
+  // Stamped BEFORE the read, not after. Everything the tail holds from before this instant is by
+  // construction inside the snapshot about to be uploaded, so the server can drop exactly that much
+  // and no more — a body appended while this export was running is not in it.
+  const tailThrough = new Date()
+
   let transcript: { salt: string; nonce: string; ciphertext: string } | undefined
+  // How many bodies the transcript holds. The server cannot open the seal, so this is the only
+  // thing it can compare one backup against another by; sending nothing made every upload look
+  // like a device that had read nothing, and the shrink guard refused them all.
+  //
+  // Declared without a starting value on purpose: every path below sets it, and a default of 0
+  // sitting here would be the exact wrong answer to fall back on — it is what the server reads as
+  // "this device has nothing", which is how a full history gets replaced by an empty one.
+  let transcriptMessages: number
   try {
     const bodies = await exportAllContents()
+    transcriptMessages = countBodies(bodies)
     const sealed = encryptBackup(
       pass,
       new TextEncoder().encode(JSON.stringify({ v: 1, bodies })),
@@ -2760,9 +2943,14 @@ export async function backupKeys(userId: string, passphrase: string): Promise<vo
         nonce: bytesToBase64(sealed.nonce),
         ciphertext: bytesToBase64(sealed.ciphertext),
       }
+    } else {
+      // The blob is too large to send, so it is NOT in this upload — and a count describing a
+      // transcript that is not there would be a lie the shrink guard then acts on.
+      transcriptMessages = 0
     }
   } catch {
     // A transcript that cannot be gathered must not stop the keys being backed up.
+    transcriptMessages = 0
   }
 
   await api.putKeyBackup(
@@ -2771,6 +2959,8 @@ export async function backupKeys(userId: string, passphrase: string): Promise<vo
     bytesToBase64(blob.nonce),
     bytesToBase64(blob.ciphertext),
     transcript,
+    transcriptMessages,
+    tailThrough,
   )
   // The passphrase is proven and the backup is live: remember it for this session so
   // auto-backup can keep the server copy current as the conversation grows.
@@ -2863,6 +3053,33 @@ export async function restoreKeys(userId: string, passphrase: string): Promise<b
     } catch {
       // Best effort; the device is already up and working without it.
     }
+  }
+
+  // Then the TAIL: everything appended since the snapshot was sealed. That is the most recent half
+  // of the history — usually the half somebody actually misses — and the snapshot by definition
+  // cannot contain it. importContents never overwrites, so anything the snapshot already carried
+  // keeps the snapshot's copy and only the genuinely newer messages are added.
+  try {
+    const tail = await api.getKeyBackupTail(true)
+    const replayed: Record<string, Record<string, string>> = {}
+    for (const entry of tail?.entries ?? []) {
+      try {
+        const opened = decryptBackup(
+          pass,
+          base64ToBytes(entry.salt),
+          base64ToBytes(entry.nonce),
+          base64ToBytes(entry.ciphertext),
+        )
+        ;(replayed[entry.conversationId] ??= {})[entry.messageId] =
+          new TextDecoder().decode(opened)
+      } catch {
+        // One unopenable entry must not cost the rest. It is one message; the others are still
+        // recoverable, and refusing them all to be tidy would be the worse outcome by far.
+      }
+    }
+    if (Object.keys(replayed).length > 0) await importContents(replayed)
+  } catch {
+    // An older server with no tail endpoint, or a network failure. The snapshot still restored.
   }
 
   // Proven this session: keep it so auto-backup keeps this device's own backup current, and

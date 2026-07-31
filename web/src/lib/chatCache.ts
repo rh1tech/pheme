@@ -79,6 +79,18 @@ export async function loadCachedEntries(
  * Raw (still-serialised) on purpose: this is a copy of the cache, not a reading of it, and
  * round-tripping through parse/serialise here could only lose information.
  */
+/**
+ * How many message bodies a transcript holds, across every conversation in it.
+ *
+ * The number the server's shrink guard compares one upload against another by — it cannot open the
+ * seal, so this is all it has to tell a device that has read everything from one that has read
+ * nothing. In one place because the count and the blob must describe the same thing: this client
+ * sent no count at all, so every upload looked like a device holding nothing and was refused.
+ */
+export function countBodies(all: Record<string, ContentMap>): number {
+  return Object.values(all).reduce((total, map) => total + Object.keys(map).length, 0)
+}
+
 export async function exportAllContents(): Promise<Record<string, ContentMap>> {
   const out: Record<string, ContentMap> = {}
   for (const key of await idbKeys()) {
@@ -149,6 +161,22 @@ export async function cacheContent(
 
   map[messageId] = serialised
   await idbSet(cacheKey(conversationId), encoder.encode(JSON.stringify(map)))
+}
+
+/**
+ * The stored body EXACTLY as it is serialised, or null when this device does not hold it.
+ *
+ * Raw on purpose: this is what the backup tail seals and what a restore replays, and both sides
+ * have to agree byte for byte with what exportAllContents produces. Round-tripping through parse
+ * and re-serialise here could only lose whatever a future content version carried.
+ */
+export async function rawBody(
+  conversationId: string,
+  messageId: string,
+): Promise<string | null> {
+  const map = await loadMap(conversationId)
+  const raw = map[messageId]
+  return typeof raw === 'string' ? raw : null
 }
 
 /**
