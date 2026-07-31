@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
-import { Alert, Badge, Button, Group, Loader, Stack, Text } from '@mantine/core'
+import { Alert, Badge, Button, Group, Loader, Stack, Text, TextInput } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { IconDeviceDesktop, IconShieldCheck, IconShieldOff } from '@tabler/icons-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../../auth/context'
 import { api } from '../../lib/api'
-import { backUpNow, backupExists, backupHealth, terminateOwnDevice } from '../../lib/mls'
+import {
+  backUpNow,
+  backupExists,
+  backupHealth,
+  terminateOwnDevice,
+  unlockBackupWithCode,
+} from '../../lib/mls'
 import { loadMlsDeviceId } from '../../lib/device'
 import { ResponsiveModal } from '../ResponsiveModal'
 import type { MLSDevice } from '../../lib/types'
@@ -45,6 +51,9 @@ export function SecurityModal({ opened, onClose }: SecurityModalProps) {
   // because several unrelated paths move it — a send, a decrypt, a failed append.
   const [health, setHealth] = useState(() => backupHealth())
   const [backingUp, setBackingUp] = useState(false)
+  const [code, setCode] = useState('')
+  const [codeError, setCodeError] = useState(false)
+  const [unlocking, setUnlocking] = useState(false)
   // The device a "Remove?" confirmation is currently showing for, and the one whose removal is
   // in flight — so the row can ask before acting and disable while it works.
   const [confirming, setConfirming] = useState<string | null>(null)
@@ -102,7 +111,26 @@ export function SecurityModal({ opened, onClose }: SecurityModalProps) {
           <Text fw={600} size="sm">
             {t('security.statusHeading')}
           </Text>
-          {backedUp === null ? null : backedUp ? (
+          {backedUp === null ? null : backedUp && !health.armed ? (
+            /*
+              A backup EXISTS, but not because of this browser.
+              
+              This is the state a device lands in when the recovery code was created somewhere else
+              — on a phone, say — or when local storage was cleared. Nothing decrypted here is being
+              backed up, and nothing will be until the code is entered. The panel used to show plain
+              green for it, because the green was answering "does the server hold a backup" while
+              the person reading it was asking "are my messages safe". Those are different
+              questions, and only one of them is theirs.
+            */
+            <Alert variant="light" color="yellow" icon={<IconShieldOff size={18} />} p="xs">
+              <Text size="sm" fw={600}>
+                {t('security.backupDormant')}
+              </Text>
+              <Text size="xs" c="dimmed">
+                {t('security.backupDormantHint')}
+              </Text>
+            </Alert>
+          ) : backedUp ? (
             <Alert variant="light" color="green" icon={<IconShieldCheck size={18} />} p="xs">
               <Text size="sm" fw={600}>
                 {t('security.backupOn')}
@@ -150,6 +178,50 @@ export function SecurityModal({ opened, onClose }: SecurityModalProps) {
             Disabled rather than hidden without a recovery code: an absent control reads as "this
             is fine", and a device backing nothing up is the least fine state there is.
           */}
+          {/*
+            Without a code this browser cannot seal anything, so "back up now" has nothing to do.
+            A greyed-out button with no explanation is a dead end; the code is the way out, so ask
+            for it here rather than leaving somebody to guess.
+          */}
+          {backedUp && !health.armed ? (
+            <Group align="flex-end" gap="xs">
+              <TextInput
+                size="xs"
+                style={{ flex: 1 }}
+                label={t('security.unlockLabel')}
+                placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+                value={code}
+                onChange={(e) => setCode(e.currentTarget.value)}
+                error={codeError ? t('security.unlockFailed') : undefined}
+              />
+              <Button
+                size="xs"
+                variant="light"
+                loading={unlocking}
+                disabled={!code.trim()}
+                onClick={async () => {
+                  if (!userId) return
+                  setUnlocking(true)
+                  setCodeError(false)
+                  try {
+                    await unlockBackupWithCode(userId, code.trim())
+                    setCode('')
+                    setHealth(backupHealth())
+                    notifications.show({ message: t('security.unlockDone'), color: 'green' })
+                  } catch {
+                    // A wrong code, and nothing was changed by trying — the stored backup is only
+                    // ever opened here, never resealed, so a typo costs an error message.
+                    setCodeError(true)
+                  } finally {
+                    setUnlocking(false)
+                  }
+                }}
+              >
+                {t('security.unlock')}
+              </Button>
+            </Group>
+          ) : null}
+
           <Group>
             <Button
               size="xs"

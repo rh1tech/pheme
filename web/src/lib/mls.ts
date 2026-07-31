@@ -2645,6 +2645,45 @@ export async function ensureRecoveryBackup(userId: string): Promise<string | nul
 }
 
 /**
+ * Proves a recovery code against the stored backup and re-arms this browser with it.
+ *
+ * The state a browser lands in without this: a backup exists on the server, but this device holds
+ * no copy of the code — it was generated on a phone, or local storage was cleared. Auto-backup is
+ * then dormant and nothing decrypted here is backed up, while the panel happily reports "chats
+ * backed up" because the SERVER has one. Dormant is not healthy, and this is the way out of it.
+ *
+ * Deliberately NOT a restore. restoreKeys mints a fresh identity and re-joins every group, which is
+ * the right thing when the history is missing and completely wrong as a way of remembering a
+ * passphrase. This only opens the stored blob to prove the code, then keeps it.
+ *
+ * Deliberately NOT backupKeys either: sealing under whatever was typed would REPLACE the stored
+ * backup's key with a wrong code on a typo, locking the real code out of the user's own history.
+ * Proving before keeping is the whole point.
+ *
+ * Returns false when there is no backup to prove it against; throws on a wrong code.
+ */
+export async function unlockBackupWithCode(userId: string, code: string): Promise<boolean> {
+  await ensureWasm()
+  const backup = await api.getKeyBackup(true)
+  if (!backup) return false
+
+  const normalized = normalizeRecoveryCode(code)
+  // Throws on a wrong code — the GCM tag fails — which is exactly the proof we want.
+  decryptBackup(
+    new TextEncoder().encode(normalized),
+    base64ToBytes(backup.salt),
+    base64ToBytes(backup.nonce),
+    base64ToBytes(backup.ciphertext),
+  )
+
+  sessionPassphrase = normalized
+  await saveRecoveryCode(code)
+  // Everything this browser read while it was dormant is still only here. Catch it up now.
+  autoBackupSoon(userId)
+  return true
+}
+
+/**
  * Re-seals the backup under a NEW recovery code and returns it — for "regenerate", when a user
  * believes their old code is compromised or lost. The old code stops working immediately.
  */
