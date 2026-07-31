@@ -980,6 +980,10 @@ class _Message extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Nothing at all until this device knows what the message is — see
+    // MessageFeedState.isReadyToShow for why a placeholder here is worse than an empty space.
+    if (!feed.isReadyToShow(message)) return const SizedBox.shrink();
+
     // Who MLS says wrote this, and whether the envelope agrees.
     //
     // `isOwn` decides which side of the feed the bubble sits on, and it is answered from the

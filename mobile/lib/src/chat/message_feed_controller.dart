@@ -41,6 +41,25 @@ class MessageFeedState {
   /// server is the untrusted Delivery Service. See crypto/attribution.dart.
   final Map<String, CachedEntry?> contents;
 
+  /// Whether [message] is ready to be shown.
+  ///
+  /// The feed paints the cached transcript from disk BEFORE the decrypt loop runs over it, so for a
+  /// beat every bubble in it has no content — and the only thing a bodyless bubble can say is "not
+  /// available on this device", which is PERMANENT. Flashing a permanent verdict at somebody a
+  /// moment before contradicting it teaches them not to believe it on the day it is true. So a
+  /// message waits until this device knows what it is.
+  ///
+  /// [contents] already carries the distinction: a key is written for every message the decrypt
+  /// loop attempts, with a null value where the answer was "cannot read this". An absent key means
+  /// it has not been tried yet.
+  ///
+  /// System and membership lines are exempt. The server writes them in plaintext and the decrypt
+  /// loop skips them, so they never get a key — keying purely off the map would hide them forever.
+  bool isReadyToShow(ChatMessage message) =>
+      message.isSystem ||
+      message.membershipEvent != null ||
+      contents.containsKey(message.id);
+
   /// The conversation's members, carrying how far each has got (deliveredSeq/readSeq). Held here, not
   /// read off the page's Conversation, because the ticks have to move as receipts arrive — and that
   /// Conversation came from a FutureProvider that nothing re-fetches. Seeded by the settle below.
