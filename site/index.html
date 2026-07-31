@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pheme — the encrypted messenger you can run yourself</title>
-  <meta name="description" content="End-to-end encrypted chats, calls and channels using MLS (RFC 9420), on a server you choose or one you run. No ads, no trackers, no analytics. Open source.">
+  <meta name="description" content="End-to-end encrypted chats, calls and channels using MLS (RFC 9420), on a server you run. No ads, no trackers, no analytics. Free software under the GPLv3.">
   <link rel="canonical" href="https://pheme.rh1.tech/">
   <link rel="alternate" hreflang="en" href="https://pheme.rh1.tech/">
   <link rel="alternate" hreflang="ru" href="https://pheme.rh1.tech/ru/">
@@ -13,13 +13,13 @@
   <link rel="apple-touch-icon" href="/assets/img/icon-512.png">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Pheme — the encrypted messenger you can run yourself">
-  <meta property="og:description" content="End-to-end encrypted chats, calls and channels using MLS (RFC 9420), on a server you choose or one you run.">
+  <meta property="og:description" content="End-to-end encrypted chats, calls and channels using MLS (RFC 9420), on a server you run.">
   <meta property="og:image" content="https://pheme.rh1.tech/assets/img/icon-512.png">
   <meta property="og:url" content="https://pheme.rh1.tech/">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="theme-color" content="#08080c">
   <script>document.documentElement.classList.add('js')</script>
-  <link rel="stylesheet" href="/assets/css/site.css?v=1">
+  <link rel="stylesheet" href="/assets/css/site.css?v=2">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -28,7 +28,9 @@
     "url": "https://pheme.rh1.tech/",
     "applicationCategory": "CommunicationApplication",
     "operatingSystem": ["iOS", "Android", "Web"],
-    "description": "End-to-end encrypted chats, calls and channels using MLS (RFC 9420), on a server you choose or one you run.",
+    "description": "End-to-end encrypted chats, calls and channels using MLS (RFC 9420), on a server you run.",
+    "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+    "author": { "@type": "Person", "name": "Mikhail Matveev", "url": "https://rh1.tech" },
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
     "inLanguage": ["en", "ru"]
   }
@@ -47,7 +49,7 @@
       <a href="#features">Features</a>
       <a href="#channels">Channels</a>
       <a href="#self-host">Run your own</a>
-      <a class="btn btn-primary" href="https://kn86r-prod.rh1.tech">Open the app</a>
+      <a class="btn btn-primary" href="https://github.com/rh1tech/pheme">Source code</a>
     </nav>
   </div>
 </header>
@@ -61,14 +63,14 @@
         <h1>A messenger you can <em>run yourself</em>.</h1>
         <p class="lede">
           Chats, calls and channels, encrypted end to end. The server stores and forwards
-          ciphertext and never holds the keys to read it — whether that server belongs to your
-          company, your community, or you.
+          ciphertext. It never holds the keys to read it, and that stays true whether the server is
+          yours or somebody else's.
         </p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="https://kn86r-prod.rh1.tech">Open the app</a>
+          <a class="btn btn-primary" href="https://github.com/rh1tech/pheme">Read the source</a>
           <a class="btn btn-ghost" href="#self-host">Run your own server</a>
         </div>
-        <p class="hero-note">Open source · No ads · No trackers · No analytics</p>
+        <p class="hero-note">GPLv3 · No ads · No trackers · No analytics</p>
       </div>
 
       <div class="device-stack reveal">
@@ -88,9 +90,9 @@
         <p class="kicker">How it works</p>
         <h2>The encryption is between people, not between servers.</h2>
         <p>
-          Pheme uses MLS, the IETF standard for group messaging. Keys are derived and rotated on
-          the devices themselves; the server sees who is in a conversation and when, and nothing
-          of what was said.
+          Pheme uses MLS, the IETF standard for group messaging. Keys are made and rotated on the
+          devices themselves. The server sees who is in a conversation and when, and nothing of what
+          was said.
         </p>
       </div>
 
@@ -98,25 +100,25 @@
         <div class="step">
           <div>
             <h3>Pick your server</h3>
-            <p>Pheme asks which server you are signing in to, the same way an email client asks. Point it at the instance you belong to.</p>
+            <p>Pheme asks which server you are signing in to, the way an email client does. Point it at the one you belong to.</p>
           </div>
         </div>
         <div class="step">
           <div>
             <h3>Your devices hold the keys</h3>
-            <p>Every device is its own member of the group with its own key material. Adding or removing one rotates the group's keys, so a device that leaves cannot read what comes next.</p>
+            <p>Every device is its own member of the group with its own keys. Adding or removing one rotates the group's keys, so a device that leaves cannot read what comes after it.</p>
           </div>
         </div>
         <div class="step">
           <div>
             <h3>The server forwards ciphertext</h3>
-            <p>It stores messages so they arrive when you are offline, and it can never open them. Losing the server does not expose your history; losing your last device is what a recovery code is for.</p>
+            <p>It stores messages so they arrive when you come back online, and it cannot open them. Losing the server does not expose your history. Losing your last device is what the recovery code is for.</p>
           </div>
         </div>
         <div class="step">
           <div>
             <h3>Servers can federate</h3>
-            <p>Someone on one instance can message someone on another, and the encryption still runs end to end between the people. Federation is permissioned by a signed list of hosts rather than open to anyone who shows up.</p>
+            <p>Someone on one server can write to someone on another, and the encryption still runs between the two people rather than between the two machines. Federation works off a signed list of hosts, so it is not open to anyone who turns up.</p>
           </div>
         </div>
       </div>
@@ -127,7 +129,7 @@
     <div class="wrap">
       <div class="section-head reveal">
         <p class="kicker">What you get</p>
-        <h2>Everything encrypted, including the parts most apps leave out.</h2>
+        <h2>Encrypted, including the parts most apps leave out.</h2>
       </div>
 
       <div class="grid reveal">
@@ -136,7 +138,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
           </div>
           <h3>Chats and groups</h3>
-          <p>Direct and group conversations, encrypted end to end, on as many devices as you like.</p>
+          <p>Direct and group conversations, encrypted end to end, on as many devices as you want to use.</p>
         </article>
 
         <article class="card">
@@ -144,7 +146,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg>
           </div>
           <h3>Voice calls</h3>
-          <p>The signalling is encrypted under the same keys as your messages, not a separate channel the server can watch.</p>
+          <p>Call setup is encrypted with the same keys as your messages, rather than going over a separate channel the server can watch.</p>
         </article>
 
         <article class="card">
@@ -152,17 +154,17 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m4 18 5-5 4 4 3-3 4 4"/></svg>
           </div>
           <h3>Photos and files</h3>
-          <p>Attachments are encrypted like everything else. The server stores blobs it cannot open.</p>
+          <p>Attachments are encrypted like anything else. The server stores files it cannot open.</p>
         </article>
 
         <article class="card wide">
           <div class="icon" aria-hidden="true">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v13"/><path d="m7 12 5 5 5-5"/><rect x="4" y="19" width="16" height="2" rx="1"/></svg>
           </div>
-          <h3>Your history follows you</h3>
+          <h3>Your history moves with you</h3>
           <p>
-            A new device is handed the conversation history by one you already trust, and a recovery
-            code seals a copy off-device — so losing a phone does not mean losing what was said.
+            A new device gets the conversation history from one you already use. A recovery code
+            keeps a sealed copy off the device, so losing a phone does not cost you what was said.
           </p>
         </article>
 
@@ -172,8 +174,8 @@
           </div>
           <h3>English and Russian</h3>
           <p>
-            The whole app, both languages — including the parts that matter under pressure, like
-            what a warning actually says.
+            Both languages throughout the app, including the screens you read when something has
+            gone wrong and the wording actually matters.
           </p>
         </article>
       </div>
@@ -192,8 +194,8 @@
           <figcaption>A channel</figcaption>
         </figure>
         <figure>
-          <img src="/assets/img/shot-en-04-settings.webp" alt="Devices & security" width="380" height="845" loading="lazy" decoding="async">
-          <figcaption>Devices & security</figcaption>
+          <img src="/assets/img/shot-en-04-settings.webp" alt="Devices and security" width="380" height="845" loading="lazy" decoding="async">
+          <figcaption>Devices &amp; security</figcaption>
         </figure>
       </div>
     </div>
@@ -205,13 +207,13 @@
         <p class="kicker">Channels</p>
         <h2>A notification feed with an HTTP endpoint.</h2>
         <p style="color:var(--text-dim);margin-bottom:1.2rem">
-          Build finished, order shipped, sensor tripped, rehearsal moved — anything that can make an
-          HTTP request can post to a channel. Every subscriber gets a push notification and a
-          permanent history they can scroll back through.
+          Build finished, order shipped, sensor tripped, rehearsal moved. Anything that can make an
+          HTTP request can post to a channel, and everyone subscribed gets a push notification and a
+          history they can scroll back through.
         </p>
         <p style="color:var(--text-dim)">
-          It is the part people end up using for things they never expected: a deploy log the whole
-          team can read on a phone, a doorbell, a cron job that finally has somewhere to speak.
+          In practice people point deploy logs at it, and doorbells, and the cron jobs that until
+          now had nowhere to report.
         </p>
       </div>
       <div class="reveal">
@@ -220,7 +222,7 @@
 <span class="k">curl</span> -X POST https://your-server/v1/channels/<span class="s">$ID</span>/posts \
   -H <span class="s">"Authorization: Bearer $TRIGGER_TOKEN"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
-  -d <span class="s">'{"body":"Deploy v1.4.0 finished — 3m12s"}'</span>
+  -d <span class="s">'{"body":"Deploy v1.4.0 finished in 3m12s"}'</span>
         </div>
       </div>
     </div>
@@ -233,11 +235,12 @@
         <h2>The whole stack is a Docker Compose file.</h2>
         <p style="color:var(--text-dim);margin-bottom:1.2rem">
           API, web client, database, push and TURN. Point the app at your host and it is your
-          messenger — no account with us, no dependency on this site staying up.
+          messenger. There is no account with us to create, and nothing that depends on this site
+          staying up.
         </p>
         <p style="color:var(--text-dim)">
-          Pheme is open source. If something here matters to you, you can read exactly how it works
-          rather than take our word for it.
+          Pheme is free software under the GPLv3. Claims about encryption that nobody can check are
+          just marketing, so the code is there to be read.
         </p>
       </div>
       <div class="reveal">
@@ -261,23 +264,23 @@
       <div class="faq reveal">
         <details>
           <summary>Can the server read my messages?</summary>
-          <p>No. Message content is encrypted on your device and decrypted on the recipients' devices; the keys never leave them. The server holds ciphertext plus the routing metadata it needs to deliver it — who is in a conversation, when a message was sent, how large it was.</p>
+          <p>No. Content is encrypted on your device and decrypted on the recipients' devices, and the keys never leave them. The server keeps the ciphertext and the routing details it needs to deliver it: who is in a conversation, when a message was sent, how big it was.</p>
         </details>
         <details>
           <summary>What happens if I lose my phone?</summary>
-          <p>Another device you are still signed in on can hand the history to a replacement. If you have no other device, a recovery code opens a copy of your history that was sealed off-device under that code — which is why the app asks you to write it down once, and why nobody but you can use it.</p>
+          <p>Another device you are still signed in on can pass the history to a replacement. With no other device, your recovery code opens a sealed copy that was stored off the device under that code. The app shows the code once and asks you to write it down, because a code we could recover for you would be a code we could use.</p>
         </details>
         <details>
           <summary>Is it really open source?</summary>
-          <p>Yes — client, server and the MLS integration. Encryption claims that cannot be checked are marketing, so the point of publishing it is that you do not have to believe this page.</p>
+          <p>Yes. Client, server and the MLS integration, under the GNU General Public License v3. You can read it, change it, and run your own version.</p>
         </details>
         <details>
           <summary>Do I have to run a server?</summary>
-          <p>No. Sign in to one that already exists — your company's, your community's, or a friend's. Running your own is an option, not a requirement.</p>
+          <p>You need a server to sign in to. It can be your company's, your community's, or one you set up yourself in an afternoon.</p>
         </details>
         <details>
           <summary>What does it collect?</summary>
-          <p>An email address for sign-in, the display name you choose, an avatar if you upload one, and a push token so notifications can reach you. No ads, no trackers, no third-party analytics, no crash reporter. The <a href="/privacy/">privacy policy</a> lists it in full.</p>
+          <p>An email address for sign-in, the display name you pick, an avatar if you upload one, and a push token so notifications can reach you. No ads, no trackers, no third-party analytics, no crash reporter. The <a href="/privacy/">privacy policy</a> lists all of it.</p>
         </details>
       </div>
     </div>
@@ -286,11 +289,11 @@
   <section>
     <div class="wrap">
       <div class="band reveal">
-        <h2>Start talking.</h2>
-        <p>Open the web app in a browser, or install it on a phone. Point it at whichever server you belong to.</p>
+        <h2>Set one up.</h2>
+        <p>Clone the repository, bring up the stack, and point the app at your own host.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="https://kn86r-prod.rh1.tech">Open the app</a>
-          <a class="btn btn-ghost" href="https://github.com/rh1tech/pheme">Read the source</a>
+          <a class="btn btn-primary" href="https://github.com/rh1tech/pheme">Get the source</a>
+          <a class="btn btn-ghost" href="/support/">Read the docs</a>
         </div>
       </div>
     </div>
@@ -310,14 +313,15 @@
         <li><a href="#how">How it works</a></li>
         <li><a href="#features">Features</a></li>
         <li><a href="#channels">Channels</a></li>
-        <li><a href="https://kn86r-prod.rh1.tech">Open the app</a></li>
+        <li><a href="#self-host">Self-hosting</a></li>
       </ul>
     </div>
     <div>
       <h4>Project</h4>
       <ul>
-        <li><a href="https://github.com/rh1tech/pheme">Source code</a></li>
-        <li><a href="#self-host">Self-hosting</a></li>
+        <li><a href="https://github.com/rh1tech/pheme">GitHub</a></li>
+        <li><a href="https://github.com/rh1tech/pheme/issues">Issues</a></li>
+        <li><a href="https://github.com/rh1tech/pheme/blob/main/LICENSE">GPLv3 licence</a></li>
         <li><a href="/support/">Support</a></li>
       </ul>
     </div>
@@ -330,7 +334,7 @@
     </div>
   </div>
   <div class="wrap colophon">
-    <span>© 2026 Pheme</span>
+    <span>© 2026 Mikhail Matveev · <a href="https://rh1.tech">rh1.tech</a> · Free software under the <a href="https://github.com/rh1tech/pheme/blob/main/LICENSE">GPLv3</a></span>
     <span class="lang">
       <a href="/" aria-current="true">English</a>
       <a href="/ru/">Русский</a>
@@ -338,6 +342,6 @@
   </div>
 </footer>
 
-<script src="/assets/js/site.js?v=1"></script>
+<script src="/assets/js/site.js?v=2"></script>
 </body>
 </html>
