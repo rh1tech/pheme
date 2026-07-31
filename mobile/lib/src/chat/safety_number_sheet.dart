@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../l10n/app_localizations.dart';
 import '../widgets/adaptive/adaptive_controls.dart';
 import '../crypto/mls_service.dart';
+import '../crypto/backup_now_button.dart';
 import 'chat_shield_status.dart';
 import 'safety_pin_store.dart';
 
@@ -186,6 +187,10 @@ class _Body extends ConsumerWidget {
         // the question the backup exists for and the one nothing used to answer anywhere.
         const SizedBox(height: 20),
         _BackupStatus(conversationId: conversationId),
+        // Compact, because this sheet's primary action is accepting the safety number. Backing up
+        // is the thing somebody does after READING the line above and deciding they want it done
+        // now rather than whenever the next checkpoint happens.
+        const BackupNowButton(compact: true),
 
         if (state.changed) ...[
           const SizedBox(height: 20),

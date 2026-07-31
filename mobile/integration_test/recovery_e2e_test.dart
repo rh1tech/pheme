@@ -283,6 +283,73 @@ void main() {
     });
   });
 
+  group('backing up on demand', () {
+    // "Back up now" has to mean it. Somebody presses this before wiping a phone or handing one
+    // over, reads that it worked, and acts on that — so a success message that arrives while the
+    // most recent messages are still queued locally would be worse than no button at all.
+    testWidgets('carries everything written since the last checkpoint', (
+      _,
+    ) async {
+      final s = await _establish('9');
+
+      final recent = await s.alice.mls.sendMessage(
+        s.conversation,
+        s.alice.userId,
+        'written a moment before pressing the button',
+      );
+
+      await s.alice.mls.backUpNow(s.alice.userId);
+
+      // A replacement handset with nothing but the code must find it — which is the promise the
+      // button makes, stated the way the person understands it.
+      final replacement = await Device.signIn(
+        'alice9-replacement',
+        s.alice.email,
+      );
+      expect(
+        await replacement.mls.restoreWithSecret(replacement.userId, s.code),
+        isTrue,
+      );
+
+      final read = await replacement.read(s.conversation.id);
+      expect(
+        read[recent.id],
+        'written a moment before pressing the button',
+        reason:
+            'the button reported success without carrying the newest message',
+      );
+    });
+
+    // It must never force. force means "replace a stored backup holding MORE history than this
+    // device has", which is how a freshly restored phone once erased a full history. Pressing
+    // "back up now" is a request to save what is here, not permission to destroy what is there.
+    testWidgets('does not overwrite a fuller backup made elsewhere', (_) async {
+      final s = await _establish('10');
+
+      // A second handset comes up with nothing but the code and does NOT restore — so it holds no
+      // history at all, which is exactly the device that must not be able to flatten the backup.
+      final empty = await Device.signIn('alice10-empty', s.alice.email);
+      await empty.mls.acceptFreshIdentity();
+
+      // It has no recovery code of its own, so the button is refused outright rather than
+      // uploading an empty transcript over a full one.
+      await expectLater(
+        empty.mls.backUpNow(empty.userId),
+        throwsA(anything),
+        reason:
+            'a device with nothing to seal under must not be able to check in an empty backup',
+      );
+
+      // And the stored history is untouched: a third handset restores everything.
+      final third = await Device.signIn('alice10-third', s.alice.email);
+      expect(await third.mls.restoreWithSecret(third.userId, s.code), isTrue);
+      final read = await third.read(s.conversation.id);
+      for (final entry in s.sent.entries) {
+        expect(read[entry.key], entry.value, reason: 'lost "${entry.value}"');
+      }
+    });
+  });
+
   group('restoring from Settings, after having started fresh', () {
     // THE ONE THAT ACTUALLY HAPPENED, and the reason the other five in this file are not enough on
     // their own: every one of them restores onto a device whose body cache is EMPTY, so there is

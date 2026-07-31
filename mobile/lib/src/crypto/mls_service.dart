@@ -2624,6 +2624,46 @@ class MlsService {
     return out;
   }
 
+  /// Backs everything up NOW, because a person asked.
+  ///
+  /// Two steps, in the order that matters. The queued bodies go first: they are the ones written
+  /// most recently, so they are the ones most likely to exist nowhere but this handset, and a
+  /// snapshot that succeeded while they were still queued would report success without having
+  /// carried them. Then the full checkpoint, which is what makes the whole history recoverable
+  /// rather than only the recent tail of it.
+  ///
+  /// Never forces. [force] means "replace a stored backup that holds MORE than this device does",
+  /// which is a destructive act and needs its own deliberate answer — pressing "back up now" is a
+  /// request to save what is here, not permission to overwrite what is there.
+  ///
+  /// Throws so the caller can say what went wrong. This one was asked for, so unlike the automatic
+  /// path it must not fail quietly.
+  Future<void> backUpNow(String userId) async {
+    final passphrase = _sessionPassphrase;
+    if (passphrase == null) {
+      throw StateError('no recovery code on this device to back up under');
+    }
+    // Cancel the pending debounce — it is about to be redundant, and leaving it armed would run a
+    // second identical backup twenty seconds after this one.
+    _autoBackupTimer?.cancel();
+    _autoBackupTimer = null;
+
+    await _flushTail();
+    final tailError = _lastTailError;
+    if (tailError != null) throw tailError;
+
+    try {
+      await backupKeys(userId, passphrase);
+      _lastBackupAt = DateTime.now();
+      _lastBackupError = null;
+    } on Object catch (e) {
+      // Recorded as well as thrown. The caller shows a message that is gone in three seconds; the
+      // shield has to keep saying so until it is actually fixed.
+      _lastBackupError = e;
+      rethrow;
+    }
+  }
+
   /// Runs an owed auto-backup NOW rather than letting the debounce swallow it.
   ///
   /// Only when one is actually owed: with no timer pending there is nothing newer than the stored

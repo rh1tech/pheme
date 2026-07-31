@@ -428,6 +428,11 @@ const Map<String, String> enStrings = {
   'backup.tooShort': 'Use at least {min} characters',
   'backup.mismatch': 'Passphrases do not match',
   'backup.save': 'Back up now',
+  'backup.now': 'Back up now',
+  'backup.nowRunning': 'Backing up…',
+  'backup.nowDone': 'Everything on this phone is backed up.',
+  'backup.nowFailed':
+      'Could not back up. Nothing was lost — your messages are still on this phone.',
   'backup.statusSafe':
       'Everything here is backed up. Losing this phone would not lose these messages.',
   'backup.statusPending': 'Backing up the newest messages…',

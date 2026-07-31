@@ -20,9 +20,18 @@ import 'package:integration_test/integration_test.dart';
 
 import 'package:pheme_mobile/main.dart' as app;
 
-const _email = String.fromEnvironment('SHOT_EMAIL', defaultValue: 'priya@pheme.test');
-const _password = String.fromEnvironment('SHOT_PASSWORD', defaultValue: 'orchard-lantern-97');
-const _server = String.fromEnvironment('PHEME_API', defaultValue: 'http://localhost:8099');
+const _email = String.fromEnvironment(
+  'SHOT_EMAIL',
+  defaultValue: 'priya@pheme.test',
+);
+const _password = String.fromEnvironment(
+  'SHOT_PASSWORD',
+  defaultValue: 'orchard-lantern-97',
+);
+const _server = String.fromEnvironment(
+  'PHEME_API',
+  defaultValue: 'http://localhost:8099',
+);
 
 /// Which language to photograph the app in: 'en', 'ru', or empty for whatever
 /// the device is set to.
@@ -59,7 +68,11 @@ Finder anyText(WidgetTester tester, List<String> labels) {
   return find.text(labels.first);
 }
 
-Future<void> tapIfPresent(WidgetTester tester, Finder f, {int settle = 4}) async {
+Future<void> tapIfPresent(
+  WidgetTester tester,
+  Finder f, {
+  int settle = 4,
+}) async {
   if (!tester.any(f)) return;
   await tester.tap(f.first, warnIfMissed: false);
   await rest(tester, seconds: settle);
@@ -76,7 +89,9 @@ void main() {
     if (_locale.isNotEmpty) {
       const storage = FlutterSecureStorage();
       await storage.write(key: 'pheme.locale', value: _locale);
-      debugPrint('SHOT_LOCALE wrote=$_locale readback=${await storage.read(key: 'pheme.locale')}');
+      debugPrint(
+        'SHOT_LOCALE wrote=$_locale readback=${await storage.read(key: 'pheme.locale')}',
+      );
     }
 
     app.main();
@@ -114,7 +129,10 @@ void main() {
     // mls.session() throws NeedsRestoreException, which needs a backup to
     // restore from. This stays as a fallback, because a dialog nobody dismissed
     // is a capture full of screenshots of a dialog.
-    const skipLabels = ['Start fresh on this device', 'Начать заново на этом устройстве'];
+    const skipLabels = [
+      'Start fresh on this device',
+      'Начать заново на этом устройстве',
+    ];
     for (var attempt = 0; attempt < 15; attempt++) {
       final skip = anyText(tester, skipLabels);
       if (tester.any(skip)) {
@@ -138,8 +156,10 @@ void main() {
     // A device with no backup is asked to write its recovery code down before it
     // will get out of the way. Tick the box, press the button.
     for (var attempt = 0; attempt < 12; attempt++) {
-      final confirm = anyText(tester,
-          const ['I have saved my recovery code', 'Я сохранил код восстановления']);
+      final confirm = anyText(tester, const [
+        'I have saved my recovery code',
+        'Я сохранил код восстановления',
+      ]);
       if (!tester.any(confirm)) {
         await rest(tester, seconds: 2);
         continue;
@@ -190,7 +210,10 @@ void main() {
       await shot(tester, '05-channels');
 
       final channelRows = firstOf(const [
-        'Deploys', 'On-call', 'Allotment 14', 'Thursday rehearsals',
+        'Deploys',
+        'On-call',
+        'Allotment 14',
+        'Thursday rehearsals',
       ]);
       if (tester.any(channelRows)) {
         await tester.tap(channelRows.first, warnIfMissed: false);
@@ -205,7 +228,11 @@ void main() {
     // The gear in the app bar, which is how a person reaches it.
     await tapIfPresent(tester, find.byIcon(Icons.settings), settle: 6);
     if (!tester.any(find.text('Appearance'))) {
-      await tapIfPresent(tester, find.byIcon(Icons.settings_outlined), settle: 6);
+      await tapIfPresent(
+        tester,
+        find.byIcon(Icons.settings_outlined),
+        settle: 6,
+      );
     }
     await shot(tester, '07-settings');
   }, timeout: const Timeout(Duration(minutes: 15)));

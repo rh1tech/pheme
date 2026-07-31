@@ -15,6 +15,7 @@ import '../l10n/app_localizations.dart';
 import '../models/chat_models.dart';
 import '../widgets/adaptive/adaptive.dart';
 import '../widgets/error_view.dart';
+import '../crypto/backup_now_button.dart';
 
 class SecurityPage extends ConsumerStatefulWidget {
   const SecurityPage({super.key});
@@ -142,6 +143,16 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
           child: Text(
             l10n.t('security.syncOn'),
             style: theme.textTheme.bodySmall,
+          ),
+        ),
+        // The manual override. Backups run themselves, but "runs itself" is not something a person
+        // can check before wiping a phone or handing one over — this is how they make it true now
+        // instead of trusting that it already is.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: const BackupNowButton(),
           ),
         ),
         _SectionHeader(title: l10n.t('security.devicesHeading')),
